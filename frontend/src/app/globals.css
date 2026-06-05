@@ -1,0 +1,108 @@
+/* ── Google Fonts — must be first @import ────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── CSS Variables ────────────────────────────────────────── */
+:root {
+  --font-ibm-plex-sans:    'IBM Plex Sans', sans-serif;
+  --font-barlow-condensed: 'Barlow Condensed', sans-serif;
+  --font-ibm-plex-mono:    'IBM Plex Mono', monospace;
+
+  --navy:    #1a2744;
+  --navy-2:  #0f1c35;
+  --steel:   #2c4a7c;
+  --steel-l: #3d5d96;
+  --accent:  #1565c0;
+  --accent-l:#1e88e5;
+  --accent-d:#0d47a1;
+  --gold:    #c8960c;
+  --gold-l:  #f5a623;
+  --gold-d:  #a07a07;
+  --green:   #2e7d32;
+  --grn-l:   #43a047;
+  --red:     #c62828;
+  --red-l:   #e53935;
+  --orange:  #e65100;
+  --orange-l:#fb8c00;
+  --teal:    #00695c;
+  --teal-l:  #00897b;
+  --purple:  #5e35b1;
+}
+
+/* ── Base ─────────────────────────────────────────────────── */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html {
+  /* Fluid base: 14 px on laptops → 16 px on wide displays.
+     All rem-based Tailwind classes scale automatically with this. */
+  font-size: clamp(14px, 0.85vw + 3px, 16px);
+}
+
+html, body {
+  background: #f5f7fb;
+  font-family: var(--font-ibm-plex-sans);
+  color: #0f1c35;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;   /* no horizontal scroll on any viewport */
+}
+
+/* ── Scrollbar ────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #eef2f8; }
+::-webkit-scrollbar-thumb { background: #b0bdd4; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #2c4a7c; }
+
+/* ── Typography helpers ───────────────────────────────────── */
+.font-condensed { font-family: var(--font-barlow-condensed); }
+.font-mono      { font-family: var(--font-ibm-plex-mono); }
+
+/* ── KPI Accent bar on top of cards ──────────────────────── */
+.accent-bar-blue   { border-top: 3px solid var(--accent); }
+.accent-bar-gold   { border-top: 3px solid var(--gold); }
+.accent-bar-green  { border-top: 3px solid var(--green); }
+.accent-bar-red    { border-top: 3px solid var(--red); }
+.accent-bar-orange { border-top: 3px solid var(--orange); }
+.accent-bar-teal   { border-top: 3px solid var(--teal); }
+.accent-bar-purple { border-top: 3px solid var(--purple); }
+
+/* ── Pulse animation (live dot) ──────────────────────────── */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(67,160,71,.5); }
+  50%       { opacity: .5; box-shadow: 0 0 0 4px rgba(67,160,71,0); }
+}
+.pulse-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: #43a047;
+  animation: pulse-dot 2s infinite;
+  display: inline-block;
+}
+
+/* ── Status pills ────────────────────────────────────────── */
+.pill-green  { @apply bg-success-bg text-success text-[10px] font-bold px-2 py-0.5 rounded; }
+.pill-red    { @apply bg-danger-bg  text-danger  text-[10px] font-bold px-2 py-0.5 rounded; }
+.pill-orange { @apply bg-warning-bg text-warning text-[10px] font-bold px-2 py-0.5 rounded; }
+.pill-blue   { @apply bg-blue-50   text-accent   text-[10px] font-bold px-2 py-0.5 rounded; }
+
+/* ── Section title ───────────────────────────────────────── */
+.section-title {
+  font-family: var(--font-barlow-condensed);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--steel);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 10px;
+}
+.section-title::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, #d0d9e8 0%, transparent 100%);
+}

@@ -1,0 +1,1923 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kaliapani Mines — Operational Performance Dashboard | 17-Apr-2026</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root{
+    --navy:#1a2744; --navy-2:#0f1c35; --steel:#2c4a7c; --steel-l:#3d5d96;
+    --accent:#1565c0; --accent-l:#1e88e5; --accent-d:#0d47a1;
+    --gold:#c8960c; --gold-l:#f5a623; --gold-d:#a07a07;
+    --green:#2e7d32; --grn-l:#43a047; --grn-bg:#e8f5e9;
+    --red:#c62828; --red-l:#e53935; --red-bg:#ffebee;
+    --orange:#e65100; --orange-l:#fb8c00; --or-bg:#fff3e0;
+    --teal:#00695c; --teal-l:#00897b;
+    --purple:#5e35b1;
+    --bg:#ffffff; --bg-s:#f5f7fb; --bg-sec:#eef2f8; --bg-light:#f8fafd;
+    --bdr:#d0d9e8; --bdr-str:#b0bdd4; --bdr-l:#e2e8f0;
+    --txt-p:#0f1c35; --txt-s:#3a4a6b; --txt-m:#6b7ea8; --txt-l:#8899bb;
+    --shadow-sm:0 1px 2px rgba(15,28,53,.04);
+    --shadow-md:0 2px 8px rgba(15,28,53,.06);
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{background:var(--bg);}
+  body{font-family:'IBM Plex Sans',sans-serif;color:var(--txt-p);font-size:12.5px;line-height:1.5;-webkit-font-smoothing:antialiased;}
+
+  /* HEADER */
+  .hdr{background:var(--navy);position:relative;overflow:hidden;}
+  .hdr::before{content:'';position:absolute;left:0;top:0;width:5px;height:100%;background:linear-gradient(180deg,var(--gold) 0%,var(--gold-l) 100%);}
+  .hdr::after{content:'';position:absolute;right:-80px;top:-80px;width:280px;height:280px;border-radius:50%;background:radial-gradient(circle,rgba(245,166,35,.08) 0%,transparent 70%);}
+  .hdr-inner{display:flex;align-items:stretch;padding:0 28px 0 32px;gap:0;position:relative;z-index:1;}
+  .hdr-brand{padding:18px 28px 18px 0;border-right:1px solid rgba(255,255,255,.12);min-width:280px;display:flex;flex-direction:column;justify-content:center;}
+  .hdr-brand .co{font-family:'Barlow Condensed',sans-serif;font-size:10.5px;font-weight:600;letter-spacing:.20em;color:var(--gold-l);text-transform:uppercase;margin-bottom:3px;}
+  .hdr-brand .mn{font-family:'Barlow Condensed',sans-serif;font-size:26px;font-weight:800;color:#fff;line-height:1.05;letter-spacing:.01em;}
+  .hdr-brand .sub{font-size:10.5px;color:rgba(255,255,255,.5);margin-top:3px;letter-spacing:.04em;}
+  .hdr-meta{flex:1;padding:18px 24px;display:flex;align-items:center;gap:38px;}
+  .hm-item .lbl{font-size:9px;text-transform:uppercase;letter-spacing:.16em;color:rgba(255,255,255,.42);font-weight:500;margin-bottom:2px;}
+  .hm-item .val{font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:700;color:#fff;line-height:1.1;}
+  .hm-item .val.dt{color:var(--gold-l);font-size:16px;}
+  .hdr-right{padding:18px 0 18px 22px;border-left:1px solid rgba(255,255,255,.12);min-width:215px;display:flex;flex-direction:column;justify-content:center;gap:7px;}
+  .badge{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);border-radius:4px;padding:4px 10px;font-size:9.5px;color:rgba(255,255,255,.78);letter-spacing:.08em;width:fit-content;font-weight:500;}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--grn-l);animation:pulse 2s infinite;box-shadow:0 0 0 0 rgba(67,160,71,.6);}
+  @keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(67,160,71,.5)}50%{opacity:.5;box-shadow:0 0 0 4px rgba(67,160,71,0)}}
+  .src-note{font-size:9px;color:rgba(255,255,255,.4);line-height:1.5;}
+
+  /* PAGE */
+  .page{padding:14px 18px 28px;}
+  .sec-title{font-family:'Barlow Condensed',sans-serif;font-size:11.5px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--steel);margin-bottom:9px;display:flex;align-items:center;gap:9px;}
+  .sec-title::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,var(--bdr) 0%,transparent 100%);}
+  .sec-title .pill{font-family:'IBM Plex Mono',monospace;font-size:9px;font-weight:600;color:var(--gold-d);background:#fdf6e3;border:1px solid #f0e0a8;border-radius:3px;padding:2px 7px;letter-spacing:.05em;}
+
+  /* MINES STOCK PANEL (top) */
+  .stk-row{display:grid;grid-template-columns:340px 1fr;gap:12px;margin-bottom:12px;}
+  .stk-card{background:var(--bg);border:1px solid var(--bdr);border-radius:6px;overflow:hidden;}
+  .stk-hdr{background:linear-gradient(135deg,var(--navy) 0%,var(--steel) 100%);padding:10px 14px;color:#fff;display:flex;justify-content:space-between;align-items:center;}
+  .stk-hdr .t{font-family:'Barlow Condensed',sans-serif;font-size:13px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;}
+  .stk-hdr .ts{font-size:9.5px;color:rgba(255,255,255,.7);font-family:'IBM Plex Mono',monospace;}
+  .stk-body{padding:12px 14px;}
+  .stk-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;}
+  .stk-mini{border:1px solid var(--bdr);border-radius:4px;padding:8px 10px;}
+  .stk-mini.hi{border-color:var(--accent);background:#f3f8ff;}
+  .stk-mini .l{font-size:9px;color:var(--txt-m);text-transform:uppercase;letter-spacing:.12em;font-weight:500;}
+  .stk-mini .v{font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:700;color:var(--txt-p);line-height:1.05;}
+  .stk-mini .v.bl{color:var(--accent);}
+  .stk-mini .v .u{font-size:11px;font-weight:400;color:var(--txt-m);margin-left:2px;}
+  .stk-mini .s{font-size:9.5px;color:var(--txt-m);margin-top:2px;}
+
+  .grade-bars{margin-top:6px;}
+  .grade-bars .gtitle{font-family:'Barlow Condensed',sans-serif;font-size:10.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--txt-s);margin-bottom:6px;}
+  .gb-row{display:grid;grid-template-columns:75px 1fr 60px;align-items:center;gap:8px;margin-bottom:5px;font-size:11px;}
+  .gb-row .gnm{color:var(--txt-s);font-weight:500;}
+  .gb-row .gbar{height:9px;background:var(--bg-sec);border-radius:1px;overflow:hidden;position:relative;}
+  .gb-row .gfill{height:100%;border-radius:1px;}
+  .gb-row .gval{font-family:'IBM Plex Mono',monospace;font-size:10.5px;font-weight:600;text-align:right;color:var(--txt-p);}
+
+  .loc-tbl{margin-top:8px;border-top:1px dashed var(--bdr);padding-top:8px;}
+  .loc-tbl .ttitle{font-family:'Barlow Condensed',sans-serif;font-size:10.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--txt-s);margin-bottom:6px;}
+  .loc-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;}
+  .loc-cell{border:1px solid var(--bdr);border-radius:3px;padding:6px 7px;text-align:center;}
+  .loc-cell.tot{background:#f3f8ff;border-color:var(--accent);}
+  .loc-cell .ln{font-size:8.5px;color:var(--txt-m);text-transform:uppercase;letter-spacing:.08em;}
+  .loc-cell .lv{font-family:'Barlow Condensed',sans-serif;font-size:15px;font-weight:700;color:var(--txt-p);}
+  .loc-cell.tot .lv{color:var(--accent);}
+
+  .pip-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px;}
+  .pip-cell{border:1px solid var(--bdr);border-radius:3px;padding:5px 7px;}
+  .pip-cell .ln{font-size:8.5px;color:var(--txt-m);text-transform:uppercase;letter-spacing:.08em;}
+  .pip-cell .lv{font-family:'Barlow Condensed',sans-serif;font-size:13.5px;font-weight:700;color:var(--txt-s);}
+
+  /* KPI hero strip on right of stock */
+  .kpi-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;}
+  .kpi{border:1px solid var(--bdr);border-radius:5px;padding:10px 12px;position:relative;overflow:hidden;background:var(--bg);box-shadow:var(--shadow-sm);}
+  .kpi::before{content:'';position:absolute;top:0;left:0;width:100%;height:3px;}
+  .kpi.bl::before{background:linear-gradient(90deg,var(--accent),var(--accent-l));}
+  .kpi.gd::before{background:linear-gradient(90deg,var(--gold),var(--gold-l));}
+  .kpi.gn::before{background:linear-gradient(90deg,var(--green),var(--grn-l));}
+  .kpi.rd::before{background:linear-gradient(90deg,var(--red),var(--red-l));}
+  .kpi.or::before{background:linear-gradient(90deg,var(--orange),var(--orange-l));}
+  .kpi.tl::before{background:linear-gradient(90deg,var(--teal),var(--teal-l));}
+  .kpi.pp::before{background:var(--purple);}
+  .kpi.sl::before{background:#546e7a;}
+  .kpi .klbl{font-size:9px;text-transform:uppercase;letter-spacing:.13em;color:var(--txt-m);font-weight:600;margin-bottom:4px;line-height:1.4;}
+  .kpi .ksub2{font-size:8.5px;color:var(--txt-l);font-weight:500;margin-bottom:2px;text-transform:uppercase;letter-spacing:.08em;}
+  .kpi .kval{font-family:'Barlow Condensed',sans-serif;font-size:26px;font-weight:700;color:var(--txt-p);line-height:1;}
+  .kpi .kval .ku{font-size:11px;font-weight:500;color:var(--txt-m);margin-left:2px;}
+  .kpi .ksub{font-size:9.5px;color:var(--txt-m);margin-top:5px;font-family:'IBM Plex Mono',monospace;}
+  .kpi .kpct{font-family:'IBM Plex Mono',monospace;font-size:10.5px;font-weight:600;padding:1px 7px;border-radius:3px;margin-top:5px;display:inline-block;letter-spacing:.02em;}
+  .kpi .ksplit{display:flex;justify-content:space-between;align-items:flex-end;}
+  .kpi .ksplit .right{text-align:right;}
+  .pg{background:#e8f5e9;color:var(--green);}
+  .pw{background:#fff3e0;color:var(--orange);}
+  .pb{background:#ffebee;color:var(--red);}
+  .po{background:#e3f2fd;color:var(--accent);}
+
+  /* Charts */
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;}
+  .grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px;}
+  .grid-mix{display:grid;grid-template-columns:1.5fr 1fr;gap:12px;margin-bottom:12px;}
+  .card{background:var(--bg);border:1px solid var(--bdr);border-radius:6px;overflow:hidden;}
+  .card-hdr{padding:9px 14px;border-bottom:1px solid var(--bdr-l);background:var(--bg-light);display:flex;justify-content:space-between;align-items:center;}
+  .card-hdr .t{font-family:'Barlow Condensed',sans-serif;font-size:12.5px;font-weight:700;letter-spacing:.10em;text-transform:uppercase;color:var(--navy);}
+  .card-hdr .summary{display:flex;gap:14px;align-items:center;}
+  .card-hdr .sm{font-size:10px;color:var(--txt-m);font-family:'IBM Plex Mono',monospace;}
+  .card-hdr .sm b{color:var(--txt-p);font-weight:700;font-size:11px;}
+  .card-hdr .sm .pct{margin-left:4px;padding:1px 5px;border-radius:2px;font-size:9.5px;font-weight:700;}
+  .card-body{padding:10px 12px;}
+  .chart-wrap{position:relative;height:170px;}
+  .chart-wrap.tall{height:200px;}
+  .chart-wrap.short{height:140px;}
+
+  /* Equipment tables */
+  .eqp-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;}
+  .eqp-tbl{width:100%;border-collapse:collapse;font-size:11px;}
+  .eqp-tbl th{background:var(--bg-sec);padding:6px 9px;text-align:left;font-size:9.5px;text-transform:uppercase;letter-spacing:.10em;color:var(--txt-s);font-weight:600;border-bottom:1px solid var(--bdr);}
+
+  /* Summary table (April day-wise) */
+  .sum-tbl{width:100%;border-collapse:collapse;font-size:11px;font-family:'IBM Plex Sans',sans-serif;table-layout:auto;}
+  .sum-tbl thead th{background:var(--bg-sec);padding:7px 10px;font-size:9.5px;text-transform:uppercase;letter-spacing:.10em;color:var(--txt-s);font-weight:700;border-bottom:1px solid var(--bdr);text-align:center;}
+  .sum-tbl thead th.r{text-align:right;padding:6px 10px;}
+  .sum-tbl thead th.lft{text-align:left;}
+  .sum-tbl thead th.grp{border-bottom:2px solid transparent;font-size:10px;letter-spacing:.08em;padding:4px 8px 4px;}
+  .sum-tbl thead th.grp.bl{background:#e3f2fd;color:var(--accent-d);border-bottom-color:var(--accent);}
+  .sum-tbl thead th.grp.gd{background:#fff8e1;color:var(--gold-d);border-bottom-color:var(--gold);}
+  .sum-tbl thead th.grp.gn{background:#e8f5e9;color:var(--green);border-bottom-color:var(--green);}
+  .sum-tbl thead th.grp.or{background:#fff3e0;color:var(--orange);border-bottom-color:var(--orange);}
+  .sum-tbl thead th.bl-h{background:#f3f8ff;}
+  .sum-tbl thead th.gd-h{background:#fffbe8;}
+  .sum-tbl thead th.gn-h{background:#f1f8f2;}
+  .sum-tbl thead th.or-h{background:#fff8ef;}
+  .sum-tbl thead th.tl-h{background:#e0f2f1;color:var(--teal);}
+  .sum-tbl tbody td{padding:5px 10px;border-bottom:1px solid var(--bdr-l);font-family:'IBM Plex Mono',monospace;font-size:10.5px;text-align:right;color:var(--txt-p);}
+  .sum-tbl tbody td.date{text-align:left;font-family:'IBM Plex Sans',sans-serif;font-weight:600;color:var(--txt-p);font-size:11px;}
+  .sum-tbl tbody tr:hover{background:var(--bg-light);}
+  .sum-tbl tbody tr.today{background:#f0f9ff;}
+  .sum-tbl tbody tr.today td{font-weight:600;}
+  .sum-tbl .v-zero{color:var(--red);}
+  .sum-tbl .v-under{color:var(--orange);}
+  .sum-tbl .v-over{color:var(--green);}
+  .sum-tbl .v-met{color:var(--accent);}
+  .sum-tbl .v-idle{color:var(--txt-l);}
+  .sum-tbl tfoot tr.mtd td{background:#eef2f8;font-family:'IBM Plex Sans',sans-serif;font-weight:700;color:var(--navy);border-top:2px solid var(--steel);padding:7px 10px;font-size:11px;text-align:right;}
+  .sum-tbl tfoot tr.mtd td.date{text-align:left;font-family:'IBM Plex Sans',sans-serif;}
+  .sum-tbl tfoot tr.mtd td:not(.date){font-family:'IBM Plex Mono',monospace;}
+  .sum-tbl tfoot tr.pct td{background:var(--bg-light);font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:10.5px;padding:6px 10px;border-bottom:1px solid var(--bdr);text-align:right;}
+  .sum-tbl tfoot tr.pct td.lbl{background:#e8f5e9;font-family:'IBM Plex Sans',sans-serif;color:var(--green);text-align:left;font-size:10.5px;}
+  .sum-tbl tfoot tr.pct td.plan{color:var(--txt-l);font-weight:400;}
+  .eqp-tbl th.r{text-align:right;}
+  .eqp-tbl td{padding:5px 9px;border-bottom:1px solid var(--bdr-l);font-family:'IBM Plex Sans';}
+  .eqp-tbl td.r{text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:500;}
+  .eqp-tbl tr:hover{background:var(--bg-light);}
+  .eqp-tbl tr.sub td{background:var(--bg-light);font-weight:600;color:var(--steel);font-size:11px;border-top:1px solid var(--bdr-str);}
+  .eqp-tbl .util-bar{display:inline-block;width:60px;height:6px;background:var(--bg-sec);border-radius:1px;overflow:hidden;vertical-align:middle;margin-right:6px;}
+  .eqp-tbl .util-bar i{display:block;height:100%;background:var(--accent);}
+  .eqp-tbl .stat{display:inline-block;font-size:8.5px;padding:1px 5px;border-radius:2px;font-weight:600;letter-spacing:.04em;}
+  .stat.act{background:#e8f5e9;color:var(--green);}
+  .stat.idl{background:#ffebee;color:var(--red);}
+  .stat.par{background:#fff3e0;color:var(--orange);}
+
+  /* Insights footer */
+  .insights{background:var(--bg-light);border:1px solid var(--bdr);border-radius:6px;padding:12px 16px;margin-top:6px;}
+  .insights .ttl{font-family:'Barlow Condensed',sans-serif;font-size:11.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--steel);margin-bottom:8px;}
+  .ins-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;}
+  .ins-item{display:flex;gap:9px;font-size:11px;line-height:1.55;}
+  .ins-item .ico{width:18px;height:18px;border-radius:3px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;font-family:'Barlow Condensed';color:#fff;}
+  .ico.r{background:var(--red);}
+  .ico.o{background:var(--orange);}
+  .ico.g{background:var(--green);}
+  .ico.b{background:var(--accent);}
+  .ico.gd{background:var(--gold);}
+  .ico.tl{background:var(--teal);}
+  .ins-item b{color:var(--navy);font-weight:700;}
+  .ins-item .lbl{display:block;font-size:9.5px;color:var(--txt-m);text-transform:uppercase;letter-spacing:.10em;font-weight:600;margin-bottom:1px;}
+
+  /* footer */
+  .ftr{margin-top:12px;padding:10px 4px 0;border-top:1px solid var(--bdr-l);display:flex;justify-content:space-between;font-size:9.5px;color:var(--txt-m);}
+  .ftr .l{display:flex;gap:14px;}
+
+  @media(max-width:1180px){
+    .stk-row{grid-template-columns:1fr;}
+    .kpi-strip{grid-template-columns:repeat(2,1fr);}
+    .grid-2,.grid-3,.grid-mix,.eqp-grid{grid-template-columns:1fr;}
+    .ins-grid{grid-template-columns:1fr;}
+  }
+</style>
+</head>
+<body>
+
+<header class="hdr">
+  <div class="hdr-inner">
+    <div class="hdr-brand">
+      <div class="co">Balasore Alloys Limited</div>
+      <div class="mn">Kaliapani Chromite Mines</div>
+      <div class="sub">Sukinda Valley, Jajpur, Odisha · BAL-1100 Series</div>
+    </div>
+    <div class="hdr-meta">
+      <div class="hm-item">
+        <div class="lbl">Report</div>
+        <div class="val">Operational Performance</div>
+      </div>
+      <div class="hm-item">
+        <div class="lbl">Period</div>
+        <div class="val">May 2026 (Day 18 of 31)</div>
+      </div>
+      <div class="hm-item">
+        <div class="lbl">As On</div>
+        <div class="val dt">19 May 2026 · 06:00 IST</div>
+      </div>
+      <div class="hm-item">
+        <div class="lbl">Cycle Day</div>
+        <div class="val">58.1% of month elapsed</div>
+      </div>
+    </div>
+    <div class="hdr-right">
+      <span class="badge"><span class="dot"></span>Live · Day-end Closing</span>
+      <span class="badge" style="background:rgba(245,166,35,.10);border-color:rgba(245,166,35,.25);color:#f5a623;">Management Review Edition</span>
+      <div class="src-note">Sources: Daily MIS · Mines Stock & Despatch · Excavator &amp; Tipper Utilization Reports</div>
+    </div>
+  </div>
+</header>
+
+<main class="page">
+
+  <!-- ============ STOCK + KPI HERO STRIP ============ -->
+  <div class="sec-title">Mines Stock Position &amp; Headline KPIs <span class="pill">Snapshot</span></div>
+
+  <div class="stk-row">
+    <!-- Stock Card -->
+    <div class="stk-card">
+      <div class="stk-hdr">
+        <div class="t">Mines Stock Position</div>
+        <div class="ts">As on 19·05·2026 @ 06:00</div>
+      </div>
+      <div class="stk-body">
+        <div class="stk-grid">
+          <div class="stk-mini hi">
+            <div class="l">Total Mines Stock</div>
+            <div class="v bl">3,229<span class="u">MT</span></div>
+            <div class="s">As on 19-May-2026 · ▲ +315 vs 18-May (2,914)</div>
+          </div>
+          <div class="stk-mini">
+            <div class="l">Dispatch MTD (till 18-May)</div>
+            <div class="v">6,112<span class="u">MT</span></div>
+            <div class="s">SKD: 1,291 · BLS: 4,821 · D17 & D18: zero dispatch</div>
+          </div>
+          <div class="stk-mini">
+            <div class="l">Proposed Despatch Today</div>
+            <div class="v">970<span class="u">MT</span></div>
+            <div class="s">SKD: 200 · BLS: 770 · MG grade · 19-May</div>
+          </div>
+          <div class="stk-mini">
+            <div class="l">Permission in Hand</div>
+            <div class="v">972<span class="u">MT</span></div>
+            <div class="s">All MG · approval cycle cleared · ready to lift</div>
+          </div>
+        </div>
+
+        <div class="grade-bars">
+          <div class="gtitle">Grade-wise Stock (Mines)</div>
+          <div class="gb-row"><span class="gnm">MG Ore</span><span class="gbar"><span class="gfill" style="width:42%;background:linear-gradient(90deg,var(--accent),var(--accent-l));"></span></span><span class="gval">2,772 MT</span></div>
+          <div class="gb-row"><span class="gnm">COB Conc.</span><span class="gbar"><span class="gfill" style="width:7%;background:linear-gradient(90deg,var(--gold),var(--gold-l));"></span></span><span class="gval">457 MT</span></div>
+          <div class="gb-row"><span class="gnm">HG / LG</span><span class="gbar"><span class="gfill" style="width:0%;"></span></span><span class="gval">0 MT</span></div>
+        </div>
+
+        <div class="loc-tbl">
+          <div class="ttitle">All Locations — Total Stock</div>
+          <div class="loc-grid">
+            <div class="loc-cell"><div class="ln">Mines</div><div class="lv">3,229</div></div>
+            <div class="loc-cell"><div class="ln">BAL Plant</div><div class="lv">466</div></div>
+            <div class="loc-cell"><div class="ln">SKD Plant</div><div class="lv">40</div></div>
+            <div class="loc-cell tot"><div class="ln">Total</div><div class="lv">3,935</div></div>
+          </div>
+          <div class="pip-grid">
+            <div class="pip-cell"><div class="ln">Awaiting Stacking</div><div class="lv">645 <span style="font-size:10px;color:var(--txt-m);">MT</span></div></div>
+            <div class="pip-cell"><div class="ln">Awaiting Verification</div><div class="lv">1,612 <span style="font-size:10px;color:var(--txt-m);">MT</span></div></div>
+            <div class="pip-cell"><div class="ln">Awaiting Permission</div><div class="lv">0 <span style="font-size:10px;color:var(--txt-m);">MT</span></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- KPI Hero Strip -->
+    <div>
+      <div class="kpi-strip" style="margin-bottom:9px;">
+        <div class="kpi bl">
+          <div class="klbl">Ore Production</div>
+          <div class="ksplit">
+            <div>
+              <div class="ksub2">Today (D18)</div>
+              <div class="kval">740<span class="ku">MT</span></div>
+              <div class="ksub">Plan: 1,000 · 74%</div>
+            </div>
+            <div class="right">
+              <div class="ksub2">MTD</div>
+              <div class="kval" style="font-size:22px;">8,133<span class="ku">MT</span></div>
+              <span class="kpct pb">47.8% vs Plan</span>
+            </div>
+          </div>
+        </div>
+        <div class="kpi or">
+          <div class="klbl">OB Excavation</div>
+          <div class="ksplit">
+            <div>
+              <div class="ksub2">Today (D18)</div>
+              <div class="kval">1,248<span class="ku">CuM</span></div>
+              <div class="ksub">Plan: 4,040 · 31%</div>
+            </div>
+            <div class="right">
+              <div class="ksub2">MTD</div>
+              <div class="kval" style="font-size:22px;">17,387<span class="ku">CuM</span></div>
+              <span class="kpct pb">25.3% vs Plan</span>
+            </div>
+          </div>
+        </div>
+        <div class="kpi tl">
+          <div class="klbl">De-Silting</div>
+          <div class="ksplit">
+            <div>
+              <div class="ksub2">Today (D18)</div>
+              <div class="kval">0<span class="ku">CuM</span></div>
+              <div class="ksub">Plan window closed 16-May</div>
+            </div>
+            <div class="right">
+              <div class="ksub2">MTD</div>
+              <div class="kval" style="font-size:22px;">0<span class="ku">CuM</span></div>
+              <span class="kpct pb">0% vs Plan 10,920</span>
+            </div>
+          </div>
+        </div>
+        <div class="kpi gd">
+          <div class="klbl">COB Production</div>
+          <div class="ksplit">
+            <div>
+              <div class="ksub2">Today (D18)</div>
+              <div class="kval">69<span class="ku">MT</span></div>
+              <div class="ksub">Plan: 126 · 55%</div>
+            </div>
+            <div class="right">
+              <div class="ksub2">MTD</div>
+              <div class="kval" style="font-size:22px;">913<span class="ku">MT</span></div>
+              <span class="kpct pb">43.9% vs Plan</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="kpi gn">
+          <div class="klbl">Despatch</div>
+          <div class="ksplit">
+            <div>
+              <div class="ksub2">Today (D18)</div>
+              <div class="kval">0<span class="ku">MT</span></div>
+              <div class="ksub">Plan: 1,050 · No despatch</div>
+            </div>
+            <div class="right">
+              <div class="ksub2">MTD</div>
+              <div class="kval" style="font-size:22px;">6,112<span class="ku">MT</span></div>
+              <span class="kpct pb">36.9% vs Plan</span>
+            </div>
+          </div>
+        </div>
+        <div class="kpi pp">
+          <div class="klbl">Grade Mix · MTD</div>
+          <div class="ksplit">
+            <div>
+              <div class="ksub2">MG Ore</div>
+              <div class="kval">6,030<span class="ku">MT</span></div>
+              <div class="ksub">74% of total mined</div>
+            </div>
+            <div class="right">
+              <div class="ksub2">LG · HG</div>
+              <div class="kval" style="font-size:22px;">2,103 · 0</div>
+              <span class="kpct pb">HG nil produced</span>
+            </div>
+          </div>
+        </div>
+        <div class="kpi sl">
+          <div class="klbl">Excavator Fleet</div>
+          <div class="ksplit">
+            <div>
+              <div class="ksub2">Active</div>
+              <div class="kval">5 / 7</div>
+              <div class="ksub">2 LBD · 470-2 low util (11%)</div>
+            </div>
+            <div class="right">
+              <div class="ksub2">Run-Hrs (Till 18-May)</div>
+              <div class="kval" style="font-size:22px;">690<span class="ku">h</span></div>
+              <span class="kpct po">Avg 38.4 h/day</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ PLANT PERFORMANCE ============ -->
+  <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:10px;margin-bottom:10px;">
+    <div style="background:linear-gradient(135deg,#1a2744 0%,#2a3b5c 100%);border:1px solid var(--bdr);border-radius:6px;padding:12px 14px;color:#fff;display:flex;align-items:center;justify-content:space-between;">
+      <div>
+        <div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.12em;color:#c8960c;font-weight:700;margin-bottom:3px;">Plant Performance (Ferro Chrome)</div>
+        <div style="font-size:11px;color:#cfd6e2;">Till 18-May-2026 · Both plants combined</div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:28px;font-weight:700;line-height:1;">3,402<span style="font-size:12px;color:#cfd6e2;font-weight:500;"> MT</span></div>
+        <div style="font-size:11px;color:#c8960c;font-weight:600;margin-top:3px;">189.0 MT/day combined</div>
+      </div>
+    </div>
+    <div style="background:#eef2f8;border:1px solid var(--bdr);border-radius:6px;padding:10px 12px;">
+      <div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.10em;color:var(--txt-s);font-weight:600;">BAL Plant</div>
+      <div style="font-size:22px;font-weight:700;color:var(--navy);margin-top:2px;">2,835<span style="font-size:11px;color:var(--txt-m);font-weight:500;"> MT</span></div>
+      <div style="font-size:10px;color:var(--accent);font-weight:600;">157.5 MT/day</div>
+      <div style="font-size:9.5px;color:var(--txt-m);margin-top:2px;">83.3% share of total output</div>
+    </div>
+    <div style="background:#eef2f8;border:1px solid var(--bdr);border-radius:6px;padding:10px 12px;">
+      <div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.10em;color:var(--txt-s);font-weight:600;">SUK Plant</div>
+      <div style="font-size:22px;font-weight:700;color:var(--navy);margin-top:2px;">567<span style="font-size:11px;color:var(--txt-m);font-weight:500;"> MT</span></div>
+      <div style="font-size:10px;color:var(--accent);font-weight:600;">31.5 MT/day</div>
+      <div style="font-size:9.5px;color:var(--txt-m);margin-top:2px;">16.7% share of total output</div>
+    </div>
+  </div>
+
+  <!-- ============ PRODUCTION TRENDS ============ -->
+  <div class="sec-title">Day-wise Plan vs Actual Trends — Production &amp; Excavation <span class="pill">May 2026</span></div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-hdr">
+        <div class="t">Ore Production · Plan vs Actual</div>
+        <div class="summary"><span class="sm">MTD <b>8,133 / 17,001 MT</b><span class="pct pb">47.8%</span></span></div>
+      </div>
+      <div class="card-body"><div class="chart-wrap"><canvas id="ch_ore"></canvas></div></div>
+    </div>
+    <div class="card">
+      <div class="card-hdr">
+        <div class="t">OB Excavation · Plan vs Actual</div>
+        <div class="summary"><span class="sm">MTD <b>17,387 / 68,680 CuM</b><span class="pct pb">25.3%</span></span></div>
+      </div>
+      <div class="card-body"><div class="chart-wrap"><canvas id="ch_ob"></canvas></div></div>
+    </div>
+  </div>
+
+  <div class="grid-mix">
+    <div class="card">
+      <div class="card-hdr">
+        <div class="t">Grade-wise Ore Production · HG / MG / LG (Plan vs Actual)</div>
+        <div class="summary"><span class="sm">HG <b>0/68.65</b></span><span class="sm">MG <b>100/232</b></span><span class="sm">LG <b>230/4,699</b></span></div>
+      </div>
+      <div class="card-body"><div class="chart-wrap tall"><canvas id="ch_grade"></canvas></div></div>
+    </div>
+    <div class="card">
+      <div class="card-hdr">
+        <div class="t">De-Silting · Plan vs Actual</div>
+        <div class="summary"><span class="sm">MTD <b>0 / 11,700 CuM</b><span class="pct pb">0%</span></span><span class="sm">Plan <b>780</b>/day · 02–16 May (15 days · 11,700 CuM)</span></div>
+      </div>
+      <div class="card-body"><div class="chart-wrap tall"><canvas id="ch_silt"></canvas></div></div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-hdr">
+        <div class="t">COB Production · Plan vs Actual</div>
+        <div class="summary"><span class="sm">MTD <b>913 / 2,082 MT</b><span class="pct pb">43.9%</span></span><span class="sm">D15: 88 · D16: 77 · D17: 60 · D18: 69</span></div>
+      </div>
+      <div class="card-body"><div class="chart-wrap"><canvas id="ch_cob"></canvas></div></div>
+    </div>
+    <div class="card">
+      <div class="card-hdr">
+        <div class="t">Despatch · Plan vs Actual</div>
+        <div class="summary"><span class="sm">MTD <b>6,112 / 16,550 MT</b><span class="pct pb">36.9%</span></span></div>
+      </div>
+      <div class="card-body"><div class="chart-wrap"><canvas id="ch_des"></canvas></div></div>
+    </div>
+  </div>
+
+  <!-- ============ DAY-WISE SUMMARY TABLE ============ -->
+  <div class="sec-title">May 2026 — Day-wise Summary Table <span class="pill">Till 18-May</span></div>
+  <div class="card" style="margin-bottom:12px;">
+    <div class="card-body" style="padding:0;overflow-x:auto;">
+      <table class="sum-tbl" id="summary_tbl">
+        <thead>
+          <tr>
+            <th rowspan="2" class="lft">Date</th>
+            <th colspan="2" class="grp bl">Ore (MT)</th>
+            <th colspan="2" class="grp gd">COBP (MT)</th>
+            <th colspan="2" class="grp gn">Despatch (MT)</th>
+            <th colspan="2" class="grp or">OB Exc. (CuM)</th>
+            <th rowspan="2" class="r tl-h">Silt (CuM)</th>
+            <th rowspan="2" class="r" style="background:#e3f2fd;color:#0d47a1;">Closing Water Level (M³)</th>
+            <th rowspan="2" class="r">Cls Stock (MT)</th>
+          </tr>
+          <tr>
+            <th class="r bl-h">Tgt</th><th class="r bl-h">Act</th>
+            <th class="r gd-h">Tgt</th><th class="r gd-h">Act</th>
+            <th class="r gn-h">Tgt</th><th class="r gn-h">Act</th>
+            <th class="r or-h">Tgt</th><th class="r or-h">Act</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ============ OB PERFORMANCE BREAKDOWN ============ -->
+  <div class="sec-title">Over-Burden Excavation — BAL OWN vs Vendor (Deshmesh) <span class="pill">Daily Plan vs Actual</span></div>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-hdr">
+        <div class="t">BAL OWN · Day-wise Plan vs Actual <span style="font-size:9.5px;font-weight:500;color:var(--txt-m);letter-spacing:.04em;">(BPM-West + OB-North)</span></div>
+        <div class="summary"><span class="sm">MTD <b>16,792 / 43,044 CuM</b><span class="pct pb">39.0%</span></span><span class="sm">Plan <b>2,532</b>/day (North 2,197 + South 335)</span></div>
+      </div>
+      <div class="card-body"><div class="chart-wrap tall"><canvas id="ch_bal_ob"></canvas></div></div>
+    </div>
+    <div class="card">
+      <div class="card-hdr">
+        <div class="t">Deshmesh (Vendor) · Day-wise Plan vs Actual</div>
+        <div class="summary"><span class="sm">MTD <b>595 / 25,636 CuM</b><span class="pct pb">2.3%</span></span></div>
+      </div>
+      <div class="card-body"><div class="chart-wrap tall"><canvas id="ch_desh_ob"></canvas></div></div>
+    </div>
+  </div>
+
+  <!-- ============ COBP ANALYSIS KPI TABLE ============ -->
+  <div class="sec-title">COB Plant Analysis · Feed · Concentrate · Tailings <span class="pill">TD &amp; MTD · Till 18-May</span></div>
+  <div class="card" style="margin-bottom:10px;">
+    <div class="card-hdr">
+      <div class="t">Quality &amp; Quantity KPIs — Combined A · B · C Shifts</div>
+      <div class="summary"><span class="sm">Plant operational from D5 onwards (14 days)</span><span class="sm">Yield (COB/Feed) · TD <b>38.0%</b> · MTD <b>38.6%</b></span></div>
+    </div>
+    <div class="card-body" style="padding:0;overflow-x:auto;">
+      <table class="sum-tbl" style="width:100%;font-size:11px;">
+        <thead>
+          <tr>
+            <th class="lft" style="text-align:left;">KPI</th>
+            <th class="r" style="background:#eef2f8;">FEED · TD (D18)</th>
+            <th class="r" style="background:#eef2f8;">FEED · MTD</th>
+            <th class="r" style="background:#e8f5e9;">COB CONC. · TD (D18)</th>
+            <th class="r" style="background:#e8f5e9;">COB CONC. · MTD</th>
+            <th class="r" style="background:#fff3e0;">TAILINGS · TD (D18)</th>
+            <th class="r" style="background:#fff3e0;">TAILINGS · MTD</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="date" style="font-weight:700;">Quantity (MT)</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--navy);">181.0</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--navy);">2,365.0</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--green);">68.78</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--green);">912.36</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--orange);">112.22</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--orange);">1,452.64</td>
+          </tr>
+          <tr>
+            <td class="date" style="font-weight:700;">%Cr₂O₃</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">21.80</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:600;">20.95</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;color:var(--green);">41.41</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--green);">39.35</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;color:var(--orange);">8.89</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--orange);">9.01</td>
+          </tr>
+          <tr>
+            <td class="date" style="font-weight:700;">Cr/Fe Ratio</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">0.59</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:600;">0.55</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;color:var(--green);">1.56</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--green);">1.40</td>
+            <td class="r" style="color:var(--txt-s);">—</td>
+            <td class="r" style="color:var(--txt-s);">—</td>
+          </tr>
+          <tr>
+            <td class="date" style="font-weight:700;">%Moisture</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;color:var(--orange);">12.25</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:600;">14.53</td>
+            <td class="r" style="color:var(--txt-s);">—</td>
+            <td class="r" style="color:var(--txt-s);">—</td>
+            <td class="r" style="color:var(--txt-s);">—</td>
+            <td class="r" style="color:var(--txt-s);">—</td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr class="mtd" style="background:#fdf6e3;">
+            <td class="date" style="font-weight:700;">YIELD = COB / FEED</td>
+            <td class="r" colspan="6" style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--gold-d);text-align:center;">TD <b>38.0%</b> · MTD <b>38.6%</b></td>
+          </tr>
+        </tfoot>
+      </table>
+      <div style="padding:8px 12px;background:var(--bg-sec);border-top:1px solid var(--bdr);font-size:10px;color:var(--txt-m);line-height:1.55;">
+        <b style="color:var(--gold-d);">Read:</b>
+        <b>Yield stable at 36–40%</b> across all 14 operational days (D5–D18), with MTD weighted Yield <b>38.6%</b> (D18 today: <b>38.0%</b>, D17: 38.0%, D16: 38.0%) — yield discipline holding flat at 38% for three days running.
+        <b>D18 Feed Cr₂O₃ recovered sharply to 21.80%</b> (D17 was 17.30%) — feed mix improved despite D18 mining showing 53% LG; MTD weighted firmed to <b>20.95%</b>. COB Cr₂O₃ on D18 at <b>41.41%</b> (MTD 39.35%) — Cr₂O₃ upgrade ratio <b>~1.9×</b>, strongest single-day COB grade since D15.
+        <b>D18 Tailings Cr₂O₃ down to 8.89%</b> (D17: 10.72%) — back below the 10% plant-loss target after D17's breach; MTD weighted improved to <b>9.01%</b>.
+        <b>D18 Moisture down to 12.25%</b> (D17: 12.98%) — moisture trending favourably lower as pre-monsoon stretch continues; MTD weighted <b>14.53%</b>.
+        Feed Cr/Fe ratio MTD <b>0.55</b> stable; D18 single-day <b>0.59</b> closer to typical run-range (vs D17's 0.44 trough).
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ EQUIPMENT UTILIZATION ============ -->
+  <div class="sec-title">Equipment Utilization — Excavators &amp; Tippers <span class="pill">Till 18-May</span></div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-hdr">
+        <div class="t">Excavator-wise · Day-wise Running Hours Trend</div>
+        <div class="summary"><span class="sm">Active Fleet <b>5 of 7</b></span><span class="sm">Total <b>690.3 h</b></span><span class="sm">Till 18-May</span></div>
+      </div>
+      <div class="card-body">
+        <div class="chart-wrap tall"><canvas id="ch_exc_trend"></canvas></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-hdr">
+        <div class="t">Excavator MTD Performance · By Machine</div>
+        <div class="summary"><span class="sm">Top: <b>Z-Axis 370-5 · 169.5h</b></span><span class="sm">Till 18-May</span></div>
+      </div>
+      <div class="card-body" style="padding:0;">
+        <table class="eqp-tbl">
+          <thead>
+            <tr>
+              <th>Machine</th>
+              <th class="r">Eng-Hr (MTD)</th>
+              <th class="r">B/D Hr</th>
+              <th class="r">Avail %</th>
+              <th class="r">Util %</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="exc_tbl"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid-mix">
+    <div class="card">
+      <div class="card-hdr">
+        <div class="t">Tipper Fleet · Fuel Consumption (L/Hr) &amp; Mileage (KMPL)</div>
+        <div class="summary"><span class="sm">Avg L/Hr: <b>7.10</b></span><span class="sm">Fleet: <b>14 reporting</b></span><span class="sm">Avg KMPL: <b>0.82</b></span><span class="sm">OEM 8 L/Hr</span></div>
+      </div>
+      <div class="card-body"><div class="chart-wrap tall"><canvas id="ch_tip_fuel"></canvas></div></div>
+    </div>
+    <div class="card">
+      <div class="card-hdr">
+        <div class="t">Tipper-wise MTD Performance</div>
+        <div class="summary"><span class="sm">Top: <b>MAN55 · 171.4h</b></span><span class="sm">Till 18-May</span></div>
+      </div>
+      <div class="card-body" style="padding:0;max-height:280px;overflow-y:auto;">
+        <table class="eqp-tbl">
+          <thead>
+            <tr>
+              <th>Vehicle</th>
+              <th class="r">Eng-Hr (MTD)</th>
+              <th class="r">B/D Hr</th>
+              <th class="r">Avail %</th>
+              <th class="r">Util %</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="tip_tbl"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ HOURLY PERFORMANCE ANALYSIS ============ -->
+  <div class="sec-title">Tipper Operations · Location × Shift × Hour Productivity <span class="pill">06–18 May 2026 · excl D9, D16</span></div>
+
+  <!-- Headline metrics strip -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:10px;">
+    <div style="background:#eef2f8;border:1px solid var(--bdr);border-radius:6px;padding:10px 12px;">
+      <div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.10em;color:var(--txt-s);font-weight:600;">Trip Sum · 11 active days (D9, D16 nil)</div>
+      <div style="font-size:22px;font-weight:700;color:var(--navy);margin-top:2px;">3,336</div>
+      <div style="font-size:10px;color:var(--txt-m);">D6:313·D7:332·D8:239·D10:176·D11:243·D12:426·D13:268·D14:254·D15:408·D17:381·D18:296</div>
+    </div>
+    <div style="background:#e8f5e9;border:1px solid var(--bdr);border-radius:6px;padding:10px 12px;">
+      <div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.10em;color:var(--txt-s);font-weight:600;">D15 — Second-Best · D17: 381 (3rd) · D18: 296</div>
+      <div style="font-size:22px;font-weight:700;color:var(--green);margin-top:2px;">408 trips</div>
+      <div style="font-size:10px;color:var(--txt-m);">All 3 shifts balanced · A:132·B:139·C:137</div>
+    </div>
+    <div style="background:#fff3e0;border:1px solid var(--bdr);border-radius:6px;padding:10px 12px;">
+      <div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.10em;color:var(--txt-s);font-weight:600;">Peak Productive Hour</div>
+      <div style="font-size:22px;font-weight:700;color:var(--orange);margin-top:2px;">40</div>
+      <div style="font-size:10px;color:var(--txt-m);">10-11 AM (D12) · 7-8 PM (D12) · 12-1 AM (D14)</div>
+    </div>
+    <div style="background:#e8f5e9;border:1px solid var(--bdr);border-radius:6px;padding:10px 12px;">
+      <div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.10em;color:var(--txt-s);font-weight:600;">D15 Most Balanced · 11-Day Pattern</div>
+      <div style="font-size:22px;font-weight:700;color:var(--green);margin-top:2px;">11-day avg 303</div>
+      <div style="font-size:10px;color:var(--txt-m);">D15 most balanced shift split (A:132·B:139·C:137)</div>
+    </div>
+  </div>
+
+  <!-- Chart row 1: Hourly trips trend (line) + Shift breakdown (stacked bar) -->
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-hdr">
+        <div class="t">Hour-wise Trip Distribution · Avg D6–D18 excl D9, D16 (11 active days)</div>
+        <div class="summary"><span class="sm">Red zones = shift-change dip hours</span></div>
+      </div>
+      <div class="card-body"><div class="chart-wrap tall"><canvas id="ch_hp_hour"></canvas></div></div>
+    </div>
+    <div class="card">
+      <div class="card-hdr">
+        <div class="t">Day-wise Shift Balance · A · B · C (Stacked)</div>
+        <div class="summary"><span class="sm">Cross-shift consistency indicator</span></div>
+      </div>
+      <div class="card-body"><div class="chart-wrap tall"><canvas id="ch_hp_shift"></canvas></div></div>
+    </div>
+  </div>
+
+  <!-- New: Day-wise × Shift-wise Trips Trend (grouped bars + total line) -->
+  <div class="card" style="margin-bottom:10px;">
+    <div class="card-hdr" style="flex-wrap:wrap;align-items:flex-start;gap:6px;">
+      <div class="t" style="flex:0 0 100%;">Day-wise × Shift-wise Trips Trend <span style="font-size:9.5px;font-weight:500;color:var(--txt-m);letter-spacing:.04em;">(grouped bars + day total line)</span></div>
+      <div class="summary" style="flex-wrap:wrap;justify-content:flex-start;gap:8px 12px;width:100%;"><span class="sm">11 days · Total <b>3,336</b> · Avg <b>303</b>/day</span><span class="sm">D6:<b>313</b> · D7:<b>332</b> · D8:<b>239</b> · D10:<b>176</b> · D11:<b>243</b> · D12:<b>426</b> · D13:<b>268</b> · D14:<b>254</b> · D15:<b>408</b> · D17:<b>381</b> · D18:<b>296</b></span><span class="sm">Best D12 · 2nd D15 · 3rd D17</span></div>
+    </div>
+    <div class="card-body"><div class="chart-wrap tall"><canvas id="ch_hp_dayshift"></canvas></div></div>
+  </div>
+
+  <!-- Location-wise performance table -->
+  <div class="card" style="margin-bottom:10px;">
+    <div class="card-hdr">
+      <div class="t">Location-wise Trip Aggregate · D6–D18 excl D9, D16 (11 active days · D9 had no shift breakdown)</div>
+      <div class="summary"><span class="sm">Sorted by total volume</span><span class="sm">Avg/day computed over days active</span></div>
+    </div>
+    <div class="card-body" style="padding:0;overflow-x:auto;">
+      <table class="sum-tbl" id="hp_loc_tbl">
+        <thead>
+          <tr>
+            <th class="lft" style="text-align:left;">Location</th>
+            <th class="r">Total Trips</th>
+            <th class="r">Days Active</th>
+            <th class="r">Avg/day</th>
+            <th class="r">A-Shift</th>
+            <th class="r">B-Shift</th>
+            <th class="r">C-Shift</th>
+            <th class="r">Shift Skew</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Critical findings block -->
+  <div style="background:#fffbf0;border:1px solid var(--gold-l);border-radius:6px;padding:12px 14px;margin-bottom:14px;">
+    <div style="font-size:11px;font-weight:700;color:var(--gold-d);text-transform:uppercase;letter-spacing:.12em;margin-bottom:8px;">Critical Findings from Hourly Data</div>
+    <div style="font-size:11.5px;color:var(--txt-p);line-height:1.6;">
+      <b>1. D6 delivered 313 trips — first significant operating day of May.</b> A-shift 86, B-shift 133, C-shift 94. B-shift the strongest contributor (42% of day's total). Peak hour 3-4 PM with 32 trips; near-peak periods 4-5 PM (28) and 10-11 PM (25).<br><br>
+      <b>2. North Side dominates again — same pattern as April.</b> N.Side 62 MRL OB (79) + N.Side 58 MRL OB (64) = <b>143 trips = 45.7% of D6's total</b>. SE BAL 65 MRL OB added 66 (21.1%). North + SE BAL combined = 209 trips (66.8%) — three faces drove the bulk of the day's output.<br><br>
+      <b>3. New face emerged: COBP Tailing — 41 trips on D6.</b> COBP Feeding only 3 trips, but Tailing pull was 41 — supports the 82 MT COB plant output. Lump shifting (COBP→Ore plot) had nil activity. Re-handling West Side Ore (10 trips) suggests stockpile rearrangement.<br><br>
+      <b>4. Persistent constraints flagged in remarks:</b> Tipper shortages, single LMV constraints, drinking water issue, dozer breakdown, congested haul road, CLL driver refusal — multiple recurring CONTROLLABLE issues affecting otherwise capable hours. Hours 1-2 PM (3 trips), 6-7 PM (snack break, nil), 9-10 PM (LMV unavailability, nil), 1-2 AM (tea break, nil), 4-5 AM (3 trips) — productive hours lost to operational gaps.<br><br>
+      <b>5. South West LG 110 MRL active — 23 trips on D6.</b> Combined with NW 70/50 MRL OB (17 trips), reflects vendor-area face activity. However, Deshmesh-tagged work is ZERO from MIS file (Desh Actual = 0 / 7,540 CuM Till-06). Indicates South West work being done by BAL OWN tippers, not vendor.
+    </div></div>
+
+  <!-- ============ DEWATERING ============ -->
+  <div class="sec-title">Dewatering Operations <span class="pill">Till 18-May 2026 · MTD Trend</span></div>
+
+  <!-- KPI strip: Dewatering main metrics -->
+  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px;">
+    <div style="background:#e8f5e9;border:1px solid var(--bdr);border-radius:6px;padding:10px 12px;">
+      <div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.10em;color:var(--txt-s);font-weight:600;">Water Disposal · D18</div>
+      <div style="font-size:22px;font-weight:700;color:var(--green);margin-top:2px;">5,313<span style="font-size:11px;color:var(--txt-m);font-weight:500;"> M³</span></div>
+      <div style="font-size:10px;color:var(--green);font-weight:600;">Plan 5,290 · 100% · +23 M³ · 2nd day at plan</div>
+    </div>
+    <div style="background:#e8f5e9;border:1px solid var(--bdr);border-radius:6px;padding:10px 12px;">
+      <div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.10em;color:var(--txt-s);font-weight:600;">Pump Run Hours · D18</div>
+      <div style="font-size:22px;font-weight:700;color:var(--green);margin-top:2px;">23.1<span style="font-size:11px;color:var(--txt-m);font-weight:500;"> hr</span></div>
+      <div style="font-size:10px;color:var(--green);font-weight:600;">Plan 23 · 100% · 0.1 hr over plan</div>
+    </div>
+    <div style="background:#fff3e0;border:1px solid var(--bdr);border-radius:6px;padding:10px 12px;">
+      <div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.10em;color:var(--txt-s);font-weight:600;">Closing Stock · D18</div>
+      <div style="font-size:22px;font-weight:700;color:var(--green);margin-top:2px;">7,274<span style="font-size:11px;color:var(--txt-m);font-weight:500;"> M³</span></div>
+      <div style="font-size:10px;color:var(--green);font-weight:600;">▼ −313 vs D17 (7,587) · new monthly low</div>
+    </div>
+    <div style="background:#eef2f8;border:1px solid var(--bdr);border-radius:6px;padding:10px 12px;">
+      <div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.10em;color:var(--txt-s);font-weight:600;">Pump Capacity (450 kW &amp; 425 HP)</div>
+      <div style="font-size:22px;font-weight:700;color:var(--navy);margin-top:2px;">230<span style="font-size:11px;color:var(--txt-m);font-weight:500;"> M³/Hr</span></div>
+      <div style="font-size:10px;color:var(--txt-m);font-weight:600;">Adjusted capacity · stable Till D18</div>
+    </div>
+    <div style="background:#ffebee;border:1px solid var(--bdr);border-radius:6px;padding:10px 12px;">
+      <div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.10em;color:var(--txt-s);font-weight:600;">EDDY Silt Removal</div>
+      <div style="font-size:22px;font-weight:700;color:var(--red);margin-top:2px;">NIL</div>
+      <div style="font-size:10px;color:var(--red);font-weight:600;">18 days nil · re-fit on CAT 350 pending</div>
+    </div>
+  </div>
+
+  <!-- Secondary strip: MTD aggregates -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px;">
+    <div style="background:var(--bg-sec);border:1px solid var(--bdr);border-radius:6px;padding:10px 12px;">
+      <div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.10em;color:var(--txt-s);font-weight:600;">MTD Disposal (18 days)</div>
+      <div style="font-size:20px;font-weight:700;color:var(--accent);margin-top:2px;">88,711<span style="font-size:10px;color:var(--txt-m);font-weight:500;"> / 103,040 M³</span></div>
+      <div style="font-size:10px;color:var(--accent);font-weight:600;">86.1% MTD compliance</div>
+    </div>
+    <div style="background:var(--bg-sec);border:1px solid var(--bdr);border-radius:6px;padding:10px 12px;">
+      <div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.10em;color:var(--txt-s);font-weight:600;">MTD Pump Hours</div>
+      <div style="font-size:20px;font-weight:700;color:var(--accent);margin-top:2px;">385.7<span style="font-size:10px;color:var(--txt-m);font-weight:500;"> / 448 hr</span></div>
+      <div style="font-size:10px;color:var(--accent);font-weight:600;">86.1% pump utilisation</div>
+    </div>
+    <div style="background:#fff3e0;border:1px solid var(--bdr);border-radius:6px;padding:10px 12px;">
+      <div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.10em;color:var(--txt-s);font-weight:600;">Rain Inflow MTD</div>
+      <div style="font-size:20px;font-weight:700;color:var(--orange);margin-top:2px;">0<span style="font-size:10px;color:var(--txt-m);font-weight:500;"> M³</span></div>
+      <div style="font-size:10px;color:var(--orange);font-weight:600;">No rain recorded May 2026 yet</div>
+    </div>
+    <div style="background:#fff3e0;border:1px solid var(--bdr);border-radius:6px;padding:10px 12px;">
+      <div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.10em;color:var(--txt-s);font-weight:600;">Net Stock Change</div>
+      <div style="font-size:20px;font-weight:700;color:var(--orange);margin-top:2px;">+1,289<span style="font-size:10px;color:var(--txt-m);font-weight:500;"> M³</span></div>
+      <div style="font-size:10px;color:var(--orange);font-weight:600;">D1 Open 5,985 → D18 Close 7,274</div>
+    </div>
+  </div>
+
+  <!-- Daily Trend Table: D1-D15 -->
+  <div class="card" style="margin-bottom:12px;">
+    <div class="card-hdr">
+      <div class="t">Daily Performance Trend · 01–18 May 2026</div>
+      <div class="summary"><span class="sm">MTD Disposal <b>88,711 / 103,040 M³ = 86.1%</b></span><span class="sm">Pump-Hr <b>385.7 / 448 = 86.1%</b></span><span class="sm">Net Stock Δ <b>+1,289 M³</b> · Seepage 5,000 M³/day</span></div>
+    </div>
+    <div class="card-body" style="padding:0;overflow-x:auto;">
+      <table class="sum-tbl" style="width:100%;font-size:10.5px;">
+        <thead>
+          <tr>
+            <th class="lft" style="text-align:left;">Date</th>
+            <th class="r">Open Stock (M³)</th>
+            <th class="r">Rain Added (M³)</th>
+            <th class="r">Pump Plan (hr)</th>
+            <th class="r">Pump Act (hr)</th>
+            <th class="r">Disposal Plan (M³)</th>
+            <th class="r">Disposal Act (M³)</th>
+            <th class="r">Variance (M³)</th>
+            <th class="r">Closing (M³)</th>
+            <th class="r">Compliance</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td class="date">01-May</td><td class="r">5,985</td><td class="r">0</td><td class="r">25</td><td class="r">25.3</td><td class="r">5,750</td><td class="r" style="color:var(--green);font-weight:600;">5,819</td><td class="r" style="color:var(--green);font-weight:600;">+69</td><td class="r">5,166</td><td class="r"><span style="background:#e8f5e9;color:var(--green);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">101%</span></td></tr>
+          <tr><td class="date">02-May</td><td class="r">5,166</td><td class="r">0</td><td class="r">24</td><td class="r">19.2</td><td class="r">5,520</td><td class="r" style="color:var(--red);font-weight:600;">4,416</td><td class="r" style="color:var(--orange);font-weight:600;">-1,104</td><td class="r">5,750</td><td class="r"><span style="background:#ffebee;color:var(--red);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">80%</span></td></tr>
+          <tr><td class="date">03-May</td><td class="r">5,750</td><td class="r">0</td><td class="r">24</td><td class="r">11.6</td><td class="r">5,520</td><td class="r" style="color:var(--red);font-weight:600;">2,668</td><td class="r" style="color:var(--red);font-weight:600;">-2,852</td><td class="r">8,082</td><td class="r"><span style="background:#ffebee;color:var(--red);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">48%</span></td></tr>
+          <tr><td class="date">04-May</td><td class="r">8,082</td><td class="r">0</td><td class="r">24</td><td class="r">0.0</td><td class="r">5,520</td><td class="r" style="color:var(--red);font-weight:600;">0</td><td class="r" style="color:var(--red);font-weight:600;">-5,520</td><td class="r">13,082</td><td class="r"><span style="background:#ffebee;color:var(--red);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">0%</span></td></tr>
+          <tr><td class="date">05-May</td><td class="r">13,082</td><td class="r">0</td><td class="r">30</td><td class="r">15.0</td><td class="r">6,900</td><td class="r" style="color:var(--red);font-weight:600;">3,450</td><td class="r" style="color:var(--red);font-weight:600;">-3,450</td><td class="r">14,632</td><td class="r"><span style="background:#ffebee;color:var(--red);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">50%</span></td></tr>
+          <tr><td class="date">06-May</td><td class="r">14,632</td><td class="r">0</td><td class="r">25</td><td class="r">25.3</td><td class="r">5,750</td><td class="r" style="color:var(--green);font-weight:600;">5,819</td><td class="r" style="color:var(--green);font-weight:600;">+69</td><td class="r">13,813</td><td class="r"><span style="background:#e8f5e9;color:var(--green);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">101%</span></td></tr>
+          <tr><td class="date">07-May</td><td class="r">13,813</td><td class="r">0</td><td class="r">25</td><td class="r">25.1</td><td class="r">5,750</td><td class="r" style="color:var(--green);font-weight:600;">5,773</td><td class="r" style="color:var(--green);font-weight:600;">+23</td><td class="r">13,040</td><td class="r"><span style="background:#e8f5e9;color:var(--green);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">100%</span></td></tr>
+          <tr><td class="date">08-May</td><td class="r">13,040</td><td class="r">0</td><td class="r">27</td><td class="r">27.2</td><td class="r">6,210</td><td class="r" style="color:var(--green);font-weight:600;">6,256</td><td class="r" style="color:var(--green);font-weight:600;">+46</td><td class="r">11,784</td><td class="r"><span style="background:#e8f5e9;color:var(--green);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">101%</span></td></tr>
+          <tr><td class="date">09-May</td><td class="r">11,784</td><td class="r">0</td><td class="r">30</td><td class="r">29.5</td><td class="r">6,900</td><td class="r" style="color:var(--green);font-weight:600;">6,785</td><td class="r" style="color:var(--orange);font-weight:600;">-115</td><td class="r">9,999</td><td class="r"><span style="background:#e8f5e9;color:var(--green);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">98%</span></td></tr>
+          <tr><td class="date">10-May</td><td class="r">9,999</td><td class="r">0</td><td class="r">30</td><td class="r">26.1</td><td class="r">6,900</td><td class="r" style="color:var(--orange);font-weight:600;">6,003</td><td class="r" style="color:var(--orange);font-weight:600;">-897</td><td class="r">8,996</td><td class="r"><span style="background:#fff3e0;color:var(--orange);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">87%</span></td></tr>
+          <tr><td class="date">11-May</td><td class="r">8,996</td><td class="r">0</td><td class="r">25</td><td class="r">25.1</td><td class="r">5,750</td><td class="r" style="color:var(--green);font-weight:600;">5,773</td><td class="r" style="color:var(--green);font-weight:600;">+23</td><td class="r">8,223</td><td class="r"><span style="background:#e8f5e9;color:var(--green);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">100%</span></td></tr>
+          <tr><td class="date">12-May</td><td class="r">8,223</td><td class="r">0</td><td class="r">21</td><td class="r">21.1</td><td class="r">4,830</td><td class="r" style="color:var(--green);font-weight:600;">4,853</td><td class="r" style="color:var(--green);font-weight:600;">+23</td><td class="r">8,370</td><td class="r"><span style="background:#e8f5e9;color:var(--green);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">100%</span></td></tr>
+          <tr><td class="date">13-May</td><td class="r">8,370</td><td class="r">0</td><td class="r">19</td><td class="r">19.0</td><td class="r">4,370</td><td class="r" style="color:var(--green);font-weight:600;">4,370</td><td class="r" style="color:var(--green);font-weight:600;">0</td><td class="r">9,000</td><td class="r"><span style="background:#e8f5e9;color:var(--green);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">100%</span></td></tr>
+          <tr><td class="date">14-May</td><td class="r">9,000</td><td class="r">0</td><td class="r">22</td><td class="r">22.1</td><td class="r">5,060</td><td class="r" style="color:var(--green);font-weight:600;">5,083</td><td class="r" style="color:var(--green);font-weight:600;">+23</td><td class="r">8,917</td><td class="r"><span style="background:#e8f5e9;color:var(--green);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">100%</span></td></tr>
+          <tr><td class="date">15-May</td><td class="r">8,917</td><td class="r">0</td><td class="r">22</td><td class="r">22.9</td><td class="r">5,060</td><td class="r" style="color:var(--green);font-weight:600;">5,267</td><td class="r" style="color:var(--green);font-weight:600;">+207</td><td class="r">8,650</td><td class="r"><span style="background:#e8f5e9;color:var(--green);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">104%</span></td></tr>
+          <tr><td class="date">16-May</td><td class="r">8,650</td><td class="r">0</td><td class="r">25</td><td class="r">21.0</td><td class="r">5,750</td><td class="r" style="color:var(--orange);font-weight:600;">4,830</td><td class="r" style="color:var(--orange);font-weight:600;">-920</td><td class="r">8,820</td><td class="r"><span style="background:#fff3e0;color:var(--orange);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">84%</span></td></tr>
+          <tr><td class="date">17-May</td><td class="r">8,820</td><td class="r">0</td><td class="r">27</td><td class="r">27.1</td><td class="r">6,210</td><td class="r" style="color:var(--green);font-weight:600;">6,233</td><td class="r" style="color:var(--green);font-weight:600;">+23</td><td class="r">7,587</td><td class="r"><span style="background:#e8f5e9;color:var(--green);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">100%</span></td></tr>
+          <tr style="background:#fdf6e3;"><td class="date" style="font-weight:700;">18-May</td><td class="r" style="font-weight:600;">7,587</td><td class="r">0</td><td class="r">23</td><td class="r" style="font-weight:600;">23.1</td><td class="r">5,290</td><td class="r" style="color:var(--green);font-weight:700;">5,313</td><td class="r" style="color:var(--green);font-weight:700;">+23</td><td class="r" style="font-weight:700;">7,274</td><td class="r"><span style="background:#e8f5e9;color:var(--green);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">100%</span></td></tr>
+        </tbody>
+        <tfoot>
+          <tr class="mtd">
+            <td class="date" style="font-weight:700;">MTD TOTAL</td>
+            <td class="r">—</td>
+            <td class="r" style="font-weight:700;">0</td>
+            <td class="r" style="font-weight:700;">448</td>
+            <td class="r" style="font-weight:700;">385.7</td>
+            <td class="r" style="font-weight:700;">103,040</td>
+            <td class="r" style="font-weight:700;color:var(--accent);">88,711</td>
+            <td class="r" style="font-weight:700;color:var(--orange);">−14,329</td>
+            <td class="r" style="font-weight:700;color:var(--orange);">7,274</td>
+            <td class="r"><span style="background:#fff3e0;color:var(--orange);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">86.1%</span></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </div>
+
+  <!-- Critical Observations -->
+  <div style="background:#fff5f0;border:1px solid #f5c0b0;border-radius:6px;padding:12px 14px;margin-bottom:14px;">
+    <div style="font-size:11px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.12em;margin-bottom:10px;">Critical Observations — Dewatering &amp; Silt</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:11px;color:var(--txt-p);line-height:1.55;">
+      <div>
+        <div style="font-weight:700;color:var(--navy);margin-bottom:4px;">🔵 Dewatering — Issues Tracked</div>
+        <div style="margin-bottom:6px;"><b>1. D2–D4 disposal collapse</b>: D3 hit 48% (2,668/5,520 M³) on just 11.6 hr pump · <b>D4 ZERO disposal</b> (pumps fully down) — closing stock spiked from 5,166 to 13,082 M³ in 4 days. Catalyst for stock rebuild crisis. <span style="color:var(--red);font-weight:600;">CRITICAL · Pump availability</span></div>
+        <div style="margin-bottom:6px;"><b>2. D5 partial recovery</b> (50% compliance · 15 hr pump · 3,450 M³ disposal) — closing peaked at 14,632 M³ (highest of month). <span style="color:var(--orange);font-weight:600;">PARTIAL · Restart progressing</span></div>
+        <div style="margin-bottom:6px;"><b>3. D6–D18 — 13 days, mostly strong</b> with D10 (87%) and D16 (84%) the two dips; otherwise 98–104% compliance. <b>D17–D18 back-to-back 100%</b> (6,233 + 5,313 M³). Plan disposal scaled from 4,370 to 6,210 matching capacity. <span style="color:var(--green);font-weight:600;">STRONG · Stable operations</span></div>
+        <div><b>4. Pump capacity 230 M³/hr</b> (450 kW &amp; 425 HP combined) — vs OEM 250–280 M³/hr design. ~18% below design rating. <span style="color:var(--orange);font-weight:600;">PARTIAL · Capacity gap</span></div>
+      </div>
+      <div>
+        <div style="font-weight:700;color:#5e35b1;margin-bottom:4px;">🟣 Stock &amp; Silt — Issues Tracked</div>
+        <div style="margin-bottom:6px;"><b>1. D5 Peak Stock 14,632 M³</b> — after D4's zero-disposal day, stock more than doubled from D1's 5,166. Recovery from peak: 14,632 → 7,274 = −7,358 M³ over 13 days (−50%). <span style="color:var(--green);font-weight:600;">RECOVERED</span></div>
+        <div style="margin-bottom:6px;"><b>2. Seepage 5,000 M³/day constant</b> — consistent daily water inflow from pit seepage. Zero rain inflow in May (pre-monsoon). Pumping must clear ≥5,000 M³/day just to hold stock flat. <span style="color:var(--txt-m);font-weight:600;">STRUCTURAL · Pit hydrology</span></div>
+        <div style="margin-bottom:6px;"><b>3. D17–D18 sustained drawdown</b>: D15 8,650 → D16 8,820 → <b>D17 7,587</b> (−1,233) → <b>D18 7,274</b> (−313, new monthly low). Two-day cumulative drop −1,546 M³ — strongest stretch since D2. <span style="color:var(--green);font-weight:600;">POSITIVE TRAJECTORY</span></div>
+        <div><b>4. EDDY Pump still dismantled — zero silt removal across all 18 days</b>. Re-fit on CAT 350 pending. Pre-monsoon silt removal window has now closed. <span style="color:var(--red);font-weight:600;">CRITICAL · Workshop</span></div>
+      </div>
+    </div>
+    <div style="margin-top:10px;padding-top:10px;border-top:1px dashed #f5c0b0;font-size:10.5px;color:var(--txt-m);line-height:1.55;">
+      <b style="color:var(--gold-d);">Headline read (Till 18-May):</b> Dewatering recovered strongly from the D2–D4 collapse. <b>D1: 101% compliance · D2: 80% · D3: 48% · D4: 0%</b> (pumps down) drove closing stock from 5,166 (D1) to peak <b>14,632 M³ on D5</b>. The 13-day recovery stretch D6–D18 averaged ~94% compliance (D10 87% and D16 84% the two dips) and brought closing stock down to <b>7,274 M³ at D18 (−50% from peak · new monthly low)</b>. <b>MTD Disposal 88,711 / 103,040 = 86.1%</b>, Pump 385.7 / 448 = 86.1%. <b>D17–D18 back-to-back 100% compliance</b> (6,233 + 5,313 = 11,546 M³ over 50.2 pump hrs). <b>Pump capacity 230 M³/hr</b> (vs 250+ M³/hr design) is a structural constraint — 18% below rated. <b>Daily seepage 5,000 M³</b> sets the minimum daily disposal floor. <b>EDDY Pump still dismantled — zero silt removal</b> 18 consecutive days; re-fit on CAT 350 remains the next critical unlock and the pre-monsoon window has now closed. Pre-monsoon buffer: stock currently 7,274 M³, well within management range — needs sustained 95%+ compliance to keep drawing down before monsoon arrives.
+    </div>
+  </div>
+
+  <!-- ============ LOSS SUMMARY + OEE ============ -->
+  
+
+  <!-- ============ LOSS SUMMARY + OEE ============ -->
+  <div class="sec-title">Loss Cost Matrix &amp; Equipment OEE <span class="pill">May 2026 · Mines Loss</span></div>
+
+  <div class="grid-2" style="margin-bottom:10px;">
+    <!-- Loss Summary -->
+    <div class="card">
+      <div class="card-hdr">
+        <div class="t">Mines Loss Summary</div>
+        <div class="summary"><span class="sm">Impact in Rs. Lacs</span></div>
+      </div>
+      <div class="card-body" style="padding:0;overflow-x:auto;">
+        <table class="sum-tbl" style="width:100%;">
+          <thead>
+            <tr>
+              <th class="lft" style="text-align:left;">Sr. No.</th>
+              <th class="lft" style="text-align:left;">Loss Description</th>
+              <th class="r">Loss (Rs. Lacs)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="date">1</td>
+              <td class="date">Impact on Fe. Cr. Output</td>
+              <td style="color:var(--red);font-weight:700;font-family:'IBM Plex Mono',monospace;">−1,401.16</td>
+            </tr>
+            <tr>
+              <td class="date">2</td>
+              <td class="date">Opportunity Loss</td>
+              <td style="color:var(--red);font-weight:700;font-family:'IBM Plex Mono',monospace;">−1,094.96</td>
+            </tr>
+          </tbody>
+          <tfoot>
+            <tr class="mtd">
+              <td class="date" colspan="2">TOTAL LOSS</td>
+              <td style="color:var(--red);font-weight:700;font-family:'IBM Plex Mono',monospace;">−2,496.12</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+
+    <!-- Loss by Category -->
+    <div class="card">
+      <div class="card-hdr">
+        <div class="t">Loss Attribution by Responsibility (KAM)</div>
+        <div class="summary"><span class="sm">BAL OWN Excavators · Till 17-May</span><span class="sm">Ore Dev: <b>8,609 MT</b> · OB Dev: <b>51,033 CuM</b></span></div>
+      </div>
+      <div class="card-body" style="padding:0;overflow-x:auto;">
+        <table class="sum-tbl" style="width:100%;font-size:11px;">
+          <thead>
+            <tr>
+              <th class="lft" style="text-align:left;">Owner (KAM)</th>
+              <th class="lft" style="text-align:left;">Primary Loss Heads</th>
+              <th class="r">Ore Loss (MT)</th>
+              <th class="r">OB Loss (CuM)</th>
+              <th class="r">% Ore</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-weight:700;color:var(--navy);vertical-align:top;text-align:left;">Amarendra Sarangi<br><span style="font-size:9px;font-weight:600;color:var(--txt-s);letter-spacing:.04em;">MAINTENANCE</span></td>
+              <td style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);color:var(--txt-p);line-height:1.55;text-align:left;">
+                <b style="color:var(--red);">Breakdown</b> 4,848.5 (TATA-470/2 down 353.6 of 408 hr · 54 hr operational across D15-D17 · 240 CuM produced)<br>
+                Tipper Shortage 35.1 · Preventive Maintenance 27.0
+              </td>
+              <td class="r" style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--red);">4,910.6</td>
+              <td class="r" style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--txt-p);">1,513.5</td>
+              <td class="r" style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--red);">57.0%</td>
+            </tr>
+            <tr>
+              <td style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-weight:700;color:var(--navy);vertical-align:top;text-align:left;">Pramod Kumar<br><span style="font-size:9px;font-weight:600;color:var(--txt-s);letter-spacing:.04em;">MINES OPS</span></td>
+              <td style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);color:var(--txt-p);line-height:1.55;text-align:left;">
+                <b style="color:var(--orange);">OTHER (DGMS Visit)</b> 1,472.9 · Rain &amp; Slippery 814.8<br>
+                Idle Safety 317.6 · Job Allocation 259.4 · Idle (No Work) 86.3 · Early Close 58.1 · Others 162.1
+              </td>
+              <td class="r" style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--orange);">3,171.2</td>
+              <td class="r" style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--red);">44,290.1</td>
+              <td class="r" style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--orange);">36.8%</td>
+            </tr>
+            <tr>
+              <td style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-weight:700;color:var(--navy);vertical-align:top;text-align:left;">Bhabani Shankar<br><span style="font-size:9px;font-weight:600;color:var(--txt-s);letter-spacing:.04em;">HR / SHIFT OPS</span></td>
+              <td style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);color:var(--txt-p);line-height:1.55;text-align:left;">
+                Tiffin 256.7 · LMV Unavailability 218.9 · Absence of Operator 0 · Strike 0
+              </td>
+              <td class="r" style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--gold-d);">475.6</td>
+              <td class="r" style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--txt-p);">4,897.2</td>
+              <td class="r" style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--gold-d);">5.5%</td>
+            </tr>
+            <tr>
+              <td style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-weight:700;color:var(--navy);vertical-align:top;text-align:left;">Bhimsen Barik<br><span style="font-size:9px;font-weight:600;color:var(--txt-s);letter-spacing:.04em;">SCM</span></td>
+              <td style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);color:var(--txt-p);line-height:1.55;text-align:left;">
+                HSD Shortage 51.3 MT / 196.9 CuM — emerged as a new loss head in D15-D17 window
+              </td>
+              <td class="r" style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--gold-d);">51.3</td>
+              <td class="r" style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--txt-p);">196.9</td>
+              <td class="r" style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--gold-d);">0.6%</td>
+            </tr>
+            <tr>
+              <td style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-weight:700;color:var(--txt-s);vertical-align:top;text-align:left;">K L Das<br><span style="font-size:9px;font-weight:600;color:var(--txt-s);letter-spacing:.04em;">ELEC · LOGISTICS</span></td>
+              <td style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);color:var(--txt-p);line-height:1.55;text-align:left;">
+                Illumination Problem 2.2 hr — minor OB-only impact
+              </td>
+              <td class="r" style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--green);">0</td>
+              <td class="r" style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--txt-p);">135.3</td>
+              <td class="r" style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--green);">0%</td>
+            </tr>
+            <tr>
+              <td style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-weight:700;color:var(--txt-s);vertical-align:top;text-align:left;">Maheswar Mohanty<br><span style="font-size:9px;font-weight:600;color:var(--txt-s);letter-spacing:.04em;">LOGISTICS</span></td>
+              <td style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);color:var(--txt-p);line-height:1.55;text-align:left;">
+                <span style="color:var(--green);">Truck Jam 0</span> — zero ore loss
+              </td>
+              <td class="r" style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--green);">0</td>
+              <td class="r" style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--green);">0</td>
+              <td class="r" style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--green);">0%</td>
+            </tr>
+          </tbody>
+          <tfoot>
+            <tr class="mtd">
+              <td class="date" colspan="2" style="font-weight:700;text-align:left;padding:8px 10px;">TOTAL DEVIATION (Ore Plan 16,001 / Actual 7,392 MT)</td>
+              <td class="r" style="font-weight:700;font-family:'IBM Plex Mono',monospace;color:var(--red);">8,609.0</td>
+              <td class="r" style="font-weight:700;font-family:'IBM Plex Mono',monospace;color:var(--red);">51,033.0</td>
+              <td class="r" style="font-weight:700;font-family:'IBM Plex Mono',monospace;color:var(--red);">100%</td>
+            </tr>
+          </tfoot>
+        </table>
+        <div style="padding:8px 12px;background:#fdf6e3;border-top:1px solid var(--bdr);font-size:10px;color:var(--txt-m);line-height:1.5;">
+          <b style="color:var(--gold-d);">Multiplying factors:</b> Ore <b>13.51 MT/hr</b> · OB <b>61.52 CuM/hr</b> · Total Loss Hours: Ore 637.1, OB 829.5 ·
+          <b style="color:var(--red);">Top single driver:</b> OTHER (DGMS Visit) — 1,472.9 MT / 20,117.9 CuM = 17.1% of ore loss · 39.4% of OB loss
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- OEE per Excavator -->
+  <div class="card" style="margin-bottom:10px;">
+    <div class="card-hdr">
+      <div class="t">Excavator OEE Breakdown · BAL Own Equipment</div>
+      <div class="summary"><span class="sm">Availability × Performance · MTD Till 17-May</span><span class="sm">Loading 408 hr/machine · 17 days × 24 (per LCM)</span></div>
+    </div>
+    <div class="card-body" style="padding:0;overflow-x:auto;">
+      <table class="sum-tbl" style="width:100%;font-size:10.5px;">
+        <thead>
+          <tr>
+            <th class="lft" style="text-align:left;">Excavator</th>
+            <th class="r">Loading Time (hr)</th>
+            <th class="r">Down Time (hr)</th>
+            <th class="r" style="background:#e8f5e9;"><b>Availability %</b></th>
+            <th class="r">Operating Time (hr)</th>
+            <th class="r">Perf. Loss (hr)</th>
+            <th class="r">Actual Exc. (CuM)</th>
+            <th class="r" style="background:#fff3e0;"><b>Performance %</b></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="date">TATA-370(4)</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">408.0</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">1.0</td>
+            <td class="r" style="background:#e8f5e9;font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--green);">99.8%</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">407.0</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;color:var(--orange);">245.5</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;">8,430</td>
+            <td class="r" style="background:#fff3e0;font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--green);">53.0%</td>
+          </tr>
+          <tr>
+            <td class="date">TATA-470(7)</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">408.0</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">7.23</td>
+            <td class="r" style="background:#e8f5e9;font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--green);">98.2%</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">400.77</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;color:var(--orange);">255.77</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;">3,540</td>
+            <td class="r" style="background:#fff3e0;font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--green);">52.0%</td>
+          </tr>
+          <tr>
+            <td class="date">TATA-370(5)</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">408.0</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">1.0</td>
+            <td class="r" style="background:#e8f5e9;font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--green);">99.8%</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">407.0</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;color:var(--orange);">278.0</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;">3,528</td>
+            <td class="r" style="background:#fff3e0;font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--red);">22.0%</td>
+          </tr>
+          <tr>
+            <td class="date">TATA-220(8)</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">408.0</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">1.0</td>
+            <td class="r" style="background:#e8f5e9;font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--green);">99.8%</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">407.0</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;color:var(--red);">303.0</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--red);">960</td>
+            <td class="r" style="background:#fff3e0;font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--red);">8.0%</td>
+          </tr>
+          <tr>
+            <td class="date">TATA-470(2)</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">408.0</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;color:var(--red);font-weight:700;">353.58</td>
+            <td class="r" style="background:#e8f5e9;font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--red);">13.3%</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">54.42</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">20.52</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--red);">240</td>
+            <td class="r" style="background:#fff3e0;font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--red);">26.0%</td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr class="mtd">
+            <td class="date">FLEET OVERALL (5 BAL OWN)</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;">2,040.0</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--red);">363.81</td>
+            <td class="r" style="background:#e8f5e9;font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--orange);">82.17%</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;">1,676.19</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--red);">1,102.79</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;">16,698</td>
+            <td class="r" style="background:#fff3e0;font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--orange);">42.00%</td>
+          </tr>
+        </tfoot>
+      </table>
+      <div style="padding:8px 12px;background:#fdf6e3;border-top:1px solid var(--bdr);font-size:10px;color:var(--txt-m);line-height:1.55;">
+        <b style="color:var(--green);">OEE = Avail × Perf = 82.17% × 42% = 34.5%</b> for the BAL Own fleet — substantial jump from 28.1% Till D14.
+        <b>TATA-470(2) recovery</b>: from 327.5/336 hr down (D14) to 353.58/408 hr down (D17) — <b>54.4 operating hours added D15-D17</b>, producing first 240 CuM. Availability now 13.3% (was 2.5%).
+        Top performer: <b>TATA-370(4) @ 53% Performance · 8,430 CuM</b> excavated (up from 5,928 Till D14). <b>TATA-470(7) also at 52%</b> (up from 35%) · 3,540 CuM. TATA-370(5) climbed to 22% (3,528 CuM, was 2,310).
+        <b>DGMS regulatory visit cost 109 hrs per machine</b> (436 fleet hrs) — single biggest non-controllable hit. Excluding 470(2), active 4-machine fleet at <b>~99.8% Availability</b> but performance still capped around 30-50% by DGMS, rain, idle, LMV gaps.
+      </div>
+    </div>
+  </div>
+
+  <!-- Loss Heads breakdown (top contributors) -->
+  <div class="card" style="margin-bottom:14px;">
+    <div class="card-hdr">
+      <div class="t">Top Loss Heads · Ore &amp; OB Production Impact</div>
+      <div class="summary"><span class="sm">Top 10 by hour impact</span><span class="sm">Hrs lost feeds back into LCM conversion</span></div>
+    </div>
+    <div class="card-body" style="padding:0;overflow-x:auto;">
+      <table class="sum-tbl" style="width:100%;font-size:10.5px;">
+        <thead>
+          <tr>
+            <th class="lft" style="text-align:left;">Loss Description</th>
+            <th class="r">Ore Loss (Hr)</th>
+            <th class="r">Ore Loss (MT)</th>
+            <th class="r">OB Loss (Hr)</th>
+            <th class="r">OB Loss (CuM)</th>
+            <th class="r">Controllability</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="date" style="font-weight:700;">Breakdown</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--red);">358.9</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--red);">4,848.5</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">0.0</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">0</td>
+            <td class="r"><span style="background:#ffebee;color:var(--red);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">CONTROLLABLE</span></td>
+          </tr>
+          <tr>
+            <td class="date" style="font-weight:700;">Other (DGMS Visit)</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--orange);">109.0</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--orange);">1,472.9</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--red);">327.0</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--red);">20,117.9</td>
+            <td class="r"><span style="background:#e0e0e0;color:var(--txt-s);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">NON-CTRL</span></td>
+          </tr>
+          <tr>
+            <td class="date" style="font-weight:700;">Rain &amp; Slippery</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">60.3</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;">814.8</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">153.0</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;">9,413.0</td>
+            <td class="r"><span style="background:#e0e0e0;color:var(--txt-s);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">NON-CTRL</span></td>
+          </tr>
+          <tr>
+            <td class="date" style="font-weight:700;">Idle (Safety Concern)</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">23.5</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;">317.6</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">24.2</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;">1,488.8</td>
+            <td class="r"><span style="background:#fff3e0;color:var(--orange);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">PARTIAL</span></td>
+          </tr>
+          <tr>
+            <td class="date" style="font-weight:700;">Job Allocation</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">19.2</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;">259.4</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">41.2</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;">2,534.7</td>
+            <td class="r"><span style="background:#ffebee;color:var(--red);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">CONTROLLABLE</span></td>
+          </tr>
+          <tr>
+            <td class="date" style="font-weight:700;">Tiffin</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">19.0</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;">256.7</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">41.0</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;">2,522.4</td>
+            <td class="r"><span style="background:#ffebee;color:var(--red);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">CONTROLLABLE</span></td>
+          </tr>
+          <tr>
+            <td class="date" style="font-weight:700;">Idle (No Work)</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">6.4</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;">86.3</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">139.5</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;">8,582.4</td>
+            <td class="r"><span style="background:#ffebee;color:var(--red);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">CONTROLLABLE</span></td>
+          </tr>
+          <tr>
+            <td class="date" style="font-weight:700;">LMV Unavailability</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">16.2</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;">218.9</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">33.2</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;">2,042.6</td>
+            <td class="r"><span style="background:#ffebee;color:var(--red);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">CONTROLLABLE</span></td>
+          </tr>
+          <tr>
+            <td class="date" style="font-weight:700;">Early Close</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">4.3</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;">58.1</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">6.6</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;">406.0</td>
+            <td class="r"><span style="background:#fff3e0;color:var(--orange);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">PARTIAL</span></td>
+          </tr>
+          <tr>
+            <td class="date" style="font-weight:700;">Safety Talk</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">4.1</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;">55.4</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;">8.2</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;">504.5</td>
+            <td class="r"><span style="background:#fff3e0;color:var(--orange);padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:700;">PARTIAL</span></td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr class="mtd">
+            <td class="date">TOP 10 SUBTOTAL</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;">620.9</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--red);">8,388.6</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;">773.9</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--red);">47,612.3</td>
+            <td class="r" style="font-size:10px;color:var(--txt-m);font-weight:600;">97% of total</td>
+          </tr>
+          <tr style="background:var(--bg-sec);">
+            <td class="date" style="font-style:italic;color:var(--txt-m);">+ minor heads (HSD 51.3, Other 43.2, Tipper Shortage 35.1, IMFA 35.1, Pre-Mtnce 27, Face Prep 21.6, Idle Req 6.8 + Dump/Absence/Illum/Late Start OB-only)</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;color:var(--txt-m);">16.3</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;color:var(--txt-m);">220.4</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;color:var(--txt-m);">55.6</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;color:var(--txt-m);">3,420.7</td>
+            <td class="r" style="font-size:10px;color:var(--txt-m);">Mixed</td>
+          </tr>
+          <tr class="mtd" style="background:#ffebee;">
+            <td class="date" style="color:var(--red);">GRAND TOTAL</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--red);">637.1</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--red);">8,609.0</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--red);">829.5</td>
+            <td class="r" style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--red);">51,033.0</td>
+            <td class="r" style="font-size:10px;color:var(--red);font-weight:700;">100%</td>
+          </tr>
+        </tfoot>
+      </table>
+      <div style="padding:8px 12px;background:#fdf6e3;border-top:1px solid var(--bdr);font-size:10px;color:var(--txt-m);line-height:1.55;">
+        <b style="color:var(--gold-d);">Controllability split:</b>
+        <b style="color:var(--red);">Controllable</b> heads (Breakdown, Idle NW, Job Allocation, Tiffin, LMV) drove
+        <b>5,669.8 MT</b> of ore loss (65.9% of total) — these are the levers within plant control.
+        <b style="color:var(--txt-s);">Non-Controllable</b> (DGMS Visit + Rain) accounted for
+        <b>2,287.7 MT</b> (26.6%). <b>DGMS Visit</b> alone is the single biggest non-controllable hit at <b>17.1% of total ore loss</b> (109 hrs × 4 machines = 436 fleet hrs).
+      </div>
+    </div>
+  </div>
+
+  
+
+  <!-- ============ OPERATIONAL INSIGHTS ============ -->
+  <div class="sec-title">Operational Insights — Management Attention <span class="pill">Till 18-May</span></div>
+  <div class="insights" style="margin-bottom:14px;">
+    <div class="ins-grid">
+      <div class="ins-item">
+        <span class="ico r">!</span>
+        <div>
+          <span class="lbl">Critical · D1-D4 Complete Operational Pause</span>
+          First four days of May registered <b>zero ore mining</b> across all faces (BPM-East, BPM-West, BAL-North, BAL-East). Likely combination of Eid holiday + continuation of April-end labour issues. OB excavation also nil D1-D4. Closing stock held flat at ~3,100 MT. Operations resumed D5 onwards and have run for 14 mining days through D18.
+        </div>
+      </div>
+      <div class="ins-item">
+        <span class="ico g">✓</span>
+        <div>
+          <span class="lbl">Strong · 14 Mining Days D5–D18 · D17 Holds Record at 1,233 MT</span>
+          Daily ore: D5 <b>330</b> · D6 0 · D7 <b>630</b> · D8 <b>590</b> · D9 <b>640</b> · D10 <b>590</b> · D11 <b>410</b> · D12 <b>480</b> · D13 <b>520</b> · D14 <b>470</b> · D15 <b>920</b> · D16 <b>580</b> · <b>D17 1,233 (best of month)</b> · D18 <b>740</b>. MTD Ore <b>8,133 MT</b>. MTD OB <b>17,387 CuM</b>, COB <b>913 MT</b>, Despatch <b>6,112 MT</b>.
+        </div>
+      </div>
+      <div class="ins-item">
+        <span class="ico g">✓</span>
+        <div>
+          <span class="lbl">Critical · Deshmesh Stalled · 10 Consecutive Zero Days D9–D18</span>
+          NW + SE Deshmesh OB MTD: <b>595 CuM</b> (only D6: 158 · D7: 121 · D8: 316 contributed; <b>D9-D18 all zero</b>). Vendor effectively stopped after D8 — 10 consecutive zero days through D18. MTD just <b>2.3% of plan</b> (vs 25,636 CuM plan-to-date). With <b>13 working days remaining</b>, the 121,193 CuM monthly OB plan demands <b>~7,985 CuM/day from D19</b> — Deshmesh re-engagement is the single largest OB unlock.
+        </div>
+      </div>
+      <div class="ins-item">
+        <span class="ico o">!</span>
+        <div>
+          <span class="lbl">Stock Building · 3,935 MT · Permission Cleared for D19 Despatch</span>
+          Total stock <b>3,935 MT</b> (Mines 3,229 / BAL 466 / SUK 40 / LG-Feed 200) — Mines stock <b>built up +315 MT</b> vs 18-May, two consecutive days of zero despatch (D17 & D18) outpaced mining. <b>BAL Plant COB stock consumed overnight</b> (140 → 0 MT) — D19 lift critical. At MTD despatch rate ~340 MT/day, mines stock = <b>~9.5 days plant feed buffer</b>. Pipeline: 645 MT awaiting stacking + 1,612 MT awaiting verification + <b>972 MT permission in hand (all MG)</b>. <b>D19 proposed despatch 970 MT</b> (SKD 200 + BLS 770) — approval cycle fully cleared.
+        </div>
+      </div>
+      <div class="ins-item">
+        <span class="ico r">!</span>
+        <div>
+          <span class="lbl">Critical · De-Silt Reporting Zero Through D18 · Plan Window Closed</span>
+          MIS "Silt-Actual" (col BE) shows <b>NIL across all 18 days</b>. EDDY Pump dismantled (18 consecutive days nil); re-fit on CAT 350 pending. <b>02-16 May plan window closed with zero achievement</b> — 11,700 CuM target missed for May. Silt removal remains the single largest unlock for sustained pump availability.
+        </div>
+      </div>
+      <div class="ins-item">
+        <span class="ico g">✓</span>
+        <div>
+          <span class="lbl">Improving · COB Plant — Sustained Run 60-90 MT/day Through D18</span>
+          COB MTD <b>913 / 2,082 MT = 43.9%</b>. Daily run: D5: 26 · D6: 82 · D7: 76 · D8: 80 · D9: 67 · D10: 55 · D11: 42 · D12: 58 · D13: 60 · D14: 73 · D15: <b>88</b> · D16: 77 · D17: 60 · D18: <b>69</b>. Current run-rate ~51 MT/day vs target <b>211 MT/day from D19</b> = 4.2× current pace.
+        </div>
+      </div>
+      <div class="ins-item">
+        <span class="ico o">!</span>
+        <div>
+          <span class="lbl">Action Today · D19 Despatch 970 MT Lined Up After 2 Days Zero</span>
+          MTD Despatch <b>6,112 MT</b> stable (D17 zero · D18 zero). Permission queue cleared overnight — <b>972 MT now in hand (all MG)</b>. <b>D19 proposed despatch 970 MT</b>: SKD 200 + BLS 770. Verification queue still 1,612 MT (MG 1,200 + COB 412), Awaiting Stacking grew to 645 MT (was 330). Despatch ramp resumes today with full plant pull.
+        </div>
+      </div>
+      <div class="ins-item">
+        <span class="ico g">✓</span>
+        <div>
+          <span class="lbl">Mixed · Grade Mix · 74% MG share Till D18</span>
+          MTD ore <b>8,133 MT</b>: HG <b>0</b> · MG <b>6,030 (74%)</b> · LG <b>2,103 (26%)</b>. <b>D18 grade-split: 350 MG + 390 LG = first day LG > MG in the recovery stretch</b>. D15-D17 averaged 90% MG mix; D18 dropped to 47% MG. HG production still nil. LG re-entering the mix may affect plant feed quality and COB recovery.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ REALITY CHECK ============ -->
+  <div class="insights" style="margin-top:10px;background:#fff8f5;border-color:#f5d4c0;">
+    <div class="ttl" style="color:var(--red);">Reality Check · Month-End Feasibility @ 18-May</div>
+    <div style="font-size:10.5px;color:var(--txt-m);margin-bottom:10px;font-style:italic;">Cycle 58.1% elapsed · 13 working days remaining to 31-May</div>
+    <table style="width:100%;border-collapse:collapse;font-size:11px;font-family:'IBM Plex Sans',sans-serif;">
+      <thead>
+        <tr style="background:#fff;">
+          <th style="text-align:left;padding:8px 10px;font-size:9.5px;text-transform:uppercase;letter-spacing:.10em;color:var(--txt-s);font-weight:700;border-bottom:1px solid var(--bdr);">KPI</th>
+          <th style="text-align:right;padding:8px 10px;font-size:9.5px;text-transform:uppercase;letter-spacing:.10em;color:var(--txt-s);font-weight:700;border-bottom:1px solid var(--bdr);">Full Month Plan</th>
+          <th style="text-align:right;padding:8px 10px;font-size:9.5px;text-transform:uppercase;letter-spacing:.10em;color:var(--txt-s);font-weight:700;border-bottom:1px solid var(--bdr);">MTD Actual</th>
+          <th style="text-align:right;padding:8px 10px;font-size:9.5px;text-transform:uppercase;letter-spacing:.10em;color:var(--txt-s);font-weight:700;border-bottom:1px solid var(--bdr);">Gap</th>
+          <th style="text-align:right;padding:8px 10px;font-size:9.5px;text-transform:uppercase;letter-spacing:.10em;color:var(--txt-s);font-weight:700;border-bottom:1px solid var(--bdr);">Run-rate/day</th>
+          <th style="text-align:right;padding:8px 10px;font-size:9.5px;text-transform:uppercase;letter-spacing:.10em;color:var(--txt-s);font-weight:700;border-bottom:1px solid var(--bdr);">Required/day</th>
+          <th style="text-align:right;padding:8px 10px;font-size:9.5px;text-transform:uppercase;letter-spacing:.10em;color:var(--txt-s);font-weight:700;border-bottom:1px solid var(--bdr);">Uplift Needed</th>
+          <th style="text-align:center;padding:8px 10px;font-size:9.5px;text-transform:uppercase;letter-spacing:.10em;color:var(--txt-s);font-weight:700;border-bottom:1px solid var(--bdr);">Verdict</th>
+        </tr>
+      </thead>
+      <tbody style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;">
+        <tr>
+          <td style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-family:'IBM Plex Sans',sans-serif;font-weight:600;color:var(--txt-p);">Ore Production (MT)</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);">30,002</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);color:var(--accent);font-weight:600;">8,133</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);color:var(--red);font-weight:600;">21,869</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);">452</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);font-weight:700;">1,682</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);color:var(--red);font-weight:700;">3.7×</td>
+          <td style="padding:7px 10px;text-align:center;border-bottom:1px solid var(--bdr-l);"><span style="background:#ffebee;color:var(--red);padding:2px 7px;border-radius:3px;font-size:9.5px;font-weight:700;letter-spacing:.04em;">NOT FEASIBLE</span></td>
+        </tr>
+        <tr>
+          <td style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-family:'IBM Plex Sans',sans-serif;font-weight:600;color:var(--txt-p);">OB Excavation (CuM)</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);">121,193</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);color:var(--accent);font-weight:600;">17,387</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);color:var(--red);font-weight:600;">103,806</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);">966</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);font-weight:700;">7,985</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);color:var(--red);font-weight:700;">8.3×</td>
+          <td style="padding:7px 10px;text-align:center;border-bottom:1px solid var(--bdr-l);"><span style="background:#ffebee;color:var(--red);padding:2px 7px;border-radius:3px;font-size:9.5px;font-weight:700;letter-spacing:.04em;">NOT FEASIBLE</span></td>
+        </tr>
+        <tr>
+          <td style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-family:'IBM Plex Sans',sans-serif;font-weight:600;color:var(--txt-p);">Despatch (MT)</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);">27,150</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);color:var(--accent);font-weight:600;">6,112</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);color:var(--red);font-weight:600;">21,038</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);">340</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);font-weight:700;">1,618</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);color:var(--red);font-weight:700;">4.8×</td>
+          <td style="padding:7px 10px;text-align:center;border-bottom:1px solid var(--bdr-l);"><span style="background:#ffebee;color:var(--red);padding:2px 7px;border-radius:3px;font-size:9.5px;font-weight:700;letter-spacing:.04em;">NOT FEASIBLE</span></td>
+        </tr>
+        <tr>
+          <td style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-family:'IBM Plex Sans',sans-serif;font-weight:600;color:var(--txt-p);">COB Production (MT)</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);">3,660</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);color:var(--accent);font-weight:600;">913</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);color:var(--red);font-weight:600;">2,747</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);">51</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);font-weight:700;">211</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);color:var(--red);font-weight:700;">4.2×</td>
+          <td style="padding:7px 10px;text-align:center;border-bottom:1px solid var(--bdr-l);"><span style="background:#ffebee;color:var(--red);padding:2px 7px;border-radius:3px;font-size:9.5px;font-weight:700;letter-spacing:.04em;">NOT FEASIBLE</span></td>
+        </tr>
+        <tr>
+          <td style="padding:7px 10px;border-bottom:1px solid var(--bdr-l);font-family:'IBM Plex Sans',sans-serif;font-weight:600;color:var(--txt-p);">De-Silting (CuM)</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);">11,700</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);color:var(--accent);font-weight:600;">0</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);color:var(--red);font-weight:600;">11,700</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);">0</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);font-weight:700;">731</td>
+          <td style="padding:7px 10px;text-align:right;border-bottom:1px solid var(--bdr-l);color:var(--red);font-weight:700;">∞</td>
+          <td style="padding:7px 10px;text-align:center;border-bottom:1px solid var(--bdr-l);"><span style="background:#ffebee;color:var(--red);padding:2px 7px;border-radius:3px;font-size:9.5px;font-weight:700;letter-spacing:.04em;">NOT FEASIBLE</span></td>
+        </tr>
+      </tbody>
+    </table>
+    <div style="font-size:10px;color:var(--txt-m);margin-top:9px;line-height:1.55;">
+      <b style="color:var(--red);">Verdict legend:</b> 
+      <span style="color:var(--green);font-weight:600;">ACHIEVABLE</span> = uplift ≤ 1.5× current run-rate · 
+      <span style="color:var(--orange);font-weight:600;">STRETCH</span> = uplift 1.5–3.5× (aggressive action needed) · 
+      <span style="color:var(--red);font-weight:600;">NOT FEASIBLE</span> = uplift &gt; 3.5× without structural capacity addition.
+      &nbsp;<b>May 2026 picture at D18:</b> D1-D4 logged <b>zero ore mining</b> (Eid + April-end issues). Operations resumed steadily from D5 onwards with 14 mining days through D18. <b>Till-18 totals: Ore 8,133 / OB 17,387 / Despatch 6,112 / COB 913 / De-Silt 0</b>. With <b>13 days remaining</b>, uplift multipliers (with OB plan 121,193) now at <b>3.7×–8.3×</b> — Ore still the most achievable at 3.7×, OB widened to 8.3×. <b>D17 holds best ore-mining day at 1,233 MT</b>; D18 retreated to 740 MT. <b>Deshmesh stalled after D8 — 10 consecutive zero days D9-D18</b>; MTD just 595 CuM (2.3% of plan). <b>Despatch zero on both D17 & D18</b> — 970 MT permission now in hand for D19 lift. <b>OB binding constraint at 8.3×</b> — entirely carried by BAL OWN (16,792 CuM MTD = 39% of plan); D18 BAL 1,248. <b>De-Silting still NIL</b> across all 18 days (Eddy Pump dismantled). Recovery requires <b>structural capacity additions sustained</b>: Deshmesh re-engagement is the single biggest OB unlock, plus Eddy Pump re-fit and Despatch unlock from D19.
+    </div>
+  </div>
+
+  <div class="ftr">
+    <div class="l">
+      <span>© Balasore Alloys Limited · Mines Operations · BAL-1100</span>
+      <span>Data sources: Daily MIS · Daily Mines Stock &amp; Despatch · Excavator &amp; Tipper Utilization Reports</span>
+    </div>
+    <div>Generated 19·05·2026 · Internal · For Management Review</div>
+  </div>
+</main>
+
+<script>
+const D = {"days":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31],"ore_t":[0,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,1000.0699999999999,999.97],"ore_a":[0,0,0,0,330,0,630,590,640,590,410,480,520,470,920,580,1232.68,740,null,null,null,null,null,null,null,null,null,null,null,null,null],"ob_t":[0,4040,4040,4040,4040,4040,4040,4040,4040,4040,4040,4040,4040,4040,4040,4040,4040,4040,4040,4040,4040,4040,4040,4040,4040,4040,4040,4040,4040,4040,4033],"ob_a":[0,0,0,0,414,1412,1381,1120,540,606,1212,2004,1110,1242,1820.9,1734.19,1543.15,1248,null,null,null,null,null,null,null,null,null,null,null,null,null],"silt_a":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,null,null,null,null,null,null,null,null,null,null,null,null,null],"silt_t":[0,780,780,780,780,780,780,780,780,780,780,780,780,780,780,780,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"cob_t":[0,126,126,126,126,96,126,126,126,126,126,126,96,126,126,126,126,126,126,96,126,126,126,126,126,126,96,126,126,126,126],"cob_a":[null,null,null,null,26,82,76,80,67,55,42,58,60,73,88,77,60,69,null,null,null,null,null,null,null,null,null,null,null,null,null],"hg_p":[0,13.73,13.73,13.73,13.73,13.73,13.73,13.73,13.73,13.73,13.73,13.73,13.73,13.73,13.73,13.73,13.73,13.73,13.73,13.73,13.73,13.73,13.73,13.73,13.73,13.73,13.73,13.73,13.73,13.73,13.83],"mg_p":[0,46.47,46.47,46.47,46.47,46.47,46.47,46.47,46.47,46.47,46.47,46.47,46.47,46.47,46.47,46.47,46.47,46.47,46.47,46.47,46.47,46.47,46.47,46.47,46.47,46.47,46.47,46.47,46.47,46.47,46.37],"lg_p":[0,939.87,939.87,939.87,939.87,939.87,939.87,939.87,939.87,939.87,939.87,939.87,939.87,939.87,939.87,939.87,939.87,939.87,939.87,939.87,939.87,939.87,939.87,939.87,939.87,939.87,939.87,939.87,939.87,939.87,939.77],"hg_a":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,null,null,null,null,null,null,null,null,null,null,null,null,null],"mg_a":[0,0,0,0,100,0,410,440,490,500,290,150,390,340,920,580,1070,350,null,null,null,null,null,null,null,null,null,null,null,null,null],"lg_a":[0,0,0,0,230,0,220,150,150,90,120,330,130,130,0,0,162.68,390,null,null,null,null,null,null,null,null,null,null,null,null,null],"des_pln":[0,1350,0,1100,1150,1250,1050,1200,1300,0,1350,750,1100,1250,1200,1450,0,1050,1000,950,1300,1250,400,0,1000,800,1000,1050,750,1100,0],"des_act":[null,null,null,null,null,590.6,960.45,0,1209.33,0,874.48,0,557.03,781.89,0,1138.63,0,0,null,null,null,null,null,null,null,null,null,null,null,null,null],"exc_series":{"ZAXIS-220-8":[0,0,0,0,5.3,12.65,11.16,8.58,6.99,7.86,13.49,16.32,11.89,8.09,11.77,10.17,8.46,12.46,null,null,null,null,null,null,null,null,null,null,null,null,null],"ZAXIS-370-4":[0,0,0,0,7.58,15.55,16.52,12.05,6.9,8.45,10.36,16.67,11.2,12.95,17.2,14.77,13.52,1.04,null,null,null,null,null,null,null,null,null,null,null,null,null],"ZAXIS-370-5":[0,0,0,0,5.49,15.34,15.96,11.64,6.13,7.44,4.5,15.24,10.42,10.64,18.7,15.03,15.73,17.13,null,null,null,null,null,null,null,null,null,null,null,null,null],"ZAXIS-370-6":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,null,null,null,null,null,null,null,null,null,null,null,null,null],"ZAXIS-450-1":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,null,null,null,null,null,null,null,null,null,null,null,null,null],"ZAXIS-470-7":[0,0,0,0,0.52,11.51,13.31,10.43,7.31,8.05,10.66,12.97,10.36,12.56,17.44,11.43,17.02,15.38,null,null,null,null,null,null,null,null,null,null,null,null,null],"ZAXIS-470-2":[0,0,0,0,0,0,0,0.04,1.05,2.47,2.08,0.48,0,2.59,11.11,12.11,12.41,3.15,null,null,null,null,null,null,null,null,null,null,null,null,null]},"exc_active":["ZAXIS-370-5","ZAXIS-370-4","ZAXIS-470-7","ZAXIS-220-8","ZAXIS-470-2"],"exc_mtd":{"ZAXIS-370-5":169.52,"ZAXIS-370-4":165.03,"ZAXIS-470-7":162.93,"ZAXIS-220-8":145.33,"ZAXIS-470-2":47.51,"ZAXIS-370-6":0,"ZAXIS-450-1":0},"tipper_day":[null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null],"tipper_mtd_sorted":[["MAN55",171.35,0.0,100.0,39.7,"Running"],["MAN80",169.71,0.9,99.8,39.4,"Running"],["MAN77",169.3,1.1,99.7,39.3,"Running"],["MAN57",165.85,46.3,89.3,43.0,"Running"],["MAN58",164.29,8.4,98.1,38.8,"Running"],["MAN56",161.06,0.9,99.8,37.4,"Running"],["MAN66",154.83,28.0,93.5,38.3,"Running"],["MAN69",154.18,32.5,92.5,38.6,"Running"],["MAN20",153.99,0.0,100.0,35.6,"Running"],["MAN14",153.98,0.0,100.0,35.6,"Running"],["MAN11",148.47,0.0,100.0,34.4,"Running"],["MAN67",130.69,4.4,99.0,30.6,"Running"],["MAN53",118.23,47.8,88.9,30.8,"Running"],["MAN75",113.95,0.0,100.0,26.4,"Running"],["MAN52",111.93,1.0,99.8,26.0,"Running"],["MAN18",101.42,37.8,91.2,25.7,"Running"],["MAN49",96.04,58.5,86.5,25.7,"Running"],["MAN65",86.42,80.1,81.5,24.6,"Running"],["MAN43",61.6,88.4,79.5,17.9,"Running"],["MAN72",0.53,432.0,0.0,0.0,"Long Breakdown"],["MAN12",0.0,432.0,0.0,0.0,"Long Breakdown"],["MAN41",0.0,432.0,0.0,0.0,"Long Breakdown"],["MAN47",0.0,432.0,0.0,0.0,"Long Breakdown"],["MAN48",0.0,432.0,0.0,0.0,"Long Breakdown"],["MAN50",0.0,432.0,0.0,0.0,"Long Breakdown"],["MAN51",0.0,432.0,0.0,0.0,"Long Breakdown"],["MAN54",0.0,432.0,0.0,0.0,"Long Breakdown"],["MAN68",0.0,432.0,0.0,0.0,"Long Breakdown"],["MAN71",0.0,49.4,88.6,0.0,"Running"],["MAN74",0.0,432.0,0.0,0.0,"Long Breakdown"],["MAN76",0.0,432.0,0.0,0.0,"Long Breakdown"],["MAN78",0.0,432.0,0.0,0.0,"Long Breakdown"],["MAN79",0.0,432.0,0.0,0.0,"Long Breakdown"],["MAN81",0.0,432.0,0.0,0.0,"Long Breakdown"]],"exc_full":[["ZAXIS-370-5",169.52,0,100.0,39.2,"Running"],["ZAXIS-370-4",165.03,23,94.7,40.3,"Running"],["ZAXIS-470-7",162.93,5.23,98.8,38.2,"Running"],["ZAXIS-220-8",145.33,0,100.0,33.6,"Running"],["ZAXIS-470-2",47.51,11,97.5,11.3,"Running"],["ZAXIS-370-6",0,432,0.0,0.0,"Long Breakdown"],["ZAXIS-450-1",0,432,0.0,0.0,"Long Breakdown"]],"table_rows":[{"date":"01-May","ore_t":0,"ore_a":0,"cob_t":0,"cob_a":null,"des_t":0,"des_a":null,"ob_t":0,"ob_a":0,"silt_a":0,"cls":3117.3199999999997,"water":5166},{"date":"02-May","ore_t":1000.0699999999999,"ore_a":0,"cob_t":126,"cob_a":null,"des_t":1350,"des_a":null,"ob_t":4040,"ob_a":0,"silt_a":0,"cls":3117.3199999999997,"water":5750},{"date":"03-May","ore_t":1000.0699999999999,"ore_a":0,"cob_t":126,"cob_a":null,"des_t":0,"des_a":null,"ob_t":4040,"ob_a":0,"silt_a":0,"cls":3117.3199999999997,"water":8082},{"date":"04-May","ore_t":1000.0699999999999,"ore_a":0,"cob_t":126,"cob_a":null,"des_t":1100,"des_a":null,"ob_t":4040,"ob_a":0,"silt_a":0,"cls":3117.3199999999997,"water":13082},{"date":"05-May","ore_t":1000.0699999999999,"ore_a":330,"cob_t":126,"cob_a":26,"des_t":1150,"des_a":null,"ob_t":4040,"ob_a":414,"silt_a":0,"cls":3243.3199999999997,"water":14632},{"date":"06-May","ore_t":1000.0699999999999,"ore_a":0,"cob_t":96,"cob_a":82,"des_t":1250,"des_a":590.6,"ob_t":4040,"ob_a":1412,"silt_a":0,"cls":2734.72,"water":13813},{"date":"07-May","ore_t":1000.0699999999999,"ore_a":630,"cob_t":126,"cob_a":76,"des_t":1050,"des_a":960.45,"ob_t":4040,"ob_a":1381,"silt_a":0,"cls":2260.27,"water":13040},{"date":"08-May","ore_t":1000.0699999999999,"ore_a":590,"cob_t":126,"cob_a":80,"des_t":1200,"des_a":0,"ob_t":4040,"ob_a":1120,"silt_a":0,"cls":2780.27,"water":11784},{"date":"09-May","ore_t":1000.0699999999999,"ore_a":640,"cob_t":126,"cob_a":67,"des_t":1300,"des_a":1209.33,"ob_t":4040,"ob_a":540,"silt_a":0,"cls":2127.94,"water":9999},{"date":"10-May","ore_t":1000.0699999999999,"ore_a":590,"cob_t":126,"cob_a":55,"des_t":0,"des_a":0,"ob_t":4040,"ob_a":606,"silt_a":0,"cls":2682.94,"water":8996},{"date":"11-May","ore_t":1000.0699999999999,"ore_a":410,"cob_t":126,"cob_a":42,"des_t":1350,"des_a":874.48,"ob_t":4040,"ob_a":1212,"silt_a":0,"cls":2140.46,"water":8223},{"date":"12-May","ore_t":1000.0699999999999,"ore_a":480,"cob_t":126,"cob_a":58,"des_t":750,"des_a":0,"ob_t":4040,"ob_a":2004,"silt_a":0,"cls":2348.46,"water":8370},{"date":"13-May","ore_t":1000.0699999999999,"ore_a":520,"cob_t":96,"cob_a":60,"des_t":1100,"des_a":557.03,"ob_t":4040,"ob_a":1110,"silt_a":0,"cls":2241.43,"water":9000},{"date":"14-May","ore_t":1000.0699999999999,"ore_a":470,"cob_t":126,"cob_a":73,"des_t":1250,"des_a":781.89,"ob_t":4040,"ob_a":1242,"silt_a":0,"cls":1872.54,"water":8917},{"date":"15-May","ore_t":1000.0699999999999,"ore_a":920,"cob_t":126,"cob_a":88,"des_t":1200,"des_a":0,"ob_t":4040,"ob_a":1820.9,"silt_a":0,"cls":2880.54,"water":8650},{"date":"16-May","ore_t":1000.0699999999999,"ore_a":580,"cob_t":126,"cob_a":77,"des_t":1450,"des_a":1138.63,"ob_t":4040,"ob_a":1734.19,"silt_a":0,"cls":2398.91,"water":8820},{"date":"17-May","ore_t":1000.0699999999999,"ore_a":1232.68,"cob_t":126,"cob_a":60,"des_t":0,"des_a":0,"ob_t":4040,"ob_a":1543.15,"silt_a":0,"cls":3528.91,"water":7587},{"date":"18-May","ore_t":1000.0699999999999,"ore_a":740,"cob_t":126,"cob_a":69,"des_t":1050,"des_a":0,"ob_t":4040,"ob_a":1248,"silt_a":0,"cls":3947.91,"water":7274}],"mtd":{"ore_t":17001.19,"ore_a":8132.68,"cob_t":2082,"cob_a":913,"des_t":16550,"des_a":6112.41,"ob_t":68680,"ob_a":17387.24,"silt_t":11700,"silt_a":0,"cls":3947.91},"desh_plan":[0,1508,1508,1508,1508,1508,1508,1508,1508,1508,1508,1508,1508,1508,1508,1508,1508,1508,1508,1508,1508,1508,1508,1508,1508,1508,1508,1508,1508,1508,1505],"desh_act":[0,0,0,0,0,158,121,316,0,0,0,0,0,0,0,0,0,0,null,null,null,null,null,null,null,null,null,null,null,null,null],"bal_plan":[0,2532,2532,2532,2532,2532,2532,2532,2532,2532,2532,2532,2532,2532,2532,2532,2532,2532,2532,2532,2532,2532,2532,2532,2532,2532,2532,2532,2532,2532,2532],"bal_act":[0,0,0,0,414,1254,1260,804,540,606,1212,2004,1110,1242,1820.9,1734.19,1543.15,1248,0,0,0,0,0,0,0,0,0,0,0,0,0],"hp":{"days":["06.05","07.05","08.05","10.05","11.05","12.05","13.05","14.05","15.05","17.05","18.05"],"hours":["5-6AM","6-7AM","7-8AM","8-9AM","9-10AM","10-11AM","11-12AM","12-1 PM","1-2PM","2-3PM","3-4PM","4-5PM","5-6PM","6-7PM","7-8PM","8-9PM","9-10PM","10-11PM","11-12PM","12-1 AM","1-2AM","2-3AM","3-4AM","4-5AM"],"hourly_by_day":{"06.05":[5,19,8,13,3,16,6,16,3,21,32,28,24,0,13,12,0,25,21,16,0,16,13,3],"07.05":[4,19,19,12,2,14,6,20,2,27,25,32,19,4,17,10,3,17,26,25,10,8,10,1],"08.05":[5,10,21,13,4,11,15,25,2,21,38,29,12,1,20,12,0,0,0,0,0,0,0,0],"10.05":[3,9,12,17,8,26,31,11,4,23,24,8,0,0,0,0,0,0,0,0,0,0,0,0],"11.05":[0,0,0,0,0,0,0,0,0,11,15,24,17,1,25,20,5,26,29,31,3,22,13,1],"12.05":[2,26,21,22,1,21,15,14,0,30,40,26,14,3,28,19,6,23,37,40,6,19,13,0],"13.05":[7,20,31,21,3,20,20,8,0,18,26,32,22,9,22,9,0,0,0,0,0,0,0,0],"14.05":[0,0,0,0,0,0,4,6,1,15,18,28,32,5,19,6,2,17,30,37,0,17,17,0],"15.05":[2,18,24,15,6,26,19,22,0,31,30,23,16,14,16,9,7,22,29,23,15,17,13,11],"17.05":[4,24,31,26,1,26,30,23,0,10,23,31,23,1,17,6,10,26,14,16,2,16,16,5],"18.05":[0,12,17,7,1,7,5,9,5,17,24,25,28,9,21,10,7,21,18,12,6,14,15,6]},"hourly_avg":[2.9, 14.3, 16.7, 13.3, 2.6, 15.2, 13.7, 14.0, 1.5, 20.4, 26.8, 26.0, 18.8, 4.3, 18.0, 10.3, 3.6, 16.1, 18.5, 18.2, 3.8, 11.7, 10.0, 2.5],"shift_by_day":{"06.05":{"A":86,"B":133,"C":94},"07.05":{"A":96,"B":136,"C":100},"08.05":{"A":104,"B":135,"C":0},"10.05":{"A":117,"B":59,"C":0},"11.05":{"A":0,"B":113,"C":130},"12.05":{"A":122,"B":160,"C":144},"13.05":{"A":130,"B":138,"C":0},"14.05":{"A":10,"B":124,"C":120},"15.05":{"A":132,"B":139,"C":137},"17.05":{"A":165,"B":111,"C":105},"18.05":{"A":58,"B":139,"C":99}},"top_locs":[["N.Side BAL 58MRL OB",{"total":1161,"A":333,"B":423,"C":405,"days":10}],["SE BAL 65MRL OB",{"total":540,"A":155,"B":219,"C":166,"days":11}],["West Side Ore",{"total":493,"A":125,"B":222,"C":146,"days":11}],["SW 110MRL OB",{"total":237,"A":41,"B":140,"C":56,"days":7}],["N.Side BAL 62MRL OB",{"total":179,"A":83,"B":71,"C":25,"days":2}],["SW 110MRL LG",{"total":169,"A":38,"B":94,"C":37,"days":8}],["WEST SIDE OB",{"total":164,"A":37,"B":86,"C":41,"days":5}],["COBP Feeding",{"total":116,"A":50,"B":33,"C":33,"days":7}],["COBP Tailing",{"total":106,"A":56,"B":50,"C":0,"days":6}],["NW Dashmesh 95MRL LG",{"total":43,"A":34,"B":9,"C":0,"days":2}]]},"fuel_tippers":[{"name":"MAN43","eng":61.6,"dist":344.18,"consumed":573.8,"lphr":9.31,"kmpl":0.6},{"name":"MAN18","eng":101.42,"dist":616.89,"consumed":800.8,"lphr":7.9,"kmpl":0.77},{"name":"MAN58","eng":164.29,"dist":1053.89,"consumed":1257.3,"lphr":7.65,"kmpl":0.84},{"name":"MAN20","eng":153.99,"dist":955.87,"consumed":1163.4,"lphr":7.56,"kmpl":0.82},{"name":"MAN55","eng":171.35,"dist":1042.96,"consumed":1261.5,"lphr":7.36,"kmpl":0.83},{"name":"MAN67","eng":130.69,"dist":785.56,"consumed":959.0,"lphr":7.34,"kmpl":0.82},{"name":"MAN75","eng":113.95,"dist":655.06,"consumed":810.5,"lphr":7.11,"kmpl":0.81},{"name":"MAN66","eng":154.83,"dist":1053.14,"consumed":1085.9,"lphr":7.01,"kmpl":0.97},{"name":"MAN69","eng":154.18,"dist":855.57,"consumed":1073.0,"lphr":6.96,"kmpl":0.8},{"name":"MAN11","eng":148.47,"dist":881.94,"consumed":1029.7,"lphr":6.94,"kmpl":0.86},{"name":"MAN77","eng":169.3,"dist":911.25,"consumed":1131.5,"lphr":6.68,"kmpl":0.81},{"name":"MAN65","eng":86.42,"dist":498.02,"consumed":564.7,"lphr":6.53,"kmpl":0.88},{"name":"MAN56","eng":161.06,"dist":860.42,"consumed":1029.8,"lphr":6.39,"kmpl":0.84},{"name":"MAN57","eng":165.85,"dist":868.33,"consumed":1007.1,"lphr":6.07,"kmpl":0.86}]};
+
+const PALETTE = {
+  navy:'#1a2744', steel:'#2c4a7c', accent:'#1565c0', accentL:'#1e88e5',
+  gold:'#c8960c', goldL:'#f5a623',
+  green:'#2e7d32', grnL:'#43a047',
+  red:'#c62828', redL:'#e53935',
+  orange:'#e65100', orangeL:'#fb8c00',
+  teal:'#00695c', tealL:'#00897b',
+  purple:'#5e35b1', purpleL:'#7e57c2',
+  grey:'#546e7a',
+  txt:'#0f1c35', txtM:'#6b7ea8', bdr:'#d0d9e8'
+};
+
+Chart.defaults.font.family = "'IBM Plex Sans', sans-serif";
+Chart.defaults.font.size = 10.5;
+Chart.defaults.color = PALETTE.txtM;
+Chart.defaults.plugins.legend.labels.boxWidth = 10;
+Chart.defaults.plugins.legend.labels.boxHeight = 10;
+Chart.defaults.plugins.legend.labels.padding = 8;
+Chart.defaults.plugins.legend.labels.font = {family:"'IBM Plex Sans',sans-serif", size:10, weight:'500'};
+Chart.defaults.plugins.tooltip.titleFont = {family:"'Barlow Condensed',sans-serif", size:12, weight:'700'};
+Chart.defaults.plugins.tooltip.bodyFont = {family:"'IBM Plex Mono',monospace", size:11};
+Chart.defaults.plugins.tooltip.padding = 8;
+Chart.defaults.plugins.tooltip.cornerRadius = 4;
+Chart.defaults.plugins.tooltip.backgroundColor = '#1a2744';
+Chart.defaults.plugins.tooltip.borderColor = '#3d5d96';
+Chart.defaults.plugins.tooltip.borderWidth = 1;
+
+const labels = D.days.map(d => 'D'+d);
+const gridConf = {color:'#eef2f8', drawTicks:false};
+const tickConf = {color:PALETTE.txtM, font:{size:9.5, family:"'IBM Plex Mono',monospace"}};
+
+function bar(canvas, datasets, opts={}){
+  return new Chart(document.getElementById(canvas), {
+    type:'bar',
+    data:{labels, datasets},
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      interaction:{mode:'index', intersect:false},
+      scales:{
+        x:{grid:{display:false}, ticks:{...tickConf, autoSkip:false, maxRotation:0}},
+        y:{beginAtZero:true, grid:gridConf, ticks:tickConf, ...opts.yScale}
+      },
+      plugins:{
+        legend:{position:'top', align:'end', labels:{usePointStyle:true, pointStyle:'rect'}},
+        tooltip:{
+          callbacks:{
+            label:(c)=> c.dataset.label + ': ' + (c.parsed.y==null?'—':c.parsed.y.toLocaleString()) + (opts.unit||'')
+          }
+        }
+      },
+      ...opts.chartOpts
+    }
+  });
+}
+
+// 1. Ore Production
+bar('ch_ore', [
+  {label:'Plan', data:D.ore_t, backgroundColor:'rgba(108,126,168,.5)', borderColor:PALETTE.txtM, borderWidth:0, borderRadius:2, barPercentage:.75, categoryPercentage:.85},
+  {label:'Actual', data:D.ore_a, backgroundColor:PALETTE.accent, borderRadius:2, barPercentage:.75, categoryPercentage:.85}
+], {unit:' MT'});
+
+// 2. OB Excavation
+bar('ch_ob', [
+  {label:'Plan', data:D.ob_t, backgroundColor:'rgba(255,152,0,.25)', borderColor:PALETTE.orangeL, borderWidth:1, borderRadius:2, barPercentage:.75, categoryPercentage:.85},
+  {label:'Actual', data:D.ob_a, backgroundColor:PALETTE.orange, borderRadius:2, barPercentage:.75, categoryPercentage:.85}
+], {unit:' CuM'});
+
+// 2a. BAL OWN OB Excavation
+bar('ch_bal_ob', [
+  {label:'BAL OWN Plan', data:D.bal_plan, backgroundColor:'rgba(21,101,192,.25)', borderColor:PALETTE.accentL, borderWidth:1, borderRadius:2, barPercentage:.75, categoryPercentage:.85},
+  {label:'BAL OWN Actual', data:D.bal_act, backgroundColor:PALETTE.accent, borderRadius:2, barPercentage:.75, categoryPercentage:.85}
+], {unit:' CuM'});
+
+// 2b. Deshmesh (Vendor) OB Excavation
+bar('ch_desh_ob', [
+  {label:'Deshmesh Plan', data:D.desh_plan, backgroundColor:'rgba(198,40,40,.22)', borderColor:PALETTE.redL, borderWidth:1, borderRadius:2, barPercentage:.75, categoryPercentage:.85},
+  {label:'Deshmesh Actual', data:D.desh_act, backgroundColor:PALETTE.red, borderRadius:2, barPercentage:.75, categoryPercentage:.85}
+], {unit:' CuM'});
+
+// 3. De-Silting (plan flat line at 512 + actual bars)
+new Chart(document.getElementById('ch_silt'), {
+  type:'bar',
+  data:{labels, datasets:[
+    {type:'line', label:'Plan (780 CuM/day · 02–16 May)', data:D.silt_t, borderColor:PALETTE.red, backgroundColor:'transparent', borderWidth:2, borderDash:[5,3], pointRadius:0, pointHoverRadius:0, tension:0},
+    {type:'bar', label:'De-Silting Actual', data:D.silt_a, backgroundColor:PALETTE.tealL, borderRadius:2, barPercentage:.7, categoryPercentage:.85},
+  ]},
+  options:{
+    responsive:true, maintainAspectRatio:false,
+    interaction:{mode:'index', intersect:false},
+    scales:{x:{grid:{display:false}, ticks:tickConf}, y:{beginAtZero:true, grid:gridConf, ticks:tickConf}},
+    plugins:{
+      legend:{position:'top', align:'end', labels:{usePointStyle:true, pointStyle:'rect'}},
+      tooltip:{callbacks:{label:(c)=>c.dataset.label+': '+(c.parsed.y==null?'—':c.parsed.y.toLocaleString())+' CuM'}}
+    }
+  }
+});
+
+// 4. Grade-wise Production - Stacked actual + line for plan total
+const planTotal = D.hg_p.map((v,i)=>(v||0)+(D.mg_p[i]||0)+(D.lg_p[i]||0));
+new Chart(document.getElementById('ch_grade'), {
+  type:'bar',
+  data:{labels, datasets:[
+    {type:'bar', label:'HG Actual', data:D.hg_a, backgroundColor:PALETTE.purple, stack:'a', borderRadius:0, barPercentage:.7},
+    {type:'bar', label:'MG Actual', data:D.mg_a, backgroundColor:PALETTE.accent, stack:'a', borderRadius:0, barPercentage:.7},
+    {type:'bar', label:'LG Actual', data:D.lg_a, backgroundColor:PALETTE.gold, stack:'a', borderRadius:{topLeft:2,topRight:2}, barPercentage:.7},
+    {type:'line', label:'Total Plan', data:planTotal, borderColor:PALETTE.red, backgroundColor:'transparent', borderWidth:2, borderDash:[5,3], pointRadius:0, pointHoverRadius:4, tension:.25}
+  ]},
+  options:{
+    responsive:true, maintainAspectRatio:false,
+    interaction:{mode:'index', intersect:false},
+    scales:{
+      x:{stacked:true, grid:{display:false}, ticks:tickConf},
+      y:{stacked:true, beginAtZero:true, grid:gridConf, ticks:tickConf}
+    },
+    plugins:{
+      legend:{position:'top', align:'end', labels:{usePointStyle:true}},
+      tooltip:{callbacks:{label:(c)=>c.dataset.label+': '+(c.parsed.y==null?'—':c.parsed.y.toLocaleString())+' MT'}}
+    }
+  }
+});
+
+// 5. COB Production
+bar('ch_cob', [
+  {label:'Plan', data:D.cob_t, backgroundColor:'rgba(200,150,12,.25)', borderColor:PALETTE.gold, borderWidth:1, borderRadius:2, barPercentage:.7},
+  {label:'Actual', data:D.cob_a, backgroundColor:PALETTE.gold, borderRadius:2, barPercentage:.7}
+], {unit:' MT'});
+
+// 6. Despatch
+bar('ch_des', [
+  {label:'Plan', data:D.des_pln, backgroundColor:'rgba(46,125,50,.18)', borderColor:PALETTE.grnL, borderWidth:1, borderRadius:2, barPercentage:.7},
+  {label:'Actual', data:D.des_act, backgroundColor:PALETTE.green, borderRadius:2, barPercentage:.7}
+], {unit:' MT'});
+
+// 7. Excavator daywise trend - multi-line
+const excColors = [PALETTE.accent, PALETTE.gold, PALETTE.green, PALETTE.red, PALETTE.purple, PALETTE.teal, PALETTE.orange];
+const excDatasets = D.exc_active.map((m, i) => {
+  const isEst = m === 'ZAXIS-370-5';  // GPS not reporting daily; only MTD available
+  return {
+    label: m + (isEst ? ' (avg, manual)' : ''),
+    data: D.exc_series[m],
+    borderColor: excColors[i % excColors.length],
+    backgroundColor: excColors[i % excColors.length] + '20',
+    borderWidth: isEst ? 1.5 : 2,
+    borderDash: isEst ? [5,3] : [],
+    tension:.3, pointRadius:isEst ? 0 : 2.5, pointHoverRadius:5, fill:false
+  };
+});
+new Chart(document.getElementById('ch_exc_trend'), {
+  type:'line',
+  data:{labels, datasets: excDatasets},
+  options:{
+    responsive:true, maintainAspectRatio:false,
+    interaction:{mode:'index', intersect:false},
+    scales:{x:{grid:{display:false}, ticks:tickConf}, y:{beginAtZero:true, max:24, grid:gridConf, ticks:{...tickConf, callback:v=>v+'h'}}},
+    plugins:{
+      legend:{position:'top', align:'end', labels:{usePointStyle:true, pointStyle:'line'}},
+      tooltip:{callbacks:{label:(c)=>c.dataset.label+': '+(c.parsed.y==null?'—':c.parsed.y.toFixed(1))+' h'}}
+    }
+  }
+});
+
+// Excavator table
+const excTbody = document.getElementById('exc_tbl');
+const allExc = D.exc_full;
+allExc.forEach(([n, eng, bd, av, ut, s]) => {
+  const tr = document.createElement('tr');
+  const isLBD = s === 'Long Breakdown';
+  const stat = isLBD ? 'LONG BD' : 'ACTIVE';
+  const statClass = isLBD ? 'idl' : 'act';
+  tr.innerHTML = `
+    <td>${n}</td>
+    <td class="r">${eng.toFixed(2)}</td>
+    <td class="r">${bd.toFixed(2)}</td>
+    <td class="r">${av.toFixed(1)}%</td>
+    <td class="r"><span class="util-bar"><i style="width:${Math.min(ut,100)}%;background:${ut>40?PALETTE.green:ut>15?PALETTE.orange:PALETTE.red}"></i></span>${ut.toFixed(1)}%</td>
+    <td><span class="stat ${statClass}">${stat}</span></td>
+  `;
+  excTbody.appendChild(tr);
+});
+const trSub = document.createElement('tr');
+trSub.className = 'sub';
+const totalEng = allExc.reduce((a,b)=>a+b[1],0);
+const totalBD = allExc.reduce((a,b)=>a+b[2],0);
+const activeCount = allExc.filter(x=>x[5]!=='Long Breakdown').length;
+const avgUtil = allExc.reduce((a,b)=>a+b[4],0)/allExc.length;
+trSub.innerHTML = `<td>TOTAL FLEET</td><td class="r">${totalEng.toFixed(2)}</td><td class="r">${totalBD.toFixed(2)}</td><td class="r">—</td><td class="r">${avgUtil.toFixed(1)}%</td><td>${activeCount} of ${allExc.length} running</td>`;
+excTbody.appendChild(trSub);
+
+// 8. Tipper Fuel Efficiency — L/Hr vs KMPL dual-axis
+const fuelData = D.fuel_tippers.slice().sort((a,b) => a.lphr - b.lphr);
+new Chart(document.getElementById('ch_tip_fuel'), {
+  type:'bar',
+  data:{
+    labels: fuelData.map(t => t.name),
+    datasets:[
+      {
+        label:'Fuel Consumption (L/Hr)',
+        data: fuelData.map(t => t.lphr),
+        backgroundColor: fuelData.map(t => t.lphr <= 7.5 ? PALETTE.green : t.lphr <= 8 ? PALETTE.accent : PALETTE.red),
+        borderRadius:2, barPercentage:.75, order:2, yAxisID:'y'
+      },
+      {
+        type:'line',
+        label:'Mileage (KMPL)',
+        data: fuelData.map(t => t.kmpl),
+        borderColor: PALETTE.gold,
+        backgroundColor: PALETTE.gold,
+        borderWidth: 2.5,
+        pointRadius: 5, pointHoverRadius: 7,
+        tension: 0.25, yAxisID:'y1', order:1
+      },
+      {
+        type:'line',
+        label:'OEM Standard (8 L/Hr)',
+        data: fuelData.map(() => 8),
+        borderColor: PALETTE.red,
+        borderWidth: 1.5,
+        borderDash: [6, 4],
+        pointRadius: 0,
+        tension: 0, yAxisID:'y', order:3
+      }
+    ]
+  },
+  options:{
+    responsive:true, maintainAspectRatio:false,
+    plugins:{
+      legend:{position:'top', align:'end', labels:{font:{size:10}, boxWidth:12, padding:8}},
+      tooltip:{mode:'index', intersect:false, callbacks:{
+        label:(ctx) => {
+          const t = fuelData[ctx.dataIndex];
+          if (ctx.dataset.label.includes('L/Hr') && !ctx.dataset.label.includes('OEM'))
+            return `L/Hr: ${t.lphr}  ·  Eng-Hr: ${t.eng}  ·  Fuel: ${t.consumed} L`;
+          if (ctx.dataset.label.includes('KMPL'))
+            return `KMPL: ${t.kmpl}  ·  Distance: ${t.dist.toLocaleString()} km`;
+          return ctx.dataset.label + ': ' + ctx.parsed.y;
+        }
+      }}
+    },
+    scales:{
+      x:{grid:{display:false}, ticks:tickConf},
+      y:{beginAtZero:true, max:10, grid:gridConf, position:'left',
+         ticks:{...tickConf, callback:v=>v+' L/hr'},
+         title:{display:true, text:'Fuel Consumption (L/Hr)', font:{size:10}}},
+      y1:{beginAtZero:true, max:1.2, grid:{drawOnChartArea:false}, position:'right',
+          ticks:{...tickConf, color:PALETTE.gold, callback:v=>v.toFixed(2)},
+          title:{display:true, text:'Mileage (KMPL)', font:{size:10}, color:PALETTE.gold}}
+    }
+  }
+});
+
+// Tipper table
+const tipTbody = document.getElementById('tip_tbl');
+const tipMax = 16 * 24;
+
+D.tipper_mtd_sorted.forEach(([n, eng, bd, av, ut, s]) => {
+  const isLBD = s === 'Long Breakdown';
+  const stat = isLBD ? 'LONG BD' : 'ACTIVE';
+  const statClass = isLBD ? 'idl' : 'act';
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td>${n}</td>
+    <td class="r">${eng.toFixed(2)}</td>
+    <td class="r">${bd.toFixed(2)}</td>
+    <td class="r">${av.toFixed(1)}%</td>
+    <td class="r"><span class="util-bar"><i style="width:${Math.min(ut,100)}%;background:${ut>40?PALETTE.green:ut>20?PALETTE.orange:PALETTE.red}"></i></span>${ut.toFixed(1)}%</td>
+    <td><span class="stat ${statClass}">${stat}</span></td>
+  `;
+  tipTbody.appendChild(tr);
+});
+const trTipSub = document.createElement('tr');
+trTipSub.className='sub';
+const totalEngT = D.tipper_mtd_sorted.reduce((a,b)=>a+b[1],0);
+const totalBDT = D.tipper_mtd_sorted.reduce((a,b)=>a+b[2],0);
+const activeT = D.tipper_mtd_sorted.filter(x=>x[5]!=='Long Breakdown').length;
+const avgUtilT = D.tipper_mtd_sorted.reduce((a,b)=>a+b[4],0)/D.tipper_mtd_sorted.length;
+trTipSub.innerHTML = `<td>TOTAL FLEET (${D.tipper_mtd_sorted.length} vehicles)</td><td class="r">${totalEngT.toFixed(2)}</td><td class="r">${totalBDT.toFixed(2)}</td><td class="r">—</td><td class="r">${avgUtilT.toFixed(1)}%</td><td>${activeT} of ${D.tipper_mtd_sorted.length} running</td>`;
+tipTbody.appendChild(trTipSub);
+
+// ========== HOURLY PERFORMANCE CHARTS ==========
+// 1. Hour-wise trip distribution (line/bar)
+const hpHours = D.hp.hours;
+const hpAvg = D.hp.hourly_avg;
+const hpDipIdxs = new Set([8, 15, 23]); // 1-2PM, 9-10PM, 4-5AM  (0-indexed from 5-6AM)
+// Wait: hours start 5-6AM (idx 0). 1-2PM is idx 8. 9-10PM is idx 16. 4-5AM is idx 23.
+// Re-check: 5-6AM(0) 6-7AM(1) 7-8AM(2) 8-9AM(3) 9-10AM(4) 10-11AM(5) 11-12AM(6) 12-1PM(7) 1-2PM(8) 2-3PM(9) 3-4PM(10) 4-5PM(11) 5-6PM(12) 6-7PM(13) 7-8PM(14) 8-9PM(15) 9-10PM(16) 10-11PM(17) 11-12PM(18) 12-1AM(19) 1-2AM(20) 2-3AM(21) 3-4AM(22) 4-5AM(23)
+const dipSet = new Set([0, 8, 16, 23]); // 5-6AM, 1-2PM, 9-10PM, 4-5AM — structural dips (<5 trips avg)
+const peakSet = new Set([10, 11, 18, 19]); // 3-4PM, 4-5PM, 11-12PM, 12-1AM (≥22 trips avg)
+
+new Chart(document.getElementById('ch_hp_hour'), {
+  type: 'bar',
+  data: {
+    labels: hpHours,
+    datasets: [{
+      label: 'Avg Trips/hour (14-day)',
+      data: hpAvg,
+      backgroundColor: hpAvg.map((_, i) => dipSet.has(i) ? PALETTE.red : (peakSet.has(i) ? PALETTE.green : PALETTE.accent)),
+      borderRadius: 2,
+      barPercentage: 0.8,
+      categoryPercentage: 0.9
+    }]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: {
+      legend: {display: false},
+      tooltip: {
+        callbacks: {
+          label: (ctx) => ctx.parsed.y.toFixed(1) + ' trips/hour'
+        }
+      }
+    },
+    scales: {
+      x: {ticks: {font: {size: 9}, maxRotation: 45, minRotation: 45}, grid: {display: false}},
+      y: {ticks: {font: {size: 10}}, grid: {color: 'rgba(0,0,0,.04)'}, title: {display: true, text: 'Trips per hour', font: {size: 10}}}
+    }
+  }
+});
+
+// 2. Shift balance by day (stacked bar A/B/C)
+const hpDays = D.hp.days;
+const hpA = hpDays.map(d => D.hp.shift_by_day[d].A);
+const hpB = hpDays.map(d => D.hp.shift_by_day[d].B);
+const hpC = hpDays.map(d => D.hp.shift_by_day[d].C);
+
+new Chart(document.getElementById('ch_hp_shift'), {
+  type: 'bar',
+  data: {
+    labels: hpDays,
+    datasets: [
+      {label: 'A-Shift (6 AM–2 PM)', data: hpA, backgroundColor: PALETTE.accent, borderRadius: 2},
+      {label: 'B-Shift (2 PM–10 PM)', data: hpB, backgroundColor: PALETTE.gold, borderRadius: 2},
+      {label: 'C-Shift (10 PM–6 AM)', data: hpC, backgroundColor: PALETTE.teal, borderRadius: 2}
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: {
+      legend: {position: 'bottom', labels: {font: {size: 10}, boxWidth: 10, boxHeight: 10, padding: 8}},
+      tooltip: {mode: 'index', intersect: false}
+    },
+    scales: {
+      x: {stacked: true, ticks: {font: {size: 10}}, grid: {display: false}},
+      y: {stacked: true, ticks: {font: {size: 10}}, grid: {color: 'rgba(0,0,0,.04)'}, title: {display: true, text: 'Trips per day', font: {size: 10}}}
+    }
+  }
+});
+
+// 2b. Day-wise × Shift-wise Trips Trend (grouped bars + day total line)
+const hpDayTotals = hpDays.map((d, i) => hpA[i] + hpB[i] + hpC[i]);
+new Chart(document.getElementById('ch_hp_dayshift'), {
+  type: 'bar',
+  data: {
+    labels: hpDays,
+    datasets: [
+      {label: 'A-Shift', data: hpA, backgroundColor: PALETTE.accent, borderRadius: 2, order: 2},
+      {label: 'B-Shift', data: hpB, backgroundColor: PALETTE.gold, borderRadius: 2, order: 2},
+      {label: 'C-Shift', data: hpC, backgroundColor: PALETTE.teal, borderRadius: 2, order: 2},
+      {type: 'line', label: 'Day Total Trips', data: hpDayTotals,
+        borderColor: PALETTE.red, backgroundColor: PALETTE.red, borderWidth: 2.5,
+        pointRadius: 5, pointHoverRadius: 7, pointBackgroundColor: PALETTE.red,
+        tension: 0.25, yAxisID: 'y1', order: 1}
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: {
+      legend: {position: 'bottom', labels: {font: {size: 10}, boxWidth: 10, boxHeight: 10, padding: 8}},
+      tooltip: {mode: 'index', intersect: false}
+    },
+    scales: {
+      x: {ticks: {font: {size: 10}}, grid: {display: false}},
+      y: {beginAtZero: true, ticks: {font: {size: 10}}, grid: {color: 'rgba(0,0,0,.04)'}, title: {display: true, text: 'Shift trips', font: {size: 10}}, position: 'left'},
+      y1: {beginAtZero: true, ticks: {font: {size: 10}, color: PALETTE.red}, grid: {drawOnChartArea: false}, title: {display: true, text: 'Day total', font: {size: 10}, color: PALETTE.red}, position: 'right'}
+    }
+  }
+});
+
+// 3. Location table
+const hpLocTbody = document.querySelector('#hp_loc_tbl tbody');
+D.hp.top_locs.forEach(([name, v]) => {
+  const avg = v.total / v.days;
+  // Compute skew: max shift / min shift
+  const shifts = [v.A, v.B, v.C];
+  const maxS = Math.max(...shifts); const minS = Math.min(...shifts);
+  const skew = minS === 0 ? '∞' : (maxS / minS).toFixed(1) + '×';
+  const skewColor = (minS === 0 || maxS/minS > 2) ? 'var(--red)' : (maxS/minS > 1.3 ? 'var(--orange)' : 'var(--green)');
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td class="date">${name}</td>
+    <td><b>${v.total}</b></td>
+    <td>${v.days}</td>
+    <td>${avg.toFixed(1)}</td>
+    <td>${v.A}</td>
+    <td>${v.B}</td>
+    <td>${v.C}</td>
+    <td style="color:${skewColor};font-weight:700;">${skew}</td>
+  `;
+  hpLocTbody.appendChild(tr);
+});
+
+// ========== DAY-WISE SUMMARY TABLE ==========
+const sumTbody = document.querySelector('#summary_tbl tbody');
+const fmt = (v) => v == null || v === 0 ? '–' : (typeof v === 'number' ? (v >= 100 ? Math.round(v).toLocaleString() : v.toFixed(v % 1 === 0 ? 0 : 1)) : v);
+
+// Class rules for actuals based on plan vs actual
+function cls(actual, plan) {
+  if (actual == null || actual === '-' || actual === 0 && plan === 0) return 'v-idle';
+  if (actual === 0 && plan > 0) return 'v-zero';   // miss entirely
+  if (plan === 0 && actual > 0) return 'v-met';    // unplanned gain (like despatch)
+  const ratio = actual / plan;
+  if (ratio >= 1) return 'v-over';                 // met or exceeded
+  if (ratio >= 0.8) return 'v-met';                // close
+  return 'v-under';                                 // short
+}
+
+D.table_rows.forEach(r => {
+  const isD17 = r.date === '17-Apr';
+  const tr = document.createElement('tr');
+  if (isD17) tr.className = 'today';
+  tr.innerHTML = `
+    <td class="date">${r.date}</td>
+    <td>${fmt(r.ore_t)}</td>
+    <td class="${cls(r.ore_a, r.ore_t)}">${fmt(r.ore_a)}</td>
+    <td>${fmt(r.cob_t)}</td>
+    <td class="${cls(r.cob_a, r.cob_t)}">${fmt(r.cob_a)}</td>
+    <td>${fmt(r.des_t)}</td>
+    <td class="${cls(r.des_a, r.des_t)}">${fmt(r.des_a)}</td>
+    <td>${fmt(r.ob_t)}</td>
+    <td class="${cls(r.ob_a, r.ob_t)}">${fmt(r.ob_a)}</td>
+    <td class="${r.silt_a > 0 ? 'v-met' : 'v-idle'}">${fmt(r.silt_a)}</td>
+    <td style="background:#f5fafe;color:#0d47a1;font-weight:600;">${fmt(r.water)}</td>
+    <td>${fmt(r.cls)}</td>
+  `;
+  sumTbody.appendChild(tr);
+});
+
+// MTD total + Achievement rows (tfoot)
+const tblEl = document.querySelector('#summary_tbl');
+const tfoot = document.createElement('tfoot');
+const mtd = D.mtd;
+const tr1 = document.createElement('tr');
+tr1.className = 'mtd';
+tr1.innerHTML = `
+  <td class="date">MTD Total</td>
+  <td>${Math.round(mtd.ore_t).toLocaleString()}</td>
+  <td>${Math.round(mtd.ore_a).toLocaleString()}</td>
+  <td>${Math.round(mtd.cob_t).toLocaleString()}</td>
+  <td>${mtd.cob_a.toFixed(1)}</td>
+  <td>${Math.round(mtd.des_t).toLocaleString()}</td>
+  <td>${mtd.des_a.toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2})}</td>
+  <td>${Math.round(mtd.ob_t).toLocaleString()}</td>
+  <td>${Math.round(mtd.ob_a).toLocaleString()}</td>
+  <td>${Math.round(mtd.silt_a).toLocaleString()}</td>
+  <td style="background:#f5fafe;color:#0d47a1;font-weight:700;">${(D.table_rows.slice().reverse().find(r=>r.water!=null)?.water ?? '–').toLocaleString?.() ?? '–'}</td>
+  <td>${Math.round(mtd.cls).toLocaleString()}</td>
+`;
+tfoot.appendChild(tr1);
+
+const orePct = (mtd.ore_a / mtd.ore_t * 100).toFixed(1);
+const cobPct = (mtd.cob_a / mtd.cob_t * 100).toFixed(1);
+const desPct = (mtd.des_a / mtd.des_t * 100).toFixed(1);
+const obPct  = (mtd.ob_a / mtd.ob_t * 100).toFixed(1);
+const pctColor = (p) => p < 40 ? 'var(--red)' : p < 80 ? 'var(--orange)' : p < 100 ? 'var(--accent)' : 'var(--green)';
+
+const tr2 = document.createElement('tr');
+tr2.className = 'pct';
+tr2.innerHTML = `
+  <td class="lbl">% Achievement</td>
+  <td class="plan">—</td>
+  <td style="color:${pctColor(orePct)}">${orePct}%</td>
+  <td class="plan">—</td>
+  <td style="color:${pctColor(cobPct)}">${cobPct}%</td>
+  <td class="plan">—</td>
+  <td style="color:${pctColor(desPct)}">${desPct}%</td>
+  <td class="plan">—</td>
+  <td style="color:${pctColor(obPct)}">${obPct}%</td>
+  <td class="plan">—</td>
+  <td class="plan">—</td>
+  <td class="plan">—</td>
+`;
+tfoot.appendChild(tr2);
+tblEl.appendChild(tfoot);
+</script>
+</body>
+</html>

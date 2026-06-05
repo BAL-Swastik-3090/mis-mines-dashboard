@@ -1,0 +1,183 @@
+"""
+COB Plant Analysis service.
+Sources:
+  - pp_production          → feed / COB / tailings quantities (MT)
+  - pp_quality_inspection  → input & output Cr₂O₃ %
+  - mines_cobp_sample_analysis → tailings Cr₂O₃ % (shift-level, VARCHAR)
+  - mines_cobp_plan        → all plan values
+"""
+from datetime import date
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+
+
+def _f(v):
+    return float(v) if v is not None else None
+
+
+def _pct(a, b):
+    if a and b:
+        return round(a / b * 100, 2)
+    return None
+
+
+def _avg(vals):
+    clean = [v for v in vals if v is not None]
+    return round(sum(clean) / len(clean), 3) if clean else None
+
+
+# ── 1. Actuals from pp_production ─────────────────────────────
+def _get_actuals(db: Session, from_date: date, to_date: date) -> dict:
+    sql = text("""
+        SELECT
+            POSTING_DATE AS dt,
+            SUM(CASE WHEN MATERIAL_DESC = 'LOW GRADE ORE(-40%CR2O3)'       AND MOVEMENT_TYPE = '261' THEN QUANTITY ELSE 0 END) AS feed_actual,
+            SUM(CASE WHEN MATERIAL_DESC = 'CONCENTRATE WITH STD MOISTURE'   AND MOVEMENT_TYPE = '101' THEN QUANTITY ELSE 0 END) AS cob_actual,
+            SUM(CASE WHEN MATERIAL_DESC = 'TAILINGS (+10% CR2O3)'           AND MOVEMENT_TYPE = '531' THEN QUANTITY ELSE 0 END) AS tailings_actual
+        FROM pp_production
+        WHERE PLANT = '1210'
+          AND POSTING_DATE BETWEEN :from_date AND :to_date
+        GROUP BY POSTING_DATE
+        ORDER BY POSTING_DATE
+    """)
+    rows = db.execute(sql, {"from_date": from_date, "to_date": to_date}).fetchall()
+    return {r.dt: dict(r._mapping) for r in rows}
+
+
+# ── 2. Quality from pp_quality_inspection ─────────────────────
+def _get_quality(db: Session, from_date: date, to_date: date) -> dict:
+    sql = text("""
+        SELECT
+            POSTING_DATE AS dt,
+            ROUND(AVG(CASE WHEN SHORT_TEXT = 'LOW GRADE ORE(-40%CR2O3)'     THEN RESULT END), 3) AS input_cr2o3,
+            ROUND(AVG(CASE WHEN SHORT_TEXT = 'CONCENTRATE WITH STD MOISTURE' THEN RESULT END), 3) AS output_cr2o3
+        FROM pp_quality_inspection
+        WHERE SHORT_TEXT_INS_CHAR = 'Cr2O3'
+          AND SHORT_TEXT IN ('LOW GRADE ORE(-40%CR2O3)', 'CONCENTRATE WITH STD MOISTURE')
+          AND POSTING_DATE BETWEEN :from_date AND :to_date
+        GROUP BY POSTING_DATE
+        ORDER BY POSTING_DATE
+    """)
+    rows = db.execute(sql, {"from_date": from_date, "to_date": to_date}).fetchall()
+    return {r.dt: dict(r._mapping) for r in rows}
+
+
+# ── 3. Tailings Cr₂O₃ from mines_cobp_sample_analysis ────────
+def _get_tailings_cr(db: Session, from_date: date, to_date: date) -> dict:
+    # Cr2O3 is VARCHAR — cast after filtering out '0' and empty values
+    sql = text("""
+        SELECT
+            Prod_date AS dt,
+            ROUND(AVG(
+                CASE
+                    WHEN TRIM(Cr2O3) != '' AND TRIM(Cr2O3) != '0'
+                    THEN CAST(Cr2O3 AS DECIMAL(8,3))
+                END
+            ), 3) AS tailings_cr2o3
+        FROM mines_cobp_sample_analysis
+        WHERE Sampling_Type = 'C.tailing'
+          AND Prod_date BETWEEN :from_date AND :to_date
+        GROUP BY Prod_date
+        ORDER BY Prod_date
+    """)
+    rows = db.execute(sql, {"from_date": from_date, "to_date": to_date}).fetchall()
+    return {r.dt: dict(r._mapping) for r in rows}
+
+
+# ── 4. Plan from mines_cobp_plan ──────────────────────────────
+def _get_plan(db: Session, from_date: date, to_date: date) -> dict:
+    sql = text("""
+        SELECT
+            Plan_date                   AS dt,
+            Feed_qty                    AS feed_plan,
+            Concentrate_qty             AS cob_plan,
+            Tailings_qty                AS tailings_plan,
+            Weight_recovery             AS yield_plan,
+            Planned_running_hr          AS running_hr_plan,
+            Feed_grade_Cr2O3            AS input_cr2o3_plan,
+            Concentrate_grade_Cr2O3     AS output_cr2o3_plan,
+            Tailings_grade_Cr2O3        AS tailings_cr2o3_plan
+        FROM mines_cobp_plan
+        WHERE Plan_date BETWEEN :from_date AND :to_date
+        ORDER BY Plan_date
+    """)
+    rows = db.execute(sql, {"from_date": from_date, "to_date": to_date}).fetchall()
+    return {r.dt: dict(r._mapping) for r in rows}
+
+
+# ── 5. Main aggregation ───────────────────────────────────────
+def get_cob_summary(db: Session, from_date: date, to_date: date) -> dict:
+    actuals    = _get_actuals(db, from_date, to_date)
+    quality    = _get_quality(db, from_date, to_date)
+    tailings_q = _get_tailings_cr(db, from_date, to_date)
+    plan       = _get_plan(db, from_date, to_date)
+
+    all_dates = sorted(
+        set(actuals) | set(quality) | set(tailings_q) | set(plan)
+    )
+
+    rows = []
+    for dt in all_dates:
+        a  = actuals.get(dt, {})
+        q  = quality.get(dt, {})
+        tc = tailings_q.get(dt, {})
+        p  = plan.get(dt, {})
+
+        feed     = _f(a.get("feed_actual"))
+        cob      = _f(a.get("cob_actual"))
+        tailings = _f(a.get("tailings_actual"))
+
+        rows.append({
+            "date":             dt,
+            "feed_actual":      feed,
+            "cob_actual":       cob,
+            "tailings_actual":  tailings,
+            "yield_pct":        _pct(cob,  feed),
+            "io_ratio":         round(feed / cob, 3) if feed and cob else None,
+            "input_cr2o3":      _f(q.get("input_cr2o3")),
+            "output_cr2o3":     _f(q.get("output_cr2o3")),
+            "tailings_cr2o3":   _f(tc.get("tailings_cr2o3")),
+            "feed_plan":        _f(p.get("feed_plan")),
+            "cob_plan":         _f(p.get("cob_plan")),
+            "tailings_plan":    _f(p.get("tailings_plan")),
+            "yield_plan":       _f(p.get("yield_plan")),
+            "running_hr_plan":  _f(p.get("running_hr_plan")),
+            "input_cr2o3_plan": _f(p.get("input_cr2o3_plan")),
+            "output_cr2o3_plan":_f(p.get("output_cr2o3_plan")),
+        })
+
+    # ── MTD quantities ────────────────────────────────────────
+    mtd_feed     = sum(r["feed_actual"]    or 0 for r in rows)
+    mtd_cob      = sum(r["cob_actual"]     or 0 for r in rows)
+    mtd_tailings = sum(r["tailings_actual"] or 0 for r in rows)
+    mtd_feed_p   = sum(r["feed_plan"]      or 0 for r in rows)
+    mtd_cob_p    = sum(r["cob_plan"]       or 0 for r in rows)
+    mtd_tail_p   = sum(r["tailings_plan"]  or 0 for r in rows)
+
+    # ── MTD derived ───────────────────────────────────────────
+    mtd_yield     = _pct(mtd_cob,  mtd_feed)
+    mtd_yield_p   = _pct(mtd_cob_p, mtd_feed_p)
+    mtd_io        = round(mtd_feed / mtd_cob, 3) if mtd_cob else None
+
+    # ── Quality averages (exclude nulls) ──────────────────────
+    avg_in_cr   = _avg([r["input_cr2o3"]    for r in rows])
+    avg_out_cr  = _avg([r["output_cr2o3"]   for r in rows])
+    avg_tail_cr = _avg([r["tailings_cr2o3"] for r in rows])
+
+    return {
+        "from_date":           from_date,
+        "to_date":             to_date,
+        "rows":                rows,
+        "mtd_feed_actual":     round(mtd_feed, 2),
+        "mtd_feed_plan":       round(mtd_feed_p, 2),
+        "mtd_cob_actual":      round(mtd_cob, 2),
+        "mtd_cob_plan":        round(mtd_cob_p, 2),
+        "mtd_tailings_actual": round(mtd_tailings, 2),
+        "mtd_tailings_plan":   round(mtd_tail_p, 2),
+        "mtd_yield_pct":       mtd_yield,
+        "mtd_yield_plan":      mtd_yield_p,
+        "mtd_io_ratio":        mtd_io,
+        "avg_input_cr2o3":     avg_in_cr,
+        "avg_output_cr2o3":    avg_out_cr,
+        "avg_tailings_cr2o3":  avg_tail_cr,
+    }
