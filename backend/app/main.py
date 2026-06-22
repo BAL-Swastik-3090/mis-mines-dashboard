@@ -1,8 +1,10 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import logging
+import sys
 
 from app.config import get_settings
 from app.database import test_connection
@@ -18,7 +20,8 @@ async def lifespan(app: FastAPI):
     if db_status["status"] == "connected":
         logger.info(f"✅ Database connected: {db_status['db']} @ {db_status['host']}")
     else:
-        logger.error(f"❌ Database connection failed: {db_status['detail']}")
+        logger.critical(f"❌ Database connection failed: {db_status.get('detail')} — aborting startup")
+        sys.exit(1)  # force container restart rather than serving broken requests
 
     yield
 
@@ -45,6 +48,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+# ── Global exception handler (prevents raw tracebacks leaking) ──
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception on {request.method} {request.url.path}", exc_info=exc)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error. Please try again later."},
+    )
 
 
 # ── Health Check ─────────────────────────────────────────────

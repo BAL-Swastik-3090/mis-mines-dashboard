@@ -1,6 +1,8 @@
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from sqlalchemy.pool import QueuePool
+from sqlalchemy.exc import SQLAlchemyError
+from fastapi import HTTPException
 from app.config import get_settings
 
 settings = get_settings()
@@ -24,9 +26,14 @@ class Base(DeclarativeBase):
 
 def get_db():
     """FastAPI dependency — yields a DB session and closes it after use."""
-    db = SessionLocal()
+    try:
+        db = SessionLocal()
+    except SQLAlchemyError as e:
+        raise HTTPException(status_code=503, detail="Database unavailable. Please try again shortly.")
     try:
         yield db
+    except SQLAlchemyError as e:
+        raise HTTPException(status_code=503, detail="Database error. Please try again shortly.")
     finally:
         db.close()
 
