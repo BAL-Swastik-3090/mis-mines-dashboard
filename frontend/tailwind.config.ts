@@ -22,6 +22,7 @@ const config: Config = {
         success: { DEFAULT: "#2e7d32", light: "#43a047", bg: "#e8f5e9" },
         danger:  { DEFAULT: "#c62828", light: "#e53935", bg: "#ffebee" },
         warning: { DEFAULT: "#e65100", light: "#fb8c00", bg: "#fff3e0" },
+        orange:  { DEFAULT: "#e65100", light: "#fb8c00", bg: "#fff3e0" },
         info:    { DEFAULT: "#00695c", light: "#00897b" },
 
         // ── Neutral ──────────────────────────────────

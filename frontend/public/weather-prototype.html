@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Weather Widget Prototype — Kaliapani Mines</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;700&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #0f172a;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 40px 24px;
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  }
+
+  .page-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: #4b5563;
+  }
+
+  .condition-tabs {
+    display: flex;
+    gap: 8px;
+  }
+
+  .tab {
+    padding: 5px 14px;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.08);
+    font-size: 11px;
+    font-weight: 600;
+    color: rgba(255,255,255,0.35);
+    cursor: pointer;
+    background: rgba(255,255,255,0.03);
+    transition: all 0.2s;
+    letter-spacing: 0.05em;
+  }
+
+  .tab.active {
+    background: rgba(255,255,255,0.10);
+    color: rgba(255,255,255,0.85);
+    border-color: rgba(255,255,255,0.18);
+  }
+
+  /* ─── WIDGET SHELL ──────────────────────────────────── */
+  .weather-widget {
+    width: 100%;
+    max-width: 920px;
+    height: 248px;
+    position: relative;
+    border-radius: 18px;
+    overflow: hidden;
+    box-shadow:
+      0 30px 80px rgba(0,0,0,0.65),
+      0 0 0 1px rgba(255,255,255,0.05);
+  }
+
+  /* ─── LAYER 1: BG gradient (swapped per condition) ── */
+  .bg-layer {
+    position: absolute;
+    inset: 0;
+    transition: background 1s ease;
+  }
+
+  /* ─── LAYER 2: Canvas (glass droplets) ─────────────── */
+  #rainCanvas {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+  }
+
+  /* ─── LAYER 3: CSS falling rain streaks ─────────────── */
+  .rain-streaks {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  .streak {
+    position: absolute;
+    top: -80px;
+    border-radius: 99px;
+    animation: streak-fall linear infinite;
+  }
+
+  @keyframes streak-fall {
+    to { transform: translateY(360px) rotate(12deg); }
+  }
+
+  /* ─── LAYER 4: Content ──────────────────────────────── */
+  .content {
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    display: flex;
+    height: 100%;
+  }
+
+  /* ── LEFT: current weather directly on background ───── */
+  .left-panel {
+    width: 215px;
+    flex-shrink: 0;
+    padding: 20px 18px 18px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+
+  .wx-emoji {
+    font-size: 44px;
+    line-height: 1;
+    margin-bottom: 8px;
+    filter: drop-shadow(0 4px 12px rgba(0,0,0,0.5));
+  }
+
+  .wx-temp {
+    font-size: 54px;
+    font-weight: 800;
+    color: #fff;
+    line-height: 1;
+    letter-spacing: -2px;
+    text-shadow: 0 2px 24px rgba(0,0,0,0.4);
+  }
+
+  .wx-temp sup {
+    font-size: 20px;
+    font-weight: 400;
+    color: rgba(255,255,255,0.42);
+    letter-spacing: 0;
+    vertical-align: super;
+    margin-left: 2px;
+  }
+
+  .wx-desc {
+    font-size: 13px;
+    font-weight: 600;
+    color: rgba(255,255,255,0.65);
+    margin-top: 5px;
+  }
+
+  .wx-feels {
+    font-size: 10px;
+    color: rgba(255,255,255,0.30);
+    margin-top: 2px;
+  }
+
+  .left-bottom { display: flex; flex-direction: column; gap: 4px; }
+
+  .sep { width: 1px; height: 24px; background: rgba(255,255,255,0.13); margin: 2px 0 6px; }
+
+  .loc-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: rgba(255,255,255,0.82);
+    line-height: 1.3;
+  }
+
+  .loc-time {
+    font-size: 10px;
+    font-family: 'IBM Plex Mono', monospace;
+    color: rgba(255,255,255,0.32);
+  }
+
+  .hl-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 4px;
+  }
+
+  .hl {
+    font-size: 11px;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .hl-lbl { font-size: 9px; color: rgba(255,255,255,0.28); text-transform: uppercase; }
+  .hl-v   { color: rgba(255,255,255,0.85); font-weight: 700; margin-left: 3px; }
+  .hl-v.lo { color: rgba(255,255,255,0.38); font-weight: 400; }
+
+  .dot-sep { color: rgba(255,255,255,0.12); font-size: 10px; }
+
+  .stat {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10px;
+    color: rgba(255,255,255,0.38);
+  }
+
+  /* ── RIGHT: frosted glass panel ──────────────────────── */
+  .glass-panel {
+    flex: 1;
+    margin: 10px 10px 10px 0;
+    border-radius: 13px;
+    background: rgba(4, 0, 18, 0.50);
+    backdrop-filter: blur(22px) saturate(1.25);
+    -webkit-backdrop-filter: blur(22px) saturate(1.25);
+    border: 1px solid rgba(255,255,255,0.085);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Alert */
+  .alert-bar {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 14px;
+    background: rgba(251,191,36,0.11);
+    border-bottom: 1px solid rgba(251,191,36,0.16);
+    flex-shrink: 0;
+  }
+
+  .alert-bar.ok {
+    background: rgba(52,211,153,0.07);
+    border-bottom-color: rgba(52,211,153,0.12);
+  }
+
+  .alert-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: #fbbf24;
+    flex-shrink: 0;
+  }
+
+  .alert-dot.ok { background: #34d399; }
+
+  .alert-txt {
+    font-size: 11px;
+    font-weight: 600;
+    color: #fde68a;
+  }
+
+  .alert-txt.ok { color: rgba(52,211,153,0.75); }
+
+  /* Panel body */
+  .panel-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 9px 14px 7px;
+    gap: 8px;
+    min-height: 0;
+  }
+
+  .sec-lbl {
+    font-size: 8.5px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.25);
+    margin-bottom: 5px;
+  }
+
+  /* Hourly */
+  .hourly { display: flex; gap: 3px; }
+
+  .h-cell {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 5px 3px 4px;
+    border-radius: 8px;
+  }
+
+  .h-cell.now {
+    background: rgba(255,255,255,0.11);
+    border: 1px solid rgba(255,255,255,0.12);
+  }
+
+  .h-time { font-size: 9px; font-family: 'IBM Plex Mono',monospace; color: rgba(255,255,255,0.32); font-weight: 600; }
+  .h-cell.now .h-time { color: rgba(255,255,255,0.65); }
+  .h-ico  { font-size: 14px; line-height: 1; }
+  .h-tmp  { font-size: 11px; font-weight: 700; color: #fff; font-family: 'IBM Plex Mono',monospace; }
+  .h-rain { font-size: 8px; color: rgba(147,197,253,0.65); font-family: 'IBM Plex Mono',monospace; }
+
+  .hdiv { height: 1px; background: rgba(255,255,255,0.06); flex-shrink: 0; }
+
+  /* 5-day */
+  .forecast { display: flex; flex-direction: column; gap: 4px; }
+
+  .f-row { display: flex; align-items: center; gap: 7px; }
+
+  .f-day { font-size: 10px; font-weight: 600; color: rgba(255,255,255,0.45); width: 36px; flex-shrink: 0; }
+  .f-day.today { color: rgba(255,255,255,0.88); }
+  .f-ico { font-size: 13px; width: 18px; flex-shrink: 0; text-align: center; }
+  .f-rain { font-size: 8px; color: rgba(147,197,253,0.60); font-family: 'IBM Plex Mono',monospace; width: 22px; flex-shrink: 0; text-align: right; }
+
+  .bar-track { flex: 1; height: 5px; border-radius: 99px; background: rgba(255,255,255,0.07); position: relative; overflow: hidden; }
+  .bar-fill  { position: absolute; height: 100%; border-radius: 99px; background: linear-gradient(90deg,#93c5fd,#fbbf24); opacity: 0.82; }
+
+  .f-temps { font-size: 10px; font-family: 'IBM Plex Mono',monospace; width: 44px; text-align: right; flex-shrink: 0; }
+  .f-hi { color: rgba(255,255,255,0.85); font-weight: 700; }
+  .f-lo { color: rgba(255,255,255,0.25); margin-left: 3px; }
+
+  /* Footer */
+  .panel-footer {
+    padding: 4px 14px;
+    border-top: 1px solid rgba(255,255,255,0.055);
+    display: flex;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+
+  .foot-txt { font-size: 8.5px; color: rgba(255,255,255,0.13); font-family: 'IBM Plex Mono',monospace; }
+
+  /* ─── Note cards ─────────────────────────────────────── */
+  .notes {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    width: 100%;
+    max-width: 920px;
+  }
+
+  .note {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+
+  .note-title {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #60a5fa;
+    margin-bottom: 8px;
+  }
+
+  .note-item {
+    font-size: 11px;
+    color: rgba(255,255,255,0.45);
+    line-height: 1.7;
+  }
+
+  .note-item b { color: rgba(255,255,255,0.70); font-weight: 600; }
+  .note-item code {
+    background: rgba(255,255,255,0.07);
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-family: 'IBM Plex Mono',monospace;
+    font-size: 10px;
+    color: #86efac;
+  }
+</style>
+</head>
+<body>
+
+<div class="page-title">⚡ Weather Widget Prototype — Kaliapani Mines Dashboard</div>
+
+<!-- Condition switcher -->
+<div class="condition-tabs">
+  <div class="tab active" onclick="setCondition('stormy')">⛈️ Stormy</div>
+  <div class="tab" onclick="setCondition('rainy')">🌧️ Rainy</div>
+  <div class="tab" onclick="setCondition('clear_day')">☀️ Clear Day</div>
+  <div class="tab" onclick="setCondition('clear_night')">🌙 Clear Night</div>
+  <div class="tab" onclick="setCondition('overcast')">☁️ Overcast</div>
+  <div class="tab" onclick="setCondition('foggy')">🌫️ Foggy</div>
+</div>
+
+<!-- ═══ WIDGET ════════════════════════════════════════════════ -->
+<div class="weather-widget" id="widget">
+  <div class="bg-layer" id="bgLayer"></div>
+  <canvas id="rainCanvas"></canvas>
+  <div class="rain-streaks" id="streakLayer"></div>
+
+  <div class="content">
+    <!-- LEFT -->
+    <div class="left-panel">
+      <div>
+        <div class="wx-emoji" id="wxEmoji">⛈️</div>
+        <div class="wx-temp" id="wxTemp">36<sup>°C</sup></div>
+        <div class="wx-desc" id="wxDesc">Thunderstorm</div>
+        <div class="wx-feels">Feels like 41°C</div>
+      </div>
+      <div class="left-bottom">
+        <div class="sep"></div>
+        <div class="loc-name">Kaliapani Mines, Sukinda</div>
+        <div class="loc-time">16:45 IST</div>
+        <div class="hl-row">
+          <div class="hl"><span class="hl-lbl">H</span><span class="hl-v" id="wxHi">36°</span></div>
+          <div class="dot-sep">·</div>
+          <div class="hl"><span class="hl-lbl">L</span><span class="hl-v lo" id="wxLo">28°</span></div>
+        </div>
+        <div class="stat">💧 <span id="wxHum">54% humidity</span></div>
+        <div class="stat">🌬️ <span id="wxWind">8 km/h WSW</span></div>
+      </div>
+    </div>
+
+    <!-- RIGHT: Glass panel -->
+    <div class="glass-panel">
+      <div class="alert-bar" id="alertBar">
+        <div class="alert-dot" id="alertDot"></div>
+        <span class="alert-txt" id="alertTxt">Thunderstorm — Suspend blasting operations</span>
+      </div>
+
+      <div class="panel-body">
+        <!-- Hourly -->
+        <div>
+          <div class="sec-lbl">Hourly Forecast</div>
+          <div class="hourly" id="hourlyStrip"></div>
+        </div>
+
+        <div class="hdiv"></div>
+
+        <!-- 5-day -->
+        <div style="flex:1;min-height:0">
+          <div class="sec-lbl">5-Day Forecast</div>
+          <div class="forecast" id="forecastRows"></div>
+        </div>
+      </div>
+
+      <div class="panel-footer">
+        <span class="foot-txt">Open-Meteo · 20.99°N 85.67°E · Auto-refresh 30 min</span>
+        <span class="foot-txt">↑H ↓L · Rain%</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Tech notes ─────────────────────────────────────────── -->
+<div class="notes">
+  <div class="note">
+    <div class="note-title">🎨 3 Animation Layers</div>
+    <div class="note-item"><b>Layer 1 — Background gradient</b><br>CSS gradient, changes per weather condition. In production: replace with real Unsplash rain photo.</div>
+    <br>
+    <div class="note-item"><b>Layer 2 — Canvas droplets</b><br>Water droplets that grow → drip down the glass. Pure HTML5 Canvas + requestAnimationFrame. No library.</div>
+    <br>
+    <div class="note-item"><b>Layer 3 — CSS streaks</b><br>Falling rain/snow streaks. Pure CSS <code>@keyframes</code>. Lightweight, GPU-accelerated.</div>
+  </div>
+  <div class="note">
+    <div class="note-title">📦 Packages Needed</div>
+    <div class="note-item"><b>Canvas droplets</b> — Zero packages. Pure browser Canvas API wrapped in a React <code>useEffect</code> hook.</div>
+    <br>
+    <div class="note-item"><b>OR if you want tsparticles</b> (heavier but more control):<br><code>@tsparticles/react</code><br><code>@tsparticles/engine</code><br><code>@tsparticles/preset-rain</code></div>
+    <br>
+    <div class="note-item"><b>Recommendation:</b> Use the canvas approach — zero extra bundle size, already demonstrated here.</div>
+  </div>
+  <div class="note">
+    <div class="note-title">🖼️ Real Photo Option</div>
+    <div class="note-item"><b>If you want a real photo background:</b><br>Download 8 images from Unsplash and save to <code>public/weather/</code>.</div>
+    <br>
+    <div class="note-item">
+      <b>stormy.jpg</b> — "rain drops glass window dark"<br>
+      <b>rainy.jpg</b> — "rain window glass blur"<br>
+      <b>clear-day.jpg</b> — "golden hour sky warm"<br>
+      <b>clear-night.jpg</b> — "night sky stars"<br>
+      <b>overcast.jpg</b> — "grey cloudy sky"<br>
+      <b>foggy.jpg</b> — "fog mist morning"
+    </div>
+    <br>
+    <div class="note-item">Canvas droplets animate ON TOP of the static photo.</div>
+  </div>
+</div>
+
+<div class="page-title" style="font-size:10px;color:#1f2937">
+  Prototype · Sample data only · Final uses live Open-Meteo API
+</div>
+
+<script>
+// ══════════════════════════════════════════════════
+//  CONDITION DATA
+// ══════════════════════════════════════════════════
+const CONDITIONS = {
+  stormy: {
+    bg: "linear-gradient(145deg,#0a0015 0%,#120020 30%,#1a0035 60%,#0d0020 100%)",
+    emoji:"⛈️", temp:36, desc:"Thunderstorm", hi:36, lo:28, hum:54, wind:"8 km/h WSW",
+    alert:"Thunderstorm — Suspend blasting operations",
+    alertOk: false,
+    hourly:[
+      {t:"Now",  e:"⛈️", tmp:36, rain:16},
+      {t:"17:00",e:"🌧️", tmp:35, rain:20},
+      {t:"18:00",e:"🌧️", tmp:33, rain:26},
+      {t:"19:00",e:"☁️",  tmp:32, rain:17},
+      {t:"20:00",e:"☁️",  tmp:31, rain:14},
+      {t:"21:00",e:"☁️",  tmp:31, rain:0},
+    ],
+    days:[
+      {n:"Today",e:"⛈️",rain:20,hi:36,lo:28},
+      {n:"WED",  e:"🌧️",rain:47,hi:38,lo:29},
+      {n:"THU",  e:"🌧️",rain:53,hi:38,lo:28},
+      {n:"FRI",  e:"🌧️",rain:73,hi:37,lo:26},
+      {n:"SAT",  e:"🌧️",rain:59,hi:37,lo:27},
+    ],
+    rain: true, rainIntensity: 60,
+  },
+  rainy: {
+    bg: "linear-gradient(145deg,#0a1628 0%,#0d2b4e 40%,#1565c0 80%,#0a1f3c 100%)",
+    emoji:"🌧️", temp:29, desc:"Moderate Rain", hi:31, lo:24, hum:78, wind:"12 km/h SE",
+    alert:"Heavy rain — Monitor sump & dewatering levels",
+    alertOk: false,
+    hourly:[
+      {t:"Now",  e:"🌧️",tmp:29,rain:65},
+      {t:"17:00",e:"🌧️",tmp:28,rain:70},
+      {t:"18:00",e:"🌦️",tmp:27,rain:55},
+      {t:"19:00",e:"🌦️",tmp:26,rain:40},
+      {t:"20:00",e:"☁️", tmp:25,rain:20},
+      {t:"21:00",e:"☁️", tmp:25,rain:10},
+    ],
+    days:[
+      {n:"Today",e:"🌧️",rain:65,hi:31,lo:24},
+      {n:"WED",  e:"🌦️",rain:40,hi:33,lo:22},
+      {n:"THU",  e:"🌤️",rain:15,hi:36,lo:21},
+      {n:"FRI",  e:"☀️", rain: 5,hi:38,lo:22},
+      {n:"SAT",  e:"🌤️",rain:20,hi:37,lo:23},
+    ],
+    rain: true, rainIntensity: 35,
+  },
+  clear_day: {
+    bg: "linear-gradient(145deg,#7c2d12 0%,#c2410c 30%,#ea580c 60%,#f97316 100%)",
+    emoji:"☀️", temp:38, desc:"Clear Sky", hi:40, lo:24, hum:32, wind:"5 km/h SW",
+    alert:null, alertOk: true,
+    hourly:[
+      {t:"Now",  e:"☀️",tmp:38,rain:0},
+      {t:"17:00",e:"☀️",tmp:37,rain:0},
+      {t:"18:00",e:"🌤️",tmp:35,rain:0},
+      {t:"19:00",e:"🌤️",tmp:33,rain:0},
+      {t:"20:00",e:"🌤️",tmp:31,rain:0},
+      {t:"21:00",e:"🌙",tmp:29,rain:0},
+    ],
+    days:[
+      {n:"Today",e:"☀️", rain: 2,hi:40,lo:24},
+      {n:"WED",  e:"☀️", rain: 3,hi:41,lo:25},
+      {n:"THU",  e:"🌤️",rain:10,hi:39,lo:24},
+      {n:"FRI",  e:"🌧️",rain:55,hi:34,lo:22},
+      {n:"SAT",  e:"🌧️",rain:40,hi:33,lo:21},
+    ],
+    rain: false, rainIntensity: 0,
+  },
+  clear_night: {
+    bg: "linear-gradient(145deg,#0d0d2b 0%,#1e1b4b 35%,#0a0a20 65%,#0c0c30 100%)",
+    emoji:"🌙", temp:26, desc:"Clear Sky", hi:36, lo:24, hum:48, wind:"4 km/h N",
+    alert:null, alertOk: true,
+    hourly:[
+      {t:"Now",  e:"🌙",tmp:26,rain:0},
+      {t:"23:00",e:"🌙",tmp:25,rain:0},
+      {t:"00:00",e:"🌙",tmp:25,rain:0},
+      {t:"01:00",e:"🌙",tmp:24,rain:0},
+      {t:"02:00",e:"🌙",tmp:24,rain:0},
+      {t:"03:00",e:"🌙",tmp:24,rain:0},
+    ],
+    days:[
+      {n:"Today",e:"🌙", rain: 0,hi:36,lo:24},
+      {n:"WED",  e:"☀️", rain: 2,hi:40,lo:25},
+      {n:"THU",  e:"☀️", rain: 5,hi:41,lo:26},
+      {n:"FRI",  e:"🌤️",rain:12,hi:38,lo:24},
+      {n:"SAT",  e:"🌧️",rain:50,hi:34,lo:22},
+    ],
+    rain: false, rainIntensity: 0,
+  },
+  overcast: {
+    bg: "linear-gradient(145deg,#1c2b3a 0%,#263238 35%,#37474f 70%,#263238 100%)",
+    emoji:"☁️", temp:33, desc:"Overcast", hi:35, lo:26, hum:62, wind:"9 km/h NW",
+    alert:null, alertOk: true,
+    hourly:[
+      {t:"Now",  e:"☁️",tmp:33,rain:5},
+      {t:"17:00",e:"☁️",tmp:32,rain:8},
+      {t:"18:00",e:"🌦️",tmp:31,rain:20},
+      {t:"19:00",e:"🌧️",tmp:30,rain:35},
+      {t:"20:00",e:"🌧️",tmp:29,rain:40},
+      {t:"21:00",e:"☁️",tmp:28,rain:15},
+    ],
+    days:[
+      {n:"Today",e:"☁️", rain:15,hi:35,lo:26},
+      {n:"WED",  e:"🌧️",rain:50,hi:32,lo:24},
+      {n:"THU",  e:"🌧️",rain:60,hi:31,lo:23},
+      {n:"FRI",  e:"🌤️",rain:15,hi:36,lo:24},
+      {n:"SAT",  e:"☀️", rain: 3,hi:39,lo:25},
+    ],
+    rain: false, rainIntensity: 0,
+  },
+  foggy: {
+    bg: "linear-gradient(145deg,#546e7a 0%,#607d8b 35%,#78909c 65%,#607d8b 100%)",
+    emoji:"🌫️", temp:24, desc:"Foggy", hi:28, lo:21, hum:92, wind:"3 km/h calm",
+    alert:"Low visibility — Restrict heavy equipment movement",
+    alertOk: false,
+    hourly:[
+      {t:"Now",  e:"🌫️",tmp:24,rain:0},
+      {t:"07:00",e:"🌫️",tmp:24,rain:0},
+      {t:"08:00",e:"🌤️",tmp:26,rain:0},
+      {t:"09:00",e:"🌤️",tmp:28,rain:0},
+      {t:"10:00",e:"☀️", tmp:30,rain:0},
+      {t:"11:00",e:"☀️", tmp:32,rain:0},
+    ],
+    days:[
+      {n:"Today",e:"🌫️",rain: 2,hi:28,lo:21},
+      {n:"WED",  e:"☀️", rain: 3,hi:36,lo:22},
+      {n:"THU",  e:"☀️", rain: 5,hi:37,lo:23},
+      {n:"FRI",  e:"🌤️",rain:10,hi:35,lo:22},
+      {n:"SAT",  e:"🌧️",rain:45,hi:30,lo:21},
+    ],
+    rain: false, rainIntensity: 0,
+  },
+};
+
+// ══════════════════════════════════════════════════
+//  CANVAS: Water droplets on glass
+// ══════════════════════════════════════════════════
+const canvas = document.getElementById('rainCanvas');
+const widget = document.getElementById('widget');
+canvas.width  = widget.offsetWidth;
+canvas.height = widget.offsetHeight;
+const ctx = canvas.getContext('2d');
+
+class GlassDrop {
+  constructor(maxDrops) {
+    this.maxDrops = maxDrops;
+    this.reset();
+  }
+  reset() {
+    this.x = Math.random() * canvas.width;
+    this.y = Math.random() * (canvas.height * 0.7);
+    this.r = 0.5 + Math.random() * 2;
+    this.maxR = 3 + Math.random() * 9;
+    this.growing = true;
+    this.vy = 0;
+    this.trail = [];
+    this.alpha = 0.35 + Math.random() * 0.45;
+    this.wobble = 0;
+    this.wobbleSpeed = 0.02 + Math.random() * 0.02;
+  }
+  update(active) {
+    if (!active) return;
+    if (this.growing) {
+      this.r += 0.025 + Math.random() * 0.015;
+      if (this.r >= this.maxR) { this.growing = false; }
+    } else {
+      this.vy += 0.05 + Math.random() * 0.02;
+      this.wobble += this.wobbleSpeed;
+      this.x += Math.sin(this.wobble) * 0.3;
+      this.y += this.vy;
+      this.trail.push({ x: this.x, y: this.y });
+      if (this.trail.length > 15) this.trail.shift();
+      this.r = Math.max(1, this.r * 0.997);
+      if (this.y > canvas.height + 30) this.reset();
+    }
+  }
+  draw(active) {
+    if (!active && this.trail.length === 0) return;
+
+    // Drip trail
+    if (this.trail.length > 1 && !this.growing) {
+      ctx.beginPath();
+      ctx.moveTo(this.trail[0].x, this.trail[0].y);
+      for (let i = 1; i < this.trail.length; i++) {
+        ctx.lineTo(this.trail[i].x, this.trail[i].y);
+      }
+      ctx.strokeStyle = `rgba(180,220,255,${this.alpha * 0.28})`;
+      ctx.lineWidth = Math.max(0.5, this.r * 0.5);
+      ctx.lineCap = 'round';
+      ctx.stroke();
+    }
+
+    // Drop body: radial gradient (lighter inside, darker edge = glass look)
+    const g = ctx.createRadialGradient(
+      this.x - this.r * 0.28, this.y - this.r * 0.28, 0,
+      this.x, this.y, this.r
+    );
+    g.addColorStop(0,   `rgba(255,255,255,${this.alpha * 0.55})`);
+    g.addColorStop(0.4, `rgba(200,230,255,${this.alpha * 0.28})`);
+    g.addColorStop(0.8, `rgba(120,180,240,${this.alpha * 0.10})`);
+    g.addColorStop(1,   `rgba(80,140,220,0)`);
+
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+    ctx.fillStyle = g;
+    ctx.fill();
+
+    // Specular highlight
+    ctx.beginPath();
+    ctx.arc(this.x - this.r * 0.28, this.y - this.r * 0.28, this.r * 0.22, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255,255,255,${this.alpha * 0.45})`;
+    ctx.fill();
+  }
+}
+
+const drops = Array.from({ length: 40 }, () => new GlassDrop(40));
+// Stagger start times
+drops.forEach((d, i) => { for(let j=0; j < Math.floor(i*3.5); j++) d.update(true); });
+
+let rainActive = true;
+
+function animateCanvas() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  drops.forEach(d => { d.update(rainActive); d.draw(rainActive); });
+  requestAnimationFrame(animateCanvas);
+}
+animateCanvas();
+
+// ══════════════════════════════════════════════════
+//  CSS RAIN STREAKS
+// ══════════════════════════════════════════════════
+const streakLayer = document.getElementById('streakLayer');
+const streakEls = [];
+
+function buildStreaks(count) {
+  streakLayer.innerHTML = '';
+  streakEls.length = 0;
+  for (let i = 0; i < count; i++) {
+    const el = document.createElement('div');
+    el.className = 'streak';
+    const len  = 35 + Math.random() * 45;
+    const spd  = 0.35 + Math.random() * 0.35;
+    el.style.cssText = `
+      left: ${Math.random() * 110 - 5}%;
+      width: ${Math.random() < 0.3 ? 2 : 1.5}px;
+      height: ${len}px;
+      background: linear-gradient(to bottom, transparent, rgba(180,215,255,${0.25 + Math.random()*0.25}));
+      animation-duration: ${spd}s;
+      animation-delay: -${Math.random() * 1.2}s;
+      transform: rotate(12deg);
+    `;
+    streakLayer.appendChild(el);
+    streakEls.push(el);
+  }
+}
+
+// ══════════════════════════════════════════════════
+//  RENDER UI
+// ══════════════════════════════════════════════════
+function renderHourly(hourly) {
+  const strip = document.getElementById('hourlyStrip');
+  strip.innerHTML = hourly.map((h, i) => `
+    <div class="h-cell ${i===0?'now':''}">
+      <div class="h-time">${h.t}</div>
+      <div class="h-ico">${h.e}</div>
+      <div class="h-tmp">${h.tmp}°</div>
+      ${h.rain > 5 ? `<div class="h-rain">${h.rain}%</div>` : `<div class="h-rain"></div>`}
+    </div>`).join('');
+}
+
+function renderForecast(days) {
+  const allHi = days.map(d=>d.hi), allLo = days.map(d=>d.lo);
+  const gMin = Math.min(...allLo), gMax = Math.max(...allHi);
+  const gRange = Math.max(1, gMax - gMin);
+
+  document.getElementById('forecastRows').innerHTML = days.map((d, i) => {
+    const bL = ((d.lo - gMin) / gRange * 100).toFixed(1);
+    const bW = Math.max(8, (d.hi - d.lo) / gRange * 100).toFixed(1);
+    return `
+      <div class="f-row">
+        <div class="f-day${i===0?' today':''}">${d.n}</div>
+        <div class="f-ico">${d.e}</div>
+        <div class="f-rain">${d.rain>0?d.rain+'%':''}</div>
+        <div class="bar-track">
+          <div class="bar-fill" style="left:${bL}%;width:${bW}%"></div>
+        </div>
+        <div class="f-temps">
+          <span class="f-hi">${d.hi}°</span>
+          <span class="f-lo">${d.lo}°</span>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function setCondition(key) {
+  const c = CONDITIONS[key];
+
+  // Update tabs
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  event.target.classList.add('active');
+
+  // Update background
+  document.getElementById('bgLayer').style.background = c.bg;
+
+  // Update left panel
+  document.getElementById('wxEmoji').textContent = c.emoji;
+  document.getElementById('wxTemp').innerHTML = `${c.temp}<sup>°C</sup>`;
+  document.getElementById('wxDesc').textContent = c.desc;
+  document.getElementById('wxHi').textContent = c.hi + '°';
+  document.getElementById('wxLo').textContent = c.lo + '°';
+  document.getElementById('wxHum').textContent = c.hum + '% humidity';
+  document.getElementById('wxWind').textContent = c.wind;
+
+  // Update alert
+  const bar = document.getElementById('alertBar');
+  const dot = document.getElementById('alertDot');
+  const txt = document.getElementById('alertTxt');
+  if (c.alert) {
+    bar.className = 'alert-bar';
+    dot.className = 'alert-dot';
+    txt.className = 'alert-txt';
+    txt.textContent = c.alert;
+  } else {
+    bar.className = 'alert-bar ok';
+    dot.className = 'alert-dot ok';
+    txt.className = 'alert-txt ok';
+    txt.textContent = 'No active weather alerts';
+  }
+
+  // Rain effects
+  rainActive = c.rain;
+  if (c.rain) {
+    buildStreaks(c.rainIntensity);
+  } else {
+    streakLayer.innerHTML = '';
+  }
+
+  // Render forecast
+  renderHourly(c.hourly);
+  renderForecast(c.days);
+}
+
+// Init with stormy
+document.getElementById('bgLayer').style.background = CONDITIONS.stormy.bg;
+buildStreaks(60);
+rainActive = true;
+renderHourly(CONDITIONS.stormy.hourly);
+renderForecast(CONDITIONS.stormy.days);
+</script>
+</body>
+</html>

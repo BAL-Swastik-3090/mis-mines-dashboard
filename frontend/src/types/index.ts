@@ -263,6 +263,136 @@ export interface CobSummaryResponse {
   avg_tailings_cr2o3:  number | null;
 }
 
+// ── Equipment Utilization ─────────────────────────────────────
+export interface ExcavatorMachineRowAPI {
+  vehicle_desc: string;
+  display_name: string;
+  eng_hr_mtd:   number;
+  bd_hr:        number;
+  bd_count:     number;
+  avail_pct:    number | null;
+  util_pct:     number | null;
+  mttr:         number | null;
+  mtbf:         number | null;
+}
+export interface ExcavatorSummaryResponse {
+  from_date:       string;
+  to_date:         string;
+  machines:        ExcavatorMachineRowAPI[];
+  total_eng_hr:    number;
+  total_bd_hr:     number;
+  active_count:    number;
+  total_count:     number;
+  total_bd_count:  number;
+  fleet_mttr:      number | null;
+  fleet_mtbf:      number | null;
+}
+export interface ExcavatorFuelRowAPI {
+  vehicle_desc: string;
+  eng_hr_mtd:   number;
+  fuel_mtd:     number;
+  lph_avg:      number | null;
+}
+export interface ExcavatorFuelResponse {
+  from_date:   string;
+  to_date:     string;
+  machines:    ExcavatorFuelRowAPI[];
+  avg_lph:     number | null;
+  fleet_count: number;
+  oem_lph:     number;
+  total_fuel:  number;
+}
+export interface ExcavatorTrendResponse {
+  from_date:     string;
+  to_date:       string;
+  machine_names: string[];
+  dates:         string[];
+  series:        Record<string, (number | null)[]>;
+}
+export interface TipperMachineRowAPI {
+  vehicle_desc: string;
+  eng_hr_mtd:   number;
+  bd_hr:        number;
+  bd_count:     number;
+  avail_pct:    number | null;
+  util_pct:     number | null;
+  mttr:         number | null;
+  mtbf:         number | null;
+}
+export interface TipperSummaryResponse {
+  from_date:       string;
+  to_date:         string;
+  machines:        TipperMachineRowAPI[];
+  total_eng_hr:    number;
+  total_bd_hr:     number;
+  active_count:    number;
+  total_count:     number;
+  total_bd_count:  number;
+  fleet_mttr:      number | null;
+  fleet_mtbf:      number | null;
+}
+export interface TipperFuelRowAPI {
+  vehicle_desc: string;
+  eng_hr_mtd:   number;
+  fuel_mtd:     number;
+  dist_mtd:     number;
+  lph_avg:      number | null;
+  kmpl_avg:     number | null;
+}
+export interface TipperFuelResponse {
+  from_date:   string;
+  to_date:     string;
+  machines:    TipperFuelRowAPI[];
+  avg_lph:     number | null;
+  avg_kmpl:    number | null;
+  fleet_count: number;
+  oem_lph:     number;
+}
+
+// ── Despatch ──────────────────────────────────────────────────
+export interface DespatchDayRowAPI {
+  date:           string;
+  total_plan:     number;
+  bal_plan:       number;
+  suk_plan:       number;
+  total_actual:   number | null;
+  bal_actual:     number | null;
+  suk_actual:     number | null;
+  unsynced_count: number;
+}
+
+export interface DespatchSummaryResponse {
+  from_date:          string;
+  to_date:            string;
+  mtd_total_plan:     number;
+  mtd_bal_plan:       number;
+  mtd_suk_plan:       number;
+  td_total_plan:      number | null;
+  td_bal_plan:        number | null;
+  td_suk_plan:        number | null;
+  mtd_total_actual:   number | null;
+  mtd_bal_actual:     number | null;
+  mtd_suk_actual:     number | null;
+  mtd_unsynced_count: number;
+  td_total_actual:    number | null;
+  td_bal_actual:      number | null;
+  td_suk_actual:      number | null;
+  td_unsynced_count:  number;
+}
+
+export interface DespatchDaywiseResponse {
+  from_date:          string;
+  to_date:            string;
+  rows:               DespatchDayRowAPI[];
+  mtd_total_plan:     number;
+  mtd_bal_plan:       number;
+  mtd_suk_plan:       number;
+  mtd_total_actual:   number | null;
+  mtd_bal_actual:     number | null;
+  mtd_suk_actual:     number | null;
+  mtd_unsynced_count: number;
+}
+
 export interface TipperRow {
   vehicle_id: string;
   eng_hours_mtd: number;
@@ -272,4 +402,97 @@ export interface TipperRow {
   status: string;
   fuel_lph?: number;
   kmpl?: number;
+}
+
+// ── Dewatering ────────────────────────────────────────────────
+export interface DewateringDayRow {
+  date:          string;
+  open_stock:    number | null;
+  rain_added:    number | null;
+  pump_plan_hr:  number | null;
+  pump_act_hr:   number | null;
+  disposal_plan: number | null;
+  disposal_act:  number | null;
+  variance:      number | null;
+  closing_stock: number | null;
+}
+
+export interface DewateringTodayKpi {
+  latest_date:        string;
+  day_num:            number;
+  disposal_actual:    number | null;
+  disposal_plan:      number | null;
+  disposal_variance:  number | null;
+  disposal_pct:       number | null;
+  pump_actual_hr:     number | null;
+  pump_plan_hr:       number | null;
+  pump_pct:           number | null;
+  closing_stock:      number | null;
+  prev_closing_stock: number | null;
+  stock_delta:        number | null;
+  pump_capacity:      number | null;
+  eddy_pump_mins:     number | null;
+}
+
+export interface DewateringMtdKpi {
+  days:                 number;
+  mtd_disposal_actual:  number;
+  mtd_disposal_plan:    number;
+  mtd_disposal_pct:     number | null;
+  mtd_pump_actual_hr:   number;
+  mtd_pump_plan_hr:     number;
+  mtd_pump_pct:         number | null;
+  mtd_rain_inflow:      number;
+  net_stock_change:     number | null;
+  d1_open_stock:        number | null;
+  d_last_close_stock:   number | null;
+}
+
+export interface DewateringSummaryResponse {
+  from_date: string;
+  to_date:   string;
+  today:     DewateringTodayKpi;
+  mtd:       DewateringMtdKpi;
+  rows:      DewateringDayRow[];
+}
+
+// ── Insights / Reality Check ──────────────────────────────────
+export type InsightVerdict =
+  | "ACHIEVABLE"
+  | "STRETCH"
+  | "NOT_FEASIBLE"
+  | "NO_DATA"
+  | "N/A";
+
+export interface RealityCheckRow {
+  kpi:              string;
+  unit:             string;
+  plan:             number;
+  actual:           number;
+  gap:              number;
+  run_rate_per_day: number | null;
+  required_per_day: number | null;
+  uplift:           number | null;
+  verdict:          InsightVerdict;
+}
+
+export interface RealityCheckResponse {
+  as_on:          string;
+  from_date:      string;
+  to_date:        string;
+  month_end:      string;
+  days_elapsed:   number;
+  days_remaining: number;
+  cycle_pct:      number;
+  plan_month:     string;
+  plan_fallback:  boolean;
+  rows:           RealityCheckRow[];
+}
+
+export interface InsightsResponse {
+  generated_at:              string;
+  model_used:                string;
+  reality_check_narrative:   string;
+  dewatering_observations:   string;
+  key_risks_and_actions:     string;
 }

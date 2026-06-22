@@ -3,10 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3333",
+    "dev": "node scripts/dev-start.mjs",
+    "dev:raw": "next dev -p 3333",
     "build": "next build",
     "start": "next start -p 3333",
-    "lint": "next lint"
+    "lint": "next lint",
+    "clean": "node -e \"require('fs').rmSync('.next',{recursive:true,force:true}); console.log('Cache cleared');\""
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.4",

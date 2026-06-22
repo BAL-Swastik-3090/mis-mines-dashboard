@@ -61,16 +61,13 @@ def health_check():
 
 
 # ── Routers ───────────────────────────────────────────────────
-from app.routers import production, stock, cob, plant, ob
-app.include_router(production.router, prefix="/api/production", tags=["Production"])
-app.include_router(stock.router,      prefix="/api/stock",      tags=["Stock"])
-app.include_router(cob.router,        prefix="/api/cob",        tags=["COB Plant"])
-app.include_router(plant.router,      prefix="/api/plant",      tags=["Plant Performance"])
-app.include_router(ob.router,         prefix="/api/ob",         tags=["OB Excavation"])
-
-# ── Routers (added as KPIs are built) ────────────────────────
-# from app.routers import equipment, dewatering, loss, plant
-# app.include_router(equipment.router,  prefix="/api/equipment",  tags=["Equipment"])
-# app.include_router(dewatering.router, prefix="/api/dewatering", tags=["Dewatering"])
-# app.include_router(loss.router,       prefix="/api/loss",       tags=["Loss & OEE"])
-# app.include_router(plant.router,      prefix="/api/plant",      tags=["Plant"])
+from app.routers import production, stock, cob, plant, ob, despatch, equipment, dewatering, insights
+app.include_router(production.router,  prefix="/api/production",  tags=["Production"])
+app.include_router(stock.router,       prefix="/api/stock",       tags=["Stock"])
+app.include_router(cob.router,         prefix="/api/cob",         tags=["COB Plant"])
+app.include_router(plant.router,       prefix="/api/plant",       tags=["Plant Performance"])
+app.include_router(ob.router,          prefix="/api/ob",          tags=["OB Excavation"])
+app.include_router(despatch.router,    prefix="/api/despatch",    tags=["Despatch"])
+app.include_router(equipment.router,   prefix="/api/equipment",   tags=["Equipment"])
+app.include_router(dewatering.router,  prefix="/api/dewatering",  tags=["Dewatering"])
+app.include_router(insights.router,    prefix="/api/insights",    tags=["Insights"])

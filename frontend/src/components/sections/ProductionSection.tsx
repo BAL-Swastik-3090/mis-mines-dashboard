@@ -4,6 +4,7 @@ import ProductionKpiStrip from "@/components/kpi/ProductionKpiStrip";
 import ProductionCharts   from "@/components/charts/ProductionCharts";
 import GradeChart         from "@/components/charts/GradeChart";
 import DeSiltingChart     from "@/components/charts/DeSiltingChart";
+import DespatchCharts     from "@/components/charts/DespatchCharts";
 import DaywiseTable       from "@/components/tables/DaywiseTable";
 
 export default function ProductionSection() {
@@ -13,13 +14,13 @@ export default function ProductionSection() {
       {/* Section title */}
       <div className="section-title">
         <TrendingUp size={13} />
-        Production Performance — Ore · Overburden · COB
+        Production Performance — Ore · Overburden · COB · Despatch
       </div>
 
-      {/* Row 1 — KPI hero cards */}
+      {/* Row 1 — KPI hero cards (Ore / OB / COB / De-Silting / Despatch) */}
       <ProductionKpiStrip />
 
-      {/* Row 2 — Plan vs Actual charts */}
+      {/* Row 2 — Plan vs Actual charts (Ore / OB / COB) */}
       <ProductionCharts />
 
       {/* Row 3 — Grade-wise Ore + De-Silting side by side */}
@@ -28,7 +29,10 @@ export default function ProductionSection() {
         <DeSiltingChart />
       </div>
 
-      {/* Row 4 — Day-wise production table (full width) */}
+      {/* Row 4 — Despatch Plan charts (Overall + Location-wise) */}
+      <DespatchCharts />
+
+      {/* Row 5 — Day-wise production + despatch table (full width) */}
       <DaywiseTable />
 
     </section>

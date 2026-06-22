@@ -1,15 +1,47 @@
 "use client";
 import { format } from "date-fns";
-import { RefreshCw, Bell, Settings } from "lucide-react";
+import { RefreshCw, Bell } from "lucide-react";
+import { useState, useCallback, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import DateFilter from "./DateFilter";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import { cn } from "@/lib/utils";
 
+/** True when the selected end-date is today → sensor data is live. */
+function useIsLive(): boolean {
+  const { apiTo } = useDateFilter();
+  const t = new Date();
+  const today = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+  return apiTo === today;
+}
+
+function useNow(): string {
+  const [now, setNow] = useState<string>("");   // empty until client mounts
+  useEffect(() => {
+    const tick = () => setNow(format(new Date(), "d MMM yyyy · HH:mm 'IST'"));
+    tick();
+    const id = setInterval(tick, 60_000);
+    return () => clearInterval(id);
+  }, []);
+  return now;
+}
+
 export default function Header() {
-  const {} = useDateFilter(); // keep store subscribed
+  const { periodLabel } = useDateFilter();
+  const isLive          = useIsLive();
+  const qc              = useQueryClient();
+  const now             = useNow();
+
+  const [spinning, setSpinning] = useState(false);
+
+  const handleRefresh = useCallback(() => {
+    setSpinning(true);
+    qc.invalidateQueries();
+    setTimeout(() => setSpinning(false), 900);
+  }, [qc]);
 
   return (
-    <header className="sticky top-0 z-30 bg-[#1a2744] shadow-lg">
+    <header className="fixed top-0 left-0 right-0 z-30 bg-[#1a2744] shadow-lg">
       {/* Gold accent line */}
       <div className="h-[3px] bg-gradient-to-r from-[#c8960c] via-[#f5a623] to-[#c8960c]" />
 
@@ -32,7 +64,7 @@ export default function Header() {
         <div className="hidden md:flex items-center gap-6 xl:gap-10 px-6 flex-1">
           <MetaItem
             label="Report As On"
-            value={format(new Date(), "d MMM yyyy · HH:mm 'IST'")}
+            value={now}
             gold
           />
         </div>
@@ -42,21 +74,44 @@ export default function Header() {
 
         {/* ── Controls ───────────────────────────────────────── */}
         <div className="flex items-center gap-2 xl:gap-3 px-4 xl:px-5 border-l border-white/10">
-          {/* Live badge */}
-          <div className="flex items-center gap-1.5 bg-white/8 border border-white/15 rounded px-3 py-1.5">
-            <span className="pulse-dot" />
-            <span className="text-[11px] text-white/75 font-semibold tracking-wider hidden sm:inline">LIVE</span>
-          </div>
+
+          {/* Live / Historical badge — reflects actual selected date */}
+          {isLive ? (
+            <div
+              title="Showing live data (today)"
+              className="flex items-center gap-1.5 bg-success/10 border border-success/30 rounded px-3 py-1.5"
+            >
+              <span className="pulse-dot" />
+              <span className="text-[11px] text-success font-bold tracking-wider hidden sm:inline">
+                LIVE
+              </span>
+            </div>
+          ) : (
+            <div
+              title={`Showing historical data — ${periodLabel}`}
+              className="flex items-center gap-1.5 bg-warning/10 border border-warning/25 rounded px-3 py-1.5"
+            >
+              <span className="inline-block w-2 h-2 rounded-full bg-warning shrink-0" />
+              <span className="text-[11px] text-warning/80 font-bold tracking-wider hidden sm:inline">
+                {periodLabel || "HIST"}
+              </span>
+            </div>
+          )}
 
           {/* Date Filter */}
           <DateFilter />
 
-          {/* Refresh */}
+          {/* Refresh — invalidates all TanStack Query cache */}
           <button
-            title="Refresh data"
-            className="p-2 rounded border border-white/15 text-white/60 hover:text-white hover:border-white/30 transition-colors"
+            onClick={handleRefresh}
+            disabled={spinning}
+            title="Refresh all data"
+            className="p-2 rounded border border-white/15 text-white/60 hover:text-white hover:border-white/30 active:scale-95 transition-all disabled:opacity-70"
           >
-            <RefreshCw size={15} />
+            <RefreshCw
+              size={15}
+              className={spinning ? "animate-spin" : ""}
+            />
           </button>
 
           {/* Alerts */}
@@ -68,14 +123,6 @@ export default function Header() {
             <span className="absolute -top-1 -right-1 w-4 h-4 bg-danger rounded-full text-[9px] text-white flex items-center justify-center font-bold">
               3
             </span>
-          </button>
-
-          {/* Settings */}
-          <button
-            title="Settings"
-            className="p-2 rounded border border-white/15 text-white/60 hover:text-white hover:border-white/30 transition-colors"
-          >
-            <Settings size={15} />
           </button>
         </div>
       </div>

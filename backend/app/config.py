@@ -26,8 +26,10 @@ class Settings(BaseSettings):
     secret_key: str = Field(default="change-this-secret")
     allowed_origins: str = Field(default="http://localhost:3000")
 
-    # AI (Phase 5)
-    anthropic_api_key: str = Field(default="")
+    # LiteLLM / AI Insights
+    litellm_base_url: str = Field(default="")
+    litellm_api_key:  str = Field(default="")
+    litellm_model:    str = Field(default="claude-sonnet-4-6")
 
     class Config:
         env_file = str(_ENV_FILE)

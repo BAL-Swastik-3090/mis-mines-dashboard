@@ -6,9 +6,14 @@ Sources:
   - mines_cobp_sample_analysis → tailings Cr₂O₃ % (shift-level, VARCHAR)
   - mines_cobp_plan        → all plan values
 """
-from datetime import date
+from datetime import date, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import text
+
+
+def _date_spine(from_date: date, to_date: date) -> list:
+    n = (to_date - from_date).days + 1
+    return [from_date + timedelta(days=i) for i in range(n)]
 
 
 def _f(v):
@@ -112,9 +117,7 @@ def get_cob_summary(db: Session, from_date: date, to_date: date) -> dict:
     tailings_q = _get_tailings_cr(db, from_date, to_date)
     plan       = _get_plan(db, from_date, to_date)
 
-    all_dates = sorted(
-        set(actuals) | set(quality) | set(tailings_q) | set(plan)
-    )
+    all_dates = _date_spine(from_date, to_date)
 
     rows = []
     for dt in all_dates:

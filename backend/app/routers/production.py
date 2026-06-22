@@ -2,7 +2,7 @@
 Production router — Ore, OB, COB KPI endpoints.
 All endpoints accept ?from_date=YYYY-MM-DD&to_date=YYYY-MM-DD
 """
-from datetime import date, timedelta
+from datetime import date
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -40,15 +40,14 @@ def production_summary(
     If no dates provided, defaults to current month.
     """
     today     = date.today()
-    yesterday = today - timedelta(days=1)   # TD = Present Day − 1
     if not from_date:
         from_date = today.replace(day=1)
     if not to_date:
         to_date = today
 
-    # TD data (yesterday — SAP is updated from previous day)
-    td_actual = svc.get_today_actuals(db, yesterday)
-    td_plan   = svc.get_today_plan(db, yesterday)
+    # TD data — use to_date (last day of selected range)
+    td_actual = svc.get_today_actuals(db, to_date)
+    td_plan   = svc.get_today_plan(db, to_date)
 
     # MTD totals
     mtd = svc.get_mtd_totals(db, from_date, to_date)
@@ -88,7 +87,7 @@ def production_summary(
             unit         = "MT",
         ),
         de_silt = KpiCard(
-            today_actual = svc.get_desilt_actual(db, yesterday, yesterday),
+            today_actual = svc.get_desilt_actual(db, to_date, to_date),
             today_plan   = None,
             today_pct    = None,
             mtd_actual   = svc.get_desilt_actual(db, from_date, to_date),
