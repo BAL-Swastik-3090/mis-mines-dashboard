@@ -47,8 +47,8 @@ def get_plant_performance(db: Session, from_date: date, to_date: date) -> dict:
 
     combined_total   = round(bal_total + suk_total, 2)
     combined_per_day = round(combined_total / days, 1)
-    bal_per_day      = round(bal_total / days, 1)
-    suk_per_day      = round(suk_total / days, 1)
+    bal_per_day      = round(bal_total / max(bal_days, 1), 1)
+    suk_per_day      = round(suk_total / max(suk_days, 1), 1)
     bal_share        = round(bal_total / combined_total * 100, 1) if combined_total else 0.0
     suk_share        = round(suk_total / combined_total * 100, 1) if combined_total else 0.0
 

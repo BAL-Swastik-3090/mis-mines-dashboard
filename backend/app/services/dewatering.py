@@ -98,8 +98,13 @@ def get_summary(db: Session, from_date: date, to_date: date) -> DewateringSummar
     # ── 2. Today KPIs (latest row that has actual data) ───────
     latest_row = data_rows[-1] if data_rows else None
 
-    # Previous day closing stock (for delta)
-    prev_close: Optional[float] = data_rows[-2].closing_stock if len(data_rows) >= 2 else None
+    # Previous day closing stock (for delta) — look up actual calendar day-1
+    if latest_row and latest_row.date:
+        _prev_str = str(date.fromisoformat(latest_row.date) - timedelta(days=1))
+        _prev_row = data_by_date.get(_prev_str)
+        prev_close: Optional[float] = _prev_row.closing_stock if _prev_row else None
+    else:
+        prev_close = None
 
     # Pump capacity & eddy pump — fetch separately (static / daily input)
     extra_sql = text("""

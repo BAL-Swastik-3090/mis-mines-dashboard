@@ -66,13 +66,14 @@ def get_td_plan(db: Session, td_date: date) -> dict:
 
 _ACTUAL_SQL = """
     SELECT
-        DATE(z.GATEINDATE)                                                   AS dt,
-        COALESCE(SUM(z.NETWEIGHT), 0)                                        AS total_actual,
-        COALESCE(SUM(CASE WHEN s.SHIP_PARTY = 'BAL'
-                          THEN z.NETWEIGHT ELSE 0 END), 0)                   AS bal_actual,
-        COALESCE(SUM(CASE WHEN s.SHIP_PARTY = 'JABAMOYEE'
-                          THEN z.NETWEIGHT ELSE 0 END), 0)                   AS suk_actual,
-        COUNT(CASE WHEN s.DELIVERY_NO IS NULL THEN 1 END)                    AS unsynced_count
+        DATE(z.GATEINDATE)                                                      AS dt,
+        COALESCE(SUM(z.NETWEIGHT), 0)                                           AS total_actual,
+        COALESCE(SUM(CASE WHEN s.SHIP_PARTY_NAME = 'Balasore Alloys Limited'
+                          THEN z.NETWEIGHT ELSE 0 END), 0)                      AS bal_actual,
+        COALESCE(SUM(CASE WHEN s.DELIVERY_NO IS NULL
+                           AND z.TRANSPORTER = 'SHREE GANESH LOGISTICS'
+                          THEN z.NETWEIGHT ELSE 0 END), 0)                      AS suk_actual,
+        COUNT(CASE WHEN s.DELIVERY_NO IS NULL THEN 1 END)                       AS unsynced_count
     FROM (
         SELECT DELIVERYNO,
                MAX(GATEINDATE)  AS GATEINDATE,
@@ -111,12 +112,13 @@ def get_actuals_summary(db: Session, from_date: date, to_date: date) -> dict:
     """MTD or single-day actual totals."""
     sql = text("""
         SELECT
-            COALESCE(SUM(z.NETWEIGHT), 0)                                    AS total_actual,
-            COALESCE(SUM(CASE WHEN s.SHIP_PARTY = 'BAL'
-                              THEN z.NETWEIGHT ELSE 0 END), 0)               AS bal_actual,
-            COALESCE(SUM(CASE WHEN s.SHIP_PARTY = 'JABAMOYEE'
-                              THEN z.NETWEIGHT ELSE 0 END), 0)               AS suk_actual,
-            COUNT(CASE WHEN s.DELIVERY_NO IS NULL THEN 1 END)                AS unsynced_count
+            COALESCE(SUM(z.NETWEIGHT), 0)                                       AS total_actual,
+            COALESCE(SUM(CASE WHEN s.SHIP_PARTY_NAME = 'Balasore Alloys Limited'
+                              THEN z.NETWEIGHT ELSE 0 END), 0)                  AS bal_actual,
+            COALESCE(SUM(CASE WHEN s.DELIVERY_NO IS NULL
+                               AND z.TRANSPORTER = 'SHREE GANESH LOGISTICS'
+                              THEN z.NETWEIGHT ELSE 0 END), 0)                  AS suk_actual,
+            COUNT(CASE WHEN s.DELIVERY_NO IS NULL THEN 1 END)                   AS unsynced_count
         FROM (
             SELECT DELIVERYNO,
                    MAX(GATEINDATE)  AS GATEINDATE,

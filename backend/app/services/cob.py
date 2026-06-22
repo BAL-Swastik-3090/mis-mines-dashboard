@@ -21,7 +21,7 @@ def _f(v):
 
 
 def _pct(a, b):
-    if a and b:
+    if a is not None and b:   # allow a=0 (genuine zero production → 0%)
         return round(a / b * 100, 2)
     return None
 
@@ -136,7 +136,7 @@ def get_cob_summary(db: Session, from_date: date, to_date: date) -> dict:
             "cob_actual":       cob,
             "tailings_actual":  tailings,
             "yield_pct":        _pct(cob,  feed),
-            "io_ratio":         round(feed / cob, 3) if feed and cob else None,
+            "io_ratio":         round(feed / cob, 3) if (feed is not None and cob) else None,
             "input_cr2o3":      _f(q.get("input_cr2o3")),
             "output_cr2o3":     _f(q.get("output_cr2o3")),
             "tailings_cr2o3":   _f(tc.get("tailings_cr2o3")),
