@@ -16,6 +16,7 @@ services:
   frontend:
     environment:
       - NODE_ENV=production
+      # ⚠️  REPLACE yourdomain.com with your actual server IP or domain before deploying
       - NEXT_PUBLIC_API_URL=https://yourdomain.com/api
       - NEXT_PUBLIC_WS_URL=wss://yourdomain.com/ws
     restart: always

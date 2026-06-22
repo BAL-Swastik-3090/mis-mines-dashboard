@@ -51,8 +51,11 @@ def cache_response(ttl: int = 300, key_prefix: str = ""):
 
 
 def invalidate_cache(pattern: str = "mines:*"):
-    """Clear cache entries matching pattern."""
-    r = get_redis()
-    keys = r.keys(pattern)
-    if keys:
-        r.delete(*keys)
+    """Clear cache entries matching pattern. Redis errors are non-fatal."""
+    try:
+        r = get_redis()
+        keys = r.keys(pattern)
+        if keys:
+            r.delete(*keys)
+    except Exception:
+        pass  # Redis unavailable — cache will expire naturally
