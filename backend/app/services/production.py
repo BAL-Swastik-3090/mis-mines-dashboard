@@ -87,12 +87,12 @@ def get_daily_ore_ob_plan(db: Session, from_date: date, to_date: date) -> list[d
     """
     sql = text("""
         SELECT
-            Prod_date                                   AS dt,
-            SUM(ORE_QTY)                                AS ore_plan,
-            SUM(CAST(OB_QTY_Cum AS DECIMAL(13,3)))      AS ob_plan,
-            SUM(HG_QTY)                                 AS hg_plan,
-            SUM(MG_QTY)                                 AS mg_plan,
-            SUM(LG_QTY)                                 AS lg_plan
+            Prod_date                                    AS dt,
+            SUM(ORE_QTY)                                 AS ore_plan,
+            MAX(CAST(OB_QTY_Cum AS DECIMAL(13,3)))       AS ob_plan,
+            SUM(HG_QTY)                                  AS hg_plan,
+            SUM(MG_QTY)                                  AS mg_plan,
+            SUM(LG_QTY)                                  AS lg_plan
         FROM mines_daily_excavation_plan
         WHERE Prod_date BETWEEN :from_date AND :to_date
         GROUP BY Prod_date
@@ -203,7 +203,7 @@ def get_mtd_totals(db: Session, from_date: date, to_date: date) -> dict:
     sql_plan = text("""
         SELECT
             SUM(ORE_QTY)                            AS ore_plan,
-            SUM(CAST(OB_QTY_Cum AS DECIMAL(13,3)))  AS ob_plan,
+            MAX(CAST(OB_QTY_Cum AS DECIMAL(13,3)))  AS ob_plan,
             SUM(HG_QTY)                             AS hg_plan,
             SUM(MG_QTY)                             AS mg_plan,
             SUM(LG_QTY)                             AS lg_plan

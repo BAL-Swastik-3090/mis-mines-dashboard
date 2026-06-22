@@ -80,32 +80,6 @@ export interface StockPositionResponse {
   note:          string;
 }
 
-// ── Production ───────────────────────────────────────────────
-export interface DayWiseRow {
-  date: string;
-  ore_target: number | null;
-  ore_actual: number | null;
-  cob_target: number | null;
-  cob_actual: number | null;
-  despatch_target: number | null;
-  despatch_actual: number | null;
-  ob_target: number | null;
-  ob_actual: number | null;
-  silt_actual: number | null;
-  closing_water_level: number | null;
-  closing_stock: number | null;
-}
-
-// ── Equipment ────────────────────────────────────────────────
-export interface ExcavatorRow {
-  machine_id: string;
-  eng_hours_mtd: number;
-  breakdown_hours: number;
-  availability_pct: number;
-  utilization_pct: number;
-  status: "Running" | "Long Breakdown" | "Maintenance";
-}
-
 // ── Production API Responses ─────────────────────────────────
 export interface ProductionKpiCard {
   today_actual: number | null;
@@ -391,17 +365,6 @@ export interface DespatchDaywiseResponse {
   mtd_bal_actual:     number | null;
   mtd_suk_actual:     number | null;
   mtd_unsynced_count: number;
-}
-
-export interface TipperRow {
-  vehicle_id: string;
-  eng_hours_mtd: number;
-  breakdown_hours: number;
-  availability_pct: number;
-  utilization_pct: number;
-  status: string;
-  fuel_lph?: number;
-  kmpl?: number;
 }
 
 // ── Dewatering ────────────────────────────────────────────────

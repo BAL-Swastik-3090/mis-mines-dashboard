@@ -213,7 +213,7 @@ def get_excavator_summary(db: Session, from_date: date, to_date: date) -> dict:
     machines = []
     for vdesc, sap_name, display_name, eng_hr in all_entries:
         bd_entry  = bd_map.get(sap_name, {"hours": 0.0, "count": 0})
-        bd_hr     = bd_entry["hours"]
+        bd_hr     = min(bd_entry["hours"], period_hrs)
         bd_count  = bd_entry["count"]
         metrics   = _calc_metrics(bd_hr, eng_hr, from_date, to_date)
         mttr      = round(bd_hr / bd_count, 1) if bd_count > 0 else None
@@ -355,7 +355,7 @@ def get_tipper_summary(db: Session, from_date: date, to_date: date) -> dict:
     for sap_name in all_sap_names:
         eng_hr   = sensor_by_sap.get(sap_name, {}).get("eng_hr", 0.0)
         bd_entry = bd_map.get(sap_name, {"hours": 0.0, "count": 0})
-        bd_hr    = bd_entry["hours"]
+        bd_hr    = min(bd_entry["hours"], period_hrs)
         bd_count = bd_entry["count"]
 
         if sap_name in sensor_by_sap:

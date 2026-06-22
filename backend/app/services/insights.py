@@ -56,8 +56,8 @@ def _latest_plan_month(db: Session) -> tuple[date, date]:
 
 def _ore_ob_full_month_plan(db: Session, first: date, last: date) -> dict:
     row = db.execute(text("""
-        SELECT COALESCE(SUM(ORE_QTY), 0)                         AS ore_plan,
-               COALESCE(SUM(CAST(OB_QTY_Cum AS DECIMAL(14,3))), 0) AS ob_plan
+        SELECT COALESCE(SUM(ORE_QTY), 0)                          AS ore_plan,
+               COALESCE(MAX(CAST(OB_QTY_Cum AS DECIMAL(14,3))), 0) AS ob_plan
         FROM   mines_daily_excavation_plan
         WHERE  Prod_date BETWEEN :f AND :t
     """), {"f": first, "t": last}).fetchone()
@@ -106,14 +106,30 @@ def _production_mtd(db: Session, from_date: date, to_date: date) -> dict:
 
 
 def _despatch_mtd_actual(db: Session, from_date: date, to_date: date) -> float | None:
-    """Returns None when actuals table is not yet wired."""
+    """
+    MTD despatch actual using the same hybrid query as the despatch service.
+    Deduplicates zsd_outbound_despatch by DELIVERYNO (sync log inserts a new row
+    every 15 min), then filters to Balasore Alloys deliveries only.
+    """
     try:
         row = db.execute(text("""
-            SELECT COALESCE(SUM(Grand_Total_Qty), 0) AS actual
-            FROM   zsd_mines_despatch
-            WHERE  Posting_date BETWEEN :f AND :t
+            SELECT COALESCE(SUM(z.NETWEIGHT), 0) AS actual
+            FROM (
+                SELECT DELIVERYNO, MAX(GATEINDATE) AS GATEINDATE,
+                       MAX(NETWEIGHT) AS NETWEIGHT, MAX(TRANSPORTER) AS TRANSPORTER
+                FROM   zsd_outbound_despatch
+                WHERE  DATE(GATEINDATE) BETWEEN :f AND :t
+                GROUP  BY DELIVERYNO
+            ) z
+            LEFT JOIN sd_outbound_delivery s
+                   ON CONCAT('0', z.DELIVERYNO) = s.DELIVERY_NO
+            WHERE (
+                (s.DELIVERY_NO IS NOT NULL AND s.SHIP_PARTY_NAME = 'Balasore Alloys Limited')
+             OR (s.DELIVERY_NO IS NULL     AND z.TRANSPORTER     = 'SHREE GANESH LOGISTICS')
+            )
         """), {"f": from_date, "t": to_date}).fetchone()
-        return _f(row.actual) if row else None
+        val = _f(row.actual) if row else None
+        return val if val and val > 0 else None
     except Exception:
         return None
 
@@ -198,12 +214,19 @@ def compute_reality_check(
                 gap=plan, run_rate_per_day=None,
                 required_per_day=None, uplift=None, verdict="NO_DATA",
             )
-        gap      = round(plan - actual, 1)
-        rr       = round(actual / elapsed, 1) if elapsed > 0 else None
-        req      = round(gap / remaining, 1)  if remaining > 0 else None
-        uplift   = round(req / rr, 2)         if (rr and rr > 0 and req is not None) else None
-        if uplift is not None and uplift < 0:
-            uplift = 0.0
+        gap = round(plan - actual, 1)
+        rr  = round(actual / elapsed, 1) if elapsed > 0 else None
+
+        # Already achieved — gap is zero or negative
+        if gap <= 0:
+            return RealityCheckRow(
+                kpi=kpi, unit=unit, plan=round(plan, 0), actual=round(actual, 0),
+                gap=gap, run_rate_per_day=rr,
+                required_per_day=0.0, uplift=0.0, verdict="ACHIEVABLE",
+            )
+
+        req    = round(gap / remaining, 1) if remaining > 0 else None
+        uplift = round(req / rr, 2)        if (rr and rr > 0 and req is not None) else None
         return RealityCheckRow(
             kpi=kpi, unit=unit, plan=round(plan, 0), actual=round(actual, 0),
             gap=gap, run_rate_per_day=rr,

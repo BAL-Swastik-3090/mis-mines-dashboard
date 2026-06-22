@@ -18,16 +18,6 @@ def _f0(v) -> float:
     return float(v or 0)
 
 
-def _kpi(actual, plan, unit: str) -> KpiCard:
-    pct = round(actual / plan * 100, 1) if plan and plan != 0 else None
-    return KpiCard(
-        today_actual=actual, today_plan=plan,
-        today_pct=pct,
-        mtd_actual=None, mtd_plan=None, mtd_pct=None,
-        unit=unit
-    )
-
-
 # ── GET /api/production/summary ───────────────────────────────
 @router.get("/summary", response_model=ProductionSummary, summary="Production KPI summary")
 def production_summary(

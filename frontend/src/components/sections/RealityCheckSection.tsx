@@ -130,7 +130,7 @@ export default function RealityCheckSection() {
           <div className="flex-1 min-w-[120px] h-1.5 bg-bg-section rounded-full overflow-hidden">
             <div
               className="h-full bg-gradient-to-r from-accent to-danger rounded-full transition-all"
-              style={{ width: `${cyclePct}%` }}
+              style={{ width: typeof cyclePct === 'number' ? `${cyclePct}%` : '0%' }}
             />
           </div>
         </div>

@@ -27,7 +27,7 @@ def _get_bal_and_plan(db: Session, from_date: date, to_date: date):
     """)
     sql_plan = text("""
         SELECT Prod_date AS dt,
-               ROUND(SUM(CAST(OB_QTY_Cum AS DECIMAL(13,3))), 2) AS ob_plan
+               ROUND(MAX(CAST(OB_QTY_Cum AS DECIMAL(13,3))), 2) AS ob_plan
         FROM mines_daily_excavation_plan
         WHERE Prod_date BETWEEN :f AND :t
         GROUP BY Prod_date ORDER BY Prod_date
@@ -63,8 +63,8 @@ def _get_vendors(db: Session, from_date: date, to_date: date) -> list[dict]:
         FROM mines_day_wise_excavation e
         LEFT JOIN mines_agency_master a ON e.Agency = a.Agency_Id
         WHERE e.Variant = '3'
-          AND e.Agency  != :bal
-          AND e.Agency  != ''
+          AND TRIM(e.Agency)  != :bal
+          AND TRIM(e.Agency)  != ''
           AND e.Prod_date BETWEEN :f AND :t
         GROUP BY e.Prod_date, e.Agency, a.Agency_Desc
         ORDER BY e.Prod_date, e.Agency
