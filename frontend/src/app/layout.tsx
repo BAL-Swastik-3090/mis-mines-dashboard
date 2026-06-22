@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import Providers from "./providers";
-import Header from "@/components/layout/Header";
+import Providers   from "./providers";
+import Header      from "@/components/layout/Header";
+import MainLayout  from "@/components/layout/MainLayout";
 
 export const metadata: Metadata = {
   title: "Mines Operation Dashboard",
@@ -15,9 +16,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="bg-bg-soft min-h-screen">
         <Providers>
           <Header />
-          <main className="px-4 sm:px-6 xl:px-8 py-5 max-w-[1920px] mx-auto">
+          <MainLayout>
             {children}
-          </main>
+          </MainLayout>
         </Providers>
       </body>
     </html>

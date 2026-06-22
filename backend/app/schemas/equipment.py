@@ -1,0 +1,100 @@
+from pydantic import BaseModel
+from datetime import date
+from typing import Optional
+
+
+# ── Excavator ──────────────────────────────────────────────────
+
+class ExcavatorMachineRow(BaseModel):
+    vehicle_desc:  str
+    display_name:  str
+    eng_hr_mtd:    float          = 0.0
+    bd_hr:         float          = 0.0
+    bd_count:      int            = 0
+    avail_pct:     Optional[float] = None
+    util_pct:      Optional[float] = None
+    mttr:          Optional[float] = None   # hrs — avg repair time per breakdown
+    mtbf:          Optional[float] = None   # hrs — avg run time between failures
+
+
+class ExcavatorSummaryResponse(BaseModel):
+    from_date:       date
+    to_date:         date
+    machines:        list[ExcavatorMachineRow]
+    total_eng_hr:    float          = 0.0
+    total_bd_hr:     float          = 0.0
+    active_count:    int            = 0
+    total_count:     int            = 0
+    total_bd_count:  int            = 0
+    fleet_mttr:      Optional[float] = None
+    fleet_mtbf:      Optional[float] = None
+
+
+class ExcavatorTrendResponse(BaseModel):
+    from_date:     date
+    to_date:       date
+    machine_names: list[str]
+    dates:         list[str]                           # "YYYY-MM-DD"
+    series:        dict[str, list[Optional[float]]]    # display_name → [hrs per date]
+
+
+class ExcavatorFuelRow(BaseModel):
+    vehicle_desc:  str
+    eng_hr_mtd:    float          = 0.0
+    fuel_mtd:      float          = 0.0
+    lph_avg:       Optional[float] = None
+
+
+class ExcavatorFuelResponse(BaseModel):
+    from_date:    date
+    to_date:      date
+    machines:     list[ExcavatorFuelRow]
+    avg_lph:      Optional[float] = None
+    fleet_count:  int             = 0
+    oem_lph:      float           = 25.0
+    total_fuel:   float           = 0.0
+
+
+# ── Tipper ─────────────────────────────────────────────────────
+
+class TipperMachineRow(BaseModel):
+    vehicle_desc:  str
+    eng_hr_mtd:    float          = 0.0
+    bd_hr:         float          = 0.0
+    bd_count:      int            = 0
+    avail_pct:     Optional[float] = None
+    util_pct:      Optional[float] = None
+    mttr:          Optional[float] = None
+    mtbf:          Optional[float] = None
+
+
+class TipperSummaryResponse(BaseModel):
+    from_date:       date
+    to_date:         date
+    machines:        list[TipperMachineRow]
+    total_eng_hr:    float          = 0.0
+    total_bd_hr:     float          = 0.0
+    active_count:    int            = 0
+    total_count:     int            = 0
+    total_bd_count:  int            = 0
+    fleet_mttr:      Optional[float] = None
+    fleet_mtbf:      Optional[float] = None
+
+
+class TipperFuelRow(BaseModel):
+    vehicle_desc: str
+    eng_hr_mtd:   float          = 0.0
+    fuel_mtd:     float          = 0.0
+    dist_mtd:     float          = 0.0
+    lph_avg:      Optional[float] = None
+    kmpl_avg:     Optional[float] = None
+
+
+class TipperFuelResponse(BaseModel):
+    from_date:   date
+    to_date:     date
+    machines:    list[TipperFuelRow]
+    avg_lph:     Optional[float] = None
+    avg_kmpl:    Optional[float] = None
+    fleet_count: int   = 0
+    oem_lph:     float = 8.0

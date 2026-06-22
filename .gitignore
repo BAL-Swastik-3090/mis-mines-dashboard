@@ -50,3 +50,6 @@ Desktop.ini
 *.key
 *.crt
 secrets/
+
+# ── Local MCP config (contains API keys) ─────────────
+.mcp.json

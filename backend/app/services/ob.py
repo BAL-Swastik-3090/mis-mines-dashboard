@@ -4,9 +4,14 @@ BAL OWN = Agency='3' (always).
 Vendors = all other non-empty agencies with OB data in the date range.
 Qty and OB_QTY_Cum are VARCHAR — always CAST to DECIMAL.
 """
-from datetime import date
+from datetime import date, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import text
+
+
+def _date_spine(from_date: date, to_date: date) -> list:
+    n = (to_date - from_date).days + 1
+    return [from_date + timedelta(days=i) for i in range(n)]
 
 BAL_AGENCY = "3"
 
@@ -32,7 +37,7 @@ def _get_bal_and_plan(db: Session, from_date: date, to_date: date):
     plan_map = {r.dt: float(r.ob_plan or 0)
                 for r in db.execute(sql_plan, {"f": from_date, "t": to_date}).fetchall()}
 
-    all_dates = sorted(set(bal_map) | set(plan_map))
+    all_dates = _date_spine(from_date, to_date)
     rows = [{"date": dt, "bal_actual": bal_map.get(dt), "ob_plan": plan_map.get(dt)}
             for dt in all_dates]
 
@@ -82,14 +87,14 @@ def _get_vendors(db: Session, from_date: date, to_date: date) -> list[dict]:
         agency_map[aid]["mtd_actual"] += qty
 
     # Build vendor list sorted by MTD descending
+    spine = _date_spine(from_date, to_date)
     result = []
     for v in sorted(agency_map.values(), key=lambda x: -x["mtd_actual"]):
-        all_dates = sorted(v["daily"])
         result.append({
             "agency_id":   v["agency_id"],
             "agency_desc": v["agency_desc"],
             "mtd_actual":  round(v["mtd_actual"], 2),
-            "rows":        [{"date": dt, "actual": v["daily"].get(dt)} for dt in all_dates],
+            "rows":        [{"date": dt, "actual": v["daily"].get(dt)} for dt in spine],
         })
     return result
 

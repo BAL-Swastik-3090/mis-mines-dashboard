@@ -2,7 +2,7 @@
 Production service — all DB query logic for Ore, OB, COB KPIs.
 Queries are raw SQL via SQLAlchemy text() for performance & clarity.
 """
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -26,6 +26,12 @@ PLANT_COBP   = "1210"
 def _f(v) -> float | None:
     """Convert Decimal/None to float safely."""
     return float(v) if v is not None else None
+
+
+def _date_spine(from_date: date, to_date: date) -> list:
+    """All dates from from_date to to_date inclusive."""
+    n = (to_date - from_date).days + 1
+    return [from_date + timedelta(days=i) for i in range(n)]
 
 
 def _pct(actual, plan) -> float | None:
@@ -140,10 +146,7 @@ def get_production_daywise(db: Session, from_date: date, to_date: date) -> list[
     cob_plan  = {r["dt"]: r for r in get_daily_cob_plan(db, from_date, to_date)}
     silt_data = _get_silt_daywise(db, from_date, to_date)
 
-    all_dates = sorted(
-        set(actuals.keys()) | set(ore_plan.keys()) |
-        set(cob_plan.keys()) | set(silt_data.keys())
-    )
+    all_dates = _date_spine(from_date, to_date)
 
     rows = []
     for dt in all_dates:

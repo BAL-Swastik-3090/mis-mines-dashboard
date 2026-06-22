@@ -37,7 +37,7 @@ function Num({ v, dec = 0 }: { v: number | null; dec?: number }) {
 
 export default function CobDaywiseTable() {
   const { data, isLoading } = useCobSummary();
-  const rows = [...(data?.rows ?? [])].reverse(); // most-recent first
+  const rows = data?.rows ?? []; // ascending: oldest → newest (most recent at bottom)
 
   return (
     <div className="bg-white border border-border rounded-lg shadow-sm overflow-hidden flex flex-col">
@@ -51,7 +51,8 @@ export default function CobDaywiseTable() {
         </span>
       </div>
 
-      <div className="overflow-auto flex-1">
+      {/* maxHeight = 2 header rows (~66px) + 10 body rows (~36px each) = ~426px */}
+      <div className="overflow-auto" style={{ maxHeight: "426px" }}>
         <table className="w-full text-[12px] border-collapse">
           <thead className="sticky top-0 z-10">
             <tr className="bg-bg-section border-b border-border">
@@ -105,7 +106,7 @@ export default function CobDaywiseTable() {
               </tr>
             ) : (
               rows.map((r, i) => {
-                const isLatest = i === 0;
+                const isLatest = i === rows.length - 1; // last row = most recent date
                 return (
                   <tr
                     key={r.date}
@@ -162,9 +163,9 @@ export default function CobDaywiseTable() {
             )}
           </tbody>
 
-          {/* MTD Footer */}
+          {/* MTD Footer — sticky at bottom, mirrors sticky thead at top */}
           {!isLoading && data && rows.length > 0 && (
-            <tfoot>
+            <tfoot className="sticky bottom-0 z-[5]">
               <tr className="bg-[#0f1c35]">
                 <td className="px-3 py-3 font-condensed font-bold text-[12px] text-white tracking-widest uppercase">
                   MTD

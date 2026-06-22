@@ -1,20 +1,22 @@
 "use client";
-import { BarChart3, Layers, Package, Droplets } from "lucide-react";
+import { BarChart3, Layers, Package, Droplets, Truck } from "lucide-react";
 import { formatIndian, formatPct, pctBgClass } from "@/lib/utils";
 import { useProductionSummary } from "@/hooks/useProduction";
+import { useDespatchSummary }   from "@/hooks/useDespatch";
+import { useDateFilter }        from "@/contexts/useDateFilter";
 import type { ProductionKpiCard } from "@/types";
 
-function tdLabel(): string {
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  const d = yesterday.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
-  return `TD · ${d}`;
+function tdLabel(apiTo: string): string {
+  const d = new Date(apiTo + "T00:00:00")
+    .toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+  return `TD · ${d.toUpperCase()}`;
 }
 
 function Shimmer({ w = "w-24", h = "h-5" }: { w?: string; h?: string }) {
   return <div className={`${h} ${w} bg-bg-section animate-pulse rounded`} />;
 }
 
+/* ── Generic Production KPI card (Ore / OB / COB / De-Silting) ── */
 interface KpiCardProps {
   label:       string;
   icon:        React.ElementType;
@@ -24,11 +26,12 @@ interface KpiCardProps {
   data?:       ProductionKpiCard;
   loading?:    boolean;
   pending?:    boolean;
+  tdDate:      string;
 }
 
 function KpiCard({
   label, icon: Icon, accentClass, iconBg, iconColor,
-  data, loading, pending,
+  data, loading, pending, tdDate,
 }: KpiCardProps) {
   const mtdPct      = data?.mtd_pct   ?? null;
   const todayPct    = data?.today_pct ?? null;
@@ -129,7 +132,7 @@ function KpiCard({
       {/* ── Today footer ─────────────────────────────────────── */}
       <div className="px-4 py-3 bg-bg-light flex items-center justify-between flex-1 gap-2">
         <div>
-          <div className="text-[10px] xl:text-[11px] text-txt-light uppercase tracking-widest font-bold mb-1">{tdLabel()}</div>
+          <div className="text-[10px] xl:text-[11px] text-txt-light uppercase tracking-widest font-bold mb-1">{tdLabel(tdDate)}</div>
           {loading ? <Shimmer w="w-24" h="h-5" /> : pending ? (
             <span className="text-txt-light text-sm font-mono">—</span>
           ) : (
@@ -162,10 +165,189 @@ function KpiCard({
   );
 }
 
-export default function ProductionKpiStrip() {
-  const { data, isLoading } = useProductionSummary();
+/* ── Despatch KPI card ─────────────────────────────────────── */
+interface DespatchKpiCardProps {
+  loading:         boolean;
+  mtdTotalPlan:    number;
+  mtdTotalActual:  number | null;
+  mtdBal:          number;
+  mtdSuk:          number;
+  mtdBalActual:    number | null;
+  mtdSukActual:    number | null;
+  mtdUnsynced:     number;
+  tdTotal:         number | null;
+  tdActual:        number | null;
+  tdUnsynced:      number;
+  tdDate:          string;
+}
 
-  const cards = [
+function DespatchKpiCard({
+  loading,
+  mtdTotalPlan, mtdTotalActual,
+  mtdBal, mtdSuk, mtdBalActual, mtdSukActual,
+  mtdUnsynced, tdTotal, tdActual, tdUnsynced, tdDate,
+}: DespatchKpiCardProps) {
+  const mtdPct = (mtdTotalActual != null && mtdTotalPlan > 0)
+    ? Math.round((mtdTotalActual / mtdTotalPlan) * 1000) / 10
+    : null;
+  const mtdProgress = mtdPct != null ? Math.min(Math.max(mtdPct, 0), 100) : 0;
+
+  return (
+    <div className="bg-white border border-border rounded-lg shadow-sm accent-bar-orange flex flex-col overflow-hidden">
+
+      {/* ── Header ──────────────────────────────────────────── */}
+      <div className="px-4 pt-3.5 pb-2.5 flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded flex items-center justify-center shrink-0 bg-orange-50">
+            <Truck size={16} className="text-orange" />
+          </div>
+          <span className="font-condensed font-bold text-[13px] xl:text-[14px] text-navy tracking-widest uppercase leading-tight">
+            Despatch
+          </span>
+        </div>
+        {loading ? <Shimmer w="w-16" h="h-5" /> : (
+          mtdPct != null
+            ? <span className={pctBgClass(mtdPct)}>Achieve % {formatPct(mtdPct)}</span>
+            : <span className="text-[10px] text-txt-light bg-bg-section px-2 py-0.5 rounded-full font-bold tracking-wider">PLAN</span>
+        )}
+      </div>
+
+      {/* ── MTD big number ───────────────────────────────────── */}
+      <div className="px-4 pb-2.5">
+        {loading ? (
+          <>
+            <Shimmer w="w-36" h="h-9" />
+            <div className="mt-1.5"><Shimmer w="w-32" h="h-3.5" /></div>
+          </>
+        ) : (
+          <>
+            <div className="font-condensed font-extrabold text-[28px] xl:text-[32px] text-navy tracking-tight leading-none">
+              {mtdTotalActual != null ? formatIndian(mtdTotalActual) : formatIndian(mtdTotalPlan)}
+              <span className="text-xs font-normal text-txt-muted ml-1.5">MT</span>
+            </div>
+            <div className="text-[11px] text-txt-muted mt-1.5 flex items-center gap-2 flex-wrap">
+              {mtdTotalActual != null ? (
+                <>
+                  <span>Plan: <span className="text-txt-secondary font-semibold">{formatIndian(mtdTotalPlan)}</span></span>
+                  <span className="text-border-strong">·</span>
+                  <span className={
+                    mtdTotalActual - mtdTotalPlan >= 0
+                      ? "text-success font-semibold"
+                      : "text-danger font-semibold"
+                  }>
+                    {mtdTotalActual - mtdTotalPlan >= 0 ? "+" : ""}
+                    {formatIndian(mtdTotalActual - mtdTotalPlan)}
+                  </span>
+                  {mtdUnsynced > 0 && (
+                    <span className="text-[10px] text-orange bg-orange-50 px-1.5 py-0.5 rounded font-bold border border-orange/20">
+                      +{mtdUnsynced} unsynced
+                    </span>
+                  )}
+                </>
+              ) : (
+                <span className="text-[10px] text-txt-light uppercase tracking-wider font-semibold">MTD Plan</span>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ── Progress bar — shown when actual available ───────── */}
+      {!loading && mtdTotalActual != null && (
+        <div className="px-4 pb-3">
+          <div className="h-1.5 bg-bg-section rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-700 ${
+                mtdProgress >= 90 ? "bg-success" :
+                mtdProgress >= 60 ? "bg-warning"  :
+                mtdProgress >  0  ? "bg-danger"   : "bg-bg-section"
+              }`}
+              style={{ width: `${mtdProgress}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* ── Location breakdown ───────────────────────────────── */}
+      <div className="px-4 pb-3 space-y-1.5">
+        {loading ? (
+          <>
+            <Shimmer w="w-full" h="h-4" />
+            <Shimmer w="w-full" h="h-4" />
+          </>
+        ) : (
+          <>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-accent inline-block shrink-0" />
+                <span className="text-[11px] text-txt-muted font-medium">BAL Plant</span>
+              </div>
+              <span className="font-mono text-[11px] font-semibold text-navy">
+                {formatIndian(mtdBalActual ?? mtdBal)}
+                <span className="text-[9px] text-txt-light ml-0.5">MT</span>
+                {mtdBalActual == null && mtdBal > 0 && (
+                  <span className="text-[9px] text-txt-light/60 ml-1">plan</span>
+                )}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-gold inline-block shrink-0" />
+                <span className="text-[11px] text-txt-muted font-medium">SUK Plant</span>
+              </div>
+              <span className="font-mono text-[11px] font-semibold text-navy">
+                {formatIndian(mtdSukActual ?? mtdSuk)}
+                <span className="text-[9px] text-txt-light ml-0.5">MT</span>
+                {mtdSukActual == null && mtdSuk > 0 && (
+                  <span className="text-[9px] text-txt-light/60 ml-1">plan</span>
+                )}
+              </span>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="border-t border-border-light" />
+
+      {/* ── TD footer ─────────────────────────────────────────── */}
+      <div className="px-4 py-3 bg-bg-light flex-1">
+        <div className="text-[10px] xl:text-[11px] text-txt-light uppercase tracking-widest font-bold mb-1.5">
+          {tdLabel(tdDate)}
+        </div>
+        {loading ? (
+          <Shimmer w="w-32" h="h-5" />
+        ) : (
+          <div className="flex items-center gap-3 flex-wrap">
+            {tdActual != null ? (
+              <span className="font-mono font-semibold text-[12px] text-navy">
+                {formatIndian(tdActual)}{" "}
+                <span className="text-[10px] font-normal text-txt-muted">MT Act</span>
+                {tdUnsynced > 0 && (
+                  <span className="ml-1 text-[9px] text-orange font-bold">+{tdUnsynced}?</span>
+                )}
+              </span>
+            ) : (
+              <span className="text-[11px] text-txt-light font-mono italic">No actual yet</span>
+            )}
+            {tdTotal != null && (
+              <span className="text-[10px] text-txt-light font-mono">
+                Plan {formatIndian(tdTotal)} MT
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── Main strip ─────────────────────────────────────────────── */
+export default function ProductionKpiStrip() {
+  const { data, isLoading }           = useProductionSummary();
+  const { data: dsp, isLoading: dspL } = useDespatchSummary();
+  const { apiTo }                      = useDateFilter();
+
+  const prodCards = [
     {
       label: "Ore Production",  icon: BarChart3,
       data: data?.ore,          accentClass: "accent-bar-green",
@@ -189,9 +371,11 @@ export default function ProductionKpiStrip() {
   ] as const;
 
   return (
-    /* 2 columns on tablet, 4 on desktop/wide — cards never squash on small screens */
-    <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 xl:gap-4">
-      {cards.map((c) => (
+    /* 2 columns on tablet, 5 on desktop/wide */
+    <div className="grid grid-cols-2 xl:grid-cols-5 gap-3 xl:gap-4">
+
+      {/* Production cards (Ore / OB / COB / De-Silting) */}
+      {prodCards.map((c) => (
         <KpiCard
           key={c.label}
           label={c.label}
@@ -200,10 +384,26 @@ export default function ProductionKpiStrip() {
           accentClass={c.accentClass}
           iconBg={c.iconBg}
           iconColor={c.iconColor}
-          loading={isLoading && !(c as { pending?: boolean }).pending}
-          pending={(c as { pending?: boolean }).pending}
+          loading={isLoading}
+          tdDate={apiTo}
         />
       ))}
+
+      {/* Despatch card */}
+      <DespatchKpiCard
+        loading={dspL}
+        mtdTotalPlan={dsp?.mtd_total_plan     ?? 0}
+        mtdTotalActual={dsp?.mtd_total_actual ?? null}
+        mtdBal={dsp?.mtd_bal_plan             ?? 0}
+        mtdSuk={dsp?.mtd_suk_plan             ?? 0}
+        mtdBalActual={dsp?.mtd_bal_actual     ?? null}
+        mtdSukActual={dsp?.mtd_suk_actual     ?? null}
+        mtdUnsynced={dsp?.mtd_unsynced_count  ?? 0}
+        tdTotal={dsp?.td_total_plan           ?? null}
+        tdActual={dsp?.td_total_actual        ?? null}
+        tdUnsynced={dsp?.td_unsynced_count    ?? 0}
+        tdDate={apiTo}
+      />
     </div>
   );
 }
