@@ -282,6 +282,149 @@ def _production_daily_rows(db: Session, from_date: date, to_date: date) -> list[
     ]
 
 
+def _equipment_summary(db: Session, from_date: date, to_date: date) -> dict:
+    """Excavator fleet BD hours and active count."""
+    try:
+        days = (to_date - from_date).days + 1
+        period_hrs = days * 24.0
+        total_excavators = 7
+
+        bd_row = db.execute(text("""
+            SELECT ROUND(SUM(BREAKDOWN_DURAION), 1) AS total_bd_hrs,
+                   COUNT(*) AS bd_events
+            FROM zpm_iw29_notifications
+            WHERE MAINTENANCE_PLANT = '1200'
+              AND MAIN_WORK_CENTER  = 'MINEAUTO'
+              AND NOTIFICATION_TYPE = 'M2'
+              AND MALFUNCTION_START BETWEEN :f AND :t
+              AND BREAKDOWN_DURAION IS NOT NULL
+              AND BREAKDOWN_DURAION > 0
+        """), {"f": from_date, "t": to_date}).fetchone()
+
+        total_bd_hrs = float(bd_row.total_bd_hrs or 0)
+        bd_events    = int(bd_row.bd_events or 0)
+        fleet_avail  = round(max(0.0, (1 - total_bd_hrs / (total_excavators * period_hrs)) * 100), 1)
+
+        sensor_row = db.execute(text("""
+            SELECT COUNT(DISTINCT vehicle_desc) AS active
+            FROM mines_technoton_rest_equipment_utilization
+            WHERE report_date BETWEEN :f AND :t
+              AND vehicle_desc LIKE '%Z AXIS%'
+              AND TIME_TO_SEC(engine_hours) / 3600.0 > 0
+        """), {"f": from_date, "t": to_date}).fetchone()
+        active_count = int(sensor_row.active or 0) if sensor_row else 0
+
+        return {
+            "total": total_excavators,
+            "active": active_count,
+            "bd_hrs": total_bd_hrs,
+            "bd_events": bd_events,
+            "fleet_avail_pct": fleet_avail,
+        }
+    except Exception:
+        return {}
+
+
+def _cob_quality_mtd(db: Session, from_date: date, to_date: date) -> dict:
+    """MTD COB plant quality — Cr₂O₃ input/output grades and yield."""
+    try:
+        q_row = db.execute(text("""
+            SELECT
+                ROUND(AVG(CASE WHEN SHORT_TEXT = 'LOW GRADE ORE(-40%CR2O3)'
+                               THEN RESULT END), 2) AS input_cr2o3,
+                ROUND(AVG(CASE WHEN SHORT_TEXT = 'CONCENTRATE WITH STD MOISTURE'
+                               THEN RESULT END), 2) AS output_cr2o3
+            FROM pp_quality_inspection
+            WHERE SHORT_TEXT_INS_CHAR = 'Cr2O3'
+              AND SHORT_TEXT IN ('LOW GRADE ORE(-40%CR2O3)', 'CONCENTRATE WITH STD MOISTURE')
+              AND POSTING_DATE BETWEEN :f AND :t
+        """), {"f": from_date, "t": to_date}).fetchone()
+
+        p_row = db.execute(text("""
+            SELECT
+                SUM(CASE WHEN MATERIAL_DESC = 'LOW GRADE ORE(-40%CR2O3)'
+                          AND MOVEMENT_TYPE = '261' THEN QUANTITY ELSE 0 END) AS feed,
+                SUM(CASE WHEN MATERIAL_DESC = 'CONCENTRATE WITH STD MOISTURE'
+                          AND MOVEMENT_TYPE = '101' THEN QUANTITY ELSE 0 END) AS cob
+            FROM pp_production
+            WHERE PLANT = '1210'
+              AND POSTING_DATE BETWEEN :f AND :t
+        """), {"f": from_date, "t": to_date}).fetchone()
+
+        feed = float(p_row.feed or 0)
+        cob  = float(p_row.cob or 0)
+        return {
+            "input_cr2o3":  float(q_row.input_cr2o3  or 0) if q_row else None,
+            "output_cr2o3": float(q_row.output_cr2o3 or 0) if q_row else None,
+            "yield_pct":    round(cob / feed * 100, 2) if feed > 0 else None,
+            "io_ratio":     round(feed / cob, 3) if cob > 0 else None,
+            "feed_mt":      round(feed),
+            "cob_mt":       round(cob),
+        }
+    except Exception:
+        return {}
+
+
+def _stock_snapshot(db: Session) -> dict:
+    """Current ore + COB stock by grade from mm_mb52_inventory_new."""
+    try:
+        rows = db.execute(text("""
+            SELECT
+                CASE
+                    WHEN MATERIAL_DESC = '+52% CHROME ORE'          THEN 'HG'
+                    WHEN MATERIAL_DESC LIKE '40-52%%'                THEN 'MG'
+                    WHEN MATERIAL_DESC = 'LOW GRADE ORE(-40%CR2O3)' THEN 'LG'
+                    WHEN MATERIAL_DESC LIKE '%LUMP%'                 THEN 'LUMP'
+                    WHEN MATERIAL_DESC = 'CONCENTRATE WITH STD MOISTURE' THEN 'COB'
+                    ELSE 'OTHER'
+                END AS grade,
+                ROUND(SUM(UNRESTRICTED_STOCK), 2) AS stock
+            FROM mm_mb52_inventory_new
+            WHERE PLANT IN ('1200', '1210')
+              AND MATERIAL_TYPE IN ('ZORE', 'ZCON')
+               OR (PLANT = '1210' AND MATERIAL_DESC = 'CONCENTRATE WITH STD MOISTURE')
+            GROUP BY 1
+        """)).fetchall()
+        result = {r.grade: float(r.stock or 0) for r in rows if r.grade != 'OTHER'}
+        result["total"] = round(sum(v for k, v in result.items()), 2)
+        return result
+    except Exception:
+        return {}
+
+
+def _despatch_split_mtd(db: Session, from_date: date, to_date: date) -> dict:
+    """MTD despatch BAL vs SUK split."""
+    try:
+        row = db.execute(text("""
+            SELECT
+                COALESCE(SUM(CASE WHEN s.SHIP_PARTY_NAME = 'Balasore Alloys Limited'
+                                  THEN z.NETWEIGHT ELSE 0 END), 0) AS bal,
+                COALESCE(SUM(CASE WHEN s.DELIVERY_NO IS NULL
+                                   AND z.TRANSPORTER = 'SHREE GANESH LOGISTICS'
+                                  THEN z.NETWEIGHT ELSE 0 END), 0) AS suk,
+                COALESCE(SUM(z.NETWEIGHT), 0)                       AS total
+            FROM (
+                SELECT DELIVERYNO, MAX(GATEINDATE) AS GATEINDATE,
+                       MAX(NETWEIGHT) AS NETWEIGHT, MAX(TRANSPORTER) AS TRANSPORTER
+                FROM zsd_outbound_despatch
+                WHERE DATE(GATEINDATE) BETWEEN :f AND :t
+                GROUP BY DELIVERYNO
+            ) z
+            LEFT JOIN sd_outbound_delivery s ON CONCAT('0', z.DELIVERYNO) = s.DELIVERY_NO
+            WHERE (
+                (s.DELIVERY_NO IS NOT NULL AND s.SHIP_PARTY_NAME = 'Balasore Alloys Limited')
+             OR (s.DELIVERY_NO IS NULL     AND z.TRANSPORTER     = 'SHREE GANESH LOGISTICS')
+            )
+        """), {"f": from_date, "t": to_date}).fetchone()
+        return {
+            "bal":   round(float(row.bal   or 0), 1),
+            "suk":   round(float(row.suk   or 0), 1),
+            "total": round(float(row.total or 0), 1),
+        }
+    except Exception:
+        return {}
+
+
 # ── public: generate insights via LiteLLM ─────────────────────
 
 async def generate_insights(
@@ -294,6 +437,10 @@ async def generate_insights(
     dew_rows   = _dewatering_daily_rows(db, from_date, to_date)
     dew_mtd    = _dewatering_mtd(db, from_date, to_date)
     prod_rows  = _production_daily_rows(db, from_date, to_date)
+    equip      = _equipment_summary(db, from_date, to_date)
+    cob_qual   = _cob_quality_mtd(db, from_date, to_date)
+    stock      = _stock_snapshot(db)
+    desp_split = _despatch_split_mtd(db, from_date, to_date)
 
     # ── build context tables ─────────────────────────────────
     rc_table_lines = [
@@ -383,9 +530,30 @@ Average over this window: Ore {avg_ore:,} MT/day · OB {avg_ob:,} CuM/day
 ## DAILY DEWATERING TREND (last {len(dew_rows)} days, newest first)
 {chr(10).join(dew_table_lines)}
 
+## EQUIPMENT — EXCAVATOR FLEET (MTD)
+- Fleet: {equip.get('active', 'N/A')} of {equip.get('total', 7)} excavators active in period
+- Fleet Availability: {equip.get('fleet_avail_pct', 'N/A')}%  (BD hours: {equip.get('bd_hrs', 0)} hrs across {equip.get('bd_events', 0)} breakdown events)
+- Note: ACHIEVABLE fleet availability benchmark = >85%; STRETCH = 70–85%; CRITICAL = <70%
+
+## COB PLANT — QUALITY & PERFORMANCE (MTD)
+- Feed processed: {cob_qual.get('feed_mt', 0):,} MT | COB produced: {cob_qual.get('cob_mt', 0):,} MT
+- Yield: {cob_qual.get('yield_pct', 'N/A')}% | I/O Ratio: {cob_qual.get('io_ratio', 'N/A')}
+- Input Cr₂O₃: {cob_qual.get('input_cr2o3', 'N/A')}% | Output Cr₂O₃: {cob_qual.get('output_cr2o3', 'N/A')}%
+- Note: Healthy output Cr₂O₃ benchmark = >44%; yield benchmark = >38%
+
+## STOCK POSITION (live snapshot)
+- HG (>52%): {stock.get('HG', 0):,.0f} MT | MG (40-52%): {stock.get('MG', 0):,.0f} MT | LG (<40%): {stock.get('LG', 0):,.0f} MT
+- COB Concentrate: {stock.get('COB', 0):,.0f} MT | Lump: {stock.get('LUMP', 0):,.0f} MT
+- Total Mine Stock: {stock.get('total', 0):,.0f} MT
+
+## DESPATCH SPLIT (MTD)
+- BAL Plant (Balasore Alloys): {desp_split.get('bal', 0):,.1f} MT ({round(desp_split.get('bal',0)/desp_split.get('total',1)*100,1) if desp_split.get('total') else 0}% of total)
+- Sukinda/Others: {desp_split.get('suk', 0):,.1f} MT
+- Total MTD Despatch: {desp_split.get('total', 0):,.1f} MT
+
 ---
 
-Generate EXACTLY the three sections below. Each must be factual, crisp, and reference specific numbers from above.
+Generate EXACTLY the five sections below. Each must be factual, crisp, and reference specific numbers from above.
 
 ### SECTION 1: MONTH-END FEASIBILITY NARRATIVE
 3-4 sentences for the GM briefing. Cover: overall outlook (optimistic/cautious/critical), which 1-2 KPIs are most at risk with their uplift factor, and the single most important operational action needed to close the gap. Mention days elapsed and remaining.
@@ -393,9 +561,15 @@ Generate EXACTLY the three sections below. Each must be factual, crisp, and refe
 ### SECTION 2: CRITICAL OBSERVATIONS — DEWATERING
 4 numbered bullet points. Each must reference a specific date or number from the dewatering table. Cover: disposal compliance trend, pump hours compliance, closing stock trajectory (rising/falling), and any notable single-day spike or drop.
 
-### SECTION 3: KEY RISKS & RECOMMENDED ACTIONS
-Exactly 3 items. Format each as:
-RISK: [specific risk with the number that makes it risky] → ACTION: [one concrete operational action, e.g. "deploy second Eddy pump", "engage Dashmesh for night shift", "reduce face distance for tipper cycle"]
+### SECTION 3: EQUIPMENT & COB PLANT STATUS
+4 numbered bullet points covering: excavator fleet availability vs benchmark, most significant breakdown impact, COB yield vs 38% benchmark, and Cr₂O₃ output grade vs 44% benchmark. Flag any concerning trend.
+
+### SECTION 4: STOCK & DESPATCH SUMMARY
+3 numbered bullet points covering: total mine stock adequacy for remaining despatch plan, grade mix observations (HG/MG/LG balance), and BAL vs SUK despatch split with any concern about concentration risk.
+
+### SECTION 5: KEY RISKS & RECOMMENDED ACTIONS
+Exactly 4 items covering the most critical cross-functional risks. Format each as:
+RISK: [specific risk with the number that makes it risky] → ACTION: [one concrete operational action]
 
 Format your response EXACTLY as:
 ---SECTION1---
@@ -403,7 +577,11 @@ Format your response EXACTLY as:
 ---SECTION2---
 [4 numbered bullets]
 ---SECTION3---
-[3 RISK/ACTION pairs]
+[4 numbered bullets]
+---SECTION4---
+[3 numbered bullets]
+---SECTION5---
+[4 RISK/ACTION pairs]
 """
 
     # ── call LiteLLM ─────────────────────────────────────────
@@ -417,7 +595,7 @@ Format your response EXACTLY as:
         model=settings.litellm_model,
         messages=[{"role": "user", "content": context}],
         temperature=0.3,
-        max_tokens=1500,
+        max_tokens=2000,
     )
 
     raw = response.choices[0].message.content or ""
@@ -433,12 +611,16 @@ Format your response EXACTLY as:
 
     narrative    = _extract(raw, "---SECTION1---", "---SECTION2---")
     dewatering   = _extract(raw, "---SECTION2---", "---SECTION3---")
-    risks        = _extract(raw, "---SECTION3---", "---END---")
+    equip_cob    = _extract(raw, "---SECTION3---", "---SECTION4---")
+    stock_desp   = _extract(raw, "---SECTION4---", "---SECTION5---")
+    risks        = _extract(raw, "---SECTION5---", "---END---")
 
     return InsightsResponse(
         generated_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
         model_used=settings.litellm_model,
         reality_check_narrative=narrative or raw,
         dewatering_observations=dewatering,
+        equipment_cob_status=equip_cob,
+        stock_despatch_summary=stock_desp,
         key_risks_and_actions=risks,
     )
