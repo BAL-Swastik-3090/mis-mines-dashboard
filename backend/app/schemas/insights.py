@@ -33,4 +33,6 @@ class InsightsResponse(BaseModel):
     model_used:                str
     reality_check_narrative:   str
     dewatering_observations:   str
+    equipment_cob_status:      str
+    stock_despatch_summary:    str
     key_risks_and_actions:     str

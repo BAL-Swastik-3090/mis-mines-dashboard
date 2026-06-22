@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { Brain, RefreshCw, AlertCircle, Droplets, ShieldAlert } from "lucide-react";
+import { Brain, RefreshCw, AlertCircle, Droplets, ShieldAlert, Truck, HardHat } from "lucide-react";
 import { useInsightsGenerate } from "@/hooks/useInsights";
 import { useDateFilter } from "@/contexts/useDateFilter";
 
@@ -119,7 +119,7 @@ export default function InsightsSection() {
           <Brain size={32} className="mx-auto text-accent/30 mb-3" />
           <p className="text-txt-muted text-[13px] mb-1">AI insights are generated on demand</p>
           <p className="text-txt-light text-[11px] mb-4">
-            Analyses month-end feasibility, dewatering patterns, and key risks using Claude.
+            Analyses month-end feasibility, dewatering, equipment fleet, COB quality, stock position, and despatch split using Claude.
           </p>
           <button
             onClick={handleGenerate}
@@ -132,22 +132,16 @@ export default function InsightsSection() {
 
       {/* Loading */}
       {triggered && busy && (
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-          <SkeletonCard
-            title="Month-End Feasibility Narrative"
-            accent="text-navy"
-            icon={<AlertCircle size={13} />}
-          />
-          <SkeletonCard
-            title="Critical Observations — Dewatering"
-            accent="text-accent"
-            icon={<Droplets size={13} />}
-          />
-          <SkeletonCard
-            title="Key Risks & Actions"
-            accent="text-danger"
-            icon={<ShieldAlert size={13} />}
-          />
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+            <SkeletonCard title="Month-End Feasibility Narrative" accent="text-navy" icon={<AlertCircle size={13} />} />
+            <SkeletonCard title="Critical Observations — Dewatering" accent="text-accent" icon={<Droplets size={13} />} />
+            <SkeletonCard title="Equipment & COB Plant Status" accent="text-warning" icon={<HardHat size={13} />} />
+          </div>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <SkeletonCard title="Stock & Despatch Summary" accent="text-success" icon={<Truck size={13} />} />
+            <SkeletonCard title="Key Risks & Recommended Actions" accent="text-danger" icon={<ShieldAlert size={13} />} />
+          </div>
         </div>
       )}
 
@@ -167,35 +161,26 @@ export default function InsightsSection() {
 
       {/* Results */}
       {triggered && data && !busy && (
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-
-          {/* Narrative */}
-          <InsightCard
-            icon={<AlertCircle size={13} className="text-navy" />}
-            title="Month-End Feasibility Narrative"
-            accent="text-navy"
-          >
-            <Prose text={data.reality_check_narrative} />
-          </InsightCard>
-
-          {/* Dewatering observations */}
-          <InsightCard
-            icon={<Droplets size={13} className="text-accent" />}
-            title="Critical Observations — Dewatering"
-            accent="text-accent"
-          >
-            <Prose text={data.dewatering_observations} />
-          </InsightCard>
-
-          {/* Risks */}
-          <InsightCard
-            icon={<ShieldAlert size={13} className="text-danger" />}
-            title="Key Risks & Recommended Actions"
-            accent="text-danger"
-          >
-            <Prose text={data.key_risks_and_actions} />
-          </InsightCard>
-
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+            <InsightCard icon={<AlertCircle size={13} className="text-navy" />} title="Month-End Feasibility Narrative" accent="text-navy">
+              <Prose text={data.reality_check_narrative} />
+            </InsightCard>
+            <InsightCard icon={<Droplets size={13} className="text-accent" />} title="Critical Observations — Dewatering" accent="text-accent">
+              <Prose text={data.dewatering_observations} />
+            </InsightCard>
+            <InsightCard icon={<HardHat size={13} className="text-warning" />} title="Equipment & COB Plant Status" accent="text-warning">
+              <Prose text={data.equipment_cob_status} />
+            </InsightCard>
+          </div>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <InsightCard icon={<Truck size={13} className="text-success" />} title="Stock & Despatch Summary" accent="text-success">
+              <Prose text={data.stock_despatch_summary} />
+            </InsightCard>
+            <InsightCard icon={<ShieldAlert size={13} className="text-danger" />} title="Key Risks & Recommended Actions" accent="text-danger">
+              <Prose text={data.key_risks_and_actions} />
+            </InsightCard>
+          </div>
         </div>
       )}
 

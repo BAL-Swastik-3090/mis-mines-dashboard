@@ -457,5 +457,7 @@ export interface InsightsResponse {
   model_used:                string;
   reality_check_narrative:   string;
   dewatering_observations:   string;
+  equipment_cob_status:      string;
+  stock_despatch_summary:    string;
   key_risks_and_actions:     string;
 }
