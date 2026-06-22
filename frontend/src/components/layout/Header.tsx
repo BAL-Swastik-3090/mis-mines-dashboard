@@ -10,9 +10,13 @@ import { cn } from "@/lib/utils";
 /** True when the selected end-date is today → sensor data is live. */
 function useIsLive(): boolean {
   const { apiTo } = useDateFilter();
-  const t = new Date();
-  const today = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
-  return apiTo === today;
+  const [isLive, setIsLive] = useState<boolean>(false); // SSR default: false (avoids hydration mismatch)
+  useEffect(() => {
+    const t = new Date();
+    const today = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+    setIsLive(apiTo === today);
+  }, [apiTo]);
+  return isLive;
 }
 
 function useNow(): string {
