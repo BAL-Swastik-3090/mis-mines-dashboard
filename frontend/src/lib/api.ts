@@ -1,7 +1,11 @@
 import axios from "axios";
 
+// Always use the Next.js proxy (/api → backend via next.config.ts rewrite).
+// Using an absolute URL (http://localhost:8989) would break access from any
+// machine other than the server itself — the browser resolves "localhost" to
+// the client's own machine, not the server.
 const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || "http://localhost:8989/api",
+  baseURL: "/api",
   headers: { "Content-Type": "application/json" },
   timeout: 60000,   // 60s global — covers cold-start + concurrent DB load
 });
