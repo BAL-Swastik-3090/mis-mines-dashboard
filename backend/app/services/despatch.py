@@ -2,12 +2,11 @@
 Despatch service.
 
 Plan source  : mines_despatch_plan
-Actual source: zsd_outbound_despatch  JOIN  sd_outbound_delivery
+Actual source: zsd_outbound_despatch  (single table, refreshed every 15 min)
 
-Hybrid logic for actuals:
-  - Synced entries  : joined to sd_outbound_delivery AND SHIP_PARTY_NAME = 'Balasore Alloys Limited'
-  - Unsynced entries: no join match yet (sd_outbound_delivery refreshes end-of-day)
-                      but TRANSPORTER = 'SHREE GANESH LOGISTICS' confirms mines→BAL origin
+BAL vs SUK classification via CUSTOMERNO:
+  CUSTOMERNO = 'BAL'       → Balasore Alloys Plant
+  CUSTOMERNO = 'JABAMOYEE' → Sukinda Plant
 """
 from datetime import date, timedelta
 from sqlalchemy.orm import Session
@@ -62,33 +61,24 @@ def get_td_plan(db: Session, td_date: date) -> dict:
     return {"td_total_plan": None, "td_bal_plan": None, "td_suk_plan": None}
 
 
-# ── Actual queries (hybrid: synced + unsynced) ────────────────
+# ── Actual queries (single table: zsd_outbound_despatch) ─────
 
 _ACTUAL_SQL = """
     SELECT
-        DATE(z.GATEINDATE)                                                      AS dt,
-        COALESCE(SUM(z.NETWEIGHT), 0)                                           AS total_actual,
-        COALESCE(SUM(CASE WHEN s.SHIP_PARTY_NAME = 'Balasore Alloys Limited'
-                          THEN z.NETWEIGHT ELSE 0 END), 0)                      AS bal_actual,
-        COALESCE(SUM(CASE WHEN s.DELIVERY_NO IS NULL
-                           AND z.TRANSPORTER = 'SHREE GANESH LOGISTICS'
-                          THEN z.NETWEIGHT ELSE 0 END), 0)                      AS suk_actual,
-        COUNT(CASE WHEN s.DELIVERY_NO IS NULL THEN 1 END)                       AS unsynced_count
+        DATE(z.GATEINDATE)                                                          AS dt,
+        COALESCE(SUM(CASE WHEN z.CUSTOMERNO = 'BAL'       THEN z.NETWEIGHT END), 0) AS bal_actual,
+        COALESCE(SUM(CASE WHEN z.CUSTOMERNO = 'JABAMOYEE' THEN z.NETWEIGHT END), 0) AS suk_actual,
+        COALESCE(SUM(z.NETWEIGHT), 0)                                               AS total_actual
     FROM (
         SELECT DELIVERYNO,
+               MAX(CUSTOMERNO)  AS CUSTOMERNO,
                MAX(GATEINDATE)  AS GATEINDATE,
-               MAX(NETWEIGHT)   AS NETWEIGHT,
-               MAX(TRANSPORTER) AS TRANSPORTER
+               MAX(NETWEIGHT)   AS NETWEIGHT
         FROM zsd_outbound_despatch
         WHERE DATE(GATEINDATE) BETWEEN :f AND :t
+          AND CUSTOMERNO IN ('BAL', 'JABAMOYEE')
         GROUP BY DELIVERYNO
     ) z
-    LEFT JOIN sd_outbound_delivery s
-           ON CONCAT('0', z.DELIVERYNO) = s.DELIVERY_NO
-    WHERE (
-        (s.DELIVERY_NO IS NOT NULL AND s.SHIP_PARTY_NAME = 'Balasore Alloys Limited')
-     OR (s.DELIVERY_NO IS NULL     AND z.TRANSPORTER     = 'SHREE GANESH LOGISTICS')
-    )
     GROUP BY DATE(z.GATEINDATE)
     ORDER BY dt
 """
@@ -102,7 +92,7 @@ def get_actuals_daywise(db: Session, from_date: date, to_date: date) -> dict:
             "total_actual":   float(r.total_actual),
             "bal_actual":     float(r.bal_actual),
             "suk_actual":     float(r.suk_actual),
-            "unsynced_count": int(r.unsynced_count),
+            "unsynced_count": 0,
         }
         for r in rows
     }
@@ -112,40 +102,30 @@ def get_actuals_summary(db: Session, from_date: date, to_date: date) -> dict:
     """MTD or single-day actual totals."""
     sql = text("""
         SELECT
-            COALESCE(SUM(z.NETWEIGHT), 0)                                       AS total_actual,
-            COALESCE(SUM(CASE WHEN s.SHIP_PARTY_NAME = 'Balasore Alloys Limited'
-                              THEN z.NETWEIGHT ELSE 0 END), 0)                  AS bal_actual,
-            COALESCE(SUM(CASE WHEN s.DELIVERY_NO IS NULL
-                               AND z.TRANSPORTER = 'SHREE GANESH LOGISTICS'
-                              THEN z.NETWEIGHT ELSE 0 END), 0)                  AS suk_actual,
-            COUNT(CASE WHEN s.DELIVERY_NO IS NULL THEN 1 END)                   AS unsynced_count
+            COALESCE(SUM(CASE WHEN z.CUSTOMERNO = 'BAL'       THEN z.NETWEIGHT END), 0) AS bal_actual,
+            COALESCE(SUM(CASE WHEN z.CUSTOMERNO = 'JABAMOYEE' THEN z.NETWEIGHT END), 0) AS suk_actual,
+            COALESCE(SUM(z.NETWEIGHT), 0)                                               AS total_actual
         FROM (
             SELECT DELIVERYNO,
-                   MAX(GATEINDATE)  AS GATEINDATE,
-                   MAX(NETWEIGHT)   AS NETWEIGHT,
-                   MAX(TRANSPORTER) AS TRANSPORTER
+                   MAX(CUSTOMERNO) AS CUSTOMERNO,
+                   MAX(NETWEIGHT)  AS NETWEIGHT
             FROM zsd_outbound_despatch
             WHERE DATE(GATEINDATE) BETWEEN :f AND :t
+              AND CUSTOMERNO IN ('BAL', 'JABAMOYEE')
             GROUP BY DELIVERYNO
         ) z
-        LEFT JOIN sd_outbound_delivery s
-               ON CONCAT('0', z.DELIVERYNO) = s.DELIVERY_NO
-        WHERE (
-            (s.DELIVERY_NO IS NOT NULL AND s.SHIP_PARTY_NAME = 'Balasore Alloys Limited')
-         OR (s.DELIVERY_NO IS NULL     AND z.TRANSPORTER     = 'SHREE GANESH LOGISTICS')
-        )
     """)
     row = db.execute(sql, {"f": from_date, "t": to_date}).fetchone()
     if not row or float(row.total_actual or 0) == 0:
         return {
             "total_actual": None, "bal_actual": None,
-            "suk_actual": None, "unsynced_count": 0,
+            "suk_actual": None,   "unsynced_count": 0,
         }
     return {
         "total_actual":   float(row.total_actual),
         "bal_actual":     float(row.bal_actual),
         "suk_actual":     float(row.suk_actual),
-        "unsynced_count": int(row.unsynced_count),
+        "unsynced_count": 0,
     }
 
 
@@ -162,8 +142,8 @@ def get_daywise(db: Session, from_date: date, to_date: date) -> list[dict]:
         WHERE Plan_date BETWEEN :f AND :t
         ORDER BY Plan_date
     """)
-    plan_rows    = db.execute(plan_sql, {"f": from_date, "t": to_date}).fetchall()
-    plan_by_date = {r.dt: r for r in plan_rows}
+    plan_rows      = db.execute(plan_sql, {"f": from_date, "t": to_date}).fetchall()
+    plan_by_date   = {r.dt: r for r in plan_rows}
     actual_by_date = get_actuals_daywise(db, from_date, to_date)
 
     result = []
@@ -178,6 +158,6 @@ def get_daywise(db: Session, from_date: date, to_date: date) -> list[dict]:
             "total_actual":   a["total_actual"]   if a else None,
             "bal_actual":     a["bal_actual"]     if a else None,
             "suk_actual":     a["suk_actual"]     if a else None,
-            "unsynced_count": a["unsynced_count"] if a else 0,
+            "unsynced_count": 0,
         })
     return result

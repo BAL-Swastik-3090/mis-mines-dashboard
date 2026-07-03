@@ -11,8 +11,8 @@ import DewateringSection   from "@/components/sections/DewateringSection";
 import RealityCheckSection from "@/components/sections/RealityCheckSection";
 import InsightsSection     from "@/components/sections/InsightsSection";
 
-// scroll-mt accounts for the fixed header (71px) + a little breathing room
-const S = "scroll-mt-[80px]";
+// scroll-mt accounts for fixed header (71px) + section tab bar (44px) + breathing room
+const S = "scroll-mt-[120px]";
 
 export default function HomePage() {
   return (

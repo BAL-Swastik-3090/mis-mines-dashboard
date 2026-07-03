@@ -36,3 +36,5 @@ class InsightsResponse(BaseModel):
     equipment_cob_status:      str
     stock_despatch_summary:    str
     key_risks_and_actions:     str
+    shift_snapshot:            Optional[str] = ""
+    cached:                    bool = False

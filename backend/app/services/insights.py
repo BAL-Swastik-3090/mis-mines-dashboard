@@ -4,15 +4,32 @@ Insights service.
 Two responsibilities:
   1. compute_reality_check()  — pure SQL math, no LLM, fast.
   2. generate_insights()      — fetches data, calls LiteLLM Claude, returns narrative.
+
+Enhancements active:
+  #2  Exception alerting — CRITICAL/ON TRACK opening in narrative
+  #3  Rolling 7-day consecutive trend — called out explicitly
+  #4  Cost context — BD hours → lost ore MT in equipment section
+  #5  Revenue projection — Rs/MT × despatch volume
+  #6  Scheduled digest — cached result served until next refresh
+  #1  Today vs Yesterday comparison (shift proxy)
 """
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import calendar
+import json
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from openai import AsyncOpenAI
 
 from ..config import get_settings
 from ..schemas.insights import RealityCheckRow, RealityCheckResponse, InsightsResponse
+
+
+# ── Configurable constants ──────────────────────────────────────
+_ORE_PRICE_PER_MT: float    = 4200.0    # Rs/MT Chrome Ore — update to current price
+_FLEET_CAP_MT_PER_HR: float = 150.0    # benchmark excavator ore output per hour (BD loss calc)
+
+# ── In-memory insights cache (date string → serialized response) ─
+_insights_cache: dict[str, dict] = {}
 
 
 # ── helpers ────────────────────────────────────────────────────
@@ -106,27 +123,17 @@ def _production_mtd(db: Session, from_date: date, to_date: date) -> dict:
 
 
 def _despatch_mtd_actual(db: Session, from_date: date, to_date: date) -> float | None:
-    """
-    MTD despatch actual using the same hybrid query as the despatch service.
-    Deduplicates zsd_outbound_despatch by DELIVERYNO (sync log inserts a new row
-    every 15 min), then filters to Balasore Alloys deliveries only.
-    """
+    """MTD despatch actual from zsd_outbound_despatch via CUSTOMERNO."""
     try:
         row = db.execute(text("""
             SELECT COALESCE(SUM(z.NETWEIGHT), 0) AS actual
             FROM (
-                SELECT DELIVERYNO, MAX(GATEINDATE) AS GATEINDATE,
-                       MAX(NETWEIGHT) AS NETWEIGHT, MAX(TRANSPORTER) AS TRANSPORTER
+                SELECT DELIVERYNO, MAX(NETWEIGHT) AS NETWEIGHT
                 FROM   zsd_outbound_despatch
                 WHERE  DATE(GATEINDATE) BETWEEN :f AND :t
+                  AND  CUSTOMERNO IN ('BAL', 'JABAMOYEE')
                 GROUP  BY DELIVERYNO
             ) z
-            LEFT JOIN sd_outbound_delivery s
-                   ON CONCAT('0', z.DELIVERYNO) = s.DELIVERY_NO
-            WHERE (
-                (s.DELIVERY_NO IS NOT NULL AND s.SHIP_PARTY_NAME = 'Balasore Alloys Limited')
-             OR (s.DELIVERY_NO IS NULL     AND z.TRANSPORTER     = 'SHREE GANESH LOGISTICS')
-            )
         """), {"f": from_date, "t": to_date}).fetchone()
         val = _f(row.actual) if row else None
         return val if val and val > 0 else None
@@ -283,7 +290,7 @@ def _production_daily_rows(db: Session, from_date: date, to_date: date) -> list[
 
 
 def _equipment_summary(db: Session, from_date: date, to_date: date) -> dict:
-    """Excavator fleet BD hours and active count."""
+    """Excavator fleet BD hours, active count, and estimated lost ore MT."""
     try:
         days = (to_date - from_date).days + 1
         period_hrs = days * 24.0
@@ -305,6 +312,9 @@ def _equipment_summary(db: Session, from_date: date, to_date: date) -> dict:
         bd_events    = int(bd_row.bd_events or 0)
         fleet_avail  = round(max(0.0, (1 - total_bd_hrs / (total_excavators * period_hrs)) * 100), 1)
 
+        # Enhancement #4: cost context — BD hours → estimated lost ore MT
+        lost_ore_mt = round(total_bd_hrs * _FLEET_CAP_MT_PER_HR)
+
         sensor_row = db.execute(text("""
             SELECT COUNT(DISTINCT vehicle_desc) AS active
             FROM mines_technoton_rest_equipment_utilization
@@ -315,11 +325,12 @@ def _equipment_summary(db: Session, from_date: date, to_date: date) -> dict:
         active_count = int(sensor_row.active or 0) if sensor_row else 0
 
         return {
-            "total": total_excavators,
-            "active": active_count,
-            "bd_hrs": total_bd_hrs,
-            "bd_events": bd_events,
+            "total":           total_excavators,
+            "active":          active_count,
+            "bd_hrs":          total_bd_hrs,
+            "bd_events":       bd_events,
             "fleet_avail_pct": fleet_avail,
+            "lost_ore_mt":     lost_ore_mt,
         }
     except Exception:
         return {}
@@ -393,28 +404,22 @@ def _stock_snapshot(db: Session) -> dict:
 
 
 def _despatch_split_mtd(db: Session, from_date: date, to_date: date) -> dict:
-    """MTD despatch BAL vs SUK split."""
+    """MTD despatch BAL vs SUK split via CUSTOMERNO."""
     try:
         row = db.execute(text("""
             SELECT
-                COALESCE(SUM(CASE WHEN s.SHIP_PARTY_NAME = 'Balasore Alloys Limited'
-                                  THEN z.NETWEIGHT ELSE 0 END), 0) AS bal,
-                COALESCE(SUM(CASE WHEN s.DELIVERY_NO IS NULL
-                                   AND z.TRANSPORTER = 'SHREE GANESH LOGISTICS'
-                                  THEN z.NETWEIGHT ELSE 0 END), 0) AS suk,
-                COALESCE(SUM(z.NETWEIGHT), 0)                       AS total
+                COALESCE(SUM(CASE WHEN z.CUSTOMERNO = 'BAL'       THEN z.NETWEIGHT END), 0) AS bal,
+                COALESCE(SUM(CASE WHEN z.CUSTOMERNO = 'JABAMOYEE' THEN z.NETWEIGHT END), 0) AS suk,
+                COALESCE(SUM(z.NETWEIGHT), 0)                                               AS total
             FROM (
-                SELECT DELIVERYNO, MAX(GATEINDATE) AS GATEINDATE,
-                       MAX(NETWEIGHT) AS NETWEIGHT, MAX(TRANSPORTER) AS TRANSPORTER
+                SELECT DELIVERYNO,
+                       MAX(CUSTOMERNO) AS CUSTOMERNO,
+                       MAX(NETWEIGHT)  AS NETWEIGHT
                 FROM zsd_outbound_despatch
                 WHERE DATE(GATEINDATE) BETWEEN :f AND :t
+                  AND CUSTOMERNO IN ('BAL', 'JABAMOYEE')
                 GROUP BY DELIVERYNO
             ) z
-            LEFT JOIN sd_outbound_delivery s ON CONCAT('0', z.DELIVERYNO) = s.DELIVERY_NO
-            WHERE (
-                (s.DELIVERY_NO IS NOT NULL AND s.SHIP_PARTY_NAME = 'Balasore Alloys Limited')
-             OR (s.DELIVERY_NO IS NULL     AND z.TRANSPORTER     = 'SHREE GANESH LOGISTICS')
-            )
         """), {"f": from_date, "t": to_date}).fetchone()
         return {
             "bal":   round(float(row.bal   or 0), 1),
@@ -425,14 +430,156 @@ def _despatch_split_mtd(db: Session, from_date: date, to_date: date) -> dict:
         return {}
 
 
+# ── Enhancement #3: 7-day consecutive trend analysis ──────────
+
+def _build_trend_signal(prod_rows: list[dict]) -> str:
+    """
+    Analyse up to 7 days of production (newest-first) for consecutive trends.
+    Returns a multi-line trend summary for ore, OB, and COB.
+    """
+    if not prod_rows:
+        return "Insufficient data for trend analysis."
+
+    def _streak(values: list[int]) -> str:
+        if len(values) < 2:
+            return "single day"
+        dirs = [
+            "up"   if values[i] > values[i - 1] else
+            "down" if values[i] < values[i - 1] else "flat"
+            for i in range(1, len(values))
+        ]
+        if all(d == "up"   for d in dirs): return f"UP {len(dirs)} consecutive days"
+        if all(d == "down" for d in dirs): return f"DOWN {len(dirs)} consecutive days"
+        last2 = dirs[-2:] if len(dirs) >= 2 else dirs
+        if all(d == "up"   for d in last2): return "recovering (up last 2 days)"
+        if all(d == "down" for d in last2): return "declining (down last 2 days)"
+        return "mixed"
+
+    window   = prod_rows[:7]              # newest first
+    ore_vals = [p["ore"] for p in reversed(window)]   # oldest→newest for streak calc
+    ob_vals  = [p["ob"]  for p in reversed(window)]
+    cob_vals = [p["cob"] for p in reversed(window)]
+
+    ore_seq = " → ".join(str(v) for v in ore_vals)
+    return "\n".join([
+        f"Ore: {_streak(ore_vals)} — sequence: {ore_seq} MT",
+        f"OB:  {_streak(ob_vals)}",
+        f"COB: {_streak(cob_vals)}",
+    ])
+
+
+# ── Enhancement #1: Today vs Yesterday daily comparison ────────
+
+def _shift_comparison(prod_rows: list[dict]) -> dict:
+    """
+    Compare today's and yesterday's production.
+    pp_production only has POSTING_DATE (no shift timestamp), so daily totals
+    are used as the best available proxy for shift-level performance.
+    """
+    if len(prod_rows) < 2:
+        return {}
+    today_row     = prod_rows[0]
+    yesterday_row = prod_rows[1]
+    return {
+        "today_date":     today_row["date"],
+        "yesterday_date": yesterday_row["date"],
+        "today_ore":      today_row["ore"],
+        "yesterday_ore":  yesterday_row["ore"],
+        "today_ob":       today_row["ob"],
+        "yesterday_ob":   yesterday_row["ob"],
+        "today_cob":      today_row["cob"],
+        "yesterday_cob":  yesterday_row["cob"],
+        "ore_delta":      today_row["ore"] - yesterday_row["ore"],
+        "ob_delta":       today_row["ob"]  - yesterday_row["ob"],
+        "cob_delta":      today_row["cob"] - yesterday_row["cob"],
+    }
+
+
+# ── Enhancement #5: Revenue projection ────────────────────────
+
+def _revenue_projection(
+    desp_split: dict, desp_plan_mt: float, elapsed: int, total_days: int
+) -> dict:
+    """Project month-end despatch revenue at _ORE_PRICE_PER_MT."""
+    mtd_total = desp_split.get("total", 0)
+    if elapsed <= 0 or mtd_total <= 0:
+        return {}
+    daily_run_rate  = mtd_total / elapsed
+    projected_total = round(daily_run_rate * total_days, 1)
+    plan_rev_cr     = round(desp_plan_mt   * _ORE_PRICE_PER_MT / 1e7, 2)
+    proj_rev_cr     = round(projected_total * _ORE_PRICE_PER_MT / 1e7, 2)
+    mtd_rev_cr      = round(mtd_total      * _ORE_PRICE_PER_MT / 1e7, 2)
+    return {
+        "price_per_mt":     _ORE_PRICE_PER_MT,
+        "mtd_revenue_cr":   mtd_rev_cr,
+        "projected_mt":     projected_total,
+        "projected_rev_cr": proj_rev_cr,
+        "plan_rev_cr":      plan_rev_cr,
+        "gap_vs_plan_cr":   round(plan_rev_cr - proj_rev_cr, 2),
+        "gap_vs_plan_mt":   round(desp_plan_mt - projected_total, 1),
+    }
+
+
+# ── Enhancement #6: Cache helpers ─────────────────────────────
+
+def get_cached_insights(cache_key: str) -> dict | None:
+    """Try Redis first, fall back to in-memory cache."""
+    try:
+        import redis as redis_lib
+        settings = get_settings()
+        r = redis_lib.Redis(
+            host=settings.redis_host,
+            port=settings.redis_port,
+            password=settings.redis_password or None,
+            decode_responses=True,
+            socket_connect_timeout=1,
+        )
+        raw = r.get(cache_key)
+        if raw:
+            return json.loads(raw)
+    except Exception:
+        pass
+    return _insights_cache.get(cache_key)
+
+
+def set_cached_insights(cache_key: str, data: dict, ttl_seconds: int = 86400) -> None:
+    """Store in Redis (if available) and in-memory fallback."""
+    _insights_cache[cache_key] = data
+    try:
+        import redis as redis_lib
+        settings = get_settings()
+        r = redis_lib.Redis(
+            host=settings.redis_host,
+            port=settings.redis_port,
+            password=settings.redis_password or None,
+            decode_responses=True,
+            socket_connect_timeout=1,
+        )
+        r.setex(cache_key, ttl_seconds, json.dumps(data))
+    except Exception:
+        pass
+
+
 # ── public: generate insights via LiteLLM ─────────────────────
 
 async def generate_insights(
-    db: Session, from_date: date, to_date: date
+    db: Session, from_date: date, to_date: date,
+    use_cache: bool = True,
 ) -> InsightsResponse:
     settings = get_settings()
 
+    # ── check cache first (Enhancement #6) ──────────────────
+    cache_key = f"insights:{to_date}"
+    if use_cache:
+        cached = get_cached_insights(cache_key)
+        if cached:
+            return InsightsResponse(**{**cached, "cached": True})
+
     # ── gather data ──────────────────────────────────────────
+    first, last = _month_bounds(to_date)
+    total_days  = (last - first).days + 1
+    elapsed     = (to_date - first).days + 1
+
     rc         = compute_reality_check(db, from_date, to_date)
     dew_rows   = _dewatering_daily_rows(db, from_date, to_date)
     dew_mtd    = _dewatering_mtd(db, from_date, to_date)
@@ -441,6 +588,27 @@ async def generate_insights(
     cob_qual   = _cob_quality_mtd(db, from_date, to_date)
     stock      = _stock_snapshot(db)
     desp_split = _despatch_split_mtd(db, from_date, to_date)
+
+    # ── Enhancement #5: revenue projection ──────────────────
+    desp_plan_mt = next((r.plan for r in rc.rows if r.kpi == "Despatch"), 0.0)
+    rev          = _revenue_projection(desp_split, desp_plan_mt, elapsed, total_days)
+
+    # ── Enhancement #2: alert level from verdicts ────────────
+    verdicts = [r.verdict for r in rc.rows]
+    if "NOT_FEASIBLE" in verdicts:
+        alert_prefix = "⚠️ CRITICAL:"
+    elif all(v in ("ACHIEVABLE", "NO_DATA") for v in verdicts):
+        alert_prefix = "✅ ON TRACK:"
+    else:
+        alert_prefix = "⚡ CAUTION:"
+
+    # ── Enhancement #3: 7-day consecutive trend ──────────────
+    trend_signal = _build_trend_signal(prod_rows)
+    avg_ore = round(sum(p["ore"] for p in prod_rows) / len(prod_rows)) if prod_rows else 0
+    avg_ob  = round(sum(p["ob"]  for p in prod_rows) / len(prod_rows)) if prod_rows else 0
+
+    # ── Enhancement #1: today vs yesterday ───────────────────
+    shift_cmp = _shift_comparison(prod_rows)
 
     # ── build context tables ─────────────────────────────────
     rc_table_lines = [
@@ -479,18 +647,39 @@ async def generate_insights(
         if dew_mtd["disp_plan"] > 0 else 0
     )
 
-    # Compute simple day-over-day trend signal for prompt enrichment
-    avg_ore = round(sum(p["ore"] for p in prod_rows) / len(prod_rows)) if prod_rows else 0
-    avg_ob  = round(sum(p["ob"]  for p in prod_rows) / len(prod_rows)) if prod_rows else 0
-    last3_ore = [p["ore"] for p in prod_rows[:3]]
-    trend_signal = ""
-    if len(last3_ore) == 3:
-        if last3_ore[0] > last3_ore[2]:
-            trend_signal = f"Ore production is trending UP over last 3 days ({last3_ore[2]} → {last3_ore[1]} → {last3_ore[0]} MT)."
-        elif last3_ore[0] < last3_ore[2]:
-            trend_signal = f"Ore production is trending DOWN over last 3 days ({last3_ore[2]} → {last3_ore[1]} → {last3_ore[0]} MT)."
-        else:
-            trend_signal = f"Ore production is flat over last 3 days (~{last3_ore[0]} MT/day)."
+    # ── shift comparison block ────────────────────────────────
+    if shift_cmp:
+        ore_d = shift_cmp["ore_delta"]
+        ob_d  = shift_cmp["ob_delta"]
+        cob_d = shift_cmp["cob_delta"]
+        shift_block = (
+            f"TODAY ({shift_cmp['today_date']}):     Ore {shift_cmp['today_ore']:,} MT | "
+            f"OB {shift_cmp['today_ob']:,} CuM | COB {shift_cmp['today_cob']:,} MT\n"
+            f"YESTERDAY ({shift_cmp['yesterday_date']}): Ore {shift_cmp['yesterday_ore']:,} MT | "
+            f"OB {shift_cmp['yesterday_ob']:,} CuM | COB {shift_cmp['yesterday_cob']:,} MT\n"
+            f"DELTA: Ore {'+' if ore_d >= 0 else ''}{ore_d:,} MT | "
+            f"OB {'+' if ob_d >= 0 else ''}{ob_d:,} CuM | "
+            f"COB {'+' if cob_d >= 0 else ''}{cob_d:,} MT"
+        )
+    else:
+        shift_block = "Insufficient daily data for comparison."
+
+    # ── revenue block ─────────────────────────────────────────
+    if rev:
+        bal_pct = (
+            round(desp_split.get("bal", 0) / desp_split.get("total", 1) * 100, 1)
+            if desp_split.get("total") else 0
+        )
+        rev_block = (
+            f"At ₹{_ORE_PRICE_PER_MT:,.0f}/MT Chrome Ore:\n"
+            f"- MTD Revenue (actual despatch): ₹{rev['mtd_revenue_cr']} Cr\n"
+            f"- Projected Month-End Despatch: {rev['projected_mt']:,.0f} MT → ₹{rev['projected_rev_cr']} Cr\n"
+            f"- Plan Revenue: ₹{rev['plan_rev_cr']} Cr | Revenue Gap vs Plan: ₹{rev['gap_vs_plan_cr']} Cr "
+            f"({rev['gap_vs_plan_mt']:+,.0f} MT vs plan)\n"
+            f"- BAL Plant share: {bal_pct}% of total MTD despatch"
+        )
+    else:
+        rev_block = "Revenue projection unavailable — insufficient despatch data."
 
     context = f"""You are the Mine Manager's operational intelligence assistant at Kaliapani Chromite Mines, Balasore Alloys Limited, Sukinda Valley, Odisha. You are preparing the morning management briefing.
 
@@ -509,6 +698,7 @@ Mine: Kaliapani Chromite Mine, Sukinda Valley, Odisha
 Operation: Open-cast chromite mining + beneficiation (COB plant)
 Key OB vendors: Dashmesh, DVS, ATWA (contractor agencies for OB excavation)
 Month reference plan: {rc.plan_month}{' (FALLBACK — current month plan not entered)' if rc.plan_fallback else ''}
+Overall Alert Level: {alert_prefix}
 
 ## MONTH-END FEASIBILITY — AS ON {rc.as_on}
 Cycle: {rc.days_elapsed} days elapsed · {rc.days_remaining} days remaining · {rc.cycle_pct}% of month gone · Month ends {rc.month_end}
@@ -519,6 +709,8 @@ Verdict: ACHIEVABLE ≤1.5× uplift · STRETCH 1.5–3.5× · NOT FEASIBLE >3.5�
 
 ## DAILY PRODUCTION TREND (last {len(prod_rows)} days, newest first)
 Average over this window: Ore {avg_ore:,} MT/day · OB {avg_ob:,} CuM/day
+
+### 7-DAY CONSECUTIVE TREND ANALYSIS
 {trend_signal}
 
 {chr(10).join(prod_table_lines)}
@@ -533,6 +725,7 @@ Average over this window: Ore {avg_ore:,} MT/day · OB {avg_ob:,} CuM/day
 ## EQUIPMENT — EXCAVATOR FLEET (MTD)
 - Fleet: {equip.get('active', 'N/A')} of {equip.get('total', 7)} excavators active in period
 - Fleet Availability: {equip.get('fleet_avail_pct', 'N/A')}%  (BD hours: {equip.get('bd_hrs', 0)} hrs across {equip.get('bd_events', 0)} breakdown events)
+- Estimated Lost Ore due to Breakdowns: {equip.get('lost_ore_mt', 0):,} MT (at {_FLEET_CAP_MT_PER_HR:.0f} MT/hr benchmark per excavator)
 - Note: ACHIEVABLE fleet availability benchmark = >85%; STRETCH = 70–85%; CRITICAL = <70%
 
 ## COB PLANT — QUALITY & PERFORMANCE (MTD)
@@ -546,30 +739,35 @@ Average over this window: Ore {avg_ore:,} MT/day · OB {avg_ob:,} CuM/day
 - COB Concentrate: {stock.get('COB', 0):,.0f} MT | Lump: {stock.get('LUMP', 0):,.0f} MT
 - Total Mine Stock: {stock.get('total', 0):,.0f} MT
 
-## DESPATCH SPLIT (MTD)
-- BAL Plant (Balasore Alloys): {desp_split.get('bal', 0):,.1f} MT ({round(desp_split.get('bal',0)/desp_split.get('total',1)*100,1) if desp_split.get('total') else 0}% of total)
-- Sukinda/Others: {desp_split.get('suk', 0):,.1f} MT
-- Total MTD Despatch: {desp_split.get('total', 0):,.1f} MT
+## DESPATCH & REVENUE PROJECTION (MTD)
+{rev_block}
+
+## TODAY vs YESTERDAY PRODUCTION
+{shift_block}
 
 ---
 
-Generate EXACTLY the five sections below. Each must be factual, crisp, and reference specific numbers from above.
+Generate EXACTLY the six sections below. Each must be factual, crisp, and reference specific numbers from above.
 
 ### SECTION 1: MONTH-END FEASIBILITY NARRATIVE
-3-4 sentences for the GM briefing. Cover: overall outlook (optimistic/cautious/critical), which 1-2 KPIs are most at risk with their uplift factor, and the single most important operational action needed to close the gap. Mention days elapsed and remaining.
+Open with EXACTLY one of: "⚠️ CRITICAL:", "✅ ON TRACK:", or "⚡ CAUTION:" matching the Overall Alert Level above — this is the FIRST word(s) of your response.
+3-4 sentences for the GM briefing. Cover: overall outlook, which 1-2 KPIs are most at risk with their uplift factor, the rolling 7-day ore trend direction (state if UP/DOWN/mixed and cite consecutive day count and sequence), and the single most important operational action needed. Mention days elapsed and remaining.
 
 ### SECTION 2: CRITICAL OBSERVATIONS — DEWATERING
 4 numbered bullet points. Each must reference a specific date or number from the dewatering table. Cover: disposal compliance trend, pump hours compliance, closing stock trajectory (rising/falling), and any notable single-day spike or drop.
 
 ### SECTION 3: EQUIPMENT & COB PLANT STATUS
-4 numbered bullet points covering: excavator fleet availability vs benchmark, most significant breakdown impact, COB yield vs 38% benchmark, and Cr₂O₃ output grade vs 44% benchmark. Flag any concerning trend.
+4 numbered bullet points covering: excavator fleet availability vs benchmark, breakdown impact in hours AND the estimated lost ore MT figure, COB yield vs 38% benchmark, and Cr₂O₃ output grade vs 44% benchmark. Flag any concerning trend.
 
-### SECTION 4: STOCK & DESPATCH SUMMARY
-3 numbered bullet points covering: total mine stock adequacy for remaining despatch plan, grade mix observations (HG/MG/LG balance), and BAL vs SUK despatch split with any concern about concentration risk.
+### SECTION 4: STOCK, DESPATCH & REVENUE
+4 numbered bullet points covering: total mine stock adequacy for remaining despatch plan, grade mix observations (HG/MG/LG balance), BAL vs SUK despatch split and concentration risk, and month-end revenue projection vs plan (cite ₹ Crore figures).
 
 ### SECTION 5: KEY RISKS & RECOMMENDED ACTIONS
 Exactly 4 items covering the most critical cross-functional risks. Format each as:
 RISK: [specific risk with the number that makes it risky] → ACTION: [one concrete operational action]
+
+### SECTION 6: TODAY VS YESTERDAY SNAPSHOT
+2-3 sentences comparing today's production to yesterday's. State the absolute numbers for ore, OB, and COB and the delta. Flag if today is >10% below yesterday as a concern; if today is above, note the positive momentum.
 
 Format your response EXACTLY as:
 ---SECTION1---
@@ -579,23 +777,25 @@ Format your response EXACTLY as:
 ---SECTION3---
 [4 numbered bullets]
 ---SECTION4---
-[3 numbered bullets]
+[4 numbered bullets]
 ---SECTION5---
 [4 RISK/ACTION pairs]
+---SECTION6---
+[2-3 sentences]
 """
 
     # ── call LiteLLM ─────────────────────────────────────────
     client = AsyncOpenAI(
         base_url=settings.litellm_base_url + "/v1",
         api_key=settings.litellm_api_key,
-        timeout=25.0,   # fail fast before the 30s frontend axios timeout
+        timeout=25.0,
     )
 
     response = await client.chat.completions.create(
         model=settings.litellm_model,
         messages=[{"role": "user", "content": context}],
         temperature=0.3,
-        max_tokens=2000,
+        max_tokens=2400,
     )
 
     raw = response.choices[0].message.content or ""
@@ -609,13 +809,14 @@ Format your response EXACTLY as:
         end = text.find(next_marker, start)
         return text[start:end].strip() if end != -1 else text[start:].strip()
 
-    narrative    = _extract(raw, "---SECTION1---", "---SECTION2---")
-    dewatering   = _extract(raw, "---SECTION2---", "---SECTION3---")
-    equip_cob    = _extract(raw, "---SECTION3---", "---SECTION4---")
-    stock_desp   = _extract(raw, "---SECTION4---", "---SECTION5---")
-    risks        = _extract(raw, "---SECTION5---", "---END---")
+    narrative  = _extract(raw, "---SECTION1---", "---SECTION2---")
+    dewatering = _extract(raw, "---SECTION2---", "---SECTION3---")
+    equip_cob  = _extract(raw, "---SECTION3---", "---SECTION4---")
+    stock_desp = _extract(raw, "---SECTION4---", "---SECTION5---")
+    risks      = _extract(raw, "---SECTION5---", "---SECTION6---")
+    shift_snap = _extract(raw, "---SECTION6---", "---END---")
 
-    return InsightsResponse(
+    result = InsightsResponse(
         generated_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
         model_used=settings.litellm_model,
         reality_check_narrative=narrative or raw,
@@ -623,4 +824,11 @@ Format your response EXACTLY as:
         equipment_cob_status=equip_cob,
         stock_despatch_summary=stock_desp,
         key_risks_and_actions=risks,
+        shift_snapshot=shift_snap,
+        cached=False,
     )
+
+    # ── cache the result (Enhancement #6) ────────────────────
+    set_cached_insights(cache_key, result.model_dump(mode="json"))
+
+    return result

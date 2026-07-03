@@ -89,6 +89,9 @@ export interface ProductionKpiCard {
   mtd_plan:     number | null;
   mtd_pct:      number | null;
   unit:         string;
+  hg_actual?:   number | null;
+  mg_actual?:   number | null;
+  lg_actual?:   number | null;
 }
 
 export interface ProductionSummaryResponse {
@@ -460,4 +463,105 @@ export interface InsightsResponse {
   equipment_cob_status:      string;
   stock_despatch_summary:    string;
   key_risks_and_actions:     string;
+  shift_snapshot?:           string;
+  cached?:                   boolean;
+}
+
+// ── Live Fleet Tracking ───────────────────────────────────────
+export interface VehicleData {
+  vehicle_desc:       string;
+  display_name:       string;
+  category:           string;
+  source:             "man" | "equipment";
+  has_data:           boolean;
+  // engine
+  engine_hours:       number;
+  // speed
+  avg_speed:          number;
+  max_speed:          number;
+  // movement
+  distance_km:        number;
+  // fuel — fuel_consumed drives wave animation
+  fuel_consumed:      number;
+  lph:                number;
+  initial_fuel_level: number;
+  final_fuel_level:   number;
+  tank_capacity:      number;
+  // events
+  total_fillings:     number;
+  total_drains:       number;
+  filled_litres:      number;
+  drained_litres:     number;
+  // meta
+  last_seen:          string | null;
+}
+
+export interface LiveTrackingResponse {
+  vehicles: VehicleData[];
+  count:    number;
+}
+
+// ── Fuel Management ───────────────────────────────────────────
+export interface FuelVehicle {
+  vehicle_desc:        string;
+  display_name:        string;
+  category:            string;
+  source:              "man" | "equipment";
+  has_data:            boolean;
+  engine_hours:        number;
+  fuel_pct:            number;
+  fuel_level_l:        number;
+  tank_capacity:       number;
+  fuel_consumed:       number;
+  lph:                 number;
+  est_hours_remaining: number | null;
+  total_fillings:      number;
+  total_drains:        number;
+  filled_litres:       number;
+  drained_litres:      number;
+  status:              "good" | "medium" | "low" | "no_data";
+  last_seen:           string | null;
+}
+
+export interface FuelDistributionBand {
+  band:  string;
+  key:   string;
+  count: number;
+  color: string;
+}
+
+export interface FuelTrendDay {
+  date:             string;
+  total_consumed_l: number;
+  vehicle_count:    number;
+}
+
+export interface FuelKpis {
+  total_vehicles:          number;
+  active_vehicles:         number;
+  vehicles_with_data:      number;
+  avg_fuel_pct:            number;
+  total_fuel_l:            number;
+  total_capacity_l:        number;
+  fleet_fuel_pct:          number;
+  fuel_consumed_today:     number;
+  fuel_consumed_yesterday: number;
+  total_filled_today:      number;
+  vehicles_refilled:       number;
+  avg_lph:                 number;
+  excellent_count:         number;
+  good_count:              number;
+  medium_count:            number;
+  low_count:               number;
+  no_data_count:           number;
+}
+
+export interface FuelOverviewResponse {
+  as_of:          string;
+  kpis:           FuelKpis;
+  distribution:   FuelDistributionBand[];
+  vehicles:       FuelVehicle[];
+  top_consumers:  FuelVehicle[];
+  refills_today:  FuelVehicle[];
+  trend:          FuelTrendDay[];
 }

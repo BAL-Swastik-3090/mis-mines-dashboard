@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { Brain, RefreshCw, AlertCircle, Droplets, ShieldAlert, Truck, HardHat } from "lucide-react";
+import { Brain, RefreshCw, AlertCircle, Droplets, ShieldAlert, Truck, HardHat, CalendarClock, Zap } from "lucide-react";
 import { useInsightsGenerate } from "@/hooks/useInsights";
 import { useDateFilter } from "@/contexts/useDateFilter";
 
@@ -95,7 +95,12 @@ export default function InsightsSection() {
 
         <span className="ml-auto flex items-center gap-2 normal-case tracking-normal font-normal text-[11px]">
           {data && (
-            <span className="text-txt-light font-mono text-[10px]">
+            <span className="text-txt-light font-mono text-[10px] flex items-center gap-1.5">
+              {data.cached && (
+                <span className="flex items-center gap-1 bg-amber-100 text-amber-700 border border-amber-200 text-[9px] font-bold px-1.5 py-0.5 rounded tracking-wider uppercase">
+                  <Zap size={8} />cached
+                </span>
+              )}
               Generated {data.generated_at} · {data.model_used}
             </span>
           )}
@@ -119,7 +124,7 @@ export default function InsightsSection() {
           <Brain size={32} className="mx-auto text-accent/30 mb-3" />
           <p className="text-txt-muted text-[13px] mb-1">AI insights are generated on demand</p>
           <p className="text-txt-light text-[11px] mb-4">
-            Analyses month-end feasibility, dewatering, equipment fleet, COB quality, stock position, and despatch split using Claude.
+            Analyses month-end feasibility, 7-day production trends, equipment BD cost impact, revenue projection, dewatering, COB quality, stock and despatch split using Claude. Pre-generated at 7 AM daily.
           </p>
           <button
             onClick={handleGenerate}
@@ -138,9 +143,10 @@ export default function InsightsSection() {
             <SkeletonCard title="Critical Observations — Dewatering" accent="text-accent" icon={<Droplets size={13} />} />
             <SkeletonCard title="Equipment & COB Plant Status" accent="text-warning" icon={<HardHat size={13} />} />
           </div>
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            <SkeletonCard title="Stock & Despatch Summary" accent="text-success" icon={<Truck size={13} />} />
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+            <SkeletonCard title="Stock, Despatch & Revenue" accent="text-success" icon={<Truck size={13} />} />
             <SkeletonCard title="Key Risks & Recommended Actions" accent="text-danger" icon={<ShieldAlert size={13} />} />
+            <SkeletonCard title="Today vs Yesterday Snapshot" accent="text-purple-600" icon={<CalendarClock size={13} />} />
           </div>
         </div>
       )}
@@ -173,13 +179,18 @@ export default function InsightsSection() {
               <Prose text={data.equipment_cob_status} />
             </InsightCard>
           </div>
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            <InsightCard icon={<Truck size={13} className="text-success" />} title="Stock & Despatch Summary" accent="text-success">
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+            <InsightCard icon={<Truck size={13} className="text-success" />} title="Stock, Despatch & Revenue" accent="text-success">
               <Prose text={data.stock_despatch_summary} />
             </InsightCard>
             <InsightCard icon={<ShieldAlert size={13} className="text-danger" />} title="Key Risks & Recommended Actions" accent="text-danger">
               <Prose text={data.key_risks_and_actions} />
             </InsightCard>
+            {data.shift_snapshot && (
+              <InsightCard icon={<CalendarClock size={13} className="text-purple-600" />} title="Today vs Yesterday Snapshot" accent="text-purple-600">
+                <Prose text={data.shift_snapshot} />
+              </InsightCard>
+            )}
           </div>
         </div>
       )}

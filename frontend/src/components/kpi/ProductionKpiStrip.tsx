@@ -27,11 +27,12 @@ interface KpiCardProps {
   loading?:    boolean;
   pending?:    boolean;
   tdDate:      string;
+  showGrades?: boolean;
 }
 
 function KpiCard({
   label, icon: Icon, accentClass, iconBg, iconColor,
-  data, loading, pending, tdDate,
+  data, loading, pending, tdDate, showGrades,
 }: KpiCardProps) {
   const mtdPct      = data?.mtd_pct   ?? null;
   const todayPct    = data?.today_pct ?? null;
@@ -127,16 +128,52 @@ function KpiCard({
         </div>
       )}
 
-      <div className="border-t border-border-light" />
+      {/* ── Grade breakdown — Ore card only ─────────────────── */}
+      {showGrades && (
+        <div className="px-4 pb-3 space-y-1.5">
+          {loading ? (
+            <>
+              <Shimmer w="w-full" h="h-4" />
+              <Shimmer w="w-full" h="h-4" />
+              <Shimmer w="w-full" h="h-4" />
+            </>
+          ) : (
+            <>
+              {[
+                { label: "HG >52%",  value: data?.hg_actual, color: "bg-gold" },
+                { label: "MG 40–52%", value: data?.mg_actual, color: "bg-accent" },
+                { label: "LG <40%",  value: data?.lg_actual, color: "bg-[#e65100]" },
+              ].map(({ label: gl, value, color }) => (
+                <div key={gl} className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <span className={`w-2 h-2 rounded-full ${color} inline-block shrink-0`} />
+                    <span className="text-[11px] text-txt-muted font-medium w-[72px] shrink-0">{gl}</span>
+                  </div>
+                  <div className="flex items-baseline gap-0.5 min-w-[64px] justify-end">
+                    <span className="font-mono text-[11px] font-semibold text-navy tabular-nums">
+                      {value != null && value > 0 ? formatIndian(value) : "—"}
+                    </span>
+                    {value != null && value > 0 && (
+                      <span className="text-[9px] text-txt-light">MT</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+
+      <div className="border-t border-border-light mt-auto" />
 
       {/* ── Today footer ─────────────────────────────────────── */}
-      <div className="px-4 py-3 bg-bg-light flex items-center justify-between flex-1 gap-2">
-        <div>
-          <div className="text-[10px] xl:text-[11px] text-txt-light uppercase tracking-widest font-bold mb-1">{tdLabel(tdDate)}</div>
+      <div className="px-4 py-3 bg-bg-light flex items-center justify-between flex-1 gap-1">
+        <div className="shrink-0">
+          <div className="text-[10px] xl:text-[11px] text-txt-light uppercase tracking-widest font-bold mb-1 whitespace-nowrap">{tdLabel(tdDate)}</div>
           {loading ? <Shimmer w="w-24" h="h-5" /> : pending ? (
             <span className="text-txt-light text-sm font-mono">—</span>
           ) : (
-            <span className="font-mono font-semibold text-[12px] text-navy">
+            <span className="font-mono font-semibold text-[12px] text-navy whitespace-nowrap">
               {formatIndian(data?.today_actual)}{" "}
               <span className="text-[10px] font-normal text-txt-muted">{data?.unit}</span>
             </span>
@@ -144,12 +181,12 @@ function KpiCard({
         </div>
         {/* Plan column — only shown when plan data exists */}
         {(pending || data?.today_plan != null) && (
-          <div className="text-right">
+          <div className="text-right shrink-0">
             <div className="text-[10px] xl:text-[11px] text-txt-light uppercase tracking-widest font-bold mb-1">Plan</div>
             {loading ? <Shimmer w="w-24" h="h-5" /> : pending ? (
               <span className="text-txt-light text-sm font-mono">—</span>
             ) : (
-              <span className="font-mono text-[12px] text-txt-secondary">
+              <span className="font-mono text-[12px] text-txt-secondary whitespace-nowrap">
                 {formatIndian(data?.today_plan)}{" "}
                 <span className="text-[10px] text-txt-muted">{data?.unit}</span>
               </span>
@@ -157,7 +194,7 @@ function KpiCard({
           </div>
         )}
         {!pending && !loading && data?.today_plan != null && (
-          <span className={pctBgClass(todayPct)}>{formatPct(todayPct)}</span>
+          <span className={`${pctBgClass(todayPct)} shrink-0`}>{formatPct(todayPct)}</span>
         )}
         {!pending && loading && data?.today_plan != null && <Shimmer w="w-14" h="h-5" />}
       </div>
@@ -174,10 +211,8 @@ interface DespatchKpiCardProps {
   mtdSuk:          number;
   mtdBalActual:    number | null;
   mtdSukActual:    number | null;
-  mtdUnsynced:     number;
   tdTotal:         number | null;
   tdActual:        number | null;
-  tdUnsynced:      number;
   tdDate:          string;
 }
 
@@ -185,7 +220,7 @@ function DespatchKpiCard({
   loading,
   mtdTotalPlan, mtdTotalActual,
   mtdBal, mtdSuk, mtdBalActual, mtdSukActual,
-  mtdUnsynced, tdTotal, tdActual, tdUnsynced, tdDate,
+  tdTotal, tdActual, tdDate,
 }: DespatchKpiCardProps) {
   const mtdPct = (mtdTotalActual != null && mtdTotalPlan > 0)
     ? Math.round((mtdTotalActual / mtdTotalPlan) * 1000) / 10
@@ -238,11 +273,6 @@ function DespatchKpiCard({
                     {mtdTotalActual - mtdTotalPlan >= 0 ? "+" : ""}
                     {formatIndian(mtdTotalActual - mtdTotalPlan)}
                   </span>
-                  {mtdUnsynced > 0 && (
-                    <span className="text-[10px] text-orange bg-orange-50 px-1.5 py-0.5 rounded font-bold border border-orange/20">
-                      +{mtdUnsynced} unsynced
-                    </span>
-                  )}
                 </>
               ) : (
                 <span className="text-[10px] text-txt-light uppercase tracking-wider font-semibold">MTD Plan</span>
@@ -322,9 +352,6 @@ function DespatchKpiCard({
               <span className="font-mono font-semibold text-[12px] text-navy">
                 {formatIndian(tdActual)}{" "}
                 <span className="text-[10px] font-normal text-txt-muted">MT Act</span>
-                {tdUnsynced > 0 && (
-                  <span className="ml-1 text-[9px] text-orange font-bold">+{tdUnsynced}?</span>
-                )}
               </span>
             ) : (
               <span className="text-[11px] text-txt-light font-mono italic">No actual yet</span>
@@ -352,23 +379,27 @@ export default function ProductionKpiStrip() {
       label: "Ore Production",  icon: BarChart3,
       data: data?.ore,          accentClass: "accent-bar-green",
       iconBg: "bg-success-bg",  iconColor: "text-success",
+      showGrades: true,
     },
     {
       label: "OB Excavation",   icon: Layers,
       data: data?.ob,           accentClass: "accent-bar-blue",
       iconBg: "bg-blue-50",     iconColor: "text-accent",
+      showGrades: false,
     },
     {
       label: "COB Production",  icon: Package,
       data: data?.cob,          accentClass: "accent-bar-gold",
       iconBg: "bg-amber-50",    iconColor: "text-gold",
+      showGrades: false,
     },
     {
       label: "De-Silting",      icon: Droplets,
       data: data?.de_silt,      accentClass: "accent-bar-teal",
       iconBg: "bg-teal-50",     iconColor: "text-info",
+      showGrades: false,
     },
-  ] as const;
+  ];
 
   return (
     /* 2 columns on tablet, 5 on desktop/wide */
@@ -386,6 +417,7 @@ export default function ProductionKpiStrip() {
           iconColor={c.iconColor}
           loading={isLoading}
           tdDate={apiTo}
+          showGrades={c.showGrades}
         />
       ))}
 
@@ -398,10 +430,8 @@ export default function ProductionKpiStrip() {
         mtdSuk={dsp?.mtd_suk_plan             ?? 0}
         mtdBalActual={dsp?.mtd_bal_actual     ?? null}
         mtdSukActual={dsp?.mtd_suk_actual     ?? null}
-        mtdUnsynced={dsp?.mtd_unsynced_count  ?? 0}
         tdTotal={dsp?.td_total_plan           ?? null}
         tdActual={dsp?.td_total_actual        ?? null}
-        tdUnsynced={dsp?.td_unsynced_count    ?? 0}
         tdDate={apiTo}
       />
     </div>
