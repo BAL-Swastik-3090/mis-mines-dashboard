@@ -12,6 +12,10 @@ class KpiCard(BaseModel):
     mtd_plan:       Optional[float] = None
     mtd_pct:        Optional[float] = None
     unit:           str
+    # Grade breakdown — only populated for the Ore card
+    hg_actual:      Optional[float] = None
+    mg_actual:      Optional[float] = None
+    lg_actual:      Optional[float] = None
 
 
 # ── Production summary (all KPIs in one response) ─────────────

@@ -8,16 +8,12 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 
-# ── Material description constants ────────────────────────────
-ORE_MATERIALS = (
-    "LOW GRADE ORE(-40%CR2O3)",
-    "40-52%        CHROME ORE",
-    "+52% CHROME ORE",
-)
-ORE_LG = "LOW GRADE ORE(-40%CR2O3)"
-ORE_MG = "40-52%        CHROME ORE"
-ORE_HG = "+52% CHROME ORE"
-OB_MATERIAL  = "OVERBURDEN"
+# ── Material number constants (pp_production.MATERIAL_NO) ─────
+ORE_LG_NO = "000000000025000003"    # LOW GRADE ORE(-40%CR2O3)
+ORE_MG_NO = "000000000025000001"    # 40-52% CHROME ORE
+ORE_HG_NO = "000000000025000002"    # +52% CHROME ORE
+OB_NO     = "000000000016000009"    # OVERBURDEN
+# COB matched by MATERIAL_DESC (no MATERIAL_NO change requested)
 COB_MATERIAL = "CONCENTRATE WITH STD MOISTURE"
 PLANT_MINES  = "1200"
 PLANT_COBP   = "1210"
@@ -48,18 +44,18 @@ def get_daily_actuals(db: Session, from_date: date, to_date: date) -> list[dict]
     """
     sql = text("""
         SELECT
-            POSTING_DATE                                                   AS dt,
+            POSTING_DATE                                                     AS dt,
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_DESC = :lg     THEN QUANTITY ELSE 0 END) AS ore_lg,
+                      AND MATERIAL_NO = :lg       THEN QUANTITY ELSE 0 END) AS ore_lg,
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_DESC = :mg     THEN QUANTITY ELSE 0 END) AS ore_mg,
+                      AND MATERIAL_NO = :mg       THEN QUANTITY ELSE 0 END) AS ore_mg,
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_DESC = :hg     THEN QUANTITY ELSE 0 END) AS ore_hg,
+                      AND MATERIAL_NO = :hg       THEN QUANTITY ELSE 0 END) AS ore_hg,
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_DESC IN (:lg, :mg, :hg)
+                      AND MATERIAL_NO IN (:lg, :mg, :hg)
                                                   THEN QUANTITY ELSE 0 END) AS ore_total,
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_DESC = :ob     THEN QUANTITY ELSE 0 END) AS ob_qty,
+                      AND MATERIAL_NO = :ob       THEN QUANTITY ELSE 0 END) AS ob_qty,
             SUM(CASE WHEN PLANT = :plant_cobp
                       AND MATERIAL_DESC = :cob    THEN QUANTITY ELSE 0 END) AS cob_qty
         FROM pp_production
@@ -71,8 +67,8 @@ def get_daily_actuals(db: Session, from_date: date, to_date: date) -> list[dict]
     rows = db.execute(sql, {
         "plant_mines": PLANT_MINES,
         "plant_cobp":  PLANT_COBP,
-        "lg": ORE_LG, "mg": ORE_MG, "hg": ORE_HG,
-        "ob": OB_MATERIAL, "cob": COB_MATERIAL,
+        "lg": ORE_LG_NO, "mg": ORE_MG_NO, "hg": ORE_HG_NO,
+        "ob": OB_NO, "cob": COB_MATERIAL,
         "from_date": from_date, "to_date": to_date,
     }).fetchall()
     return [dict(r._mapping) for r in rows]
@@ -178,25 +174,25 @@ def get_mtd_totals(db: Session, from_date: date, to_date: date) -> dict:
     sql_actual = text("""
         SELECT
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_DESC IN (:lg, :mg, :hg) THEN QUANTITY ELSE 0 END) AS ore_mtd,
+                      AND MATERIAL_NO IN (:lg, :mg, :hg)  THEN QUANTITY ELSE 0 END) AS ore_mtd,
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_DESC = :ob              THEN QUANTITY ELSE 0 END) AS ob_mtd,
+                      AND MATERIAL_NO = :ob               THEN QUANTITY ELSE 0 END) AS ob_mtd,
             SUM(CASE WHEN PLANT = :plant_cobp
-                      AND MATERIAL_DESC = :cob             THEN QUANTITY ELSE 0 END) AS cob_mtd,
+                      AND MATERIAL_DESC = :cob            THEN QUANTITY ELSE 0 END) AS cob_mtd,
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_DESC = :hg              THEN QUANTITY ELSE 0 END) AS hg_mtd,
+                      AND MATERIAL_NO = :hg               THEN QUANTITY ELSE 0 END) AS hg_mtd,
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_DESC = :mg              THEN QUANTITY ELSE 0 END) AS mg_mtd,
+                      AND MATERIAL_NO = :mg               THEN QUANTITY ELSE 0 END) AS mg_mtd,
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_DESC = :lg              THEN QUANTITY ELSE 0 END) AS lg_mtd
+                      AND MATERIAL_NO = :lg               THEN QUANTITY ELSE 0 END) AS lg_mtd
         FROM pp_production
         WHERE POSTING_DATE BETWEEN :from_date AND :to_date
           AND PLANT IN (:plant_mines, :plant_cobp)
     """)
     ar = db.execute(sql_actual, {
         "plant_mines": PLANT_MINES, "plant_cobp": PLANT_COBP,
-        "lg": ORE_LG, "mg": ORE_MG, "hg": ORE_HG,
-        "ob": OB_MATERIAL, "cob": COB_MATERIAL,
+        "lg": ORE_LG_NO, "mg": ORE_MG_NO, "hg": ORE_HG_NO,
+        "ob": OB_NO, "cob": COB_MATERIAL,
         "from_date": from_date, "to_date": to_date,
     }).fetchone()
 

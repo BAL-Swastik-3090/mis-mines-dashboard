@@ -1,36 +1,17 @@
 "use client";
-import {
-  Cloud, Package, Building2, BarChart3,
-  Layers, FlaskConical, Wrench, Droplets,
-  Target, Sparkles, ChevronLeft, ChevronRight, Truck,
-} from "lucide-react";
-import { useSidebar }          from "@/contexts/useSidebar";
-import { useSectionObserver }  from "@/hooks/useSectionObserver";
+import { LayoutDashboard, Truck, Gauge, ChevronLeft, ChevronRight } from "lucide-react";
+import { useAppPage, type AppPage } from "@/contexts/useAppPage";
+import { useSidebar }               from "@/contexts/useSidebar";
 
-const NAV_ITEMS = [
-  { id: "weather",        label: "Weather",           icon: Cloud        },
-  { id: "stock",          label: "Stock Position",    icon: Package      },
-  { id: "plant",          label: "Plant Performance", icon: Building2    },
-  { id: "production",     label: "Production",        icon: BarChart3    },
-  { id: "ob",             label: "OB Excavation",     icon: Layers       },
-  { id: "cob",            label: "COB Plant",         icon: FlaskConical },
-  { id: "equipment",      label: "Equipment",         icon: Wrench       },
-  { id: "dewatering",     label: "Dewatering",        icon: Droplets     },
-  { id: "live-tracking",  label: "Live Tracking",     icon: Truck        },
-  { id: "reality-check", label: "Reality Check",     icon: Target       },
-  { id: "insights",      label: "AI Insights",       icon: Sparkles     },
-] as const;
+const NAV_ITEMS: { id: AppPage; label: string; icon: React.ElementType }[] = [
+  { id: "mis",              label: "MIS Dashboard",  icon: LayoutDashboard },
+  { id: "live-tracking",   label: "Live Tracking",   icon: Truck           },
+  { id: "fuel-management", label: "Fuel Management", icon: Gauge           },
+];
 
-const SECTION_IDS = NAV_ITEMS.map((n) => n.id);
-
-export default function Sidebar() {
-  const { collapsed, toggle } = useSidebar();
-  const activeId = useSectionObserver(SECTION_IDS);
-
-  function scrollTo(id: string) {
-    const el = document.getElementById(id);
-    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
+export default function AppSidebar() {
+  const { page, setPage }      = useAppPage();
+  const { collapsed, toggle }  = useSidebar();
 
   return (
     <aside
@@ -39,29 +20,29 @@ export default function Sidebar() {
         bg-[#1a2744] border-r border-white/10
         flex flex-col
         transition-[width] duration-300 ease-in-out
-        ${collapsed ? "w-[56px]" : "w-[220px]"}
+        ${collapsed ? "w-[56px]" : "w-[200px]"}
       `}
     >
-      {/* ── Gold accent line (mirrors header) ─────────────────── */}
+      {/* Gold accent line — mirrors header */}
       <div className="h-[2px] bg-gradient-to-r from-[#c8960c] via-[#f5a623] to-transparent shrink-0" />
 
-      {/* ── Section label ─────────────────────────────────────── */}
+      {/* Group label — hidden when collapsed */}
       {!collapsed && (
         <div className="px-4 pt-3 pb-1.5 shrink-0">
           <span className="text-[10px] font-bold tracking-[.18em] text-white/30 uppercase font-condensed">
-            Navigation
+            Operations
           </span>
         </div>
       )}
 
-      {/* ── Nav items ─────────────────────────────────────────── */}
+      {/* Nav items */}
       <nav className="flex-1 overflow-y-auto overflow-x-hidden py-1 scrollbar-thin">
         {NAV_ITEMS.map(({ id, label, icon: Icon }) => {
-          const isActive = activeId === id;
+          const isActive = page === id;
           return (
             <button
               key={id}
-              onClick={() => scrollTo(id)}
+              onClick={() => setPage(id)}
               title={collapsed ? label : undefined}
               className={`
                 w-full flex items-center gap-3
@@ -82,19 +63,17 @@ export default function Sidebar() {
               {/* Icon */}
               <Icon
                 size={17}
-                className={`shrink-0 transition-colors ${
-                  isActive ? "text-[#f5a623]" : "text-current"
-                }`}
+                className={`shrink-0 transition-colors ${isActive ? "text-[#f5a623]" : "text-current"}`}
               />
 
-              {/* Label */}
+              {/* Label — hidden when collapsed */}
               {!collapsed && (
                 <span className="text-[12px] font-semibold tracking-wide leading-tight truncate font-condensed text-left">
                   {label}
                 </span>
               )}
 
-              {/* Tooltip when collapsed */}
+              {/* Tooltip — only when collapsed */}
               {collapsed && (
                 <span className="
                   pointer-events-none select-none
@@ -113,7 +92,7 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* ── Collapse toggle ───────────────────────────────────── */}
+      {/* Collapse toggle */}
       <div className="border-t border-white/10 shrink-0">
         <button
           onClick={toggle}

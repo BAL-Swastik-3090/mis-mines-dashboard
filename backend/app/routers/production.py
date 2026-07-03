@@ -57,6 +57,9 @@ def production_summary(
             mtd_plan     = mtd["ore_plan"],
             mtd_pct      = pct(mtd["ore_actual"], mtd["ore_plan"]),
             unit         = "MT",
+            hg_actual    = mtd["hg_actual"],
+            mg_actual    = mtd["mg_actual"],
+            lg_actual    = mtd["lg_actual"],
         ),
         ob = KpiCard(
             today_actual = svc._f(td_actual.get("ob_qty")),
