@@ -120,16 +120,16 @@ export default function DaywiseTable() {
             </tr>
             <tr className="bg-bg-soft border-b border-border-light text-[11px] text-txt-light font-semibold">
               {/* ORE sub */}
-              <th className="px-3 py-1.5 text-right border-l border-border-light">Act</th>
-              <th className="px-3 py-1.5 text-right">Plan</th>
+              <th className="px-3 py-1.5 text-right border-l border-border-light">Plan</th>
+              <th className="px-3 py-1.5 text-right">Act</th>
               <th className="px-3 py-1.5 text-right">%</th>
               {/* OB sub */}
-              <th className="px-3 py-1.5 text-right border-l border-border-light">Act</th>
-              <th className="px-3 py-1.5 text-right">Plan</th>
+              <th className="px-3 py-1.5 text-right border-l border-border-light">Plan</th>
+              <th className="px-3 py-1.5 text-right">Act</th>
               <th className="px-3 py-1.5 text-right">%</th>
               {/* COB sub */}
-              <th className="px-3 py-1.5 text-right border-l border-border-light">Act</th>
-              <th className="px-3 py-1.5 text-right">Plan</th>
+              <th className="px-3 py-1.5 text-right border-l border-border-light">Plan</th>
+              <th className="px-3 py-1.5 text-right">Act</th>
               <th className="px-3 py-1.5 text-right">%</th>
               {/* Silt — rowSpan covers sub-header row */}
               {/* Despatch sub */}
@@ -172,23 +172,23 @@ export default function DaywiseTable() {
 
                     {/* ORE */}
                     <td className="px-3 py-2 text-right border-l border-border-light">
-                      <NumCell v={r.ore_actual} />
+                      <NumCell v={r.ore_plan} dim />
                     </td>
-                    <td className="px-3 py-2 text-right"><NumCell v={r.ore_plan} dim /></td>
+                    <td className="px-3 py-2 text-right"><NumCell v={r.ore_actual} /></td>
                     <td className="px-3 py-2 text-right"><PctPill pct={orePct} /></td>
 
                     {/* OB */}
                     <td className="px-3 py-2 text-right border-l border-border-light">
-                      <NumCell v={r.ob_actual} />
+                      <NumCell v={r.ob_plan} dim />
                     </td>
-                    <td className="px-3 py-2 text-right"><NumCell v={r.ob_plan} dim /></td>
+                    <td className="px-3 py-2 text-right"><NumCell v={r.ob_actual} /></td>
                     <td className="px-3 py-2 text-right"><PctPill pct={obPct} /></td>
 
                     {/* COB */}
                     <td className="px-3 py-2 text-right border-l border-border-light">
-                      <NumCell v={r.cob_actual} />
+                      <NumCell v={r.cob_plan} dim />
                     </td>
-                    <td className="px-3 py-2 text-right"><NumCell v={r.cob_plan} dim /></td>
+                    <td className="px-3 py-2 text-right"><NumCell v={r.cob_actual} /></td>
                     <td className="px-3 py-2 text-right"><PctPill pct={cobPct} /></td>
 
                     {/* SILT */}
@@ -233,27 +233,27 @@ export default function DaywiseTable() {
                   MTD TOTAL
                 </td>
                 {/* ORE */}
-                <td className="px-3 py-3 text-right font-mono font-bold text-white text-[12px] border-l border-white/10">
-                  {formatIndian(prodData.mtd_ore_actual)}
-                </td>
-                <td className="px-3 py-3 text-right font-mono text-white/50 text-[12px]">
+                <td className="px-3 py-3 text-right font-mono text-white/50 text-[12px] border-l border-white/10">
                   {formatIndian(prodData.mtd_ore_plan)}
+                </td>
+                <td className="px-3 py-3 text-right font-mono font-bold text-white text-[12px]">
+                  {formatIndian(prodData.mtd_ore_actual)}
                 </td>
                 <td className="px-3 py-3 text-right"><PctPill pct={mtdOrePct} /></td>
                 {/* OB */}
-                <td className="px-3 py-3 text-right font-mono font-bold text-white text-[12px] border-l border-white/10">
-                  {formatIndian(prodData.mtd_ob_actual)}
-                </td>
-                <td className="px-3 py-3 text-right font-mono text-white/50 text-[12px]">
+                <td className="px-3 py-3 text-right font-mono text-white/50 text-[12px] border-l border-white/10">
                   {formatIndian(prodData.mtd_ob_plan)}
+                </td>
+                <td className="px-3 py-3 text-right font-mono font-bold text-white text-[12px]">
+                  {formatIndian(prodData.mtd_ob_actual)}
                 </td>
                 <td className="px-3 py-3 text-right"><PctPill pct={mtdObPct} /></td>
                 {/* COB */}
-                <td className="px-3 py-3 text-right font-mono font-bold text-white text-[12px] border-l border-white/10">
-                  {formatIndian(prodData.mtd_cob_actual)}
-                </td>
-                <td className="px-3 py-3 text-right font-mono text-white/50 text-[12px]">
+                <td className="px-3 py-3 text-right font-mono text-white/50 text-[12px] border-l border-white/10">
                   {formatIndian(prodData.mtd_cob_plan)}
+                </td>
+                <td className="px-3 py-3 text-right font-mono font-bold text-white text-[12px]">
+                  {formatIndian(prodData.mtd_cob_actual)}
                 </td>
                 <td className="px-3 py-3 text-right"><PctPill pct={mtdCobPct} /></td>
                 {/* SILT */}
