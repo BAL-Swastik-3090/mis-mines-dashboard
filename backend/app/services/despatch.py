@@ -77,6 +77,7 @@ _ACTUAL_SQL = """
         FROM zsd_outbound_despatch
         WHERE DATE(GATEINDATE) BETWEEN :f AND :t
           AND CUSTOMERNO IN ('BAL', 'JABAMOYEE')
+          AND TRANSPORTER = 'SHREE GANESH LOGISTICS'
         GROUP BY DELIVERYNO
     ) z
     GROUP BY DATE(z.GATEINDATE)
@@ -112,6 +113,7 @@ def get_actuals_summary(db: Session, from_date: date, to_date: date) -> dict:
             FROM zsd_outbound_despatch
             WHERE DATE(GATEINDATE) BETWEEN :f AND :t
               AND CUSTOMERNO IN ('BAL', 'JABAMOYEE')
+              AND TRANSPORTER = 'SHREE GANESH LOGISTICS'
             GROUP BY DELIVERYNO
         ) z
     """)
