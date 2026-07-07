@@ -79,12 +79,12 @@ export default function CobDaywiseTable() {
               </th>
             </tr>
             <tr className="bg-bg-soft border-b border-border-light text-[11px] text-txt-light font-semibold">
-              <th className="px-2 py-1.5 text-right border-l border-border-light">Act</th>
-              <th className="px-2 py-1.5 text-right">Plan</th>
-              <th className="px-2 py-1.5 text-right">%</th>
-              <th className="px-2 py-1.5 text-right border-l border-border-light">Act</th>
-              <th className="px-2 py-1.5 text-right">Plan</th>
-              <th className="px-2 py-1.5 text-right">%</th>
+              <th className="px-2 py-1.5 text-right border-l border-border-light">Plan</th>
+              <th className="px-2 py-1.5 text-right">Act</th>
+              <th className="px-2 py-1.5 text-right">Achieved %</th>
+              <th className="px-2 py-1.5 text-right border-l border-border-light">Plan</th>
+              <th className="px-2 py-1.5 text-right">Act</th>
+              <th className="px-2 py-1.5 text-right">Achieved %</th>
               <th className="px-2 py-1.5 text-right border-l border-border-light">Act</th>
               <th className="px-2 py-1.5 text-right">Plan</th>
               <th className="px-2 py-1.5 text-right border-l border-border-light">Act</th>
@@ -119,16 +119,16 @@ export default function CobDaywiseTable() {
                       {isLatest && <span className="ml-1.5 inline-block w-1.5 h-1.5 rounded-full bg-success align-middle" />}
                     </td>
                     {/* Feed */}
-                    <td className="px-2 py-2 text-right font-mono text-navy border-l border-border-light">
-                      <Num v={r.feed_actual} />
+                    <td className="px-2 py-2 text-right font-mono text-txt-muted border-l border-border-light">
+                      <Num v={r.feed_plan} />
                     </td>
-                    <td className="px-2 py-2 text-right font-mono text-txt-muted"><Num v={r.feed_plan} /></td>
+                    <td className="px-2 py-2 text-right font-mono text-navy"><Num v={r.feed_actual} /></td>
                     <td className="px-2 py-2 text-right"><PctPill pct={pctOf(r.feed_actual, r.feed_plan)} /></td>
                     {/* COB */}
-                    <td className="px-2 py-2 text-right font-mono text-navy border-l border-border-light">
-                      <Num v={r.cob_actual} />
+                    <td className="px-2 py-2 text-right font-mono text-txt-muted border-l border-border-light">
+                      <Num v={r.cob_plan} />
                     </td>
-                    <td className="px-2 py-2 text-right font-mono text-txt-muted"><Num v={r.cob_plan} /></td>
+                    <td className="px-2 py-2 text-right font-mono text-navy"><Num v={r.cob_actual} /></td>
                     <td className="px-2 py-2 text-right"><PctPill pct={pctOf(r.cob_actual, r.cob_plan)} /></td>
                     {/* Tailings */}
                     <td className="px-2 py-2 text-right font-mono text-navy border-l border-border-light">
@@ -171,21 +171,21 @@ export default function CobDaywiseTable() {
                   MTD
                 </td>
                 {/* Feed MTD */}
-                <td className="px-2 py-3 text-right font-mono font-bold text-white text-[12px] border-l border-white/10">
-                  {formatIndian(data.mtd_feed_actual)}
-                </td>
-                <td className="px-2 py-3 text-right font-mono text-white/50 text-[12px]">
+                <td className="px-2 py-3 text-right font-mono text-white/50 text-[12px] border-l border-white/10">
                   {formatIndian(data.mtd_feed_plan)}
+                </td>
+                <td className="px-2 py-3 text-right font-mono font-bold text-white text-[12px]">
+                  {formatIndian(data.mtd_feed_actual)}
                 </td>
                 <td className="px-2 py-3 text-right">
                   <PctPill pct={pctOf(data.mtd_feed_actual, data.mtd_feed_plan)} />
                 </td>
                 {/* COB MTD */}
-                <td className="px-2 py-3 text-right font-mono font-bold text-white text-[12px] border-l border-white/10">
-                  {formatIndian(data.mtd_cob_actual)}
-                </td>
-                <td className="px-2 py-3 text-right font-mono text-white/50 text-[12px]">
+                <td className="px-2 py-3 text-right font-mono text-white/50 text-[12px] border-l border-white/10">
                   {formatIndian(data.mtd_cob_plan)}
+                </td>
+                <td className="px-2 py-3 text-right font-mono font-bold text-white text-[12px]">
+                  {formatIndian(data.mtd_cob_actual)}
                 </td>
                 <td className="px-2 py-3 text-right">
                   <PctPill pct={pctOf(data.mtd_cob_actual, data.mtd_cob_plan)} />
