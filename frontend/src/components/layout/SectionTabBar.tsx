@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import {
-  Cloud, Package, Building2, BarChart3,
+  Cloud, Building2, BarChart3,
   Layers, FlaskConical, Wrench, Droplets,
   Target, Sparkles, Download, Check,
 } from "lucide-react";
@@ -12,7 +12,7 @@ import { downloadDashboard }  from "@/utils/downloadDashboard";
 
 const TABS = [
   { id: "weather",        label: "Weather",        icon: Cloud        },
-  { id: "stock",          label: "Stock",           icon: Package      },
+  // { id: "stock",          label: "Stock",           icon: Package      },  // hidden — SAP data not maintained
   { id: "plant",          label: "Plant",           icon: Building2    },
   { id: "production",     label: "Production",      icon: BarChart3    },
   { id: "ob",             label: "OB Excavation",   icon: Layers       },
