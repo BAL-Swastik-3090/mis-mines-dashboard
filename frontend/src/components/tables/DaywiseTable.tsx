@@ -122,20 +122,20 @@ export default function DaywiseTable() {
               {/* ORE sub */}
               <th className="px-3 py-1.5 text-right border-l border-border-light">Plan</th>
               <th className="px-3 py-1.5 text-right">Act</th>
-              <th className="px-3 py-1.5 text-right">%</th>
+              <th className="px-3 py-1.5 text-right">Achieved %</th>
               {/* OB sub */}
               <th className="px-3 py-1.5 text-right border-l border-border-light">Plan</th>
               <th className="px-3 py-1.5 text-right">Act</th>
-              <th className="px-3 py-1.5 text-right">%</th>
+              <th className="px-3 py-1.5 text-right">Achieved %</th>
               {/* COB sub */}
               <th className="px-3 py-1.5 text-right border-l border-border-light">Plan</th>
               <th className="px-3 py-1.5 text-right">Act</th>
-              <th className="px-3 py-1.5 text-right">%</th>
+              <th className="px-3 py-1.5 text-right">Achieved %</th>
               {/* Silt — rowSpan covers sub-header row */}
               {/* Despatch sub */}
               <th className="px-3 py-1.5 text-right border-l border-border-light">Plan</th>
               <th className="px-3 py-1.5 text-right">Actual</th>
-              <th className="px-3 py-1.5 text-right text-orange">%</th>
+              <th className="px-3 py-1.5 text-right text-orange">Achieved %</th>
             </tr>
           </thead>
 
