@@ -19,42 +19,49 @@ function PlantPanel({
   isLast: boolean;
 }) {
   return (
-    <div className={`flex-1 px-5 py-3.5 bg-bg-soft ${!isLast ? "border-r border-border-light" : ""}`}>
-      {/* Label */}
-      <div className="text-[10px] font-extrabold tracking-[.18em] text-txt-light uppercase mb-2">
-        {name}
+    <div className={`flex-1 bg-bg-soft ${!isLast ? "border-r border-border-light" : ""} flex flex-col`}>
+      <div className="px-5 py-3.5 flex-1">
+        {/* Label */}
+        <div className="text-[10px] font-extrabold tracking-[.18em] text-txt-light uppercase mb-2">
+          {name}
+        </div>
+
+        {/* Total */}
+        {loading ? (
+          <Shimmer w="w-32" h="h-8 bg-bg-section" />
+        ) : (
+          <div className="font-condensed font-extrabold text-[28px] xl:text-[32px] text-navy leading-none tracking-tight">
+            {formatIndian(data?.total ?? null)}
+            <span className="text-sm font-normal text-txt-muted ml-1.5">MT</span>
+          </div>
+        )}
+
+        {/* MT/day */}
+        {loading ? (
+          <div className="mt-1.5"><Shimmer w="w-24" h="h-4 bg-bg-section" /></div>
+        ) : (
+          <div className="mt-1 font-condensed font-bold text-[15px] text-txt-secondary leading-tight">
+            {data?.per_day != null ? data.per_day.toFixed(1) : "—"}
+            <span className="text-[12px] font-normal text-txt-muted ml-1">MT/day</span>
+          </div>
+        )}
+
+        {/* Share % */}
+        {!loading && data && (
+          <div className="mt-2 text-[11px] text-txt-muted flex items-center gap-1.5">
+            <span
+              className="inline-block h-1.5 rounded-full shrink-0"
+              style={{ width: `${Math.max(data.share_pct, 4)}%`, maxWidth: "72px", background: name.includes("BAL") ? "#1565c0" : "#c8960c" }}
+            />
+            {data.share_pct.toFixed(1)}% share of total output
+          </div>
+        )}
       </div>
-
-      {/* Total */}
-      {loading ? (
-        <Shimmer w="w-32" h="h-8 bg-bg-section" />
-      ) : (
-        <div className="font-condensed font-extrabold text-[28px] xl:text-[32px] text-navy leading-none tracking-tight">
-          {formatIndian(data?.total ?? null)}
-          <span className="text-sm font-normal text-txt-muted ml-1.5">MT</span>
-        </div>
-      )}
-
-      {/* MT/day */}
-      {loading ? (
-        <div className="mt-1.5"><Shimmer w="w-24" h="h-4 bg-bg-section" /></div>
-      ) : (
-        <div className="mt-1 font-condensed font-bold text-[15px] text-txt-secondary leading-tight">
-          {data?.per_day != null ? data.per_day.toFixed(1) : "—"}
-          <span className="text-[12px] font-normal text-txt-muted ml-1">MT/day</span>
-        </div>
-      )}
-
-      {/* Share % */}
-      {!loading && data && (
-        <div className="mt-2 text-[11px] text-txt-muted flex items-center gap-1.5">
-          <span
-            className="inline-block h-1.5 rounded-full shrink-0"
-            style={{ width: `${Math.max(data.share_pct, 4)}%`, maxWidth: "72px", background: name.includes("BAL") ? "#1565c0" : "#c8960c" }}
-          />
-          {data.share_pct.toFixed(1)}% share of total output
-        </div>
-      )}
+      <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
+        <p className="text-[9px] font-mono text-success/70 leading-tight">
+          <span className="font-semibold text-success/60">ACTUAL · </span>SAP
+        </p>
+      </div>
     </div>
   );
 }

@@ -31,21 +31,24 @@ function Shimmer({ w = "w-24", h = "h-5" }: { w?: string; h?: string }) {
 
 // ── KPI card: Actual vs Plan (Daily & MTD) ────────────────────
 interface PairCardProps {
-  label:       string;
-  sub?:        string;
-  accentClass: string;
-  iconBg:      string;
-  iconColor:   string;
-  actual:      number | null;
-  plan:        number | null;
-  pct:         number | null;
-  unit:        string;
-  loading:     boolean;
+  label:        string;
+  sub?:         string;
+  accentClass:  string;
+  iconBg:       string;
+  iconColor:    string;
+  actual:       number | null;
+  plan:         number | null;
+  pct:          number | null;
+  unit:         string;
+  loading:      boolean;
+  sourcePlan?:  string;
+  sourceActual?: string;
 }
 
 function PairCard({
   label, sub, accentClass, iconBg, iconColor,
   actual, plan, pct, unit, loading,
+  sourcePlan, sourceActual,
 }: PairCardProps) {
   const variance = actual != null && plan != null ? actual - plan : null;
 
@@ -98,25 +101,41 @@ function PairCard({
           </>
         )}
       </div>
+      {(sourcePlan || sourceActual) && (
+        <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
+          {sourcePlan && (
+            <p className="text-[9px] font-mono text-success/70 leading-tight">
+              <span className="font-semibold text-success/60">PLAN · </span>{sourcePlan}
+            </p>
+          )}
+          {sourceActual && (
+            <p className="text-[9px] font-mono text-success/70 leading-tight">
+              <span className="font-semibold text-success/60">ACTUAL · </span>{sourceActual}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 // ── KPI card: Single value stat ───────────────────────────────
 interface StatCardProps {
-  label:       string;
-  sub?:        string;
-  accentClass: string;
-  valueColor:  string;
-  value:       number | null;
-  unit:        string;
-  note?:       string | null;
-  loading:     boolean;
+  label:        string;
+  sub?:         string;
+  accentClass:  string;
+  valueColor:   string;
+  value:        number | null;
+  unit:         string;
+  note?:        string | null;
+  loading:      boolean;
+  sourceActual?: string;
 }
 
 function StatCard({
   label, sub, accentClass, valueColor,
   value, unit, note, loading,
+  sourceActual,
 }: StatCardProps) {
   return (
     <div className={`bg-white border border-border rounded-lg shadow-sm ${accentClass} flex flex-col overflow-hidden`}>
@@ -152,6 +171,13 @@ function StatCard({
           </div>
         )}
       </div>
+      {sourceActual && (
+        <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
+          <p className="text-[9px] font-mono text-success/70 leading-tight">
+            <span className="font-semibold text-success/60">ACTUAL · </span>{sourceActual}
+          </p>
+        </div>
+      )}
     </div>
   );
 }
@@ -177,6 +203,8 @@ function DailyKpiRow({ today, loading }: { today: DewateringTodayKpi; loading: b
         pct={today?.disposal_pct ?? null}
         unit="M³"
         loading={loading}
+        sourcePlan="IMOS"
+        sourceActual="IMOS"
       />
       <PairCard
         label="Pump Run Hours"
@@ -189,6 +217,8 @@ function DailyKpiRow({ today, loading }: { today: DewateringTodayKpi; loading: b
         pct={today?.pump_pct ?? null}
         unit="Hrs"
         loading={loading}
+        sourcePlan="IMOS"
+        sourceActual="IMOS"
       />
       <StatCard
         label="Closing Stock"
@@ -199,6 +229,7 @@ function DailyKpiRow({ today, loading }: { today: DewateringTodayKpi; loading: b
         unit="M³"
         note={deltaNote}
         loading={loading}
+        sourceActual="IMOS"
       />
       <StatCard
         label="Pump Capacity"
@@ -209,6 +240,7 @@ function DailyKpiRow({ today, loading }: { today: DewateringTodayKpi; loading: b
         unit="M³/Hr"
         note={null}
         loading={loading}
+        sourceActual="IMOS"
       />
       <StatCard
         label="Eddy Pump"
@@ -219,6 +251,7 @@ function DailyKpiRow({ today, loading }: { today: DewateringTodayKpi; loading: b
         unit="Mins"
         note={null}
         loading={loading}
+        sourceActual="IMOS"
       />
     </div>
   );
@@ -243,6 +276,8 @@ function MtdKpiRow({ mtd, loading }: { mtd: DewateringMtdKpi; loading: boolean }
         pct={mtd?.mtd_disposal_pct ?? null}
         unit="M³"
         loading={loading}
+        sourcePlan="IMOS"
+        sourceActual="IMOS"
       />
       <PairCard
         label="MTD Pump Hours"
@@ -254,6 +289,8 @@ function MtdKpiRow({ mtd, loading }: { mtd: DewateringMtdKpi; loading: boolean }
         pct={mtd?.mtd_pump_pct ?? null}
         unit="Hrs"
         loading={loading}
+        sourcePlan="IMOS"
+        sourceActual="IMOS"
       />
       <StatCard
         label="Rain Inflow MTD"
@@ -264,6 +301,7 @@ function MtdKpiRow({ mtd, loading }: { mtd: DewateringMtdKpi; loading: boolean }
         unit="M³"
         note={null}
         loading={loading}
+        sourceActual="IMOS"
       />
       <StatCard
         label="Net Stock Change"
@@ -274,6 +312,7 @@ function MtdKpiRow({ mtd, loading }: { mtd: DewateringMtdKpi; loading: boolean }
         unit="M³"
         note={null}
         loading={loading}
+        sourceActual="IMOS"
       />
     </div>
   );

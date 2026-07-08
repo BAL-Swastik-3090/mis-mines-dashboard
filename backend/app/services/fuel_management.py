@@ -198,6 +198,96 @@ def _fetch_trend(db: Session, start_date: str, end_date: str) -> list:
     return sorted(combined.values(), key=lambda x: x["date"])
 
 
+_VEHICLE_HISTORY_QUERY = """
+SELECT
+    v.report_date,
+    v.engine_hours,
+    v.fuel_consumed,
+    v.lph,
+    v.initial_fuel_level,
+    v.final_fuel_level,
+    v.filled,
+    v.drained,
+    v.total_fillings,
+    v.total_drains
+FROM {table} v
+INNER JOIN (
+    SELECT report_date, MAX(row_id) AS latest_id
+    FROM {table}
+    WHERE vehicle_desc = :vehicle_desc
+      AND report_date BETWEEN :start_date AND :end_date
+    GROUP BY report_date
+) latest ON v.report_date = latest.report_date AND v.row_id = latest.latest_id
+WHERE v.vehicle_desc = :vehicle_desc
+ORDER BY v.report_date
+"""
+
+
+def get_vehicle_history(db: Session, vehicle_desc: str, days: int = 7) -> dict | None:
+    end_date   = date.today() - timedelta(days=1)
+    start_date = end_date - timedelta(days=days - 1)
+
+    history: dict = {}
+    found_table: str | None = None
+
+    for table in [
+        "mines_technoton_man_utilization",
+        "mines_technoton_rest_equipment_utilization",
+    ]:
+        rows = db.execute(
+            text(_VEHICLE_HISTORY_QUERY.format(table=table)),
+            {
+                "vehicle_desc": vehicle_desc,
+                "start_date":   start_date.isoformat(),
+                "end_date":     end_date.isoformat(),
+            },
+        ).fetchall()
+
+        if rows:
+            found_table = table
+            for row in rows:
+                (
+                    report_date, engine_hours, fuel_consumed, lph,
+                    initial_fuel_level, final_fuel_level,
+                    filled, drained, total_fillings, total_drains,
+                ) = row
+                date_str = (
+                    report_date.isoformat()
+                    if hasattr(report_date, "isoformat")
+                    else str(report_date)
+                )
+                has_data = float(initial_fuel_level or 0) > 0
+                tank_cap = _resolve_tank_capacity(vehicle_desc)
+                fuel_lvl = float(final_fuel_level or 0)
+                pct      = _fuel_pct(fuel_lvl, tank_cap) if has_data else 0.0
+                history[date_str] = {
+                    "date":           date_str,
+                    "engine_hours":   _time_to_hours(engine_hours),
+                    "fuel_consumed":  round(float(fuel_consumed or 0), 1),
+                    "lph":            round(float(lph or 0), 2),
+                    "fuel_pct":       pct,
+                    "filled_litres":  round(float(filled or 0), 1),
+                    "drained_litres": round(float(drained or 0), 1),
+                    "total_fillings": int(total_fillings or 0),
+                    "total_drains":   int(total_drains or 0),
+                }
+            break  # vehicle found in this table — no need to check the other
+
+    if not history:
+        return None
+
+    return {
+        "vehicle_desc":  vehicle_desc,
+        "display_name":  _clean_name(vehicle_desc),
+        "category":      _category_from_desc(vehicle_desc),
+        "tank_capacity": _resolve_tank_capacity(vehicle_desc),
+        "source_table":  found_table,
+        "from_date":     start_date.isoformat(),
+        "to_date":       end_date.isoformat(),
+        "days":          sorted(history.values(), key=lambda x: x["date"]),
+    }
+
+
 def get_fuel_overview(db: Session) -> dict:
     today       = date.today().isoformat()
     yesterday   = (date.today() - timedelta(days=1)).isoformat()

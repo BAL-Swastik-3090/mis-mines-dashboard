@@ -200,6 +200,14 @@ export default function CobCharts() {
           <span className="text-[11px] text-txt-muted font-mono">{rows.length} days</span>
         </div>
         <ReactECharts option={qtyOption} style={{ height: 220 }} opts={{ renderer: "canvas" }} notMerge />
+        <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
+          <p className="text-[9px] font-mono text-success/70 leading-tight">
+            <span className="font-semibold text-success/60">PLAN · </span>IMOS
+          </p>
+          <p className="text-[9px] font-mono text-success/70 leading-tight">
+            <span className="font-semibold text-success/60">ACTUAL · </span>SAP
+          </p>
+        </div>
       </div>
 
       {/* Grade chart — 2/5 */}
@@ -227,6 +235,14 @@ export default function CobCharts() {
           </div>
         </div>
         <ReactECharts option={gradeOption} style={{ height: 220 }} opts={{ renderer: "canvas" }} notMerge />
+        <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
+          <p className="text-[9px] font-mono text-success/70 leading-tight">
+            <span className="font-semibold text-success/60">PLAN · </span>IMOS
+          </p>
+          <p className="text-[9px] font-mono text-success/70 leading-tight">
+            <span className="font-semibold text-success/60">ACTUAL · </span>Input &amp; Output Cr₂O₃ → SAP · Tailings Cr₂O₃ → IMOS
+          </p>
+        </div>
       </div>
     </div>
   );

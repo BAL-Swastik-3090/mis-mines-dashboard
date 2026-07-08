@@ -16,10 +16,10 @@ function tdDateLabel(dateStr: string | undefined): string {
 
 // ── TD footer row ──────────────────────────────────────────────
 function TdFooter({
-  label, value, unit, precision = 0, loading,
+  label, value, unit, precision = 0, loading, showCuM = false,
 }: {
   label: string; value: number | null | undefined;
-  unit: string; precision?: number; loading: boolean;
+  unit: string; precision?: number; loading: boolean; showCuM?: boolean;
 }) {
   return (
     <div className="px-4 py-2.5 border-t border-border-light bg-bg-light flex items-center justify-between mt-auto">
@@ -27,12 +27,19 @@ function TdFooter({
       {loading ? (
         <div className="h-3.5 w-16 bg-bg-section animate-pulse rounded" />
       ) : (
-        <span className="font-mono font-semibold text-[12px] text-navy">
-          {value != null
-            ? precision > 0
-              ? `${value.toFixed(precision)} ${unit}`
-              : `${formatIndian(value)} ${unit}`
-            : "—"}
+        <span className="font-mono font-semibold text-[12px] text-navy whitespace-nowrap">
+          {value != null ? (
+            <>
+              {precision > 0 ? `${value.toFixed(precision)} ${unit}` : `${formatIndian(value)} ${unit}`}
+              {showCuM && (
+                <>
+                  <span className="text-[10px] font-normal text-txt-muted mx-1">/</span>
+                  {formatIndian(Math.round(value / 3))}{" "}
+                  <span className="text-[10px] font-normal text-txt-muted">CuM</span>
+                </>
+              )}
+            </>
+          ) : "—"}
         </span>
       )}
     </div>
@@ -41,20 +48,24 @@ function TdFooter({
 
 // ── Quantity card (Feed / COB / Tailings) ──────────────────────
 interface QtyCardProps {
-  label:       string;
-  unit:        string;
-  accentClass: string;
-  dotColor:    string;
-  actual:      number;
-  plan:        number;
-  tdValue:     number | null | undefined;
-  tdLabel:     string;
-  loading:     boolean;
+  label:        string;
+  unit:         string;
+  accentClass:  string;
+  dotColor:     string;
+  actual:       number;
+  plan:         number;
+  tdValue:      number | null | undefined;
+  tdLabel:      string;
+  loading:      boolean;
+  showCuM?:     boolean;
+  sourcePlan?:  string;
+  sourceActual?: string;
 }
 
 function QtyCard({
   label, unit, accentClass, dotColor,
   actual, plan, tdValue, tdLabel, loading,
+  showCuM = false, sourcePlan, sourceActual,
 }: QtyCardProps) {
   const pct      = plan > 0 ? Math.round((actual / plan) * 1000) / 10 : null;
   const progress = pct != null ? Math.min(Math.max(pct, 0), 100) : 0;
@@ -84,6 +95,13 @@ function QtyCard({
           <div className="font-condensed font-extrabold text-[28px] xl:text-[32px] text-navy leading-none tracking-tight">
             {formatIndian(actual)}
             <span className="text-xs font-normal text-txt-muted ml-1.5">{unit}</span>
+            {showCuM && actual != null && (
+              <>
+                <span className="text-[20px] xl:text-[22px] font-normal text-txt-muted mx-1.5">/</span>
+                {formatIndian(Math.round(actual / 3))}
+                <span className="text-xs font-normal text-txt-muted ml-1.5">CuM</span>
+              </>
+            )}
           </div>
         )}
         {!loading && (
@@ -112,29 +130,48 @@ function QtyCard({
       </div>
 
       {/* TD footer */}
-      <TdFooter label={tdLabel} value={tdValue} unit={unit} loading={loading} />
+      <TdFooter label={tdLabel} value={tdValue} unit={unit} loading={loading} showCuM={showCuM} />
+
+      {/* Data source strip */}
+      {(sourcePlan || sourceActual) && (
+        <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
+          {sourcePlan && (
+            <p className="text-[9px] font-mono text-success/70 leading-tight">
+              <span className="font-semibold text-success/60">PLAN · </span>{sourcePlan}
+            </p>
+          )}
+          {sourceActual && (
+            <p className="text-[9px] font-mono text-success/70 leading-tight">
+              <span className="font-semibold text-success/60">ACTUAL · </span>{sourceActual}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 // ── Rate card (Yield % / I/O Ratio) ───────────────────────────
 interface RateCardProps {
-  label:       string;
-  actual:      number | null;
-  plan:        number | null;
-  unit:        string;
-  precision:   number;
-  accentClass: string;
-  dotColor:    string;
-  tdValue:     number | null | undefined;
-  tdLabel:     string;
-  loading:     boolean;
-  note:        string;
+  label:        string;
+  actual:       number | null;
+  plan:         number | null;
+  unit:         string;
+  precision:    number;
+  accentClass:  string;
+  dotColor:     string;
+  tdValue:      number | null | undefined;
+  tdLabel:      string;
+  loading:      boolean;
+  note:         string;
+  sourcePlan?:  string;
+  sourceActual?: string;
 }
 
 function RateCard({
   label, actual, plan, unit, precision,
   accentClass, dotColor, tdValue, tdLabel, loading, note,
+  sourcePlan, sourceActual,
 }: RateCardProps) {
   const diff     = actual != null && plan != null ? actual - plan : null;
   const goodHigh = unit === "%";   // yield% → higher is better; I/O → lower is better
@@ -190,6 +227,22 @@ function RateCard({
         precision={precision}
         loading={loading}
       />
+
+      {/* Data source strip */}
+      {(sourcePlan || sourceActual) && (
+        <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
+          {sourcePlan && (
+            <p className="text-[9px] font-mono text-success/70 leading-tight">
+              <span className="font-semibold text-success/60">PLAN · </span>{sourcePlan}
+            </p>
+          )}
+          {sourceActual && (
+            <p className="text-[9px] font-mono text-success/70 leading-tight">
+              <span className="font-semibold text-success/60">ACTUAL · </span>{sourceActual}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -225,6 +278,8 @@ export default function CobKpiStrip() {
         tdValue={latestRow?.feed_actual}
         tdLabel={tdLabel}
         loading={isLoading}
+        sourcePlan="IMOS"
+        sourceActual="SAP"
       />
 
       {/* COB Production */}
@@ -237,6 +292,9 @@ export default function CobKpiStrip() {
         tdValue={latestRow?.cob_actual}
         tdLabel={tdLabel}
         loading={isLoading}
+        showCuM
+        sourcePlan="IMOS"
+        sourceActual="SAP"
       />
 
       {/* Tailings */}
@@ -249,6 +307,8 @@ export default function CobKpiStrip() {
         tdValue={latestRow?.tailings_actual}
         tdLabel={tdLabel}
         loading={isLoading}
+        sourcePlan="IMOS"
+        sourceActual="SAP"
       />
 
       {/* Yield % */}
@@ -262,6 +322,8 @@ export default function CobKpiStrip() {
         tdLabel={tdLabel}
         loading={isLoading}
         note="COB ÷ Feed × 100"
+        sourcePlan="IMOS"
+        sourceActual="SAP"
       />
 
       {/* I/O Ratio */}
@@ -279,6 +341,8 @@ export default function CobKpiStrip() {
         tdLabel={tdLabel}
         loading={isLoading}
         note="Feed ÷ COB Production"
+        sourcePlan="IMOS"
+        sourceActual="SAP"
       />
     </div>
   );

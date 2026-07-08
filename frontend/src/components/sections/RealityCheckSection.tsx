@@ -164,7 +164,7 @@ export default function RealityCheckSection() {
             <tbody>
               {isLoading
                 ? Array.from({ length: 5 }).map((_, i) => <RcRow key={i} loading />)
-                : (data?.rows ?? []).map((row) => (
+                : (data?.rows ?? []).filter((row) => row.kpi !== "Water Disposal").map((row) => (
                     <RcRow key={row.kpi} row={row} loading={false} />
                   ))}
             </tbody>
@@ -182,6 +182,16 @@ export default function RealityCheckSection() {
               </span>
             );
           })}
+        </div>
+
+        {/* Data source attribution */}
+        <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
+          <p className="text-[9px] font-mono text-success/70 leading-tight">
+            <span className="font-semibold text-success/60">PLAN · </span>Ore &amp; OB → IMOS · COB → IMOS · Despatch → IMOS · Disposal → IMOS
+          </p>
+          <p className="text-[9px] font-mono text-success/70 leading-tight">
+            <span className="font-semibold text-success/60">ACTUAL · </span>Ore &amp; COB → SAP · OB → IMOS · Despatch → SAP · Disposal → IMOS
+          </p>
         </div>
       </div>
     </section>

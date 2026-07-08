@@ -284,6 +284,16 @@ export default function DaywiseTable() {
           )}
         </table>
       </div>
+
+      {/* Data source attribution */}
+      <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
+        <p className="text-[9px] font-mono text-success/70 leading-tight">
+          <span className="font-semibold text-success/60">PLAN · </span>Ore &amp; OB → IMOS · COB → IMOS · Despatch → IMOS
+        </p>
+        <p className="text-[9px] font-mono text-success/70 leading-tight">
+          <span className="font-semibold text-success/60">ACTUAL · </span>Ore &amp; COB → SAP · OB &amp; Silt → IMOS · Despatch → SAP
+        </p>
+      </div>
     </div>
   );
 }

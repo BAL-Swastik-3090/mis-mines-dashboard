@@ -195,24 +195,17 @@ def compute_reality_check(
     remaining    = (last - to_date).days
     cycle_pct    = round(elapsed / total_days * 100, 1)
 
-    # Check if plan data exists for current month; fall back to latest available
-    trial        = _ore_ob_full_month_plan(db, first, last)
-    if trial["ore"] == 0 and trial["ob"] == 0:
-        plan_first, plan_last = _latest_plan_month(db)
-        plan_fallback = (plan_first.month != first.month or plan_first.year != first.year)
-    else:
-        plan_first, plan_last = first, last
-        plan_fallback = False
+    plans         = _ore_ob_full_month_plan(db, first, last)
+    actuals       = _production_mtd(db, from_date, to_date)
+    dew_full      = _dewatering_mtd(db, first, last)        # full month bounds — plan column
+    dew           = _dewatering_mtd(db, from_date, to_date) # MTD range — actual column
 
-    plans   = _ore_ob_full_month_plan(db, plan_first, plan_last)
-    actuals = _production_mtd(db, from_date, to_date)
-    dew     = _dewatering_mtd(db, from_date, to_date)
-
-    cob_plan      = _cob_full_month_plan(db, plan_first, plan_last)
-    desp_plan     = _despatch_full_month_plan(db, plan_first, plan_last)
+    cob_plan      = _cob_full_month_plan(db, first, last)
+    desp_plan     = _despatch_full_month_plan(db, first, last)
     desp_act      = _despatch_mtd_actual(db, from_date, to_date)
 
-    plan_month_label = plan_first.strftime("%b %Y")
+    plan_month_label = first.strftime("%b %Y")
+    plan_fallback    = False
 
     def make_row(kpi, unit, plan, actual) -> RealityCheckRow:
         if actual is None:
@@ -246,7 +239,7 @@ def compute_reality_check(
         make_row("OB Excavation",    "CuM", plans["ob"],    actuals["ob"]),
         make_row("COB Production",   "MT",  cob_plan,       actuals["cob"]),
         make_row("Despatch",         "MT",  desp_plan,      desp_act),
-        make_row("Water Disposal",   "M³",  dew["disp_plan"], dew["disp_act"]),
+        make_row("Water Disposal",   "M³",  dew_full["disp_plan"], dew["disp_act"]),
     ]
 
     return RealityCheckResponse(
@@ -297,7 +290,7 @@ def _equipment_summary(db: Session, from_date: date, to_date: date) -> dict:
         total_excavators = 7
 
         bd_row = db.execute(text("""
-            SELECT ROUND(SUM(BREAKDOWN_DURAION), 1) AS total_bd_hrs,
+            SELECT ROUND(SUM(BREAKDOWN_DURAION) / 3600.0, 1) AS total_bd_hrs,
                    COUNT(*) AS bd_events
             FROM zpm_iw29_notifications
             WHERE MAINTENANCE_PLANT = '1200'
