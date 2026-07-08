@@ -288,6 +288,80 @@ def get_vehicle_history(db: Session, vehicle_desc: str, days: int = 7) -> dict |
     }
 
 
+_VEHICLE_INTRADAY_QUERY = """
+SELECT
+    v.tripDate,
+    v.fuel_consumed,
+    v.lph,
+    v.final_fuel_level,
+    v.engine_hours
+FROM {table} v
+WHERE v.vehicle_desc = :vehicle_desc
+  AND v.report_date  = :today
+ORDER BY v.tripDate ASC
+"""
+
+
+def get_vehicle_intraday(db: Session, vehicle_desc: str) -> dict | None:
+    from datetime import datetime
+    today = date.today().isoformat()
+    rows_found = []
+    source_table = None
+
+    for table in [
+        "mines_technoton_man_utilization",
+        "mines_technoton_rest_equipment_utilization",
+    ]:
+        rows = db.execute(
+            text(_VEHICLE_INTRADAY_QUERY.format(table=table)),
+            {"vehicle_desc": vehicle_desc, "today": today},
+        ).fetchall()
+        if rows:
+            rows_found = rows
+            source_table = table
+            break
+
+    if not rows_found:
+        return None
+
+    tank_cap = _resolve_tank_capacity(vehicle_desc)
+    readings = []
+    for row in rows_found:
+        trip_date, fuel_consumed, lph, final_fuel_level, engine_hours = row
+        # Extract HH:MM from tripDate (datetime or string)
+        if hasattr(trip_date, "strftime"):
+            time_str = trip_date.strftime("%H:%M")
+        elif trip_date and "T" in str(trip_date):
+            time_str = str(trip_date).split("T")[1][:5]
+        elif trip_date and " " in str(trip_date):
+            time_str = str(trip_date).split(" ")[1][:5]
+        else:
+            time_str = str(trip_date or "")[:5]
+
+        fuel_lvl = float(final_fuel_level or 0)
+        pct = _fuel_pct(fuel_lvl, tank_cap)
+        readings.append({
+            "time":          time_str,
+            "fuel_level_l":  round(fuel_lvl, 1),
+            "fuel_pct":      pct,
+            "fuel_consumed": round(float(fuel_consumed or 0), 1),
+            "lph":           round(float(lph or 0), 2),
+            "engine_hours":  _time_to_hours(engine_hours),
+        })
+
+    latest = readings[-1] if readings else None
+    return {
+        "vehicle_desc":  vehicle_desc,
+        "display_name":  _clean_name(vehicle_desc),
+        "category":      _category_from_desc(vehicle_desc),
+        "tank_capacity": tank_cap,
+        "date":          today,
+        "reading_count": len(readings),
+        "latest":        latest,
+        "readings":      readings,
+    }
+
+
 def get_fuel_overview(db: Session) -> dict:
     today       = date.today().isoformat()
     yesterday   = (date.today() - timedelta(days=1)).isoformat()
