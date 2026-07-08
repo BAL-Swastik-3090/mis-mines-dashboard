@@ -26,16 +26,17 @@ function Shimmer({ w = "w-20", h = "h-6" }: { w?: string; h?: string }) {
 
 // ── MTTR / MTBF KPI card ──────────────────────────────────────
 interface MtCard {
-  label:       string;
-  sub:         string;
-  value:       number | null;
-  count:       number;
-  accentClass: string;
-  valueColor:  string;
-  loading:     boolean;
+  label:        string;
+  sub:          string;
+  value:        number | null;
+  count:        number;
+  accentClass:  string;
+  valueColor:   string;
+  loading:      boolean;
+  sourceActual?: string;
 }
 
-function MtKpiCard({ label, sub, value, count, accentClass, valueColor, loading }: MtCard) {
+function MtKpiCard({ label, sub, value, count, accentClass, valueColor, loading, sourceActual }: MtCard) {
   return (
     <div className={`bg-white border border-border rounded-lg shadow-sm ${accentClass} flex flex-col overflow-hidden`}>
       <div className="px-4 pt-3 pb-1">
@@ -65,6 +66,13 @@ function MtKpiCard({ label, sub, value, count, accentClass, valueColor, loading 
           <div className="font-condensed font-bold text-[22px] text-txt-light/40">—</div>
         )}
       </div>
+      {sourceActual && (
+        <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
+          <p className="text-[9px] font-mono text-success/70 leading-tight">
+            <span className="font-semibold text-success/60">ACTUAL · </span>{sourceActual}
+          </p>
+        </div>
+      )}
     </div>
   );
 }
@@ -76,40 +84,44 @@ function MtrrMtbfStrip() {
 
   const cards: MtCard[] = [
     {
-      label:       "Excavator MTTR",
-      sub:         "Mean Time To Repair",
-      value:       excData?.fleet_mttr ?? null,
-      count:       excData?.total_bd_count ?? 0,
-      accentClass: "accent-bar-blue",
-      valueColor:  "text-danger",
-      loading:     excLoading,
+      label:        "Excavator MTTR",
+      sub:          "Mean Time To Repair",
+      value:        excData?.fleet_mttr ?? null,
+      count:        excData?.total_bd_count ?? 0,
+      accentClass:  "accent-bar-blue",
+      valueColor:   "text-danger",
+      loading:      excLoading,
+      sourceActual: "SAP",
     },
     {
-      label:       "Excavator MTBF",
-      sub:         "Mean Time Between Failures",
-      value:       excData?.fleet_mtbf ?? null,
-      count:       excData?.total_bd_count ?? 0,
-      accentClass: "accent-bar-blue",
-      valueColor:  "text-success",
-      loading:     excLoading,
+      label:        "Excavator MTBF",
+      sub:          "Mean Time Between Failures",
+      value:        excData?.fleet_mtbf ?? null,
+      count:        excData?.total_bd_count ?? 0,
+      accentClass:  "accent-bar-blue",
+      valueColor:   "text-success",
+      loading:      excLoading,
+      sourceActual: "SAP",
     },
     {
-      label:       "Tipper MTTR",
-      sub:         "Mean Time To Repair",
-      value:       tipData?.fleet_mttr ?? null,
-      count:       tipData?.total_bd_count ?? 0,
-      accentClass: "accent-bar-gold",
-      valueColor:  "text-danger",
-      loading:     tipLoading,
+      label:        "Tipper MTTR",
+      sub:          "Mean Time To Repair",
+      value:        tipData?.fleet_mttr ?? null,
+      count:        tipData?.total_bd_count ?? 0,
+      accentClass:  "accent-bar-gold",
+      valueColor:   "text-danger",
+      loading:      tipLoading,
+      sourceActual: "SAP",
     },
     {
-      label:       "Tipper MTBF",
-      sub:         "Mean Time Between Failures",
-      value:       tipData?.fleet_mtbf ?? null,
-      count:       tipData?.total_bd_count ?? 0,
-      accentClass: "accent-bar-gold",
-      valueColor:  "text-success",
-      loading:     tipLoading,
+      label:        "Tipper MTBF",
+      sub:          "Mean Time Between Failures",
+      value:        tipData?.fleet_mtbf ?? null,
+      count:        tipData?.total_bd_count ?? 0,
+      accentClass:  "accent-bar-gold",
+      valueColor:   "text-success",
+      loading:      tipLoading,
+      sourceActual: "SAP",
     },
   ];
 

@@ -2,7 +2,7 @@
 import {
   Cloud, Building2, BarChart3,
   Layers, FlaskConical, Wrench, Droplets,
-  Target, Sparkles, ChevronLeft, ChevronRight, Truck,
+  Target, Sparkles, ChevronLeft, ChevronRight,
 } from "lucide-react";
 import { useSidebar }          from "@/contexts/useSidebar";
 import { useSectionObserver }  from "@/hooks/useSectionObserver";
@@ -16,7 +16,6 @@ const NAV_ITEMS = [
   { id: "cob",            label: "COB Plant",         icon: FlaskConical },
   { id: "equipment",      label: "Equipment",         icon: Wrench       },
   { id: "dewatering",     label: "Dewatering",        icon: Droplets     },
-  { id: "live-tracking",  label: "Live Tracking",     icon: Truck        },
   { id: "reality-check", label: "Reality Check",     icon: Target       },
   { id: "insights",      label: "AI Insights",       icon: Sparkles     },
 ] as const;

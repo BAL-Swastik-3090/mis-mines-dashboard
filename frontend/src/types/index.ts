@@ -565,3 +565,26 @@ export interface FuelOverviewResponse {
   refills_today:  FuelVehicle[];
   trend:          FuelTrendDay[];
 }
+
+export interface FuelVehicleHistoryDay {
+  date:           string;
+  engine_hours:   number;
+  fuel_consumed:  number;
+  lph:            number;
+  fuel_pct:       number;
+  filled_litres:  number;
+  drained_litres: number;
+  total_fillings: number;
+  total_drains:   number;
+}
+
+export interface FuelVehicleHistoryResponse {
+  vehicle_desc:  string;
+  display_name:  string;
+  category:      string;
+  tank_capacity: number;
+  source_table:  string;
+  from_date:     string;
+  to_date:       string;
+  days:          FuelVehicleHistoryDay[];
+}

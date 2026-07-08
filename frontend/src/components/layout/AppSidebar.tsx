@@ -1,11 +1,10 @@
 "use client";
-import { LayoutDashboard, Truck, Gauge, ChevronLeft, ChevronRight } from "lucide-react";
+import { LayoutDashboard, Gauge, ChevronLeft, ChevronRight } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { useSidebar }               from "@/contexts/useSidebar";
 
 const NAV_ITEMS: { id: AppPage; label: string; icon: React.ElementType }[] = [
   { id: "mis",              label: "MIS Dashboard",  icon: LayoutDashboard },
-  { id: "live-tracking",   label: "Live Tracking",   icon: Truck           },
   { id: "fuel-management", label: "Fuel Management", icon: Gauge           },
 ];
 

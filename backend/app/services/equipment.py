@@ -136,8 +136,8 @@ def _get_bd_hours(
     ph = ", ".join(f":n{i}" for i in range(len(sap_names)))
     sql = text(f"""
         SELECT DESC_TECH_OBJECT,
-               ROUND(SUM(BREAKDOWN_DURAION), 2) AS bd_hours,
-               COUNT(*)                          AS bd_count
+               ROUND(SUM(BREAKDOWN_DURAION) / 3600.0, 2) AS bd_hours,
+               COUNT(*)                                    AS bd_count
         FROM   zpm_iw29_notifications
         WHERE  MAINTENANCE_PLANT = :plant
           AND  MAIN_WORK_CENTER  = :wc
@@ -170,8 +170,8 @@ def _get_tipper_bd_hours(
     """
     sql = text("""
         SELECT DESC_TECH_OBJECT,
-               ROUND(SUM(BREAKDOWN_DURAION), 2) AS bd_hours,
-               COUNT(*)                          AS bd_count
+               ROUND(SUM(BREAKDOWN_DURAION) / 3600.0, 2) AS bd_hours,
+               COUNT(*)                                    AS bd_count
         FROM   zpm_iw29_notifications
         WHERE  MAINTENANCE_PLANT = :plant
           AND  MAIN_WORK_CENTER  = :wc

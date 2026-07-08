@@ -18,21 +18,25 @@ function Shimmer({ w = "w-24", h = "h-5" }: { w?: string; h?: string }) {
 
 /* ── Generic Production KPI card (Ore / OB / COB / De-Silting) ── */
 interface KpiCardProps {
-  label:       string;
-  icon:        React.ElementType;
-  accentClass: string;
-  iconBg:      string;
-  iconColor:   string;
-  data?:       ProductionKpiCard;
-  loading?:    boolean;
-  pending?:    boolean;
-  tdDate:      string;
-  showGrades?: boolean;
+  label:        string;
+  icon:         React.ElementType;
+  accentClass:  string;
+  iconBg:       string;
+  iconColor:    string;
+  data?:        ProductionKpiCard;
+  loading?:     boolean;
+  pending?:     boolean;
+  tdDate:       string;
+  showGrades?:  boolean;
+  sourcePlan?:  string;
+  sourceActual?: string;
+  showCuM?:     boolean;
 }
 
 function KpiCard({
   label, icon: Icon, accentClass, iconBg, iconColor,
   data, loading, pending, tdDate, showGrades,
+  sourcePlan, sourceActual, showCuM,
 }: KpiCardProps) {
   const mtdPct      = data?.mtd_pct   ?? null;
   const todayPct    = data?.today_pct ?? null;
@@ -89,6 +93,13 @@ function KpiCard({
             <div className="font-condensed font-extrabold text-[28px] xl:text-[32px] text-navy tracking-tight leading-none">
               {formatIndian(data?.mtd_actual)}
               <span className="text-xs font-normal text-txt-muted ml-1.5">{data?.unit}</span>
+              {showCuM && data?.mtd_actual != null && (
+                <>
+                  <span className="text-[20px] xl:text-[22px] font-normal text-txt-muted mx-1.5">/</span>
+                  {formatIndian(Math.round(data.mtd_actual / 3))}
+                  <span className="text-xs font-normal text-txt-muted ml-1.5">CuM</span>
+                </>
+              )}
             </div>
             {data?.mtd_plan != null && (
               <div className="text-[11px] text-txt-muted mt-1.5 flex items-center gap-2 flex-wrap">
@@ -176,6 +187,13 @@ function KpiCard({
             <span className="font-mono font-semibold text-[12px] text-navy whitespace-nowrap">
               {formatIndian(data?.today_actual)}{" "}
               <span className="text-[10px] font-normal text-txt-muted">{data?.unit}</span>
+              {showCuM && data?.today_actual != null && (
+                <>
+                  <span className="text-[10px] font-normal text-txt-muted mx-1">/</span>
+                  {formatIndian(Math.round(data.today_actual / 3))}{" "}
+                  <span className="text-[10px] font-normal text-txt-muted">CuM</span>
+                </>
+              )}
             </span>
           )}
         </div>
@@ -198,22 +216,41 @@ function KpiCard({
         )}
         {!pending && loading && data?.today_plan != null && <Shimmer w="w-14" h="h-5" />}
       </div>
+
+      {/* ── Data source strip ─────────────────────────────────── */}
+      {(sourcePlan || sourceActual) && (
+        <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
+          {sourcePlan && (
+            <p className="text-[9px] font-mono text-success/70 leading-tight">
+              <span className="font-semibold text-success/60">PLAN · </span>{sourcePlan}
+            </p>
+          )}
+          {sourceActual && (
+            <p className="text-[9px] font-mono text-success/70 leading-tight">
+              <span className="font-semibold text-success/60">ACTUAL · </span>{sourceActual}
+            </p>
+          )}
+        </div>
+      )}
+
     </div>
   );
 }
 
 /* ── Despatch KPI card ─────────────────────────────────────── */
 interface DespatchKpiCardProps {
-  loading:         boolean;
-  mtdTotalPlan:    number;
-  mtdTotalActual:  number | null;
-  mtdBal:          number;
-  mtdSuk:          number;
-  mtdBalActual:    number | null;
-  mtdSukActual:    number | null;
-  tdTotal:         number | null;
-  tdActual:        number | null;
-  tdDate:          string;
+  loading:          boolean;
+  mtdTotalPlan:     number;
+  mtdTotalActual:   number | null;
+  mtdBal:           number;
+  mtdSuk:           number;
+  mtdBalActual:     number | null;
+  mtdSukActual:     number | null;
+  tdTotal:          number | null;
+  tdActual:         number | null;
+  tdDate:           string;
+  sourcePlan?:      string;
+  sourceActual?:    string;
 }
 
 function DespatchKpiCard({
@@ -221,6 +258,7 @@ function DespatchKpiCard({
   mtdTotalPlan, mtdTotalActual,
   mtdBal, mtdSuk, mtdBalActual, mtdSukActual,
   tdTotal, tdActual, tdDate,
+  sourcePlan, sourceActual,
 }: DespatchKpiCardProps) {
   const mtdPct = (mtdTotalActual != null && mtdTotalPlan > 0)
     ? Math.round((mtdTotalActual / mtdTotalPlan) * 1000) / 10
@@ -364,6 +402,22 @@ function DespatchKpiCard({
           </div>
         )}
       </div>
+
+      {/* ── Data source strip ─────────────────────────────────── */}
+      {(sourcePlan || sourceActual) && (
+        <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
+          {sourcePlan && (
+            <p className="text-[9px] font-mono text-success/70 leading-tight">
+              <span className="font-semibold text-success/60">PLAN · </span>{sourcePlan}
+            </p>
+          )}
+          {sourceActual && (
+            <p className="text-[9px] font-mono text-success/70 leading-tight">
+              <span className="font-semibold text-success/60">ACTUAL · </span>{sourceActual}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -379,25 +433,33 @@ export default function ProductionKpiStrip() {
       label: "Ore Production",  icon: BarChart3,
       data: data?.ore,          accentClass: "accent-bar-green",
       iconBg: "bg-success-bg",  iconColor: "text-success",
-      showGrades: true,
+      showGrades: true,         showCuM: true,
+      sourcePlan: "IMOS",
+      sourceActual: "SAP",
     },
     {
       label: "OB Excavation",   icon: Layers,
       data: data?.ob,           accentClass: "accent-bar-blue",
       iconBg: "bg-blue-50",     iconColor: "text-accent",
       showGrades: false,
+      sourcePlan: "IMOS",
+      sourceActual: "SAP",
     },
     {
       label: "COB Production",  icon: Package,
       data: data?.cob,          accentClass: "accent-bar-gold",
       iconBg: "bg-amber-50",    iconColor: "text-gold",
-      showGrades: false,
+      showGrades: false,        showCuM: true,
+      sourcePlan: "IMOS",
+      sourceActual: "SAP",
     },
     {
       label: "De-Silting",      icon: Droplets,
       data: data?.de_silt,      accentClass: "accent-bar-teal",
       iconBg: "bg-teal-50",     iconColor: "text-info",
       showGrades: false,
+      sourcePlan: undefined,
+      sourceActual: "IMOS",
     },
   ];
 
@@ -418,6 +480,9 @@ export default function ProductionKpiStrip() {
           loading={isLoading}
           tdDate={apiTo}
           showGrades={c.showGrades}
+          showCuM={c.showCuM}
+          sourcePlan={c.sourcePlan}
+          sourceActual={c.sourceActual}
         />
       ))}
 
@@ -433,6 +498,8 @@ export default function ProductionKpiStrip() {
         tdTotal={dsp?.td_total_plan           ?? null}
         tdActual={dsp?.td_total_actual        ?? null}
         tdDate={apiTo}
+        sourcePlan="IMOS"
+        sourceActual="SAP"
       />
     </div>
   );

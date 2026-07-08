@@ -112,6 +112,11 @@ export default function DeSiltingChart() {
           notMerge
         />
       )}
+      <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
+        <p className="text-[9px] font-mono text-success/70 leading-tight">
+          <span className="font-semibold text-success/60">ACTUAL · </span>IMOS
+        </p>
+      </div>
     </div>
   );
 }

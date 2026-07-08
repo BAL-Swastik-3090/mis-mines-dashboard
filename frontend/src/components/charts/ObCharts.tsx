@@ -141,6 +141,14 @@ function BalChart() {
           />
         </div>
       )}
+      <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
+        <p className="text-[9px] font-mono text-success/70 leading-tight">
+          <span className="font-semibold text-success/60">PLAN · </span>IMOS
+        </p>
+        <p className="text-[9px] font-mono text-success/70 leading-tight">
+          <span className="font-semibold text-success/60">ACTUAL · </span>IMOS
+        </p>
+      </div>
     </div>
   );
 }
@@ -218,6 +226,11 @@ function VendorChart({ vendor, colorIdx }: { vendor: ObVendorDataAPI; colorIdx: 
           notMerge
         />
       )}
+      <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
+        <p className="text-[9px] font-mono text-success/70 leading-tight">
+          <span className="font-semibold text-success/60">ACTUAL · </span>IMOS
+        </p>
+      </div>
     </div>
   );
 }

@@ -219,6 +219,16 @@ export default function CobDaywiseTable() {
           )}
         </table>
       </div>
+
+      {/* Data source attribution */}
+      <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
+        <p className="text-[9px] font-mono text-success/70 leading-tight">
+          <span className="font-semibold text-success/60">PLAN · </span>IMOS
+        </p>
+        <p className="text-[9px] font-mono text-success/70 leading-tight">
+          <span className="font-semibold text-success/60">ACTUAL · </span>Feed/COB/Tailings Qty → SAP · Input &amp; Output Cr₂O₃ → SAP · Tailings Cr₂O₃ → IMOS
+        </p>
+      </div>
     </div>
   );
 }

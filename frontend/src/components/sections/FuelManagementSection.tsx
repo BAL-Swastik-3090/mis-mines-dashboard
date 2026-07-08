@@ -7,6 +7,8 @@ import {
   CheckCircle, Clock,
 } from "lucide-react";
 import { useFuelManagement } from "@/hooks/useFuelManagement";
+import VehicleDrawer from "@/components/fuel/VehicleDrawer";
+import { equipPhoto } from "@/lib/equip-photo";
 import type { FuelVehicle, FuelOverviewResponse } from "@/types";
 
 const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
@@ -62,7 +64,7 @@ function KpiCard({ icon: Icon, label, value, sub, delta, deltaLabel, accentColor
 
   return (
     <div
-      className="bg-white border border-[#d0d9e8] rounded-lg shadow-sm p-4 flex flex-col gap-2 min-w-0"
+      className="bg-white border border-border rounded-lg shadow-sm p-4 flex flex-col gap-2 min-w-0"
       style={{ borderTop: `3px solid ${accentColor}` }}
     >
       <div className="flex items-center gap-2">
@@ -70,30 +72,35 @@ function KpiCard({ icon: Icon, label, value, sub, delta, deltaLabel, accentColor
              style={{ background: `${accentColor}18` }}>
           <Icon size={13} style={{ color: accentColor }} />
         </div>
-        <span className="font-condensed text-[11px] font-bold tracking-[.14em] uppercase text-[#8899bb] truncate">
+        <span className="font-condensed text-[12px] font-bold tracking-widest uppercase text-txt-muted truncate">
           {label}
         </span>
       </div>
 
-      <div className="font-mono text-[22px] font-bold text-[#0f1c35] leading-none truncate">
+      <div className="font-condensed text-[26px] xl:text-[28px] font-extrabold text-navy-2 leading-none truncate tracking-tight">
         {value}
       </div>
 
       <div className="flex items-center gap-2 min-h-[16px]">
-        {sub && <span className="text-[10px] text-[#8899bb] font-condensed truncate">{sub}</span>}
+        {sub && <span className="text-[11px] text-txt-muted font-condensed truncate">{sub}</span>}
         {hasDelta && (
           <span className={`flex items-center gap-0.5 text-[10px] font-mono font-semibold ml-auto shrink-0
             ${isUp ? "text-[#c62828]" : "text-[#2e7d32]"}`}>
             {isUp ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
             {Math.abs(delta!).toLocaleString("en-IN", { maximumFractionDigits: 0 })}
-            {deltaLabel && <span className="text-[#8899bb] ml-0.5 font-normal">{deltaLabel}</span>}
+            {deltaLabel && <span className="text-txt-light ml-0.5 font-normal">{deltaLabel}</span>}
           </span>
         )}
         {delta === 0 && (
-          <span className="flex items-center gap-0.5 text-[10px] font-mono text-[#8899bb] ml-auto shrink-0">
+          <span className="flex items-center gap-0.5 text-[10px] font-mono text-txt-light ml-auto shrink-0">
             <Minus size={10} /> Same as yesterday
           </span>
         )}
+      </div>
+      <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40 -mx-4 -mb-4 mt-2 rounded-b-lg">
+        <p className="text-[9px] font-mono text-success/70 leading-tight">
+          <span className="font-semibold text-success/60">ACTUAL · </span>Technoton
+        </p>
       </div>
     </div>
   );
@@ -103,7 +110,7 @@ function KpiCard({ icon: Icon, label, value, sub, delta, deltaLabel, accentColor
 function FuelDonutChart({ data }: { data: FuelOverviewResponse["distribution"] }) {
   const total = data.reduce((s, d) => s + d.count, 0);
   if (total === 0) return (
-    <div className="flex-1 flex items-center justify-center text-[#8899bb] text-sm">No vehicle data</div>
+    <div className="flex-1 flex items-center justify-center text-txt-light text-sm">No vehicle data</div>
   );
 
   const option = {
@@ -171,7 +178,7 @@ function FuelDonutChart({ data }: { data: FuelOverviewResponse["distribution"] }
 // ── 7-day trend chart ──────────────────────────────────────────
 function TrendChart({ data }: { data: FuelOverviewResponse["trend"] }) {
   if (data.length === 0) return (
-    <div className="h-[160px] flex items-center justify-center text-[#8899bb] text-xs">
+    <div className="h-[160px] flex items-center justify-center text-txt-light text-xs">
       No trend data available
     </div>
   );
@@ -242,106 +249,21 @@ function TrendChart({ data }: { data: FuelOverviewResponse["trend"] }) {
   );
 }
 
-// ── Vehicle type icon ──────────────────────────────────────────
+// ── Equipment photo icon ───────────────────────────────────────
 function VehicleIcon({ category }: { category: string }) {
-  const cat = category.toLowerCase();
-
-  if (cat === "tipper") return (
-    <svg viewBox="0 0 64 44" fill="none" style={{ width: 48, height: 33 }}>
-      <circle cx="13" cy="37" r="6" fill="#1e2c3a" stroke="#2e4060" strokeWidth="1"/>
-      <circle cx="13" cy="37" r="2.5" fill="#344058"/>
-      <circle cx="51" cy="37" r="6" fill="#1e2c3a" stroke="#2e4060" strokeWidth="1"/>
-      <circle cx="51" cy="37" r="2.5" fill="#344058"/>
-      <rect x="5" y="29" width="54" height="5" rx="1.5" fill="#b07e0a"/>
-      <rect x="5" y="13" width="20" height="18" rx="2.5" fill="#f5b800"/>
-      <rect x="19" y="16" width="5" height="11" rx="1" fill="#9dd4f0" opacity="0.9"/>
-      <path d="M27 12 L61 7 L61 30 L27 30 Z" fill="#e0a800"/>
-      <rect x="58" y="7" width="3" height="23" rx="1" fill="#b07e0a"/>
-      <rect x="29" y="21" width="3" height="9" rx="1" fill="#8899bb"/>
-    </svg>
-  );
-
-  if (cat === "excavator") return (
-    <svg viewBox="0 0 64 50" fill="none" style={{ width: 48, height: 38 }}>
-      <rect x="3" y="36" width="36" height="11" rx="4" fill="#1e2c3a" stroke="#2e4060" strokeWidth="1"/>
-      <rect x="5" y="37" width="32" height="8" rx="3" fill="#2e3e50"/>
-      {[10,18,26,34].map(x => <circle key={x} cx={x} cy="42" r="3" fill="#1e2c3a" stroke="#2e4060" strokeWidth="0.5"/>)}
-      <rect x="3" y="23" width="36" height="15" rx="2.5" fill="#f5b800"/>
-      <rect x="3" y="12" width="18" height="13" rx="2" fill="#f5b800"/>
-      <rect x="4" y="14" width="7" height="8" rx="1.5" fill="#9dd4f0" opacity="0.9"/>
-      <path d="M35 20 L52 6 L56 10 L39 26 Z" fill="#c8960c"/>
-      <path d="M50 7 L62 17 L58 21 L46 11 Z" fill="#e0a800"/>
-      <path d="M59 16 L64 20 L62 28 L56 24 Z" fill="#8899bb" stroke="#6a7a9a" strokeWidth="0.7"/>
-    </svg>
-  );
-
-  if (cat === "grader") return (
-    <svg viewBox="0 0 80 44" fill="none" style={{ width: 56, height: 31 }}>
-      <circle cx="10" cy="36" r="6" fill="#1e2c3a" stroke="#2e4060" strokeWidth="1"/>
-      <circle cx="10" cy="36" r="2.5" fill="#344058"/>
-      {[62,72].map(x => (
-        <g key={x}>
-          <circle cx={x} cy="36" r="6" fill="#1e2c3a" stroke="#2e4060" strokeWidth="1"/>
-          <circle cx={x} cy="36" r="2.5" fill="#344058"/>
-        </g>
-      ))}
-      <rect x="5" y="28" width="70" height="5" rx="1.5" fill="#b07e0a"/>
-      <rect x="5" y="20" width="22" height="10" rx="2" fill="#e0a800"/>
-      <rect x="55" y="10" width="20" height="20" rx="2.5" fill="#f5b800"/>
-      <rect x="56" y="12" width="7" height="13" rx="1.5" fill="#9dd4f0" opacity="0.9"/>
-      <path d="M24 20 L55 15 L55 28 L24 32 Z" fill="#8899bb" stroke="#6a7a9a" strokeWidth="0.8"/>
-      <circle cx="39" cy="23" r="4.5" fill="none" stroke="#b07e0a" strokeWidth="1.5"/>
-    </svg>
-  );
-
-  if (cat === "dozer") return (
-    <svg viewBox="0 0 64 48" fill="none" style={{ width: 48, height: 36 }}>
-      <rect x="6" y="32" width="50" height="13" rx="5" fill="#1e2c3a" stroke="#2e4060" strokeWidth="1"/>
-      <rect x="8" y="33" width="46" height="10" rx="4" fill="#2e3e50"/>
-      {[13,21,29,37,45,53].map(x => <circle key={x} cx={x} cy="38" r="3" fill="#1e2c3a" stroke="#2e4060" strokeWidth="0.4"/>)}
-      <rect x="10" y="17" width="38" height="17" rx="2.5" fill="#f5b800"/>
-      <rect x="30" y="7" width="18" height="14" rx="2.5" fill="#f5b800"/>
-      <rect x="31" y="9" width="6" height="9" rx="1.5" fill="#9dd4f0" opacity="0.9"/>
-      <rect x="10" y="8" width="3.5" height="12" rx="1" fill="#c8960c"/>
-      <rect x="4" y="22" width="9" height="15" rx="2" fill="#8899bb" stroke="#6a7a9a" strokeWidth="0.8"/>
-      <rect x="11" y="24" width="10" height="2.5" rx="1" fill="#b07e0a"/>
-      <rect x="11" y="31" width="10" height="2.5" rx="1" fill="#b07e0a"/>
-    </svg>
-  );
-
-  if (cat === "jcb") return (
-    <svg viewBox="0 0 72 50" fill="none" style={{ width: 52, height: 36 }}>
-      <circle cx="14" cy="40" r="9" fill="#1e2c3a" stroke="#2e4060" strokeWidth="1.2"/>
-      <circle cx="14" cy="40" r="3.5" fill="#344058"/>
-      <circle cx="56" cy="40" r="9" fill="#1e2c3a" stroke="#2e4060" strokeWidth="1.2"/>
-      <circle cx="56" cy="40" r="3.5" fill="#344058"/>
-      <rect x="18" y="22" width="28" height="16" rx="3" fill="#f5b800"/>
-      <rect x="26" y="10" width="16" height="14" rx="2.5" fill="#f5b800"/>
-      <rect x="27" y="12" width="6" height="9" rx="1.5" fill="#9dd4f0" opacity="0.9"/>
-      <path d="M10 28 L20 14 L24 16 L14 32 Z" fill="#c8960c"/>
-      <path d="M5 28 L12 22 L16 32 L8 38 Z" fill="#8899bb" stroke="#6a7a9a" strokeWidth="0.5"/>
-      <path d="M46 20 L60 8 L64 12 L50 26 Z" fill="#c8960c"/>
-      <path d="M60 6 L66 10 L63 20 L57 16 Z" fill="#8899bb" stroke="#6a7a9a" strokeWidth="0.5"/>
-    </svg>
-  );
-
   return (
-    <svg viewBox="0 0 64 44" fill="none" style={{ width: 48, height: 33 }}>
-      <circle cx="13" cy="37" r="6" fill="#1e2c3a" stroke="#2e4060" strokeWidth="1"/>
-      <circle cx="13" cy="37" r="2.5" fill="#344058"/>
-      <circle cx="51" cy="37" r="6" fill="#1e2c3a" stroke="#2e4060" strokeWidth="1"/>
-      <circle cx="51" cy="37" r="2.5" fill="#344058"/>
-      <rect x="5" y="28" width="54" height="6" rx="2" fill="#b07e0a"/>
-      <rect x="5" y="12" width="22" height="18" rx="3" fill="#f5b800"/>
-      <rect x="22" y="15" width="4" height="12" rx="1" fill="#9dd4f0" opacity="0.9"/>
-      <rect x="29" y="17" width="30" height="13" rx="2" fill="#e0a800"/>
-    </svg>
+    <img
+      src={equipPhoto(category)}
+      alt={category}
+      className="w-full h-full object-contain"
+      draggable={false}
+    />
   );
 }
 
 // ── Horizontal tank SVG (3D cylindrical) ──────────────────────
 function HorizontalTank({ pct, status, uid }: { pct: number; status: FuelVehicle["status"]; uid: string }) {
-  const W = 188, H = 54, rx = 26;
+  const W = 140, H = 38, rx = 19;
 
   const colors: Record<string, { hi: string; mid: string; lo: string }> = {
     good:    { hi: "#69c96d", mid: "#2e7d32", lo: "#1b5e20" },
@@ -355,7 +277,7 @@ function HorizontalTank({ pct, status, uid }: { pct: number; status: FuelVehicle
   const safe  = uid.replace(/[^a-zA-Z0-9]/g, "_");
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: 188, height: 54, display: "block", flexShrink: 0 }}>
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: 140, height: 38, display: "block", flexShrink: 0 }}>
       <defs>
         <clipPath id={`tc_${safe}`}>
           <rect x="0.5" y="0.5" width={W-1} height={H-1} rx={rx}/>
@@ -440,7 +362,7 @@ function FuelRing({ pct, status, estHrs }: { pct: number; status: FuelVehicle["s
         </span>
       </div>
       {estHrs != null ? (
-        <span className="text-[9px] text-[#8899bb] font-mono">Est. {estHrs} Hrs</span>
+        <span className="text-[9px] text-txt-light font-mono">Est. {estHrs} Hrs</span>
       ) : (
         <span className="text-[9px] text-[#c0cce0] font-mono">— Hrs</span>
       )}
@@ -449,19 +371,23 @@ function FuelRing({ pct, status, estHrs }: { pct: number; status: FuelVehicle["s
 }
 
 // ── Visual vehicle row ─────────────────────────────────────────
-function VehicleRow({ v }: { v: FuelVehicle }) {
+function VehicleRow({ v, onSelect }: { v: FuelVehicle; onSelect: (v: FuelVehicle) => void }) {
   const sc = statusColor(v.status);
   return (
-    <tr className="border-b border-[#eef2f8] hover:bg-[#f8fafd] transition-colors">
+    <tr
+      className="border-b border-[#eef2f8] hover:bg-[#eef6ff] transition-colors cursor-pointer"
+      onClick={() => onSelect(v)}
+      title={`Click to view ${v.display_name} fuel history`}
+    >
 
       {/* Vehicle thumbnail + name + active badge */}
       <td className="py-2.5 px-3 whitespace-nowrap">
         <div className="flex items-center gap-2.5">
-          <div className="w-[56px] h-[42px] rounded-lg bg-[#edf1f8] border border-[#d0d9e8] flex items-center justify-center shrink-0 overflow-hidden">
+          <div className="w-[80px] h-[60px] rounded-lg bg-[#f5f7fb] flex items-center justify-center shrink-0 overflow-hidden">
             <VehicleIcon category={v.category} />
           </div>
           <div>
-            <div className="font-bold text-[12px] text-[#1a2744] leading-tight font-mono tracking-wide">
+            <div className="font-bold text-[12px] text-navy leading-tight font-mono tracking-wide">
               {v.display_name}
             </div>
             <span
@@ -481,7 +407,7 @@ function VehicleRow({ v }: { v: FuelVehicle }) {
 
       {/* Type */}
       <td className="py-2.5 px-3 whitespace-nowrap">
-        <span className="text-[11px] text-[#3a4a6b]">{v.category}</span>
+        <span className="text-[11px] text-txt-secondary">{v.category}</span>
       </td>
 
       {/* Horizontal tank + F/½/E markers */}
@@ -489,8 +415,8 @@ function VehicleRow({ v }: { v: FuelVehicle }) {
         {v.has_data ? (
           <div className="flex items-center gap-2">
             <HorizontalTank pct={v.fuel_pct} status={v.status} uid={v.vehicle_desc} />
-            <div className="flex flex-col justify-between text-[8px] font-mono font-semibold text-[#8899bb] select-none"
-                 style={{ height: 54, paddingTop: 4, paddingBottom: 4 }}>
+            <div className="flex flex-col justify-between text-[8px] font-mono font-semibold text-txt-light select-none"
+                 style={{ height: 38, paddingTop: 3, paddingBottom: 3 }}>
               <span>F</span>
               <span>½</span>
               <span>E</span>
@@ -511,20 +437,20 @@ function VehicleRow({ v }: { v: FuelVehicle }) {
 
       {/* Fuel in Tank */}
       <td className="py-2.5 px-3 whitespace-nowrap">
-        <span className="font-mono text-[13px] font-bold text-[#1a2744]">
+        <span className="font-mono text-[13px] font-bold text-navy">
           {v.has_data ? `${fmt(v.fuel_level_l)} L` : "—"}
         </span>
       </td>
 
       {/* Capacity */}
       <td className="py-2.5 px-3 whitespace-nowrap">
-        <span className="font-mono text-[11px] text-[#8899bb]">{fmt(v.tank_capacity)} L</span>
+        <span className="font-mono text-[11px] text-txt-light">{fmt(v.tank_capacity)} L</span>
       </td>
 
       {/* Last Updated + Live badge */}
       <td className="py-2.5 px-3 whitespace-nowrap">
         <div className="flex flex-col gap-0.5">
-          <span className="text-[11px] text-[#3a4a6b] font-mono">
+          <span className="text-[11px] text-txt-secondary font-mono">
             {v.last_seen ? fmtDate(v.last_seen) : "Today"}
           </span>
           {v.has_data && (
@@ -559,7 +485,7 @@ function VehicleRow({ v }: { v: FuelVehicle }) {
                 <span className="text-[10px] font-mono text-[#0288d1] font-semibold">
                   {v.total_fillings} fill{v.total_fillings > 1 ? "s" : ""}
                 </span>
-                <span className="text-[9px] text-[#8899bb] font-mono">
+                <span className="text-[9px] text-txt-light font-mono">
                   +{fmt(v.filled_litres)} L
                 </span>
               </>
@@ -568,12 +494,10 @@ function VehicleRow({ v }: { v: FuelVehicle }) {
             )}
           </div>
           <div className="flex items-center gap-0.5">
-            <button title="Trend" className="w-6 h-6 rounded flex items-center justify-center text-[#8899bb] hover:text-[#1565c0] hover:bg-[#eef2f8] transition-colors">
-              <TrendingUp size={11}/>
-            </button>
-            <button title="Activity" className="w-6 h-6 rounded flex items-center justify-center text-[#8899bb] hover:text-[#1a2744] hover:bg-[#eef2f8] transition-colors">
-              <Activity size={11}/>
-            </button>
+            <span className="flex items-center gap-1 text-[9px] font-mono text-[#b0bdd4]">
+              <TrendingUp size={9} />
+              View history
+            </span>
           </div>
         </div>
       </td>
@@ -584,9 +508,10 @@ function VehicleRow({ v }: { v: FuelVehicle }) {
 // ── Main component ─────────────────────────────────────────────
 export default function FuelManagementSection() {
   const { data, loading, error, lastUpdated, refetch } = useFuelManagement();
-  const [search,        setSearch]        = useState("");
-  const [filterStatus,  setFilterStatus]  = useState<string>("all");
-  const [filterCategory, setFilterCategory] = useState<string>("all");
+  const [search,          setSearch]          = useState("");
+  const [filterStatus,    setFilterStatus]    = useState<string>("all");
+  const [filterCategory,  setFilterCategory]  = useState<string>("all");
+  const [selectedVehicle, setSelectedVehicle] = useState<FuelVehicle | null>(null);
 
   const kpis     = data?.kpis;
   const vehicles = data?.vehicles ?? [];
@@ -609,31 +534,34 @@ export default function FuelManagementSection() {
 
   return (
     <div className="min-h-screen bg-[#f5f7fb]">
+      <VehicleDrawer
+        vehicle={selectedVehicle}
+        onClose={() => setSelectedVehicle(null)}
+      />
 
       {/* ── Page header ──────────────────────────────────── */}
-      <div className="flex items-center justify-between py-3 px-1 border-b border-[#d0d9e8]">
+      <div className="flex items-center justify-between py-3 px-1 border-b border-border">
         <div>
           <div className="flex items-center gap-2">
-            <Fuel size={18} className="text-[#c8960c]" />
-            <h1 className="font-condensed text-[22px] font-black tracking-[.04em] uppercase text-[#1a2744]">
+            <Fuel size={18} className="text-gold" />
+            <h1 className="font-condensed text-[22px] font-black tracking-[.04em] uppercase text-navy">
               Fuel Management
             </h1>
           </div>
-          <p className="text-[11px] text-[#8899bb] mt-0.5 ml-[26px]">
+          <p className="text-[11px] text-txt-light mt-0.5 ml-[26px]">
             Kaliapani Chromite Mines — Real-time Fleet Fuel Overview
           </p>
         </div>
         <div className="flex items-center gap-3">
           {lastUpdated && (
-            <span className="hidden sm:flex items-center gap-1.5 text-[10px] text-[#8899bb] font-mono">
+            <span className="hidden sm:flex items-center gap-1.5 text-[10px] text-txt-light font-mono">
               <Activity size={10} />
               {fmtTime(lastUpdated)}
             </span>
           )}
           <button
             onClick={refetch}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-white hover:bg-[#eef2f8] text-[#3a4a6b] hover:text-[#1a2744] transition text-[11px] font-semibold border border-[#d0d9e8] shadow-sm"
-            style={{ fontFamily: "'Barlow Condensed', sans-serif", letterSpacing: ".08em" }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-white hover:bg-bg-section text-txt-secondary hover:text-navy transition text-[11px] font-condensed font-bold tracking-widest border border-border shadow-sm"
           >
             <RefreshCw size={11} />
             REFRESH
@@ -645,8 +573,8 @@ export default function FuelManagementSection() {
       {loading && (
         <div className="flex items-center justify-center py-24">
           <div className="flex flex-col items-center gap-3">
-            <div className="w-8 h-8 border-2 border-[#d0d9e8] border-t-[#c8960c] rounded-full animate-spin" />
-            <span className="text-[12px] text-[#8899bb] font-condensed tracking-wide">
+            <div className="w-8 h-8 border-2 border-border border-t-[#c8960c] rounded-full animate-spin" />
+            <span className="text-[12px] text-txt-light font-condensed tracking-wide">
               Loading fuel data…
             </span>
           </div>
@@ -659,7 +587,7 @@ export default function FuelManagementSection() {
           <span className="text-[12px] text-[#c62828]">{error}</span>
           <button
             onClick={refetch}
-            className="ml-auto text-[11px] text-[#c62828] hover:text-[#1a2744] underline"
+            className="ml-auto text-[11px] text-[#c62828] hover:text-navy underline"
           >
             Retry
           </button>
@@ -712,9 +640,9 @@ export default function FuelManagementSection() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
 
             {/* Donut: Fuel level distribution */}
-            <div className="bg-white border border-[#d0d9e8] rounded-lg shadow-sm p-4">
+            <div className="bg-white border border-border rounded-lg shadow-sm p-4">
               <div className="px-0 pb-2.5 border-b border-[#eef2f8] mb-3">
-                <span className="font-condensed text-[11px] font-bold tracking-[.14em] uppercase text-[#8899bb]">
+                <span className="font-condensed text-[13px] font-bold tracking-widest uppercase text-steel">
                   Fuel Level Distribution
                 </span>
               </div>
@@ -723,17 +651,22 @@ export default function FuelManagementSection() {
                 {data.distribution.map(d => (
                   <div key={d.key} className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full shrink-0" style={{ background: d.color }} />
-                    <span className="text-[10px] text-[#8899bb]">{d.band}</span>
-                    <span className="text-[10px] font-mono font-bold text-[#1a2744]">{d.count}</span>
+                    <span className="text-[10px] text-txt-light">{d.band}</span>
+                    <span className="text-[10px] font-mono font-bold text-navy">{d.count}</span>
                   </div>
                 ))}
+              </div>
+              <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40 -mx-4 -mb-4 mt-3 rounded-b-lg">
+                <p className="text-[9px] font-mono text-success/70 leading-tight">
+                  <span className="font-semibold text-success/60">ACTUAL · </span>Technoton
+                </p>
               </div>
             </div>
 
             {/* Alerts */}
-            <div className="bg-white border border-[#d0d9e8] rounded-lg shadow-sm p-4 flex flex-col">
+            <div className="bg-white border border-border rounded-lg shadow-sm p-4 flex flex-col">
               <div className="pb-2.5 border-b border-[#eef2f8] mb-3">
-                <span className="font-condensed text-[11px] font-bold tracking-[.14em] uppercase text-[#8899bb]">
+                <span className="font-condensed text-[13px] font-bold tracking-widest uppercase text-steel">
                   Fuel Alerts
                 </span>
               </div>
@@ -750,7 +683,7 @@ export default function FuelManagementSection() {
                     {lowFuelVehicles.map(v => (
                       <div key={v.vehicle_desc}
                            className="flex items-center justify-between bg-red-50 border border-red-200 rounded px-2.5 py-1.5">
-                        <span className="text-[11px] text-[#1a2744] font-semibold">{v.display_name}</span>
+                        <span className="text-[11px] text-navy font-semibold">{v.display_name}</span>
                         <span className="font-mono text-[10px] text-[#c62828] font-bold">{v.fuel_pct.toFixed(0)}%</span>
                       </div>
                     ))}
@@ -775,7 +708,7 @@ export default function FuelManagementSection() {
                 {data.refills_today.slice(0, 4).map(v => (
                   <div key={v.vehicle_desc}
                        className="flex items-center justify-between py-1 border-b border-[#eef2f8] last:border-0">
-                    <span className="text-[10px] text-[#8899bb]">{v.display_name}</span>
+                    <span className="text-[10px] text-txt-light">{v.display_name}</span>
                     <div className="flex items-center gap-1.5 text-[10px] font-mono">
                       <span className="text-[#00697c] font-semibold">+{fmt(v.filled_litres)} L</span>
                       <span className="text-[#b0bdd4]">×{v.total_fillings}</span>
@@ -790,34 +723,39 @@ export default function FuelManagementSection() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mt-3">
 
             {/* 7-day trend */}
-            <div className="bg-white border border-[#d0d9e8] rounded-lg shadow-sm p-4">
+            <div className="bg-white border border-border rounded-lg shadow-sm p-4">
               <div className="flex items-center justify-between pb-2.5 border-b border-[#eef2f8] mb-3">
-                <span className="font-condensed text-[11px] font-bold tracking-[.14em] uppercase text-[#8899bb]">
+                <span className="font-condensed text-[13px] font-bold tracking-widest uppercase text-steel">
                   7-Day Consumption Trend
                 </span>
                 {data.trend.length > 0 && (
-                  <span className="text-[10px] font-mono text-[#8899bb]">
+                  <span className="text-[10px] font-mono text-txt-light">
                     Σ {fmt(data.trend.reduce((s, d) => s + d.total_consumed_l, 0))} L
                   </span>
                 )}
               </div>
               <TrendChart data={data.trend} />
               {data.trend.length === 0 && (
-                <p className="text-[10px] text-[#8899bb] mt-1">
+                <p className="text-[10px] text-txt-light mt-1">
                   Historical data will appear as the fleet operates over multiple days.
                 </p>
               )}
+              <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40 -mx-4 -mb-4 mt-3 rounded-b-lg">
+                <p className="text-[9px] font-mono text-success/70 leading-tight">
+                  <span className="font-semibold text-success/60">ACTUAL · </span>Technoton
+                </p>
+              </div>
             </div>
 
             {/* Top 5 consumers */}
-            <div className="bg-white border border-[#d0d9e8] rounded-lg shadow-sm p-4">
+            <div className="bg-white border border-border rounded-lg shadow-sm p-4">
               <div className="pb-2.5 border-b border-[#eef2f8] mb-3">
-                <span className="font-condensed text-[11px] font-bold tracking-[.14em] uppercase text-[#8899bb]">
+                <span className="font-condensed text-[13px] font-bold tracking-widest uppercase text-steel">
                   Top Fuel Consumers Today
                 </span>
               </div>
               {data.top_consumers.length === 0 ? (
-                <p className="text-[11px] text-[#8899bb]">No consumption data yet</p>
+                <p className="text-[11px] text-txt-light">No consumption data yet</p>
               ) : (
                 <div className="flex flex-col gap-3">
                   {data.top_consumers.map((v, i) => {
@@ -833,14 +771,14 @@ export default function FuelManagementSection() {
                                   style={{ color: rankColors[i] }}>
                               #{i + 1}
                             </span>
-                            <span className="text-[11px] text-[#1a2744] font-semibold">{v.display_name}</span>
-                            <span className="text-[10px] text-[#8899bb]">{v.category}</span>
+                            <span className="text-[11px] text-navy font-semibold">{v.display_name}</span>
+                            <span className="text-[10px] text-txt-light">{v.category}</span>
                           </div>
-                          <span className="font-mono text-[11px] text-[#1a2744] font-bold">
+                          <span className="font-mono text-[11px] text-navy font-bold">
                             {fmt(v.fuel_consumed)} L
                           </span>
                         </div>
-                        <div className="h-1.5 bg-[#eef2f8] rounded-full overflow-hidden">
+                        <div className="h-1.5 bg-bg-section rounded-full overflow-hidden">
                           <div
                             className="h-full rounded-full transition-all duration-700"
                             style={{ width: `${barPct}%`, background: barColors[i] }}
@@ -857,15 +795,20 @@ export default function FuelManagementSection() {
                   })}
                 </div>
               )}
+              <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40 -mx-4 -mb-4 mt-3 rounded-b-lg">
+                <p className="text-[9px] font-mono text-success/70 leading-tight">
+                  <span className="font-semibold text-success/60">ACTUAL · </span>Technoton
+                </p>
+              </div>
             </div>
           </div>
 
           {/* ── Vehicle Table Row ───────────────────────────── */}
-          <div className="mt-3 bg-white border border-[#d0d9e8] rounded-lg shadow-sm overflow-hidden">
+          <div className="mt-3 bg-white border border-border rounded-lg shadow-sm overflow-hidden">
 
               {/* Table toolbar */}
               <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-[#eef2f8]">
-                <span className="font-condensed text-[11px] font-bold tracking-[.14em] uppercase text-[#1a2744] mr-1">
+                <span className="font-condensed text-[13px] font-bold tracking-widest uppercase text-navy mr-1">
                   All Vehicles ({filtered.length})
                 </span>
 
@@ -877,8 +820,7 @@ export default function FuelManagementSection() {
                     placeholder="Search Vehicle / Type"
                     value={search}
                     onChange={e => setSearch(e.target.value)}
-                    className="bg-[#f5f7fb] border border-[#d0d9e8] rounded text-[11px] text-[#1a2744] placeholder-[#b0bdd4] pl-7 pr-3 py-1.5 outline-none focus:border-[#c8960c] w-44 transition-colors"
-                    style={{ fontFamily: "'IBM Plex Sans', sans-serif" }}
+                    className="bg-bg-section border border-border rounded text-[11px] text-navy placeholder-[#b0bdd4] pl-7 pr-3 py-1.5 outline-none focus:border-[#c8960c] w-44 transition-colors"
                   />
                 </div>
 
@@ -886,8 +828,7 @@ export default function FuelManagementSection() {
                 <select
                   value={filterCategory}
                   onChange={e => setFilterCategory(e.target.value)}
-                  className="bg-[#f5f7fb] border border-[#d0d9e8] rounded text-[11px] text-[#3a4a6b] px-2.5 py-1.5 outline-none focus:border-[#c8960c] transition-colors cursor-pointer"
-                  style={{ fontFamily: "'IBM Plex Sans', sans-serif" }}
+                  className="bg-bg-section border border-border rounded text-[11px] text-txt-secondary px-2.5 py-1.5 outline-none focus:border-[#c8960c] transition-colors cursor-pointer"
                 >
                   <option value="all">All Types</option>
                   {categories.map(c => <option key={c} value={c}>{c}</option>)}
@@ -897,8 +838,7 @@ export default function FuelManagementSection() {
                 <select
                   value={filterStatus}
                   onChange={e => setFilterStatus(e.target.value)}
-                  className="bg-[#f5f7fb] border border-[#d0d9e8] rounded text-[11px] text-[#3a4a6b] px-2.5 py-1.5 outline-none focus:border-[#c8960c] transition-colors cursor-pointer"
-                  style={{ fontFamily: "'IBM Plex Sans', sans-serif" }}
+                  className="bg-bg-section border border-border rounded text-[11px] text-txt-secondary px-2.5 py-1.5 outline-none focus:border-[#c8960c] transition-colors cursor-pointer"
                 >
                   <option value="all">All Status</option>
                   <option value="good">Good (&gt;50%)</option>
@@ -923,8 +863,7 @@ export default function FuelManagementSection() {
                     <tr className="border-b border-[#eef2f8] bg-[#f8fafd]">
                       {["Vehicle", "Type", "Fuel Tank", "Fuel Level", "Fuel in Tank", "Capacity", "Last Updated", "Status", "Actions"].map(h => (
                         <th key={h}
-                            className="px-4 py-2.5 text-[10px] font-bold tracking-[.14em] uppercase text-[#8899bb] whitespace-nowrap"
-                            style={{ fontFamily: "'Barlow Condensed', sans-serif" }}>
+                            className="px-4 py-2.5 font-condensed text-[11px] font-bold tracking-widest uppercase text-txt-light whitespace-nowrap">
                           {h}
                         </th>
                       ))}
@@ -933,21 +872,21 @@ export default function FuelManagementSection() {
                   <tbody>
                     {filtered.length === 0 ? (
                       <tr>
-                        <td colSpan={9} className="px-4 py-10 text-center text-[12px] text-[#8899bb]">
+                        <td colSpan={9} className="px-4 py-10 text-center text-[12px] text-txt-light">
                           {search || filterStatus !== "all" || filterCategory !== "all"
                             ? "No vehicles match the current filters"
                             : "No vehicle data for today"}
                         </td>
                       </tr>
                     ) : (
-                      filtered.map(v => <VehicleRow key={v.vehicle_desc} v={v} />)
+                      filtered.map(v => <VehicleRow key={v.vehicle_desc} v={v} onSelect={setSelectedVehicle} />)
                     )}
                   </tbody>
                 </table>
               </div>
 
               {/* Table footer */}
-              <div className="px-4 py-2.5 border-t border-[#eef2f8] bg-[#f8fafd] flex items-center gap-2 text-[10px] text-[#8899bb]">
+              <div className="px-4 py-2.5 border-t border-[#eef2f8] bg-[#f8fafd] flex items-center gap-2 text-[10px] text-txt-light">
                 <span>Showing {filtered.length} of {vehicles.length} vehicles</span>
                 <span className="flex items-center gap-2 ml-auto xl:hidden">
                   {[["#2e7d32","Good"],["#e65100","Medium"],["#c62828","Low"]].map(([c,l]) => (
@@ -956,6 +895,11 @@ export default function FuelManagementSection() {
                     </span>
                   ))}
                 </span>
+              </div>
+              <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
+                <p className="text-[9px] font-mono text-success/70 leading-tight">
+                  <span className="font-semibold text-success/60">ACTUAL · </span>Technoton
+                </p>
               </div>
             </div>
 

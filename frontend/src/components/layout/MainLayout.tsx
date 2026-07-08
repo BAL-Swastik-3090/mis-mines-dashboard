@@ -1,7 +1,6 @@
 "use client";
 import AppSidebar            from "./AppSidebar";
 import SectionTabBar         from "./SectionTabBar";
-import LiveTrackingSection   from "@/components/live/LiveTrackingSection";
 import FuelManagementSection from "@/components/sections/FuelManagementSection";
 import { useAppPage }        from "@/contexts/useAppPage";
 import { useSidebar }        from "@/contexts/useSidebar";
@@ -29,7 +28,6 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
       >
         <div className="max-w-[1920px] mx-auto">
           {page === "mis"              && children}
-          {page === "live-tracking"    && <LiveTrackingSection />}
           {page === "fuel-management"  && <FuelManagementSection />}
         </div>
       </main>
