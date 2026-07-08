@@ -3,24 +3,43 @@ import { useEffect, useCallback, useState } from "react";
 import dynamic from "next/dynamic";
 import { X, Zap, Clock, Droplets, AlertTriangle } from "lucide-react";
 import { equipPhoto } from "@/lib/equip-photo";
-import type { FuelVehicle, FuelVehicleHistoryResponse } from "@/types";
+import type { FuelVehicle } from "@/types";
 
 const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
 
-// ── Auto-refresh hook: fetches 7 days of data, refreshes every 60s ──
+interface IntradayReading {
+  time:          string;
+  fuel_level_l:  number;
+  fuel_pct:      number;
+  fuel_consumed: number;
+  lph:           number;
+  engine_hours:  number;
+}
+
+interface IntradayResponse {
+  vehicle_desc:  string;
+  display_name:  string;
+  category:      string;
+  tank_capacity: number;
+  date:          string;
+  reading_count: number;
+  latest:        IntradayReading | null;
+  readings:      IntradayReading[];
+}
+
+// ── Auto-refresh hook: fetches today's intraday readings, refreshes every 60s ──
 function useLive(vehicleDesc: string | null) {
-  const [data, setData] = useState<FuelVehicleHistoryResponse | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [data,      setData]      = useState<IntradayResponse | null>(null);
+  const [loading,   setLoading]   = useState(false);
   const [countdown, setCountdown] = useState(60);
 
   const poll = useCallback(async (desc: string) => {
     try {
       const res = await fetch(
-        `/api/fuel-management/vehicle/${encodeURIComponent(desc)}/history?days=7`,
+        `/api/fuel-management/vehicle/${encodeURIComponent(desc)}/intraday`,
       );
       if (!res.ok) return;
-      const json: FuelVehicleHistoryResponse = await res.json();
-      setData(json);
+      setData(await res.json());
     } catch { /* silent */ }
   }, []);
 
@@ -45,7 +64,7 @@ function FuelGauge({ pct, capacity }: { pct: number; capacity: number }) {
     const a = ((deg % 360) + 360) % 360;
     return `${(cx + r * Math.cos(toRad(a))).toFixed(1)} ${(cy + r * Math.sin(toRad(a))).toFixed(1)}`;
   };
-  const arcPath = `M ${coord(135)} A ${r} ${r} 0 1 1 ${coord(45)}`;
+  const arcPath  = `M ${coord(135)} A ${r} ${r} 0 1 1 ${coord(45)}`;
   const totalLen = 2 * Math.PI * r * 0.75;
   const c   = Math.min(Math.max(pct, 0), 100);
   const col = c >= 50 ? "#2e7d32" : c >= 20 ? "#e65100" : "#c62828";
@@ -72,11 +91,6 @@ function FuelGauge({ pct, capacity }: { pct: number; capacity: number }) {
       </text>
     </svg>
   );
-}
-
-function fmtDate(iso: string) {
-  const d = new Date(iso + "T00:00:00");
-  return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
 }
 
 function statusColor(status: FuelVehicle["status"]) {
@@ -106,22 +120,22 @@ export default function VehicleDrawer({
 
   if (!vehicle) return null;
 
-  const days  = data?.days ?? [];
-  // Latest day with engine activity = live stats
-  const today = days.length > 0 ? days[days.length - 1] : null;
-  const sc    = statusColor(vehicle.status);
+  const readings = data?.readings ?? [];
+  const latest   = data?.latest ?? null;
+  const sc       = statusColor(vehicle.status);
 
-  // ── 7-day consumption chart ──────────────────────────────────────
-  const consumedData = days.map(d => d.fuel_consumed);
-  const lphData      = days.map(d => d.lph);
-  const maxConsumed  = Math.max(...consumedData, 1);
+  // ── Intraday fuel-level chart ─────────────────────────────────
+  const times      = readings.map(r => r.time);
+  const fuelLevels = readings.map(r => r.fuel_level_l);
+  const lphSeries  = readings.map(r => r.lph);
+  const maxLevel   = Math.max(...fuelLevels, vehicle.tank_capacity, 1);
 
   const chartOption = {
     backgroundColor: "transparent",
     animation: true,
     grid: { top: 40, right: 52, bottom: 32, left: 8, containLabel: true },
     legend: {
-      data: ["Consumed (L)", "LPH"],
+      data: ["Fuel Level (L)", "LPH"],
       top: 8, right: 8,
       textStyle: { fontSize: 11, color: "#6b7ea8", fontFamily: "IBM Plex Sans" },
       itemWidth: 12, itemHeight: 8,
@@ -135,40 +149,35 @@ export default function VehicleDrawer({
       padding: [10, 14],
       textStyle: { color: "#e8eef8", fontSize: 12, fontFamily: "IBM Plex Sans" },
       formatter(params: Array<{ seriesName: string; value: number; color: string; axisValue: string }>) {
-        const day = params[0]?.axisValue ?? "";
-        let html = `<div style="font-weight:700;margin-bottom:6px;color:#c8d8f0;font-size:13px">${day}</div>`;
+        const t = params[0]?.axisValue ?? "";
+        let html = `<div style="font-weight:700;margin-bottom:6px;color:#c8d8f0;font-size:13px">${t}</div>`;
         params.forEach(p => {
-          const unit = p.seriesName === "Consumed (L)" ? " L" : " L/hr";
+          const unit = p.seriesName === "Fuel Level (L)" ? " L" : " L/hr";
           html += `<div style="display:flex;justify-content:space-between;gap:20px;margin-top:3px">
             <span style="color:${p.color}">${p.seriesName}</span>
             <span style="font-weight:700;font-family:'IBM Plex Mono';color:#e8eef8">${(p.value ?? 0).toFixed(1)}${unit}</span>
           </div>`;
         });
-        const idx = days.findIndex(d => fmtDate(d.date) === day);
-        if (idx >= 0) {
-          const d = days[idx];
-          if (d.total_fillings > 0) {
-            html += `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #2c4a7c;color:#4dd0e1;font-size:11px">⛽ +${d.filled_litres.toLocaleString("en-IN")} L refilled</div>`;
-          }
-          if (d.total_drains > 0) {
-            html += `<div style="margin-top:3px;color:#ef5350;font-size:11px">⚠ ${d.drained_litres.toLocaleString("en-IN")} L drained</div>`;
-          }
-        }
         return html;
       },
     },
     xAxis: {
       type: "category",
-      data: days.map(d => fmtDate(d.date)),
+      data: times,
       axisLine:  { lineStyle: { color: "#d0d9e8" } },
       axisTick:  { show: false },
-      axisLabel: { fontSize: 11, color: "#8899bb", fontFamily: "IBM Plex Mono" },
+      axisLabel: {
+        fontSize: 10, color: "#8899bb", fontFamily: "IBM Plex Mono",
+        // Show every Nth label to avoid overlap
+        interval: Math.max(0, Math.floor(times.length / 8) - 1),
+      },
       boundaryGap: false,
     },
     yAxis: [
       {
         type: "value",
         name: "Litres",
+        max: Math.ceil(maxLevel * 1.05),
         nameTextStyle: { color: "#8899bb", fontSize: 10 },
         axisLabel: { fontSize: 10, color: "#8899bb", formatter: (v: number) => `${v}L` },
         splitLine: { lineStyle: { color: "#eef2f8", type: "dashed" as const } },
@@ -187,12 +196,13 @@ export default function VehicleDrawer({
     ],
     series: [
       {
-        name: "Consumed (L)",
+        name: "Fuel Level (L)",
         type: "line",
         yAxisIndex: 0,
-        data: consumedData,
-        smooth: 0.4,
-        symbol: "circle", symbolSize: 6,
+        data: fuelLevels,
+        smooth: 0.3,
+        symbol: readings.length <= 30 ? "circle" : "none",
+        symbolSize: 5,
         lineStyle: { color: "#1565c0", width: 2.5 },
         itemStyle: { color: "#1565c0" },
         areaStyle: {
@@ -204,24 +214,14 @@ export default function VehicleDrawer({
             ],
           },
         },
-        markPoint: {
-          symbol: "pin", symbolSize: 20,
-          data: days.map((d, i) =>
-            d.total_fillings > 0
-              ? { xAxis: i, yAxis: d.fuel_consumed + maxConsumed * 0.06, name: "refill" }
-              : null
-          ).filter(Boolean) as object[],
-          itemStyle: { color: "#0288d1" },
-          label: { show: false },
-        },
       },
       {
         name: "LPH",
         type: "line",
         yAxisIndex: 1,
-        data: lphData,
-        smooth: 0.4,
-        symbol: "circle", symbolSize: 5,
+        data: lphSeries,
+        smooth: 0.3,
+        symbol: "none",
         lineStyle: { color: "#c8960c", width: 2, type: "dashed" as const },
         itemStyle: { color: "#c8960c" },
       },
@@ -254,14 +254,8 @@ export default function VehicleDrawer({
               LIVE
             </span>
 
-            {/* Equipment photo */}
             <div className="w-[64px] h-[48px] rounded-lg bg-[#f0f3f8] flex items-center justify-center shrink-0 overflow-hidden">
-              <img
-                src={equipPhoto(vehicle.category)}
-                alt={vehicle.category}
-                className="w-full h-full object-contain"
-                draggable={false}
-              />
+              <img src={equipPhoto(vehicle.category)} alt={vehicle.category} className="w-full h-full object-contain" draggable={false} />
             </div>
 
             <div className="flex-1 min-w-0">
@@ -275,6 +269,7 @@ export default function VehicleDrawer({
                 Tank {vehicle.tank_capacity.toLocaleString("en-IN")} L
                 &nbsp;·&nbsp;
                 {vehicle.source === "man" ? "MAN Fleet" : "Equipment Fleet"}
+                {data && <span className="ml-2 text-[#b0bdd4]">· {data.reading_count} readings today</span>}
               </p>
             </div>
 
@@ -312,7 +307,7 @@ export default function VehicleDrawer({
                 <div className="flex items-stretch gap-4">
                   <div className="shrink-0 flex items-center justify-center border border-[#eef2f8] rounded-xl bg-[#f8fafd] px-3 py-2">
                     <FuelGauge
-                      pct={today?.fuel_pct ?? vehicle.fuel_pct}
+                      pct={latest?.fuel_pct ?? vehicle.fuel_pct}
                       capacity={vehicle.tank_capacity}
                     />
                   </div>
@@ -321,17 +316,17 @@ export default function VehicleDrawer({
                     {([
                       {
                         icon: Zap, label: "Consumed Today",
-                        val: today ? `${today.fuel_consumed.toLocaleString("en-IN")} L` : "—",
+                        val: latest ? `${latest.fuel_consumed.toLocaleString("en-IN")} L` : "—",
                         color: "#1565c0",
                       },
                       {
                         icon: Clock, label: "Engine Hours",
-                        val: today && today.engine_hours > 0 ? `${today.engine_hours.toFixed(1)} h` : "—",
+                        val: latest && latest.engine_hours > 0 ? `${latest.engine_hours.toFixed(1)} h` : "—",
                         color: "#6a1b9a",
                       },
                       {
                         icon: Droplets, label: "Live LPH",
-                        val: today && today.lph > 0 ? today.lph.toFixed(1) : "—",
+                        val: latest && latest.lph > 0 ? latest.lph.toFixed(1) : "—",
                         color: "#c8960c",
                       },
                       {
@@ -356,24 +351,24 @@ export default function VehicleDrawer({
                   </div>
                 </div>
 
-                {/* ── 7-day consumption chart ── */}
+                {/* ── Intraday fuel level chart ── */}
                 <div className="border border-[#eef2f8] rounded-lg overflow-hidden">
                   <div className="px-4 pt-3 pb-2 border-b border-[#eef2f8] bg-[#f8fafd] flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <span className="w-2 h-2 rounded-full bg-[#1565c0] animate-pulse" />
                       <span className="font-condensed text-[11px] font-bold tracking-[.14em] uppercase text-[#8899bb]">
-                        Fuel Consumption · Last 7 Days
+                        Fuel Level · Today (Live 24h)
                       </span>
                     </div>
-                    {days.length > 0 && (
+                    {readings.length > 0 && (
                       <span className="text-[10px] font-mono text-[#b0bdd4]">
-                        {data?.from_date && fmtDate(data.from_date)} – {data?.to_date && fmtDate(data.to_date)}
+                        {readings[0].time} – {readings[readings.length - 1].time}
                       </span>
                     )}
                   </div>
-                  {days.length === 0 ? (
+                  {readings.length === 0 ? (
                     <div className="h-[200px] flex items-center justify-center">
-                      <span className="text-[12px] text-[#b0bdd4] font-mono">No data for the last 7 days</span>
+                      <span className="text-[12px] text-[#b0bdd4] font-mono">No readings for today yet</span>
                     </div>
                   ) : (
                     <ReactECharts
@@ -385,51 +380,6 @@ export default function VehicleDrawer({
                   )}
                 </div>
 
-                {/* ── Today's events ── */}
-                {today && (today.total_fillings > 0 || today.total_drains > 0) ? (
-                  <div className="border border-[#eef2f8] rounded-lg overflow-hidden">
-                    <div className="px-4 pt-3 pb-2 border-b border-[#eef2f8] bg-[#f8fafd]">
-                      <span className="font-condensed text-[11px] font-bold tracking-[.14em] uppercase text-[#8899bb]">
-                        Today's Events
-                      </span>
-                    </div>
-                    <div className="px-4 py-3 flex flex-col gap-3">
-                      {today.total_fillings > 0 && (
-                        <div className="flex items-center gap-3">
-                          <span className="w-8 h-8 rounded-full bg-blue-50 border border-blue-200 flex items-center justify-center text-base shrink-0">⛽</span>
-                          <div>
-                            <p className="text-[12px] font-semibold text-[#0f1c35]">
-                              {today.total_fillings} refill event{today.total_fillings > 1 ? "s" : ""}
-                            </p>
-                            <p className="text-[11px] text-[#8899bb] font-mono">
-                              +{today.filled_litres.toLocaleString("en-IN")} L added today
-                            </p>
-                          </div>
-                        </div>
-                      )}
-                      {today.total_drains > 0 && (
-                        <div className="flex items-center gap-3">
-                          <span className="w-8 h-8 rounded-full bg-red-50 border border-red-200 flex items-center justify-center text-base shrink-0">⚠️</span>
-                          <div>
-                            <p className="text-[12px] font-semibold text-[#c62828]">
-                              {today.total_drains} drain event{today.total_drains > 1 ? "s" : ""}
-                            </p>
-                            <p className="text-[11px] text-[#8899bb] font-mono">
-                              {today.drained_litres.toLocaleString("en-IN")} L drained today
-                            </p>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  today && (
-                    <p className="text-center text-[11px] text-[#b0bdd4] font-mono py-1">
-                      No filling or drain events detected today
-                    </p>
-                  )
-                )}
-
               </div>
             )}
           </div>
@@ -438,7 +388,7 @@ export default function VehicleDrawer({
           <div className="shrink-0 px-6 py-3 border-t border-[#eef2f8] bg-[#f8fafd] flex items-center justify-between gap-4">
             <p className="text-[9px] font-mono text-[#b0bdd4] truncate">
               <span className="font-semibold text-[#c8d0e0]">SOURCE · </span>
-              Technoton GPS-fuel sensor · daily snapshot · auto-refreshes every 60s
+              Technoton GPS-fuel sensor · intraday snapshots · auto-refreshes every 60s
             </p>
             <button
               onClick={onClose}

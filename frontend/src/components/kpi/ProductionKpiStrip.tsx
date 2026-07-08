@@ -449,7 +449,7 @@ export default function ProductionKpiStrip() {
       label: "COB Production",  icon: Package,
       data: data?.cob,          accentClass: "accent-bar-gold",
       iconBg: "bg-amber-50",    iconColor: "text-gold",
-      showGrades: false,        showCuM: true,
+      showGrades: false,
       sourcePlan: "IMOS",
       sourceActual: "SAP",
     },

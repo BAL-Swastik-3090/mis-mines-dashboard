@@ -49,11 +49,11 @@ def _category_from_desc(vehicle_desc: str) -> str:
     if "JCB" in vd:
         return "JCB"
     if "COMPACTOR" in vd:
-        return "Compactor"
+        return "Soil Compactor"
     if "HYDRA" in vd:
         return "Hydra"
     if "DRILL" in vd:
-        return "Drill"
+        return "Driller"
     if "TANKER" in vd:
         return "Diesel Tanker"
     # MAN trucks are tippers
