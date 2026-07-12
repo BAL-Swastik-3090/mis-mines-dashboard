@@ -17,7 +17,7 @@ export default function ObSection() {
       ? ` vs Vendor (${vendorNames[0]})`
       : ` vs Vendors (${vendorNames.join(" · ")})`;
 
-  const title = `Over-Burden Excavation — BAL Own${vendorLabel}`;
+  const title = `Over-Burden Excavation — Ore · OB · De-Silting${vendorLabel}`;
 
   return (
     <section className="space-y-4">

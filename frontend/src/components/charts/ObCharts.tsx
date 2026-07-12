@@ -1,6 +1,7 @@
 "use client";
 import dynamic from "next/dynamic";
-import { useObSummary } from "@/hooks/useOb";
+import { useObSummary }        from "@/hooks/useOb";
+import { useProductionDaywise } from "@/hooks/useProduction";
 import { formatIndian, formatPct, pctBgClass } from "@/lib/utils";
 import type { ObVendorDataAPI } from "@/types";
 
@@ -51,6 +52,186 @@ const tooltipBase = {
 };
 
 const VENDOR_COLORS = ["#c62828", "#e65100", "#5e35b1", "#00695c", "#006064"];
+
+// ── Shimmer skeleton ──────────────────────────────────────────
+function Shimmer({ w = "w-20", h = "h-5" }: { w?: string; h?: string }) {
+  return <div className={`${h} ${w} bg-bg-section animate-pulse rounded`} />;
+}
+
+// ── MTD Badge ─────────────────────────────────────────────────
+function MtdBadge({
+  color, dotColor, bgColor, borderColor, label, value, unit,
+}: {
+  color: string; dotColor: string; bgColor: string; borderColor: string;
+  label: string; value: number | null | undefined; unit: string;
+}) {
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-0.5 rounded border"
+      style={{ color, backgroundColor: bgColor, borderColor }}
+    >
+      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: dotColor }} />
+      {label} {formatIndian(value)} {unit}
+    </span>
+  );
+}
+
+// ── Day Wise Total Excavation — stacked bar (Ore + OB + De-Silting) ──
+function ExcavationDaywiseChart() {
+  const { data: prodData, isLoading: prodLoading } = useProductionDaywise();
+  const { data: obData,   isLoading: obLoading   } = useObSummary();
+
+  const isLoading = prodLoading || obLoading;
+
+  // OB lookup keyed by date string (YYYY-MM-DD) from /api/ob/summary
+  const obMap = Object.fromEntries(
+    (obData?.rows ?? []).map((r) => [r.date, r.bal_actual ?? 0])
+  );
+
+  // Production rows are the primary date spine
+  const rows   = prodData?.rows ?? [];
+  const labels = rows.map((r) => dayLabel(r.date));
+
+  // MTD De-Silt — no dedicated field in /api/production/daywise, sum from rows
+  const mtdSilt = rows.reduce((sum, r) => sum + (r.silt_actual ?? 0), 0);
+
+  const oreData   = rows.map((r) => r.ore_actual  ?? 0);
+  const obBarData = rows.map((r) => obMap[r.date] ?? 0);
+  const siltData  = rows.map((r) => r.silt_actual  ?? 0);
+
+  const option = {
+    backgroundColor: "transparent",
+    animation: true,
+    grid: {
+      top: 48,
+      right: 14,
+      bottom: labels.length > 20 ? 56 : 36,
+      left: 12,
+      containLabel: true,
+    },
+    legend: {
+      data: ["Ore Production (MT)", "OB Excavation (CuM)", "De-Silting (CuM)"],
+      top: 6,
+      textStyle: { fontSize: 11, color: "#6b7ea8", fontFamily: "IBM Plex Sans" },
+      itemWidth: 12, itemHeight: 8, padding: [4, 0],
+    },
+    tooltip: {
+      ...tooltipBase,
+      formatter(
+        params: Array<{ seriesName: string; value: number; color: string; axisValue: string }>
+      ) {
+        const day = params[0]?.axisValue ?? "";
+        let html = `<div style="font-weight:700;margin-bottom:6px;color:#c8d8f0;font-family:'Barlow Condensed',sans-serif;font-size:13px;">${day} — Total Excavation</div>`;
+        let hasData = false;
+        params.forEach((p) => {
+          if ((p.value ?? 0) > 0) {
+            hasData = true;
+            const unit = p.seriesName.includes("MT") ? "MT" : "CuM";
+            html += `
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:16px;margin-top:3px;">
+                <span style="color:${p.color};display:flex;align-items:center;gap:5px;">
+                  <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${p.color};flex-shrink:0"></span>
+                  ${p.seriesName}
+                </span>
+                <span style="font-weight:700;font-family:'IBM Plex Mono',monospace;color:#fff;">
+                  ${formatIndian(p.value)} ${unit}
+                </span>
+              </div>`;
+          }
+        });
+        if (!hasData)
+          html += `<div style="color:#6b7ea8;font-style:italic;margin-top:4px;">No excavation recorded</div>`;
+        return html;
+      },
+    },
+    xAxis: makeXAxis(labels, labels.length),
+    yAxis,
+    series: [
+      {
+        name: "Ore Production (MT)",
+        type: "bar", stack: "excavation",
+        data: oreData, barMaxWidth: 28,
+        itemStyle: { color: "#2e7d32", borderRadius: [0, 0, 0, 0] },
+        emphasis: { itemStyle: { color: "#43a047" } },
+      },
+      {
+        name: "OB Excavation (CuM)",
+        type: "bar", stack: "excavation",
+        data: obBarData, barMaxWidth: 28,
+        itemStyle: { color: "#e65100", borderRadius: [0, 0, 0, 0] },
+        emphasis: { itemStyle: { color: "#fb8c00" } },
+      },
+      {
+        name: "De-Silting (CuM)",
+        type: "bar", stack: "excavation",
+        data: siltData, barMaxWidth: 28,
+        // Top segment gets rounded top corners
+        itemStyle: { color: "#00897b", borderRadius: [2, 2, 0, 0] },
+        emphasis: { itemStyle: { color: "#26a69a" } },
+      },
+    ],
+  };
+
+  return (
+    <div className="bg-white border border-border rounded-lg shadow-sm overflow-hidden">
+
+      {/* Header */}
+      <div className="px-4 pt-3 pb-2.5 border-b border-border-light flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <span className="font-condensed font-bold text-[13px] text-navy tracking-widest uppercase">
+            Day Wise Total Excavation
+          </span>
+          <span className="text-[10px] text-txt-muted font-medium">Ore · OB · De-Silting</span>
+        </div>
+
+        {/* MTD Badges */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {isLoading ? (
+            <><Shimmer w="w-24" /><Shimmer w="w-24" /><Shimmer w="w-24" /></>
+          ) : (
+            <>
+              <MtdBadge label="Ore"     value={prodData?.mtd_ore_actual}  unit="MT"
+                color="#2e7d32" dotColor="#2e7d32" bgColor="#e8f5e9" borderColor="#a5d6a7" />
+              <MtdBadge label="OB"      value={obData?.mtd_bal_actual}    unit="CuM"
+                color="#e65100" dotColor="#e65100" bgColor="#fff3e0" borderColor="#ffcc80" />
+              {mtdSilt > 0 && (
+                <MtdBadge label="De-Silt" value={mtdSilt}                 unit="CuM"
+                  color="#00695c" dotColor="#00897b" bgColor="#e0f2f1" borderColor="#80cbc4" />
+              )}
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Chart */}
+      {isLoading ? (
+        <div className="flex items-center justify-center bg-bg-light" style={{ height: 300 }}>
+          <div className="text-txt-muted text-sm animate-pulse">Loading chart…</div>
+        </div>
+      ) : (
+        <ReactECharts
+          option={option}
+          style={{ height: 300 }}
+          opts={{ renderer: "canvas" }}
+          notMerge
+        />
+      )}
+
+      {/* Data source footer */}
+      <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40 flex gap-4 flex-wrap">
+        <p className="text-[9px] font-mono text-success/70 leading-tight">
+          <span className="font-semibold text-success/60">ORE · </span>SAP
+        </p>
+        <p className="text-[9px] font-mono text-success/70 leading-tight">
+          <span className="font-semibold text-success/60">OB · </span>IMOS
+        </p>
+        <p className="text-[9px] font-mono text-success/70 leading-tight">
+          <span className="font-semibold text-success/60">DE-SILT · </span>IMOS
+        </p>
+      </div>
+    </div>
+  );
+}
 
 // ── BAL OWN chart — stretches to fill left column height ───────
 function BalChart() {
@@ -242,35 +423,48 @@ export default function ObCharts() {
 
   if (isLoading) {
     return (
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 xl:gap-4">
-        {[0, 1].map((i) => (
-          <div key={i} className="bg-white border border-border rounded-lg shadow-sm flex items-center justify-center" style={{ height: 280 }}>
-            <div className="text-txt-muted text-sm animate-pulse">Loading chart…</div>
-          </div>
-        ))}
+      <div className="space-y-3 xl:space-y-4">
+        <div className="bg-white border border-border rounded-lg shadow-sm flex items-center justify-center" style={{ height: 300 }}>
+          <div className="text-txt-muted text-sm animate-pulse">Loading chart…</div>
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 xl:gap-4">
+          {[0, 1].map((i) => (
+            <div key={i} className="bg-white border border-border rounded-lg shadow-sm flex items-center justify-center" style={{ height: 280 }}>
+              <div className="text-txt-muted text-sm animate-pulse">Loading chart…</div>
+            </div>
+          ))}
+        </div>
       </div>
     );
   }
 
   return (
-    /* items-stretch ensures left column matches right column height */
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 xl:gap-4 items-stretch">
+    <div className="space-y-3 xl:space-y-4">
 
-      {/* Left: BAL OWN — h-full stretches to match right side */}
-      <BalChart />
+      {/* ── Row 1: Day Wise Total Excavation (full width) ─── */}
+      <ExcavationDaywiseChart />
 
-      {/* Right: vendor charts stacked — each gets equal space */}
-      <div className="flex flex-col gap-3">
-        {vendors.length === 0 ? (
-          <div className="bg-white border border-border rounded-lg shadow-sm flex items-center justify-center flex-1 min-h-[280px]">
-            <p className="text-txt-muted text-sm">No vendor excavation in this period</p>
-          </div>
-        ) : (
-          vendors.map((v, i) => (
-            <VendorChart key={v.agency_id} vendor={v} colorIdx={i} />
-          ))
-        )}
+      {/* ── Row 2: BAL OWN + Vendor breakdown ──────────────── */}
+      {/* items-stretch ensures left column matches right column height */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 xl:gap-4 items-stretch">
+
+        {/* Left: BAL OWN */}
+        <BalChart />
+
+        {/* Right: vendor charts stacked */}
+        <div className="flex flex-col gap-3">
+          {vendors.length === 0 ? (
+            <div className="bg-white border border-border rounded-lg shadow-sm flex items-center justify-center flex-1 min-h-[280px]">
+              <p className="text-txt-muted text-sm">No vendor excavation in this period</p>
+            </div>
+          ) : (
+            vendors.map((v, i) => (
+              <VendorChart key={v.agency_id} vendor={v} colorIdx={i} />
+            ))
+          )}
+        </div>
       </div>
+
     </div>
   );
 }
