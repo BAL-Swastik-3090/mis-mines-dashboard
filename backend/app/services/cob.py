@@ -69,13 +69,14 @@ def _get_quality(db: Session, from_date: date, to_date: date) -> dict:
 
 # ── 3. Tailings Cr₂O₃ from mines_cobp_sample_analysis ────────
 def _get_tailings_cr(db: Session, from_date: date, to_date: date) -> dict:
-    # Cr2O3 is VARCHAR — cast after filtering out '0' and empty values
+    # Cr2O3 is VARCHAR — cast after filtering out empty strings only;
+    # genuine '0' readings are included (excluding them biases the average upward)
     sql = text("""
         SELECT
             Prod_date AS dt,
             ROUND(AVG(
                 CASE
-                    WHEN TRIM(Cr2O3) != '' AND TRIM(Cr2O3) != '0'
+                    WHEN TRIM(Cr2O3) != ''
                     THEN CAST(Cr2O3 AS DECIMAL(8,3))
                 END
             ), 3) AS tailings_cr2o3

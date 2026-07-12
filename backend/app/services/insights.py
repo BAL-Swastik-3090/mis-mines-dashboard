@@ -123,7 +123,12 @@ def _production_mtd(db: Session, from_date: date, to_date: date) -> dict:
 
 
 def _despatch_mtd_actual(db: Session, from_date: date, to_date: date) -> float | None:
-    """MTD despatch actual from zsd_outbound_despatch via CUSTOMERNO."""
+    """MTD despatch actual from zsd_outbound_despatch via CUSTOMERNO.
+
+    Filter must match despatch.py's get_actuals_summary() exactly (same
+    TRANSPORTER restriction) so Reality Check / AI Insights agree with the
+    Despatch dashboard section's own numbers.
+    """
     try:
         row = db.execute(text("""
             SELECT COALESCE(SUM(z.NETWEIGHT), 0) AS actual
@@ -132,6 +137,7 @@ def _despatch_mtd_actual(db: Session, from_date: date, to_date: date) -> float |
                 FROM   zsd_outbound_despatch
                 WHERE  DATE(GATEINDATE) BETWEEN :f AND :t
                   AND  CUSTOMERNO IN ('BAL', 'JABAMOYEE')
+                  AND  TRANSPORTER = 'SHREE GANESH LOGISTICS'
                 GROUP  BY DELIVERYNO
             ) z
         """), {"f": from_date, "t": to_date}).fetchone()
@@ -370,7 +376,12 @@ def _cob_quality_mtd(db: Session, from_date: date, to_date: date) -> dict:
 
 
 def _stock_snapshot(db: Session) -> dict:
-    """Current ore + COB stock by grade from mm_mb52_inventory_new."""
+    """Current ore + COB stock by grade from mm_mb52_inventory_new.
+
+    Mirrors stock.py's get_stock_position() scope exactly:
+      - Ore  : PLANT='1200', MATERIAL_TYPE='ZORE'
+      - COB  : PLANT='1210', STORE_LOC='CST1', MATERIAL_DESC='CONCENTRATE WITH STD MOISTURE'
+    """
     try:
         rows = db.execute(text("""
             SELECT
@@ -384,9 +395,9 @@ def _stock_snapshot(db: Session) -> dict:
                 END AS grade,
                 ROUND(SUM(UNRESTRICTED_STOCK), 2) AS stock
             FROM mm_mb52_inventory_new
-            WHERE PLANT IN ('1200', '1210')
-              AND MATERIAL_TYPE IN ('ZORE', 'ZCON')
-               OR (PLANT = '1210' AND MATERIAL_DESC = 'CONCENTRATE WITH STD MOISTURE')
+            WHERE (PLANT = '1200' AND MATERIAL_TYPE = 'ZORE')
+               OR (PLANT = '1210' AND STORE_LOC = 'CST1'
+                   AND MATERIAL_DESC = 'CONCENTRATE WITH STD MOISTURE')
             GROUP BY 1
         """)).fetchall()
         result = {r.grade: float(r.stock or 0) for r in rows if r.grade != 'OTHER'}
@@ -397,7 +408,12 @@ def _stock_snapshot(db: Session) -> dict:
 
 
 def _despatch_split_mtd(db: Session, from_date: date, to_date: date) -> dict:
-    """MTD despatch BAL vs SUK split via CUSTOMERNO."""
+    """MTD despatch BAL vs SUK split via CUSTOMERNO.
+
+    Filter must match despatch.py's get_actuals_summary() exactly (same
+    TRANSPORTER restriction) so Reality Check / AI Insights agree with the
+    Despatch dashboard section's own numbers.
+    """
     try:
         row = db.execute(text("""
             SELECT
@@ -411,6 +427,7 @@ def _despatch_split_mtd(db: Session, from_date: date, to_date: date) -> dict:
                 FROM zsd_outbound_despatch
                 WHERE DATE(GATEINDATE) BETWEEN :f AND :t
                   AND CUSTOMERNO IN ('BAL', 'JABAMOYEE')
+                  AND TRANSPORTER = 'SHREE GANESH LOGISTICS'
                 GROUP BY DELIVERYNO
             ) z
         """), {"f": from_date, "t": to_date}).fetchone()
