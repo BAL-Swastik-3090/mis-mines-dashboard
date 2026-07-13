@@ -6,15 +6,17 @@ from typing import Optional
 # ── Excavator ──────────────────────────────────────────────────
 
 class ExcavatorMachineRow(BaseModel):
-    vehicle_desc:  str
-    display_name:  str
-    eng_hr_mtd:    float          = 0.0
-    bd_hr:         float          = 0.0
-    bd_count:      int            = 0
-    avail_pct:     Optional[float] = None
-    util_pct:      Optional[float] = None
-    mttr:          Optional[float] = None   # hrs — avg repair time per breakdown
-    mtbf:          Optional[float] = None   # hrs — avg run time between failures
+    vehicle_desc:   str
+    display_name:   str
+    sap_name:       str            = ""
+    eng_hr_mtd:     float          = 0.0
+    bd_hr:          float          = 0.0
+    bd_count:       int            = 0
+    bd_count_start: int            = 0     # count by MALFUNCTION_START presence
+    avail_pct:      Optional[float] = None
+    util_pct:       Optional[float] = None
+    mttr:           Optional[float] = None
+    mtbf:           Optional[float] = None
 
 
 class ExcavatorSummaryResponse(BaseModel):
@@ -58,14 +60,31 @@ class ExcavatorFuelResponse(BaseModel):
 # ── Tipper ─────────────────────────────────────────────────────
 
 class TipperMachineRow(BaseModel):
-    vehicle_desc:  str
-    eng_hr_mtd:    float          = 0.0
-    bd_hr:         float          = 0.0
-    bd_count:      int            = 0
-    avail_pct:     Optional[float] = None
-    util_pct:      Optional[float] = None
-    mttr:          Optional[float] = None
-    mtbf:          Optional[float] = None
+    vehicle_desc:   str
+    sap_name:       str            = ""
+    eng_hr_mtd:     float          = 0.0
+    bd_hr:          float          = 0.0
+    bd_count:       int            = 0
+    bd_count_start: int            = 0
+    avail_pct:      Optional[float] = None
+    util_pct:       Optional[float] = None
+    mttr:           Optional[float] = None
+    mtbf:           Optional[float] = None
+
+
+class BreakdownEvent(BaseModel):
+    notification_no: str
+    start:   Optional[str]   = None
+    end:     Optional[str]   = None
+    bd_hrs:  Optional[float] = None
+    reason:  Optional[str]   = None
+
+
+class BreakdownDetailsResponse(BaseModel):
+    machine:    str
+    from_date:  date
+    to_date:    date
+    events:     list[BreakdownEvent]
 
 
 class TipperSummaryResponse(BaseModel):

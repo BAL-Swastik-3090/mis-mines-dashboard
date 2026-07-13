@@ -16,6 +16,7 @@ import type {
   ExcavatorFuelResponse,
   TipperSummaryResponse,
   TipperFuelResponse,
+  BreakdownDetailsResponse,
 } from "@/types";
 
 /** Returns true when the selected end-date is today → live sensor mode. */
@@ -99,6 +100,22 @@ export function useExcavatorFuel() {
     refetchInterval: live ? 60_000 : false,
     placeholderData: keepPreviousData,
     enabled:         Boolean(apiFrom && apiTo),
+  });
+}
+
+// ── Breakdown details (on-demand, triggered by row click) ────
+export function useBreakdownDetails(sapName: string | null) {
+  const { apiFrom, apiTo } = useDateFilter();
+  return useQuery<BreakdownDetailsResponse>({
+    queryKey: ["equipment", "breakdown-details", sapName, apiFrom, apiTo],
+    queryFn: async () => {
+      const res = await api.get("/equipment/breakdown-details", {
+        params: { machine: sapName, from_date: apiFrom, to_date: apiTo },
+      });
+      return res.data;
+    },
+    enabled: Boolean(sapName && apiFrom && apiTo),
+    staleTime: 5 * 60_000,
   });
 }
 

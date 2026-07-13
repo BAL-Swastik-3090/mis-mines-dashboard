@@ -10,6 +10,7 @@ from ..schemas.equipment import (
     ExcavatorFuelResponse,
     TipperSummaryResponse,
     TipperFuelResponse,
+    BreakdownDetailsResponse,
 )
 
 router = APIRouter(tags=["Equipment"])
@@ -66,3 +67,16 @@ def tipper_fuel(
     db: Session = Depends(get_db),
 ):
     return svc.get_tipper_fuel(db, from_date or _mstart(), to_date or _today())
+
+
+@router.get("/breakdown-details", response_model=BreakdownDetailsResponse)
+def breakdown_details(
+    machine:   str,
+    from_date: date = None,
+    to_date:   date = None,
+    db: Session = Depends(get_db),
+):
+    f = from_date or _mstart()
+    t = to_date   or _today()
+    events = svc.get_breakdown_details(db, machine, f, t)
+    return {"machine": machine, "from_date": f, "to_date": t, "events": events}

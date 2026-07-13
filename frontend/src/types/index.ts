@@ -242,15 +242,17 @@ export interface CobSummaryResponse {
 
 // ── Equipment Utilization ─────────────────────────────────────
 export interface ExcavatorMachineRowAPI {
-  vehicle_desc: string;
-  display_name: string;
-  eng_hr_mtd:   number;
-  bd_hr:        number;
-  bd_count:     number;
-  avail_pct:    number | null;
-  util_pct:     number | null;
-  mttr:         number | null;
-  mtbf:         number | null;
+  vehicle_desc:   string;
+  display_name:   string;
+  sap_name:       string;
+  eng_hr_mtd:     number;
+  bd_hr:          number;
+  bd_count:       number;
+  bd_count_start: number;
+  avail_pct:      number | null;
+  util_pct:       number | null;
+  mttr:           number | null;
+  mtbf:           number | null;
 }
 export interface ExcavatorSummaryResponse {
   from_date:       string;
@@ -287,14 +289,31 @@ export interface ExcavatorTrendResponse {
   series:        Record<string, (number | null)[]>;
 }
 export interface TipperMachineRowAPI {
-  vehicle_desc: string;
-  eng_hr_mtd:   number;
-  bd_hr:        number;
-  bd_count:     number;
-  avail_pct:    number | null;
-  util_pct:     number | null;
-  mttr:         number | null;
-  mtbf:         number | null;
+  vehicle_desc:   string;
+  sap_name:       string;
+  eng_hr_mtd:     number;
+  bd_hr:          number;
+  bd_count:       number;
+  bd_count_start: number;
+  avail_pct:      number | null;
+  util_pct:       number | null;
+  mttr:           number | null;
+  mtbf:           number | null;
+}
+
+export interface BreakdownEvent {
+  notification_no: string;
+  start:   string | null;
+  end:     string | null;
+  bd_hrs:  number | null;
+  reason:  string | null;
+}
+
+export interface BreakdownDetailsResponse {
+  machine:    string;
+  from_date:  string;
+  to_date:    string;
+  events:     BreakdownEvent[];
 }
 export interface TipperSummaryResponse {
   from_date:       string;
