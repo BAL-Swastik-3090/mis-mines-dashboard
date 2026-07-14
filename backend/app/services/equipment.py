@@ -25,22 +25,21 @@ Availability formula
   AVAIL% = (1 − BD_hours / total_possible_hours) × 100
   clamped to [0, 100]
 
-MTTR / MTBF
-───────────
-  MTTR (date-filter dependent):
-    Per machine = avg BREAKDOWN_DURAION of closed events in the selected period
-                  (only where BREAKDOWN_DURAION > 0 = SAP has posted end time)
-    Fleet MTTR  = average of per-machine MTTRs
-  MTBF (date-filter independent — full history):
-    Per machine = avg gap: end_of_breakdown[i] → start_of_breakdown[i+1]
-                  needs ≥ 2 historical breakdowns; open breakdowns use start as end
-    Fleet MTBF  = average of per-machine MTBFs
+MTTR / MTBF  (both date-filter dependent)
+──────────────────────────────────────────
+  Calendar Hours = (to_date − from_date + 1) × 24  [follows the date filter]
+  B/D Hours      = SUM(BREAKDOWN_DURAION) for CLOSED breakdowns in period
+                   (closed = BREAKDOWN_DURAION > 0, i.e. SAP has posted an end time)
+
+  MTTR = B/D Hours  ÷  No. of closed breakdowns in period
+  MTBF = (Calendar Hours − B/D Hours)  ÷  No. of breakdowns started in period
+
+  Fleet MTTR = total fleet B/D hrs  ÷  total fleet closed breakdown count
+  Fleet MTBF = (machines_with_bd × Calendar Hours − total B/D hrs) ÷ total breakdown count
 """
-from collections import defaultdict
-from datetime import date, datetime as _dt, timedelta as _td
+from datetime import date
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from typing import Optional
 
 
 # ── Excavator map: sensor name → (SAP name, display name) ─────
@@ -210,68 +209,6 @@ def _get_tipper_bd_hours(
     }
 
 
-def _historical_mtbf_mttr(
-    db: Session,
-    name_clause: str,
-    params: dict,
-) -> dict[str, dict]:
-    """Query ALL breakdown history (no date filter) and compute correct MTTR/MTBF.
-
-    name_clause  : SQL fragment added to WHERE, e.g.
-                   "DESC_TECH_OBJECT IN (:hn0,:hn1,...)"  — for excavators
-                   "DESC_TECH_OBJECT LIKE 'MAN-%'"         — for tippers
-    params       : bind-param dict matching the clause above.
-
-    MTTR = avg repair time of closed breakdowns (BREAKDOWN_DURAION > 0).
-    MTBF = avg gap: end_of_event[i] → start_of_event[i+1].
-           Open breakdowns (duration=0) are treated as zero-duration for MTBF.
-           Returns None when not enough data (< 2 events for MTBF, 0 closed for MTTR).
-    Returns {DESC_TECH_OBJECT: {"mttr": float|None, "mtbf": float|None}}
-    """
-    rows = db.execute(text(f"""
-        SELECT DESC_TECH_OBJECT,
-               MALFUNCTION_START,
-               BREAKDOWN_DURAION
-        FROM   zpm_iw29_notifications
-        WHERE  MAINTENANCE_PLANT = '1200'
-          AND  MAIN_WORK_CENTER  = 'MINEAUTO'
-          AND  NOTIFICATION_TYPE = 'M2'
-          AND  MALFUNCTION_START IS NOT NULL
-          AND  {name_clause}
-        ORDER BY DESC_TECH_OBJECT, MALFUNCTION_START
-    """), params).fetchall()
-
-    machine_events: dict[str, list] = defaultdict(list)
-    for r in rows:
-        start = r.MALFUNCTION_START
-        if isinstance(start, str):
-            start = _dt.fromisoformat(start.replace("T", " "))
-        machine_events[r.DESC_TECH_OBJECT].append({
-            "start":   start,
-            "dur_sec": float(r.BREAKDOWN_DURAION or 0),
-        })
-
-    result: dict[str, dict] = {}
-    for sap_name, events in machine_events.items():
-        closed = [e for e in events if e["dur_sec"] > 0]
-        mttr = (
-            round(sum(e["dur_sec"] for e in closed) / len(closed) / 3600.0, 1)
-            if closed else None
-        )
-
-        gaps_hr: list[float] = []
-        for i in range(len(events) - 1):
-            curr_end = events[i]["start"] + _td(seconds=events[i]["dur_sec"])
-            gap_sec  = (events[i + 1]["start"] - curr_end).total_seconds()
-            if gap_sec > 0:
-                gaps_hr.append(gap_sec / 3600.0)
-        mtbf = round(sum(gaps_hr) / len(gaps_hr), 1) if gaps_hr else None
-
-        result[sap_name] = {"mttr": mttr, "mtbf": mtbf}
-
-    return result
-
-
 def get_breakdown_details(
     db: Session, machine_sap_name: str, from_date: date, to_date: date
 ) -> list[dict]:
@@ -349,15 +286,8 @@ def get_excavator_summary(db: Session, from_date: date, to_date: date) -> dict:
         (vdesc, *EXCAVATOR_MAP[vdesc], found.get(vdesc, 0.0))
         for vdesc in EXCAVATOR_MAP
     ]
-    sap_names = [e[1] for e in all_entries]
-    bd_map    = _get_bd_hours(db, from_date, to_date, sap_names)
-
-    # Historical MTTR/MTBF — independent of the date filter
-    hist_ph     = ", ".join(f":hn{i}" for i in range(len(sap_names)))
-    hist_params = {f"hn{i}": name for i, name in enumerate(sap_names)}
-    hist_map    = _historical_mtbf_mttr(
-        db, f"DESC_TECH_OBJECT IN ({hist_ph})", hist_params
-    )
+    sap_names  = [e[1] for e in all_entries]
+    bd_map     = _get_bd_hours(db, from_date, to_date, sap_names)
 
     days       = (to_date - from_date).days + 1
     period_hrs = days * 24.0
@@ -370,10 +300,10 @@ def get_excavator_summary(db: Session, from_date: date, to_date: date) -> dict:
         bd_count_start  = bd_entry["count_start"]
         bd_count_closed = bd_entry["count_closed"]
         metrics         = _calc_metrics(bd_hr, eng_hr, from_date, to_date)
-        # MTTR: date-filtered (closed events in period only)
+        # MTTR = B/D Hours ÷ No. of closed breakdowns (only when SAP has posted end time)
         mttr = round(bd_hr / bd_count_closed, 1) if bd_count_closed > 0 else None
-        # MTBF: full-history gap between consecutive breakdown ends → starts
-        mtbf = hist_map.get(sap_name, {}).get("mtbf")
+        # MTBF = (Calendar Hours − B/D Hours) ÷ No. of breakdowns started in period
+        mtbf = round((period_hrs - bd_hr) / bd_count_start, 1) if bd_count_start > 0 else None
         machines.append({
             "vehicle_desc":   vdesc,
             "display_name":   display_name,
@@ -390,12 +320,19 @@ def get_excavator_summary(db: Session, from_date: date, to_date: date) -> dict:
 
     machines.sort(key=lambda x: (-x["eng_hr_mtd"], x["display_name"]))
 
-    total_bd_count = sum(m["bd_count"] for m in machines)
-    total_bd_hrs   = sum(m["bd_hr"]    for m in machines)
-    mttr_vals      = [m["mttr"] for m in machines if m["mttr"] is not None]
-    mtbf_vals      = [m["mtbf"] for m in machines if m["mtbf"] is not None]
-    fleet_mttr     = round(sum(mttr_vals) / len(mttr_vals), 1) if mttr_vals else None
-    fleet_mtbf     = round(sum(mtbf_vals) / len(mtbf_vals), 1) if mtbf_vals else None
+    total_bd_hrs          = sum(m["bd_hr"] for m in machines)
+    total_bd_count_start  = sum(m["bd_count_start"]  for m in machines)
+    total_bd_count_closed = sum(
+        bd_map.get(m["sap_name"], {"count_closed": 0})["count_closed"] for m in machines
+    )
+    n_with_bd    = sum(1 for m in machines if m["bd_count_start"] > 0)
+    # Fleet MTTR = total closed B/D hrs ÷ total closed count
+    fleet_mttr   = round(total_bd_hrs / total_bd_count_closed, 1) if total_bd_count_closed > 0 else None
+    # Fleet MTBF = (machines_with_bd × Calendar Hrs − total B/D hrs) ÷ total breakdown count
+    fleet_mtbf   = round(
+        (n_with_bd * period_hrs - total_bd_hrs) / total_bd_count_start, 1
+    ) if total_bd_count_start > 0 else None
+    total_bd_count = total_bd_count_start
 
     return {
         "from_date":      from_date,
@@ -504,11 +441,6 @@ def get_tipper_summary(db: Session, from_date: date, to_date: date) -> dict:
     bd_map        = _get_tipper_bd_hours(db, from_date, to_date)
     all_sap_names = set(sensor_by_sap) | set(bd_map)
 
-    # Historical MTTR/MTBF — independent of the date filter
-    hist_map = _historical_mtbf_mttr(
-        db, "DESC_TECH_OBJECT LIKE 'MAN-%'", {}
-    )
-
     days       = (to_date - from_date).days + 1
     period_hrs = days * 24.0
 
@@ -532,10 +464,10 @@ def get_tipper_summary(db: Session, from_date: date, to_date: date) -> dict:
         else:
             metrics = {"avail_pct": None, "util_pct": None}
 
-        # MTTR: date-filtered (closed events in period only)
+        # MTTR = B/D Hours ÷ No. of closed breakdowns
         mttr = round(bd_hr / bd_count_closed, 1) if bd_count_closed > 0 else None
-        # MTBF: full-history gap between consecutive breakdown ends → starts
-        mtbf = hist_map.get(sap_name, {}).get("mtbf")
+        # MTBF = (Calendar Hours − B/D Hours) ÷ No. of breakdowns started in period
+        mtbf = round((period_hrs - bd_hr) / bd_count_start, 1) if bd_count_start > 0 else None
         machines.append({
             "vehicle_desc":   vdesc,
             "sap_name":       sap_name,
@@ -551,12 +483,17 @@ def get_tipper_summary(db: Session, from_date: date, to_date: date) -> dict:
 
     machines.sort(key=lambda x: (-x["eng_hr_mtd"], x["vehicle_desc"]))
 
-    total_bd_count = sum(m["bd_count"] for m in machines)
-    total_bd_hrs   = sum(m["bd_hr"]    for m in machines)
-    mttr_vals      = [m["mttr"] for m in machines if m["mttr"] is not None]
-    mtbf_vals      = [m["mtbf"] for m in machines if m["mtbf"] is not None]
-    fleet_mttr     = round(sum(mttr_vals) / len(mttr_vals), 1) if mttr_vals else None
-    fleet_mtbf     = round(sum(mtbf_vals) / len(mtbf_vals), 1) if mtbf_vals else None
+    total_bd_hrs          = sum(m["bd_hr"] for m in machines)
+    total_bd_count_start  = sum(m["bd_count_start"] for m in machines)
+    total_bd_count_closed = sum(
+        bd_map.get(m["sap_name"], {"count_closed": 0})["count_closed"] for m in machines
+    )
+    n_with_bd    = sum(1 for m in machines if m["bd_count_start"] > 0)
+    fleet_mttr   = round(total_bd_hrs / total_bd_count_closed, 1) if total_bd_count_closed > 0 else None
+    fleet_mtbf   = round(
+        (n_with_bd * period_hrs - total_bd_hrs) / total_bd_count_start, 1
+    ) if total_bd_count_start > 0 else None
+    total_bd_count = total_bd_count_start
 
     return {
         "from_date":      from_date,
