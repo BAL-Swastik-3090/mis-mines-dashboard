@@ -398,10 +398,10 @@ function DewateringTable({ rows, loading }: { rows: DewateringDayRow[]; loading:
                       {r.open_stock != null ? formatIndian(r.open_stock) : <span className="text-txt-light/40">—</span>}
                     </td>
                     <td className="px-3 py-2.5 text-right font-mono text-txt-muted">
-                      {r.rain_added != null && r.rain_added > 0 ? formatIndian(r.rain_added) : <span className="text-txt-light/40">—</span>}
+                      {r.rain_added != null ? formatIndian(r.rain_added) : <span className="text-txt-light/40">—</span>}
                     </td>
                     <td className="px-3 py-2.5 text-right font-mono text-txt-muted">
-                      {r.seepage != null && r.seepage > 0 ? formatIndian(r.seepage) : <span className="text-txt-light/40">—</span>}
+                      {r.seepage != null ? formatIndian(r.seepage) : <span className="text-txt-light/40">—</span>}
                     </td>
                     <td className="px-3 py-2.5 text-right font-mono text-txt-muted">
                       {r.pump_plan_hr != null ? formatIndian(r.pump_plan_hr, 1) : <span className="text-txt-light/40">—</span>}
