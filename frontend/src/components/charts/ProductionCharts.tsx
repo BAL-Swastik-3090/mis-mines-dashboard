@@ -302,7 +302,7 @@ function StackedExcavationPanel({
           <span className="font-semibold text-success/60">ORE · </span>SAP
         </p>
         <p className="text-[9px] font-mono text-success/70 leading-tight">
-          <span className="font-semibold text-success/60">OB · </span>IMOS
+          <span className="font-semibold text-success/60">OB · </span>SAP
         </p>
         <p className="text-[9px] font-mono text-success/70 leading-tight">
           <span className="font-semibold text-success/60">DE-SILT · </span>IMOS
@@ -319,7 +319,7 @@ export default function ProductionCharts() {
   const rows  = data?.rows ?? [];
   const dates = rows.map((r) => r.date);
 
-  // OB from IMOS — keyed by date string (YYYY-MM-DD)
+  // OB from SAP (pp_production) — keyed by date string (YYYY-MM-DD)
   const obMap = Object.fromEntries(
     (obData?.rows ?? []).map((r) => [r.date, r.bal_actual ?? 0])
   );
@@ -355,7 +355,7 @@ export default function ProductionCharts() {
         dates={dates} actuals={rows.map((r) => r.ob_actual)} plans={rows.map((r) => r.ob_plan)}
         unit="CuM" barColor="#2c4a7c" loading={isLoading}
         planSource="IMOS"
-        actualSource="IMOS"
+        actualSource="SAP"
       />
       <ChartPanel
         title="COB Production (MT)"
