@@ -291,7 +291,7 @@ export default function DaywiseTable() {
           <span className="font-semibold text-success/60">PLAN · </span>Ore &amp; OB → IMOS · COB → IMOS · Despatch → IMOS
         </p>
         <p className="text-[9px] font-mono text-success/70 leading-tight">
-          <span className="font-semibold text-success/60">ACTUAL · </span>Ore &amp; COB → SAP · OB &amp; Silt → IMOS · Despatch → SAP
+          <span className="font-semibold text-success/60">ACTUAL · </span>Ore, OB &amp; COB → SAP · Silt → IMOS · Despatch → SAP
         </p>
       </div>
     </div>

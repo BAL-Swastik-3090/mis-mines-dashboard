@@ -1,29 +1,33 @@
 """
-OB Excavation service — dynamic vendor detection.
-BAL OWN = Agency='3' (always).
-Vendors = all other non-empty agencies with OB data in the date range.
-Qty and OB_QTY_Cum are VARCHAR — always CAST to DECIMAL.
+OB Excavation service.
+BAL OWN actual = pp_production WHERE PLANT='1200' AND MATERIAL_NO='000000000016000009'.
+OB plan        = mines_daily_excavation_plan.OB_QTY_Cum.
+Vendors        = mines_day_wise_excavation (non-BAL agencies, Variant='3').
 """
 from datetime import date, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import text
+
+OB_MATERIAL_NO = "000000000016000009"   # OVERBURDEN in SAP pp_production
+OB_PLANT       = "1200"
 
 
 def _date_spine(from_date: date, to_date: date) -> list:
     n = (to_date - from_date).days + 1
     return [from_date + timedelta(days=i) for i in range(n)]
 
-BAL_AGENCY = "3"
-
 
 def _get_bal_and_plan(db: Session, from_date: date, to_date: date):
-    """Returns BAL actuals + OB plan merged by date."""
+    """Returns BAL actuals (from SAP pp_production) + OB plan merged by date."""
     sql_bal = text("""
-        SELECT Prod_date AS dt,
-               ROUND(SUM(CAST(Qty AS DECIMAL(13,3))), 2) AS qty
-        FROM mines_day_wise_excavation
-        WHERE Variant = '3' AND Agency = :bal AND Prod_date BETWEEN :f AND :t
-        GROUP BY Prod_date ORDER BY Prod_date
+        SELECT POSTING_DATE AS dt,
+               ROUND(SUM(QUANTITY), 2) AS qty
+        FROM   pp_production
+        WHERE  PLANT       = :plant
+          AND  MATERIAL_NO = :mat
+          AND  POSTING_DATE BETWEEN :f AND :t
+        GROUP BY POSTING_DATE
+        ORDER BY POSTING_DATE
     """)
     sql_plan = text("""
         SELECT Prod_date AS dt,
@@ -33,7 +37,8 @@ def _get_bal_and_plan(db: Session, from_date: date, to_date: date):
         GROUP BY Prod_date ORDER BY Prod_date
     """)
     bal_map  = {r.dt: float(r.qty or 0)
-                for r in db.execute(sql_bal,  {"bal": BAL_AGENCY, "f": from_date, "t": to_date}).fetchall()}
+                for r in db.execute(sql_bal, {"plant": OB_PLANT, "mat": OB_MATERIAL_NO,
+                                              "f": from_date, "t": to_date}).fetchall()}
     plan_map = {r.dt: float(r.ob_plan or 0)
                 for r in db.execute(sql_plan, {"f": from_date, "t": to_date}).fetchall()}
 

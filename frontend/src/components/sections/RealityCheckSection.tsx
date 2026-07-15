@@ -190,7 +190,7 @@ export default function RealityCheckSection() {
             <span className="font-semibold text-success/60">PLAN · </span>Ore &amp; OB → IMOS · COB → IMOS · Despatch → IMOS · Disposal → IMOS
           </p>
           <p className="text-[9px] font-mono text-success/70 leading-tight">
-            <span className="font-semibold text-success/60">ACTUAL · </span>Ore &amp; COB → SAP · OB → IMOS · Despatch → SAP · Disposal → IMOS
+            <span className="font-semibold text-success/60">ACTUAL · </span>Ore, OB &amp; COB → SAP · Despatch → SAP · Disposal → IMOS
           </p>
         </div>
       </div>
