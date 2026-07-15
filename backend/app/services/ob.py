@@ -10,6 +10,7 @@ from sqlalchemy import text
 
 OB_MATERIAL_NO = "000000000016000009"   # OVERBURDEN in SAP pp_production
 OB_PLANT       = "1200"
+BAL_AGENCY     = "3"                    # BAL OWN agency ID in mines_day_wise_excavation
 
 
 def _date_spine(from_date: date, to_date: date) -> list:
