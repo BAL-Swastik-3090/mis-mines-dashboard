@@ -223,7 +223,7 @@ function ExcavationDaywiseChart() {
           <span className="font-semibold text-success/60">ORE · </span>SAP
         </p>
         <p className="text-[9px] font-mono text-success/70 leading-tight">
-          <span className="font-semibold text-success/60">OB · </span>IMOS
+          <span className="font-semibold text-success/60">OB · </span>SAP
         </p>
         <p className="text-[9px] font-mono text-success/70 leading-tight">
           <span className="font-semibold text-success/60">DE-SILT · </span>IMOS
@@ -327,7 +327,7 @@ function BalChart() {
           <span className="font-semibold text-success/60">PLAN · </span>IMOS
         </p>
         <p className="text-[9px] font-mono text-success/70 leading-tight">
-          <span className="font-semibold text-success/60">ACTUAL · </span>IMOS
+          <span className="font-semibold text-success/60">ACTUAL · </span>SAP
         </p>
       </div>
     </div>
