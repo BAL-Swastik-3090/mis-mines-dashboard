@@ -320,7 +320,7 @@ function MtdKpiRow({ mtd, loading }: { mtd: DewateringMtdKpi; loading: boolean }
 
 // ── Day-wise Table ────────────────────────────────────────────
 function DewateringTable({ rows, loading }: { rows: DewateringDayRow[]; loading: boolean }) {
-  const COLS = 9;
+  const COLS = 10;
 
   const thCls =
     "px-3 py-2 text-left text-[10px] xl:text-[11px] font-bold text-txt-muted uppercase tracking-widest whitespace-nowrap select-none";
@@ -343,6 +343,7 @@ function DewateringTable({ rows, loading }: { rows: DewateringDayRow[]; loading:
   const totPumpAct  = rows.reduce((s, r) => s + (r.pump_act_hr   ?? 0), 0);
   const totVariance = rows.reduce((s, r) => s + (r.variance      ?? 0), 0);
   const totRain     = rows.reduce((s, r) => s + (r.rain_added    ?? 0), 0);
+  const totSeepage  = rows.reduce((s, r) => s + (r.seepage       ?? 0), 0);
   const showFooter  = !loading && rows.length > 0;
 
   return (
@@ -354,6 +355,7 @@ function DewateringTable({ rows, loading }: { rows: DewateringDayRow[]; loading:
               <th className={thCls}>Date</th>
               <th className={`${thCls} text-right`}>Open Stock</th>
               <th className={`${thCls} text-right`}>Rain Added</th>
+              <th className={`${thCls} text-right`}>Day Water Seepage</th>
               <th className={`${thCls} text-right`}>Pump Plan Hr</th>
               <th className={`${thCls} text-right`}>Pump Act Hr</th>
               <th className={`${thCls} text-right`}>Disposal Plan</th>
@@ -399,6 +401,9 @@ function DewateringTable({ rows, loading }: { rows: DewateringDayRow[]; loading:
                       {r.rain_added != null && r.rain_added > 0 ? formatIndian(r.rain_added) : <span className="text-txt-light/40">—</span>}
                     </td>
                     <td className="px-3 py-2.5 text-right font-mono text-txt-muted">
+                      {r.seepage != null && r.seepage > 0 ? formatIndian(r.seepage) : <span className="text-txt-light/40">—</span>}
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-mono text-txt-muted">
                       {r.pump_plan_hr != null ? formatIndian(r.pump_plan_hr, 1) : <span className="text-txt-light/40">—</span>}
                     </td>
                     <td className={`px-3 py-2.5 text-right ${numCls(r.pump_act_hr, r.pump_plan_hr)}`}>
@@ -434,6 +439,9 @@ function DewateringTable({ rows, loading }: { rows: DewateringDayRow[]; loading:
                 <td className="px-3 py-2.5 text-right font-mono text-txt-muted">—</td>
                 <td className="px-3 py-2.5 text-right font-mono text-txt-muted">
                   {totRain > 0 ? formatIndian(totRain) : "—"}
+                </td>
+                <td className="px-3 py-2.5 text-right font-mono text-txt-muted">
+                  {totSeepage > 0 ? formatIndian(totSeepage) : "—"}
                 </td>
                 <td className="px-3 py-2.5 text-right font-mono text-txt-secondary">
                   {formatIndian(totPumpPlan, 1)}

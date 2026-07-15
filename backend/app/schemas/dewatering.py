@@ -6,6 +6,7 @@ class DewateringDayRow(BaseModel):
     date:           str
     open_stock:     Optional[float]
     rain_added:     Optional[float]
+    seepage:        Optional[float]
     pump_plan_hr:   Optional[float]
     pump_act_hr:    Optional[float]
     disposal_plan:  Optional[float]
