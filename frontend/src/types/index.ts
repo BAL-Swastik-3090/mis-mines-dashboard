@@ -394,6 +394,7 @@ export interface DewateringDayRow {
   date:          string;
   open_stock:    number | null;
   rain_added:    number | null;
+  seepage:       number | null;
   pump_plan_hr:  number | null;
   pump_act_hr:   number | null;
   disposal_plan: number | null;

@@ -42,6 +42,7 @@ def get_summary(db: Session, from_date: date, to_date: date) -> DewateringSummar
             d.date,
             MAX(CASE WHEN d.kpi_id = :open_stock    THEN d.calculation_value END) AS open_stock,
             MAX(CASE WHEN d.kpi_id = :rain_water     THEN d.calculation_value END) AS rain_added,
+            MAX(CASE WHEN d.kpi_id = :seepage        THEN d.calculation_value END) AS seepage,
             MAX(CASE WHEN d.kpi_id = :pump_plan_hr   THEN d.calculation_value END) AS pump_plan_hr,
             MAX(CASE WHEN d.kpi_id = :pump_act_hr    THEN d.calculation_value END) AS pump_act_hr,
             MAX(CASE WHEN d.kpi_id = :disposal_plan  THEN d.calculation_value END) AS disposal_plan,
@@ -57,6 +58,7 @@ def get_summary(db: Session, from_date: date, to_date: date) -> DewateringSummar
     raw_rows = db.execute(daily_sql, {
         "open_stock":   KPI_OPEN_STOCK,
         "rain_water":   KPI_RAIN_WATER,
+        "seepage":      KPI_SEEPAGE,
         "pump_plan_hr": KPI_PUMP_PLAN_HR,
         "pump_act_hr":  KPI_PUMP_ACT_HR,
         "disposal_plan":KPI_DISPOSAL_PLAN,
@@ -73,6 +75,7 @@ def get_summary(db: Session, from_date: date, to_date: date) -> DewateringSummar
             date=str(r.date),
             open_stock=_f(r.open_stock),
             rain_added=_f(r.rain_added),
+            seepage=_f(r.seepage),
             pump_plan_hr=_f(r.pump_plan_hr),
             pump_act_hr=_f(r.pump_act_hr),
             disposal_plan=_f(r.disposal_plan),
@@ -88,7 +91,7 @@ def get_summary(db: Session, from_date: date, to_date: date) -> DewateringSummar
     rows = [
         data_by_date.get(str(dt), DewateringDayRow(
             date=str(dt),
-            open_stock=None, rain_added=None, pump_plan_hr=None,
+            open_stock=None, rain_added=None, seepage=None, pump_plan_hr=None,
             pump_act_hr=None, disposal_plan=None, disposal_act=None,
             variance=None, closing_stock=None,
         ))
