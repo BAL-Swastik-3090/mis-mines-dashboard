@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-export type AppPage = "mis" | "fuel-management";
+export type AppPage = "mis" | "fuel-management" | "ev-tracking";
 
 interface AppPageStore {
   page: AppPage;

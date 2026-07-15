@@ -1,11 +1,12 @@
 "use client";
-import { LayoutDashboard, Gauge, ChevronLeft, ChevronRight } from "lucide-react";
+import { LayoutDashboard, Gauge, Zap, ChevronLeft, ChevronRight, LogOut } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { useSidebar }               from "@/contexts/useSidebar";
 
 const NAV_ITEMS: { id: AppPage; label: string; icon: React.ElementType }[] = [
-  { id: "mis",              label: "MIS Dashboard",  icon: LayoutDashboard },
-  { id: "fuel-management", label: "Fuel Management", icon: Gauge           },
+  { id: "mis",              label: "MIS Dashboard",             icon: LayoutDashboard },
+  { id: "fuel-management", label: "Fuel Management",            icon: Gauge           },
+  { id: "ev-tracking",     label: "Electric Vehicles Tracking", icon: Zap             },
 ];
 
 export default function AppSidebar() {
@@ -90,6 +91,40 @@ export default function AppSidebar() {
           );
         })}
       </nav>
+
+      {/* Logout button */}
+      <div className="border-t border-white/10 shrink-0">
+        <button
+          onClick={() => {
+            localStorage.removeItem("auth_token");
+            localStorage.removeItem("auth_empid");
+            localStorage.removeItem("kaliapani-app-page");
+            window.location.reload();
+          }}
+          title={collapsed ? "Logout" : undefined}
+          className="w-full flex items-center gap-3 px-3 py-3 text-white/55 hover:text-white/90 hover:bg-white/5 transition-colors group relative"
+        >
+          <LogOut size={16} className="shrink-0 text-danger-light group-hover:text-danger" />
+          {!collapsed && (
+            <span className="text-[12px] font-semibold tracking-wide leading-tight truncate font-condensed text-left">
+              LOGOUT
+            </span>
+          )}
+          {collapsed && (
+            <span className="
+              pointer-events-none select-none
+              absolute left-[56px] top-1/2 -translate-y-1/2
+              bg-[#0f1c35] text-white text-[11px] font-semibold
+              px-2.5 py-1 rounded shadow-lg whitespace-nowrap
+              opacity-0 group-hover:opacity-100
+              transition-opacity duration-150
+              z-50 border border-white/10
+            ">
+              Logout
+            </span>
+          )}
+        </button>
+      </div>
 
       {/* Collapse toggle */}
       <div className="border-t border-white/10 shrink-0">
