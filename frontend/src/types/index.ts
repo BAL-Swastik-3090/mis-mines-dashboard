@@ -608,3 +608,54 @@ export interface FuelVehicleHistoryResponse {
   to_date:       string;
   days:          FuelVehicleHistoryDay[];
 }
+
+// ── Electric Vehicle Tracking ────────────────────────────────
+export interface EvVehicleData {
+  ev_equipment_id:      number;
+  serial_no:            string;
+  display_name:         string;
+  equipment_type:       string;
+  make:                 string;
+  model:                string;
+  battery_capacity:     number;
+  status:               "Active" | "Idle";
+  operating_hours:      number;
+  idling_hours:         number;
+  work_hours:           number;
+  total_energy_kwh:     number;
+  avg_energy_kwh_per_h: number;
+  battery_soc:          number;
+  battery_soh:          number;
+  last_seen:            string | null;
+}
+
+export interface EvOverviewResponse {
+  report_date:      string;
+  total_vehicles:   number;
+  active_vehicles:  number;
+  total_work_hours: number;
+  total_energy_kwh: number;
+  vehicles:         EvVehicleData[];
+}
+
+export interface EvVehicleHistoryDay {
+  date:                 string;
+  operating_hours:      number;
+  idling_hours:         number;
+  work_hours:           number;
+  total_energy_kwh:     number;
+  avg_energy_kwh_per_h: number;
+  battery_soc:          number;
+}
+
+export interface EvVehicleHistoryResponse {
+  ev_equipment_id:  number;
+  serial_no:        string;
+  equipment_type:   string;
+  make:             string;
+  model:            string;
+  battery_capacity: number;
+  from_date:        string;
+  to_date:          string;
+  history:          EvVehicleHistoryDay[];
+}

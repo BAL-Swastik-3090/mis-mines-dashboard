@@ -9,6 +9,7 @@ process.env.NEXT_TELEMETRY_DISABLED = "1";
 const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8989";
 
 const nextConfig: NextConfig = {
+  output: "standalone",
   devIndicators: false,
   async rewrites() {
     return [
