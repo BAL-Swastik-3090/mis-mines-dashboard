@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.schemas.production import ProductionSummary, ProductionDaywise, GradeBreakdown, KpiCard
+from app.schemas.production import ProductionSummary, ProductionDaywise, GradeBreakdown, KpiCard, RehandlingDaywise
 from app.services import production as svc
 
 router = APIRouter()
@@ -161,4 +161,28 @@ def production_grade(
         mtd_mg     = _f0(mtd["mg_actual"]),
         mtd_lg     = _f0(mtd["lg_actual"]),
         mtd_total  = _f0(mtd["ore_actual"]),
+    )
+
+
+# ── GET /api/production/rehandling-daywise ────────────────────
+@router.get("/rehandling-daywise", response_model=RehandlingDaywise, summary="Day-wise excavation re-handling (MINE_EXV)")
+def rehandling_daywise(
+    from_date: date = Query(default=None),
+    to_date:   date = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    today = date.today()
+    if not from_date:
+        from_date = today.replace(day=1)
+    if not to_date:
+        to_date = today
+
+    rows = svc.get_rehandling_daywise(db, from_date, to_date)
+    mtd  = svc.get_rehandling_mtd(db, from_date, to_date)
+
+    return RehandlingDaywise(
+        from_date  = from_date,
+        to_date    = to_date,
+        rows       = rows,
+        mtd_total  = mtd,
     )

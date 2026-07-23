@@ -87,3 +87,16 @@ class GradeBreakdown(BaseModel):
     mtd_mg:     float = 0.0
     mtd_lg:     float = 0.0
     mtd_total:  float = 0.0
+
+
+# ── Re-handling excavation (pp_prod_order_confirmation · MINE_EXV) ──
+class RehandlingDayRow(BaseModel):
+    date:     date
+    total_m3: Optional[float] = None
+
+
+class RehandlingDaywise(BaseModel):
+    from_date:  date
+    to_date:    date
+    rows:       list[RehandlingDayRow]
+    mtd_total:  float = 0.0

@@ -134,6 +134,18 @@ export interface ProductionDaywiseResponse {
   mtd_lg:         number;
 }
 
+export interface RehandlingDaywiseRow {
+  date:     string;
+  total_m3: number | null;
+}
+
+export interface RehandlingDaywiseResponse {
+  from_date:  string;
+  to_date:    string;
+  rows:       RehandlingDaywiseRow[];
+  mtd_total:  number;
+}
+
 export interface GradeDayRowAPI {
   date:       string;
   hg_actual:  number | null;

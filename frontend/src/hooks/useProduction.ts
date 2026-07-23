@@ -11,6 +11,7 @@ import type {
   ProductionSummaryResponse,
   ProductionDaywiseResponse,
   GradeBreakdownResponse,
+  RehandlingDaywiseResponse,
 } from "@/types";
 
 // ── /api/production/summary ───────────────────────────────────
@@ -36,6 +37,22 @@ export function useProductionDaywise() {
     queryKey: ["production", "daywise", apiFrom, apiTo],
     queryFn: async () => {
       const res = await api.get("/production/daywise", {
+        params: { from_date: apiFrom, to_date: apiTo },
+      });
+      return res.data;
+    },
+    staleTime: 5 * 60 * 1000,
+    enabled: Boolean(apiFrom && apiTo),
+  });
+}
+
+// ── /api/production/rehandling-daywise ───────────────────────
+export function useRehandlingDaywise() {
+  const { apiFrom, apiTo } = useDateFilter();
+  return useQuery<RehandlingDaywiseResponse>({
+    queryKey: ["production", "rehandling-daywise", apiFrom, apiTo],
+    queryFn: async () => {
+      const res = await api.get("/production/rehandling-daywise", {
         params: { from_date: apiFrom, to_date: apiTo },
       });
       return res.data;

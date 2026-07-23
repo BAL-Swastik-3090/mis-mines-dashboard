@@ -251,7 +251,61 @@ def get_today_plan(db: Session, today: date) -> dict:
     }
 
 
-# ── 7. De-silting actuals ─────────────────────────────────────
+# ── 7. Re-handling excavation daywise ────────────────────────
+def get_rehandling_daywise(db: Session, from_date: date, to_date: date) -> list[dict]:
+    """
+    Day-wise total excavation from pp_prod_order_confirmation (MINE_EXV work center).
+    Deduplicates on (ORDER_NO, CONFIRM_COUNTER, POSTING_DATE) before summing ACTIVITY_CONF_1.
+    Returns a full date-spine — dates with no data get total_m3=None.
+    """
+    sql = text("""
+        SELECT POSTING_DATE AS dt, SUM(ACTIVITY_CONF_1) AS total_m3
+        FROM (
+            SELECT DISTINCT ORDER_NO, CONFIRM_COUNTER, POSTING_DATE, ACTIVITY_CONF_1
+            FROM pp_prod_order_confirmation
+            WHERE PLANT      = :plant
+              AND WORK_CENTER = :work_center
+              AND POSTING_DATE BETWEEN :from_date AND :to_date
+        ) dedup
+        GROUP BY POSTING_DATE
+        ORDER BY POSTING_DATE
+    """)
+    rows = db.execute(sql, {
+        "plant":       PLANT_MINES,
+        "work_center": "MINE_EXV",
+        "from_date":   from_date,
+        "to_date":     to_date,
+    }).fetchall()
+    by_date = {r.dt: float(r.total_m3) for r in rows if r.total_m3 is not None}
+
+    return [
+        {"date": dt, "total_m3": by_date.get(dt)}
+        for dt in _date_spine(from_date, to_date)
+    ]
+
+
+def get_rehandling_mtd(db: Session, from_date: date, to_date: date) -> float:
+    """MTD total excavation re-handling in M3 (deduplicated)."""
+    sql = text("""
+        SELECT SUM(ACTIVITY_CONF_1) AS total_m3
+        FROM (
+            SELECT DISTINCT ORDER_NO, CONFIRM_COUNTER, POSTING_DATE, ACTIVITY_CONF_1
+            FROM pp_prod_order_confirmation
+            WHERE PLANT      = :plant
+              AND WORK_CENTER = :work_center
+              AND POSTING_DATE BETWEEN :from_date AND :to_date
+        ) dedup
+    """)
+    row = db.execute(sql, {
+        "plant":       PLANT_MINES,
+        "work_center": "MINE_EXV",
+        "from_date":   from_date,
+        "to_date":     to_date,
+    }).fetchone()
+    return float(row.total_m3) if row and row.total_m3 is not None else 0.0
+
+
+# ── 8. De-silting actuals ─────────────────────────────────────
 # Source: mines_day_wise_excavation WHERE Variant='4' (SILT)
 # Note: Qty stored as VARCHAR — must CAST. No plan table exists.
 def get_desilt_actual(db: Session, from_date: date, to_date: date) -> float | None:
