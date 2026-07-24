@@ -10,10 +10,11 @@ settings = get_settings()
 engine = create_engine(
     settings.database_url,
     poolclass=QueuePool,
-    pool_size=10,
-    max_overflow=20,
+    pool_size=3,
+    max_overflow=5,
+    pool_timeout=30,
     pool_pre_ping=True,       # auto-reconnect on stale connections
-    pool_recycle=3600,        # recycle connections every hour
+    pool_recycle=1800,        # recycle connections every 30 min
     echo=settings.app_env == "development",
 )
 

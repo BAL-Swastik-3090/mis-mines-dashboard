@@ -45,7 +45,7 @@ function buildRehandlingOption(
           return `<div style="font-weight:700;color:#c8d8f0;">Day ${day}</div><div style="color:#6b7ea8;font-style:italic;margin-top:4px;">No data recorded</div>`;
         return `<div style="font-weight:700;margin-bottom:6px;color:#c8d8f0;font-size:13px;">Day ${day}</div>
           <div style="display:flex;justify-content:space-between;gap:16px;">
-            <span style="color:#64b5f6;">Total Excavation</span>
+            <span style="color:#ce93d8;">Total Excavation</span>
             <span style="font-weight:700;font-family:'IBM Plex Mono';color:#fff;">${formatIndian(Math.round(val))} M³</span>
           </div>`;
       },
@@ -70,8 +70,8 @@ function buildRehandlingOption(
         type: "bar",
         data: data.map((v) => v ?? 0),
         barMaxWidth: 26,
-        itemStyle: { color: "#1565c0", borderRadius: [3, 3, 0, 0] },
-        emphasis: { itemStyle: { color: "#1e88e5" } },
+        itemStyle: { color: "#6a1b9a", borderRadius: [3, 3, 0, 0] },
+        emphasis: { itemStyle: { color: "#8e24aa" } },
       },
     ],
   };
@@ -211,12 +211,12 @@ function RehandlingExcavationPanel({ dates, data, loading, mtdTotal }: Rehandlin
       {/* Header */}
       <div className="px-4 pt-3 pb-2 border-b border-border-light flex items-center justify-between flex-wrap gap-2">
         <span className="font-condensed font-bold text-[13px] text-navy tracking-widest uppercase">
-          Day Wise Total Excavation (Re-Handling)
+          Day Wise Total Excavation (CuM)
         </span>
         {!loading && mtdTotal > 0 && (
           <span className="inline-flex items-center gap-1 text-[9px] font-bold px-2 py-0.5 rounded border"
-            style={{ color: "#1565c0", backgroundColor: "#e3f2fd", borderColor: "#90caf9" }}>
-            <span className="w-1.5 h-1.5 rounded-full bg-[#1565c0]" />
+            style={{ color: "#6a1b9a", backgroundColor: "#f3e5f5", borderColor: "#ce93d8" }}>
+            <span className="w-1.5 h-1.5 rounded-full bg-[#6a1b9a]" />
             MTD {formatIndian(Math.round(mtdTotal))} M³
           </span>
         )}
@@ -239,7 +239,7 @@ function RehandlingExcavationPanel({ dates, data, loading, mtdTotal }: Rehandlin
       {/* Data source footer */}
       <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
         <p className="text-[9px] font-mono text-success/70 leading-tight">
-          <span className="font-semibold text-success/60">SOURCE · </span>pp_prod_order_confirmation (MINE_EXV)
+          <span className="font-semibold text-success/60">SOURCE · </span>SAP
         </p>
       </div>
     </div>
