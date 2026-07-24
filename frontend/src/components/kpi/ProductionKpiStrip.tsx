@@ -433,7 +433,7 @@ export default function ProductionKpiStrip() {
       label: "Ore Production",  icon: BarChart3,
       data: data?.ore,          accentClass: "accent-bar-green",
       iconBg: "bg-success-bg",  iconColor: "text-success",
-      showGrades: true,         showCuM: true,
+      showGrades: true,
       sourcePlan: "IMOS",
       sourceActual: "SAP",
     },
@@ -480,7 +480,6 @@ export default function ProductionKpiStrip() {
           loading={isLoading}
           tdDate={apiTo}
           showGrades={c.showGrades}
-          showCuM={c.showCuM}
           sourcePlan={c.sourcePlan}
           sourceActual={c.sourceActual}
         />

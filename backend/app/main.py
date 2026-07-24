@@ -54,13 +54,18 @@ async def _daily_insights_digest():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # ── Startup ──────────────────────────────────────────────
-    db_status = test_connection()
-    if db_status["status"] == "connected":
-        logger.info(f"✅ Database connected: {db_status['db']} @ {db_status['host']}")
+    # ── Startup — retry up to 5 times for transient errors (e.g. too many connections) ──
+    db_status = {"status": "error"}
+    for attempt in range(1, 6):
+        db_status = test_connection()
+        if db_status["status"] == "connected":
+            logger.info(f"✅ Database connected: {db_status['db']} @ {db_status['host']}")
+            break
+        logger.warning(f"⚠️  DB connect attempt {attempt}/5 failed: {db_status.get('detail')} — retrying in 5s")
+        await asyncio.sleep(5)
     else:
-        logger.critical(f"❌ Database connection failed: {db_status.get('detail')} — aborting startup")
-        sys.exit(1)  # force container restart rather than serving broken requests
+        logger.critical(f"❌ Database connection failed after 5 attempts — aborting startup")
+        sys.exit(1)
 
     # Start 7AM digest scheduler as a background task
     digest_task = asyncio.create_task(_daily_insights_digest())
