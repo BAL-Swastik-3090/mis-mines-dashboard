@@ -122,7 +122,7 @@ def health_check():
 
 
 # ── Routers ───────────────────────────────────────────────────
-from app.routers import production, stock, cob, plant, ob, despatch, equipment, dewatering, insights, live_tracking, fuel_management, ev_tracking, auth
+from app.routers import production, stock, cob, plant, ob, despatch, equipment, dewatering, insights, live_tracking, fuel_management, ev_tracking, auth, oee
 app.include_router(production.router,      prefix="/api/production",    tags=["Production"])
 app.include_router(stock.router,           prefix="/api/stock",         tags=["Stock"])
 app.include_router(cob.router,             prefix="/api/cob",           tags=["COB Plant"])
@@ -136,3 +136,4 @@ app.include_router(live_tracking.router)
 app.include_router(fuel_management.router)
 app.include_router(ev_tracking.router)
 app.include_router(auth.router)
+app.include_router(oee.router)

@@ -53,3 +53,7 @@ secrets/
 
 # ── Local MCP config (contains API keys) ─────────────
 .mcp.json
+
+# -- Local working files (not project code) --
+Claude Context backup/
+*.tsbuildinfo
