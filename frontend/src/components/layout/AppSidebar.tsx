@@ -1,12 +1,13 @@
 "use client";
-import { LayoutDashboard, Gauge, Zap, ChevronLeft, ChevronRight, LogOut } from "lucide-react";
+import { LayoutDashboard, Gauge, Zap, Activity, ChevronLeft, ChevronRight, LogOut } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { useSidebar }               from "@/contexts/useSidebar";
 
 const NAV_ITEMS: { id: AppPage; label: string; icon: React.ElementType }[] = [
-  { id: "mis",              label: "MIS Dashboard",             icon: LayoutDashboard },
-  { id: "fuel-management", label: "Fuel Management",            icon: Gauge           },
-  { id: "ev-tracking",     label: "Electric Vehicles Tracking", icon: Zap             },
+  { id: "mis",             label: "MIS Dashboard",             icon: LayoutDashboard },
+  { id: "oee",             label: "OEE / LCM",                 icon: Activity        },
+  { id: "fuel-management", label: "Fuel Management",           icon: Gauge           },
+  { id: "ev-tracking",    label: "Electric Vehicles Tracking", icon: Zap             },
 ];
 
 export default function AppSidebar() {

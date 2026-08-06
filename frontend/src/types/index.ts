@@ -589,7 +589,10 @@ export interface FuelKpis {
 }
 
 export interface FuelOverviewResponse {
-  as_of:          string;
+  as_of:          string;   // newest report_date that actually has data
+  compared_to:    string;   // previous date with data (day-on-day baseline)
+  days_stale:     number;   // calendar days between as_of and today
+  is_stale:       boolean;  // true when as_of is behind today
   kpis:           FuelKpis;
   distribution:   FuelDistributionBand[];
   vehicles:       FuelVehicle[];
@@ -671,3 +674,29 @@ export interface EvVehicleHistoryResponse {
   to_date:          string;
   history:          EvVehicleHistoryDay[];
 }
+
+// ── OEE ───────────────────────────────────────────────────────
+export interface OEEMachineRow {
+  machine:        string;
+  ideal_cap:      number;
+  god_hours:      number;
+  holiday_hrs:    number;
+  no_plan_hrs:    number;
+  planned_sd_hrs: number;
+  bd_hours:       number;
+  pm_hours:       number;
+  operating_hrs:  number;
+  actual_cum:     number;
+  ideal_cum:      number;
+  availability:   number;
+  performance:    number;
+  quality:        number;
+  oee:            number;
+}
+
+export interface OEEResponse {
+  from_date: string;
+  to_date:   string;
+  machines:  OEEMachineRow[];
+}
+

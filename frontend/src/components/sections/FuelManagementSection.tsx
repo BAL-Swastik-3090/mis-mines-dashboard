@@ -596,6 +596,22 @@ export default function FuelManagementSection() {
 
       {!loading && data && (
         <>
+          {/* ── Stale-feed banner ──────────────────────────── */}
+          {data.is_stale && (
+            <div className="mx-1 mt-4 p-3 rounded-lg bg-[#fff8e1] border border-[#ffe082] border-l-[3px] border-l-[#c8960c] flex items-start gap-2.5">
+              <AlertTriangle size={15} className="text-[#c8960c] shrink-0 mt-[1px]" />
+              <div className="text-[11.5px] text-txt-secondary leading-relaxed">
+                <span className="font-bold text-navy">
+                  Showing data as on {fmtDate(data.as_of)} — {data.days_stale}{" "}
+                  {data.days_stale === 1 ? "day" : "days"} behind today.
+                </span>{" "}
+                The Technoton telematics feed has not delivered records since then, so
+                every figure below is the last complete read, not live status.
+                Day-on-day comparison uses {fmtDate(data.compared_to)}.
+              </div>
+            </div>
+          )}
+
           {/* ── KPI Strip ──────────────────────────────────── */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mt-4">
             <KpiCard

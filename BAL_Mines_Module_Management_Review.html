@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BAL · Mines Operations — Module-wise Management Review</title>
+<style>
+:root{
+  --ink:#0E1420; --ink2:#33405A; --muted:#6A7690; --line:#DCE1EB; --line2:#EBEEF4;
+  --paper:#F5F6F9; --card:#FFFFFF;
+  --steel:#1F5FA6; --steel-soft:#E7EFF8;
+  --amber:#B5730B; --amber-soft:#FBF0DA;
+  --green:#0F8A4D; --green-soft:#E1F3E9;
+  --slate:#5A6480; --slate-soft:#ECEEF3;
+  --red:#C0362C; --red-soft:#FBE7E4;
+  --accent:#E8552E;
+  --mines:#0E6E6E;
+  --shadow:0 1px 2px rgba(16,20,32,.05),0 6px 20px rgba(16,20,32,.06);
+  --mono:'SF Mono',ui-monospace,'Roboto Mono',Menlo,monospace;
+  --disp:'Georgia','Times New Roman',serif;
+  --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--paper);color:var(--ink);font-family:var(--sans);line-height:1.5;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1240px;margin:0 auto;padding:0 22px 70px}
+
+.mast{border-bottom:2px solid var(--ink);padding:30px 0 18px}
+.mast .kicker{font-family:var(--mono);font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--mines);font-weight:600}
+.mast h1{font-family:var(--disp);font-size:32px;line-height:1.1;font-weight:600;letter-spacing:-.01em;margin:6px 0 4px}
+.mast .sub{color:var(--muted);font-size:13.5px;display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:8px}
+.mast .sub b{color:var(--ink2);font-weight:600}
+.confid{font-family:var(--mono);font-size:10px;letter-spacing:.16em;color:var(--muted);text-transform:uppercase;border:1px solid var(--line);border-radius:3px;padding:3px 8px}
+
+.sec{margin-top:34px}
+.sec-h{display:flex;align-items:baseline;gap:12px;border-bottom:1px solid var(--line);padding-bottom:9px;margin-bottom:16px}
+.sec-h .num{font-family:var(--mono);font-size:12px;color:var(--mines);font-weight:600}
+.sec-h h2{font-family:var(--disp);font-size:19px;font-weight:600;letter-spacing:-.01em}
+.sec-h .note{margin-left:auto;font-size:12px;color:var(--muted);font-family:var(--mono)}
+
+.dhero{background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:22px 24px;margin:26px 0 6px;position:relative;overflow:hidden}
+.dhero::before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;background:var(--mines)}
+.dhero .eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.dhero h2{font-family:var(--disp);font-size:24px;font-weight:600;margin:4px 0;letter-spacing:-.01em}
+.dhero p{color:var(--ink2);font-size:13.5px;max-width:860px}
+
+.kpis{display:grid;gap:12px;margin-top:4px}
+.kpis.k5{grid-template-columns:repeat(5,1fr)}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:15px;box-shadow:var(--shadow);position:relative;overflow:hidden}
+.kpi::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--steel)}
+.kpi.k-green::before{background:var(--green)} .kpi.k-amber::before{background:var(--amber)}
+.kpi.k-slate::before{background:var(--slate)} .kpi.k-red::before{background:var(--red)}
+.kpi.k-mines::before{background:var(--mines)}
+.kpi .v{font-family:var(--disp);font-size:27px;font-weight:600;line-height:1;letter-spacing:-.02em}
+.kpi .l{font-size:11.5px;color:var(--muted);margin-top:7px;line-height:1.35}
+.kpi .l b{color:var(--ink2);font-weight:600}
+
+.prog-bar{height:7px;border-radius:5px;background:var(--line2);overflow:hidden;display:flex;margin-top:14px}
+.prog-bar i{height:100%;display:block}
+.pb-live{background:var(--green)} .pb-prog{background:var(--amber)} .pb-plan{background:var(--slate)}
+.prog-legend{display:flex;gap:11px;margin-top:8px;font-size:11px;color:var(--ink2);flex-wrap:wrap}
+.prog-legend span{display:flex;align-items:center;gap:5px}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.d-live{background:var(--green)} .d-prog{background:var(--amber)} .d-plan{background:var(--slate)}
+
+.chip{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.04em;padding:3px 8px;border-radius:20px;text-transform:uppercase}
+.c-live{background:var(--green-soft);color:var(--green)}
+.c-prog{background:var(--amber-soft);color:var(--amber)}
+.c-plan{background:var(--slate-soft);color:var(--slate)}
+.c-hold{background:var(--red-soft);color:var(--red)}
+.c-over{background:var(--red-soft);color:var(--red)}
+
+.tbl-wrap{background:var(--card);border:1px solid var(--line);border-radius:11px;box-shadow:var(--shadow);overflow:hidden}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+thead th{background:var(--ink);color:#fff;text-align:left;font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;font-weight:600;padding:11px 14px;white-space:nowrap}
+tbody td{padding:11px 14px;border-bottom:1px solid var(--line2);vertical-align:top;color:var(--ink2)}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover{background:var(--steel-soft)}
+td .app{font-weight:600;color:var(--ink)}
+td .sub{font-size:11px;color:var(--muted);margin-top:2px}
+.tnum{font-variant-numeric:tabular-nums;font-weight:600;color:var(--ink)}
+
+.wf-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:11px;box-shadow:var(--shadow);overflow:hidden}
+.panel .ph{padding:12px 16px;border-bottom:1px solid var(--line2);display:flex;align-items:center;gap:9px}
+.panel .ph h4{font-family:var(--disp);font-size:15px;font-weight:600}
+.panel .ph .ico{width:26px;height:26px;border-radius:7px;display:grid;place-items:center;font-family:var(--mono);font-weight:700;font-size:13px;color:#fff}
+.ico-blk{background:var(--red)} .ico-fund{background:var(--green)} .ico-due{background:var(--amber)} .ico-act{background:var(--steel)}
+.panel .pl{list-style:none}
+.panel .pl li{padding:11px 16px;border-bottom:1px solid var(--line2);font-size:12.5px;color:var(--ink2)}
+.panel .pl li:last-child{border-bottom:none}
+.panel .pl li .hd{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+.panel .pl li .t{font-weight:600;color:var(--ink)}
+.panel .pl li .meta{font-size:11.5px;color:var(--muted);margin-top:3px}
+.panel .pl li .meta b{color:var(--ink2)}
+.fund-amt{font-family:var(--disp);font-weight:600;color:var(--green);font-size:14px;white-space:nowrap}
+.rmk{border-left:3px solid var(--steel);padding-left:12px}
+
+.footer{margin-top:40px;padding-top:18px;border-top:1px solid var(--line);font-size:11.5px;color:var(--muted);display:flex;flex-wrap:wrap;gap:6px 20px;justify-content:space-between}
+.footer .mono{font-family:var(--mono);letter-spacing:.04em}
+
+@media (max-width:1000px){
+  .kpis.k5{grid-template-columns:repeat(3,1fr)} .wf-grid{grid-template-columns:1fr}
+}
+@media (max-width:640px){
+  .kpis.k5{grid-template-columns:repeat(2,1fr)}
+  .mast h1{font-size:24px} .tbl-wrap{overflow-x:auto}
+}
+@media print{ body{background:#fff} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="mast">
+    <div class="kicker">IT &amp; Digitalization · Module-wise Management Review</div>
+    <h1>Mines Operations — Kaliapani Chromite Mines Digital Suite</h1>
+    <div class="sub">
+      <span><b>Status as on:</b> 30 July 2026</span>
+      <span><b>Location:</b> Sukinda Valley, Jajpur, Odisha</span>
+      <span class="confid">Confidential — Internal Management Review</span>
+    </div>
+  </header>
+
+  <div class="dhero">
+    <div class="eyebrow">Mines Operations Digitization</div>
+    <h2>Kaliapani Mines Operational Dashboard</h2>
+    <p>A single in-house platform with 10 live operating modules — production, excavation, beneficiation, equipment,
+       dewatering and fuel — plus an agentic AI insights layer and a pre-generated 07:00 digest for the daily management
+       review. The OEE/LCM engine is in progress; Electric Vehicles Tracking, Mines Costing and AMIRA Accounting are
+       yet to start. Built entirely in-house on SAP, IMOS and telematics data with no per-seat licence cost.</p>
+  </div>
+
+  <!-- 01 · PROJECTS & STATUS -->
+  <div class="sec">
+    <div class="sec-h"><span class="num">01</span><h2>Projects &amp; Status</h2>
+      <span class="note">10 live · 3 in progress · 3 to do · 16 total</span></div>
+
+    <div class="kpis k5">
+      <div class="kpi k-mines"><div class="v">16</div><div class="l"><b>Modules</b> tracked in the mines suite</div></div>
+      <div class="kpi k-green"><div class="v">10</div><div class="l"><b>Live</b> in production</div></div>
+      <div class="kpi k-amber"><div class="v">3</div><div class="l"><b>In progress</b></div></div>
+      <div class="kpi k-slate"><div class="v">3</div><div class="l"><b>To do</b> — not yet started</div></div>
+      <div class="kpi"><div class="v">63%</div><div class="l"><b>Implementation rate</b></div></div>
+    </div>
+
+    <div class="tbl-wrap" style="margin-top:14px;padding:15px 16px">
+      <div class="prog-bar">
+        <i class="pb-live" style="width:62.5%"></i>
+        <i class="pb-prog" style="width:18.75%"></i>
+        <i class="pb-plan" style="width:18.75%"></i>
+      </div>
+      <div class="prog-legend">
+        <span><i class="dot d-live"></i>10 Live</span>
+        <span><i class="dot d-prog"></i>3 In progress</span>
+        <span><i class="dot d-plan"></i>3 To do</span>
+        <span style="margin-left:auto;color:var(--muted)"><b style="color:var(--ink)">16</b> total</span>
+      </div>
+    </div>
+
+    <div class="tbl-wrap" style="margin-top:14px"><table>
+      <thead><tr><th style="width:28%">Module</th><th>Type</th><th>Status</th><th>Data source</th></tr></thead>
+      <tbody>
+        <tr><td><span class="app">MIS Dashboard — Weather</span></td><td>MIS section</td><td><span class="chip c-live">Live</span></td><td>Open-Meteo API · 30-min refresh</td></tr>
+        <tr><td><span class="app">Plant Performance — Ferro Chrome</span></td><td>MIS section</td><td><span class="chip c-live">Live</span></td><td>SAP</td></tr>
+        <tr><td><span class="app">Ore Production &amp; Grade (HG/MG/LG)</span></td><td>MIS section</td><td><span class="chip c-live">Live</span></td><td>Actual SAP · Plan IMOS</td></tr>
+        <tr><td><span class="app">OB Excavation (incl. vendor split)</span></td><td>MIS section</td><td><span class="chip c-live">Live</span></td><td>Actual SAP · Plan IMOS</td></tr>
+        <tr><td><span class="app">COB Plant Analysis</span></td><td>MIS section</td><td><span class="chip c-live">Live</span></td><td>SAP</td></tr>
+        <tr><td><span class="app">Equipment Utilization (MTTR/MTBF)</span></td><td>MIS section</td><td><span class="chip c-live">Live</span></td><td>SAP PM notifications · telematics</td></tr>
+        <tr><td><span class="app">Dewatering &amp; Water Balance</span></td><td>MIS section</td><td><span class="chip c-live">Live</span></td><td>IMOS</td></tr>
+        <tr><td><span class="app">Reality Check — plan feasibility</span></td><td>MIS section</td><td><span class="chip c-live">Live</span></td><td>SAP + IMOS (computed)</td></tr>
+        <tr><td><span class="app">AI Insights + 07:00 digest</span></td><td>MIS section</td><td><span class="chip c-live">Live</span></td><td>LiteLLM gateway (internal)</td></tr>
+        <tr><td><span class="app">Fuel Management (Phase 1)</span></td><td>Standalone page</td><td><span class="chip c-live">Live</span></td><td>Technoton telematics</td></tr>
+        <tr><td><span class="app">OEE / LCM — 5 excavators</span></td><td>Standalone page</td><td><span class="chip c-prog">In Progress</span></td><td>SAP ×2 + IMOS</td></tr>
+        <tr><td><span class="app">Fuel Phase 2 — exception e-mail alerts</span></td><td>Enhancement</td><td><span class="chip c-prog">In Progress</span></td><td>Technoton telematics</td></tr>
+        <tr><td><span class="app">Fuel Phase 3 — cost, drain &amp; countdown</span></td><td>Enhancement</td><td><span class="chip c-prog">In Progress</span></td><td>Technoton + SAP rates</td></tr>
+        <tr><td><span class="app">Electric Vehicles Tracking</span></td><td>Standalone page</td><td><span class="chip c-plan">To Do</span></td><td>EV vendor API — pending</td></tr>
+        <tr><td><span class="app">Mines Costing</span></td><td>New module</td><td><span class="chip c-plan">To Do</span></td><td>SAP FI/CO — 15 mines cost centres available</td></tr>
+        <tr><td><span class="app">AMIRA Accounting</span></td><td>New module</td><td><span class="chip c-plan">To Do</span></td><td>To be confirmed</td></tr>
+      </tbody>
+    </table></div>
+  </div>
+
+  <!-- 02 · VALUE PROPOSITION -->
+  <div class="sec">
+    <div class="sec-h"><span class="num">02</span><h2>Value Proposition per Application</h2><span class="note">Productivity · Performance · Cost Reduction</span></div>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th style="width:21%">Application</th><th>Productivity</th><th>Performance</th><th>Cost Reduction</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="app">MIS Dashboard — 9 sections</span><div class="sub"><span class="chip c-live">Live</span></div></td>
+          <td>Replaces the manual shift &amp; MTD Excel MIS; 9 operating domains in one scroll; one-click full-dashboard HTML export for circulation.</td>
+          <td>Plan-vs-actual with achieve % and variance across ore, OB, COB, despatch and dewatering; date / month / financial-year filters on every KPI.</td>
+          <td>Built in-house — no licence or per-seat cost. Rupee benefit not yet quantified.</td>
+        </tr>
+        <tr>
+          <td><span class="app">AI Insights &amp; Reality Check</span><div class="sub"><span class="chip c-live">Live</span></div></td>
+          <td>LLM narrative across 6 domains replaces manual review notes; digest pre-generated at 07:00 so the 08:00 management review opens instantly instead of waiting on generation.</td>
+          <td>Reality Check computes run-rate vs required-rate per KPI and flags ACHIEVABLE / STRETCH / NOT FEASIBLE; exception alerting, rolling 7-day trend and today-vs-yesterday comparison.</td>
+          <td>Runs on the internal LiteLLM gateway — API cost only, no external AI licence. Breakdown hours are converted to lost-ore MT for cost context.</td>
+        </tr>
+        <tr>
+          <td><span class="app">Equipment Utilization</span><div class="sub"><span class="chip c-live">Live</span></div></td>
+          <td>MTTR / MTBF, breakdown drill-down and fuel LPH per machine on demand — no manual breakdown register.</td>
+          <td>Excavator and tipper availability &amp; utilisation computed from SAP PM notification durations, with per-machine trend charts.</td>
+          <td>Breakdown-hour visibility enables targeted maintenance; rupee benefit to be measured.</td>
+        </tr>
+        <tr>
+          <td><span class="app">Fuel Management</span><div class="sub"><span class="chip c-live">Live · Phase 1</span></div></td>
+          <td>Fleet fuel level, refill and drain events and a 7-day consumption trend pulled straight from telematics — replaces manual fuel registers.</td>
+          <td>Per-vehicle LPH, tank level, estimated hours remaining and low-fuel banding across the fleet.</td>
+          <td>Drain / pilferage detection is live; quantified saving arrives with Phase 3 costing.</td>
+        </tr>
+        <tr>
+          <td><span class="app">OEE / LCM Engine</span><div class="sub"><span class="chip c-prog">In Progress</span></div></td>
+          <td>Per-excavator OEE derived automatically from 3 source tables — removes the manual availability / performance computation entirely. Computing today; not yet certified for review use.</td>
+          <td>5 excavators tracked with a full God-hour to operating-hour loss waterfall (weekly off, no-plan, planned shutdown, breakdown, preventive maintenance).</td>
+          <td>Value pending — figures cannot be relied on until the SAP PM time columns land and the loss-hour fields are populated.</td>
+        </tr>
+        <tr>
+          <td><span class="app">Electric Vehicles Tracking</span><div class="sub"><span class="chip c-plan">To Do</span></div></td>
+          <td>On delivery: EV operating, idling and working hours plus energy consumed per vehicle in a single view.</td>
+          <td>On delivery: kWh/hr efficiency, battery state-of-charge and state-of-health per EV.</td>
+          <td>Not yet realisable — the EV vehicle API has not been released by the vendor, so no EV data is flowing.</td>
+        </tr>
+        <tr>
+          <td><span class="app">Mines Costing</span><div class="sub"><span class="chip c-plan">To Do</span></div></td>
+          <td>On delivery: cost-centre-wise mining cost without manual compilation from SAP reports.</td>
+          <td>On delivery: cost per tonne of ore and per CuM of overburden, tracked against budget — the missing commercial layer over the existing production volumes.</td>
+          <td>Directly enables cost control at the mining face. Scope and methodology to be agreed with Finance &amp; Accounts.</td>
+        </tr>
+        <tr>
+          <td><span class="app">AMIRA Accounting</span><div class="sub"><span class="chip c-plan">To Do</span></div></td>
+          <td colspan="3" style="font-style:italic;color:var(--muted)">Scope, source system and value proposition to be defined with Finance &amp; Accounts before this module can be assessed.</td>
+        </tr>
+      </tbody>
+    </table></div>
+  </div>
+
+  <!-- 03 · CURRENT STATUS -->
+  <div class="sec">
+    <div class="sec-h"><span class="num">03</span><h2>Current Project Status — In-Progress &amp; Pipeline</h2><span class="note">dependency · owner · latest remark</span></div>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Project</th><th>Status</th><th>Due / Target</th><th>Owner · Dependency</th><th>Latest remark</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="app">OEE / LCM</span></td>
+          <td><span class="chip c-prog">In Progress</span></td>
+          <td>On SAP delivery</td>
+          <td style="font-size:11.5px;color:var(--muted)">IT &amp; Digitization · SAP CoE · Mines operations</td>
+          <td>Engine is built and computing per-excavator OEE across all 5 excavators. Two dependencies keep it in progress: preventive-maintenance duration is date-level only until SAP adds the start and completion time columns, and the excavator loss-hour fields are still blank, which overstates availability. Both must close before the figures can be used in review.</td>
+        </tr>
+        <tr>
+          <td><span class="app">Electric Vehicles Tracking</span></td>
+          <td><span class="chip c-plan">To Do</span></td>
+          <td>On vendor delivery</td>
+          <td style="font-size:11.5px;color:var(--muted)">EV vendor — vehicle API</td>
+          <td>Held before start. The EV vehicle API has not been released by the vendor, so no EV data is available to build against. No internal effort is outstanding — this is entirely vendor-gated.</td>
+        </tr>
+        <tr>
+          <td><span class="app">Fuel Phase 2 — exception e-mail alerts</span></td>
+          <td><span class="chip c-prog">In Progress</span></td>
+          <td>No fixed date</td>
+          <td style="font-size:11.5px;color:var(--muted)">IT &amp; Digitization · Mines Mech</td>
+          <td>Low-fuel and drain-event alerting to be pushed to the mines mechanical desk.</td>
+        </tr>
+        <tr>
+          <td><span class="app">Fuel Phase 3 — cost, drain &amp; countdown</span></td>
+          <td><span class="chip c-prog">In Progress</span></td>
+          <td>No fixed date</td>
+          <td style="font-size:11.5px;color:var(--muted)">IT &amp; Digitization · Stores rates</td>
+          <td>Converts litres to rupees and adds refill countdown. Required to put a value on fuel-pilferage prevention.</td>
+        </tr>
+        <tr>
+          <td><span class="app">Mines Costing</span></td>
+          <td><span class="chip c-plan">To Do</span></td>
+          <td>Scope pending</td>
+          <td style="font-size:11.5px;color:var(--muted)">Finance &amp; Accounts · IT &amp; Digitization</td>
+          <td>Not started. Cost-centre-wise mining cost with cost per tonne of ore and per CuM of overburden against budget. The SAP cost-centre master already carries 15 mines cost centres, so the master data exists — costing methodology and reporting format need to be agreed with Finance before build.</td>
+        </tr>
+        <tr>
+          <td><span class="app">AMIRA Accounting</span></td>
+          <td><span class="chip c-plan">To Do</span></td>
+          <td>Scope pending</td>
+          <td style="font-size:11.5px;color:var(--muted)">Finance &amp; Accounts · IT &amp; Digitization</td>
+          <td>Not started. No source system or existing data set has been identified for this module — scope, source and expected output all need to be defined with Finance &amp; Accounts before it can be estimated or scheduled.</td>
+        </tr>
+      </tbody>
+    </table></div>
+  </div>
+
+  <!-- 04 · WAY FORWARD -->
+  <div class="sec">
+    <div class="sec-h"><span class="num">04</span><h2>Way Forward — Blockers · Dates · Funds · Actions</h2></div>
+    <div class="wf-grid">
+
+      <div class="panel">
+        <div class="ph"><span class="ico ico-blk">!</span><h4>Constraints &amp; Blockers</h4></div>
+        <ul class="pl">
+          <li><div class="hd"><span class="t">EV vehicle API not released</span><span class="chip c-hold">Blocked</span></div>
+            <div class="meta">Vendor has not delivered the EV vehicle API, so Electric Vehicles Tracking cannot start. <b>Entirely vendor-gated — needs commercial escalation, not development.</b></div></li>
+          <li><div class="hd"><span class="t">SAP PM time columns pending</span><span class="chip c-prog">Active</span></div>
+            <div class="meta">Preventive-maintenance duration is date-level only. SAP CoE is adding start and completion time columns; until then OEE PM hours are approximate.</div></li>
+          <li><div class="hd"><span class="t">Excavator loss-hour fields blank</span><span class="chip c-prog">Active</span></div>
+            <div class="meta">Weekly-off, no-plan and planned-shutdown fields are newly added and not being filled, which overstates OEE availability. Operations discipline issue, not a development one.</div></li>
+          <li><div class="hd"><span class="t">Two new modules have no scope</span><span class="chip c-plan">Planned</span></div>
+            <div class="meta">Mines Costing and AMIRA Accounting are both approved in principle but undefined. AMIRA in particular has no identified source system. <b>Neither can be estimated or scheduled until Finance &amp; Accounts confirms scope.</b></div></li>
+          <li><div class="hd"><span class="t">Vehicle ID mismatch</span><span class="chip c-hold">Blocked</span></div>
+            <div class="meta">Telematics device IDs do not match physical registration numbers, so vehicle names display inconsistently in Fuel Management. A mapping sheet is required from the mines mechanical team.</div></li>
+        </ul>
+      </div>
+
+      <div class="panel">
+        <div class="ph"><span class="ico ico-due">⏱</span><h4>Due Dates &amp; Overdue</h4></div>
+        <ul class="pl">
+          <li><div class="hd"><span class="t">OEE / LCM</span><span class="chip c-prog">SAP-gated</span></div>
+            <div class="meta">Cannot be dated until SAP confirms delivery of the PM time columns and the loss-hour fields are being populated.</div></li>
+          <li><div class="hd"><span class="t">Electric Vehicles Tracking</span><span class="chip c-plan">Vendor-gated</span></div>
+            <div class="meta">No date can be committed until the vendor releases the EV vehicle API.</div></li>
+          <li><div class="hd"><span class="t">Fuel Phase 2 &amp; Phase 3</span><span class="chip c-prog">No date set</span></div>
+            <div class="meta">Sequenced after Phase 1; dates to be committed.</div></li>
+          <li><div class="hd"><span class="t">Mines Costing &amp; AMIRA Accounting</span><span class="chip c-plan">Scope pending</span></div>
+            <div class="meta">Cannot be dated until scope is agreed with Finance &amp; Accounts. Mines Costing is the more advanced of the two — its SAP master data already exists.</div></li>
+        </ul>
+      </div>
+
+      <div class="panel">
+        <div class="ph"><span class="ico ico-fund">₹</span><h4>Fund / Budget &amp; Value at Stake</h4></div>
+        <ul class="pl">
+          <li><div class="hd"><span class="t">Built in-house &amp; owned</span><span class="fund-amt">No licences</span></div>
+            <div class="meta">All 16 initiatives developed internally — no per-user licence, full data ownership, consistent with the wider BAL digital portfolio.</div></li>
+          <li><div class="hd"><span class="t">AI layer run cost</span><span class="fund-amt">API cost only</span></div>
+            <div class="meta">AI Insights and the 07:00 digest run on the internal LiteLLM gateway — no external AI subscription.</div></li>
+          <li><div class="hd"><span class="t">Rupee benefit</span><span class="fund-amt">To be measured</span></div>
+            <div class="meta">Value from production visibility, breakdown reduction, fuel-pilferage prevention and OEE improvement is not yet quantified. Fuel Phase 3 costing and the Mines Costing module are the two steps that will establish a rupee baseline.</div></li>
+          <li><div class="hd"><span class="t">EV transition value</span><span class="fund-amt">Blocked</span></div>
+            <div class="meta">The diesel-vs-EV cost comparison cannot be built until the vendor API delivers EV hours and energy data. Direct commercial relevance once unblocked.</div></li>
+        </ul>
+      </div>
+
+      <div class="panel">
+        <div class="ph"><span class="ico ico-act">→</span><h4>Latest Remarks &amp; Action Points</h4></div>
+        <ul class="pl">
+          <li class="rmk"><div class="hd"><span class="t">1 · Escalate the EV vendor API</span></div>
+            <div class="meta">Highest priority and fully external. Commercial follow-up with the vendor is the only path to starting Electric Vehicles Tracking.</div></li>
+          <li class="rmk"><div class="hd"><span class="t">2 · Close the SAP PM time-column dependency</span></div>
+            <div class="meta">Chase SAP CoE for the start and completion time columns so OEE preventive-maintenance hours become exact.</div></li>
+          <li class="rmk"><div class="hd"><span class="t">3 · Enforce loss-hour data entry</span></div>
+            <div class="meta">Brief shift in-charges to fill the weekly-off, no-plan and shutdown fields so OEE availability becomes trustworthy and the module can move to live.</div></li>
+          <li class="rmk"><div class="hd"><span class="t">4 · Complete Fuel Phase 2 and Phase 3</span></div>
+            <div class="meta">Ship exception alerting to the mechanical desk, then the costing layer that converts litres to rupees.</div></li>
+          <li class="rmk"><div class="hd"><span class="t">5 · Define scope for the two new modules</span></div>
+            <div class="meta">Sit with Finance &amp; Accounts to fix the costing methodology for Mines Costing and to establish what AMIRA Accounting is required to produce and from which source. Without this neither can be estimated.</div></li>
+          <li class="rmk"><div class="hd"><span class="t">6 · Obtain the vehicle ID mapping sheet</span></div>
+            <div class="meta">Required from mines mechanical to correct vehicle naming in Fuel Management.</div></li>
+          <li class="rmk"><div class="hd"><span class="t">7 · Quantify the rupee benefit</span></div>
+            <div class="meta">Fuel Phase 3 costing plus the Mines Costing module will convert the current qualitative value into measured figures for the next review.</div></li>
+        </ul>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="footer">
+    <span>Compiled by IT &amp; Digitalization from the Mines Dashboard codebase and the SAP / IMOS / telematics source tables as on 30 July 2026. Unquantified value is stated as such rather than estimated.</span>
+    <span class="mono">BALASORE ALLOYS LIMITED · CONFIDENTIAL</span>
+  </div>
+</div>
+</body>
+</html>
