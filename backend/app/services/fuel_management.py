@@ -55,6 +55,55 @@ _TELEMATICS_TABLES = [
     "mines_technoton_rest_equipment_utilization",
 ]
 
+# ── Fuel Summary (historical, date-range driven) ──────────────────────────────
+# Both queries below reduce to the end-of-day row per vehicle per day
+# (MAX(row_id)) before aggregating, mirroring _TREND_QUERY. Technoton values are
+# cumulative within a day, so summing raw rows would multiply-count.
+
+# Day-wise fleet totals across the range
+_SUMMARY_DAILY_QUERY = """
+SELECT
+    DATE(v.report_date)                       AS report_day,
+    SUM(v.fuel_consumed)                      AS consumed_l,
+    SUM(v.filled)                             AS filled_l,
+    SUM(v.drained)                            AS drained_l,
+    SUM(v.total_drains)                       AS drain_events,
+    SUM(v.total_fillings)                     AS fill_events,
+    SUM(v.distance)                           AS distance_km,
+    SUM(TIME_TO_SEC(v.engine_hours) / 3600.0) AS engine_hours,
+    COUNT(DISTINCT v.vehicle_desc)            AS vehicles_reporting
+FROM {table} v
+INNER JOIN (
+    SELECT vehicle_desc, MAX(row_id) AS latest_id
+    FROM {table}
+    WHERE report_date >= :range_start AND report_date < :range_next
+    GROUP BY vehicle_desc, DATE(report_date)
+) rd ON v.vehicle_desc = rd.vehicle_desc AND v.row_id = rd.latest_id
+GROUP BY DATE(v.report_date)
+"""
+
+# Per-vehicle totals across the whole range
+_SUMMARY_VEHICLE_QUERY = """
+SELECT
+    v.vehicle_desc                            AS vehicle_desc,
+    SUM(v.fuel_consumed)                      AS consumed_l,
+    SUM(v.filled)                             AS filled_l,
+    SUM(v.drained)                            AS drained_l,
+    SUM(v.total_drains)                       AS drain_events,
+    SUM(v.total_fillings)                     AS fill_events,
+    SUM(v.distance)                           AS distance_km,
+    SUM(TIME_TO_SEC(v.engine_hours) / 3600.0) AS engine_hours,
+    COUNT(DISTINCT DATE(v.report_date))       AS days_reported
+FROM {table} v
+INNER JOIN (
+    SELECT vehicle_desc, MAX(row_id) AS latest_id
+    FROM {table}
+    WHERE report_date >= :range_start AND report_date < :range_next
+    GROUP BY vehicle_desc, DATE(report_date)
+) rd ON v.vehicle_desc = rd.vehicle_desc AND v.row_id = rd.latest_id
+GROUP BY v.vehicle_desc
+"""
+
 
 def _as_date(v) -> date | None:
     """Normalise a DB value to a plain `date`.
@@ -478,4 +527,126 @@ def get_fuel_overview(db: Session) -> dict:
         "top_consumers": top_consumers,
         "refills_today": refills_today,
         "trend":         trend,
+    }
+
+
+# ── Fuel Summary — historical view driven by the global date filter ───────────
+
+def _f2(v, dp: int = 1) -> float:
+    return round(float(v or 0), dp)
+
+
+def get_fuel_summary(db: Session, from_date: date, to_date: date) -> dict:
+    """Fleet fuel aggregates over an arbitrary date range.
+
+    Unlike get_fuel_overview (which anchors on the newest data), this honours the
+    caller's range exactly — an empty range legitimately returns zeros.
+    """
+    range_start = from_date.isoformat()
+    range_next  = (to_date + timedelta(days=1)).isoformat()
+    params      = {"range_start": range_start, "range_next": range_next}
+
+    # ── Day-wise, merged across both tables ───────────────────────────────
+    daily_map: dict = {}
+    for table in _TELEMATICS_TABLES:
+        for r in db.execute(text(_SUMMARY_DAILY_QUERY.format(table=table)), params).fetchall():
+            d = _as_date(r.report_day)
+            if d is None:
+                continue
+            acc = daily_map.setdefault(d, {
+                "consumed_l": 0.0, "filled_l": 0.0, "drained_l": 0.0,
+                "drain_events": 0, "fill_events": 0,
+                "distance_km": 0.0, "engine_hours": 0.0, "vehicles_reporting": 0,
+            })
+            acc["consumed_l"]         += float(r.consumed_l   or 0)
+            acc["filled_l"]           += float(r.filled_l     or 0)
+            acc["drained_l"]          += float(r.drained_l    or 0)
+            acc["drain_events"]       += int(r.drain_events   or 0)
+            acc["fill_events"]        += int(r.fill_events    or 0)
+            acc["distance_km"]        += float(r.distance_km  or 0)
+            acc["engine_hours"]       += float(r.engine_hours or 0)
+            acc["vehicles_reporting"] += int(r.vehicles_reporting or 0)
+
+    daily = [
+        {
+            "date":               d.isoformat(),
+            "consumed_l":         _f2(v["consumed_l"]),
+            "filled_l":           _f2(v["filled_l"]),
+            "drained_l":          _f2(v["drained_l"]),
+            "drain_events":       v["drain_events"],
+            "fill_events":        v["fill_events"],
+            "distance_km":        _f2(v["distance_km"]),
+            "engine_hours":       _f2(v["engine_hours"], 2),
+            "vehicles_reporting": v["vehicles_reporting"],
+        }
+        for d, v in sorted(daily_map.items())
+    ]
+
+    # ── Per-vehicle over the whole range ──────────────────────────────────
+    vehicles = []
+    for table, source in [
+        ("mines_technoton_man_utilization", "man"),
+        ("mines_technoton_rest_equipment_utilization", "equipment"),
+    ]:
+        for r in db.execute(text(_SUMMARY_VEHICLE_QUERY.format(table=table)), params).fetchall():
+            consumed = float(r.consumed_l   or 0)
+            eng_hrs  = float(r.engine_hours or 0)
+            dist     = float(r.distance_km  or 0)
+            # km/L only means something for road vehicles (MAN tippers)
+            is_road  = source == "man"
+            vehicles.append({
+                "vehicle_desc":  r.vehicle_desc,
+                "display_name":  _clean_name(r.vehicle_desc),
+                "category":      _category_from_desc(r.vehicle_desc),
+                "source":        source,
+                "consumed_l":    _f2(consumed),
+                "filled_l":      _f2(r.filled_l),
+                "drained_l":     _f2(r.drained_l),
+                "drain_events":  int(r.drain_events or 0),
+                "fill_events":   int(r.fill_events  or 0),
+                "engine_hours":  _f2(eng_hrs, 2),
+                "distance_km":   _f2(dist) if is_road else None,
+                "avg_lph":       round(consumed / eng_hrs, 2) if eng_hrs > 0 else None,
+                "kmpl":          round(dist / consumed, 2) if (is_road and consumed > 0) else None,
+                "days_reported": int(r.days_reported or 0),
+            })
+
+    vehicles.sort(key=lambda v: v["consumed_l"], reverse=True)
+
+    # ── Range KPIs ────────────────────────────────────────────────────────
+    total_consumed = sum(v["consumed_l"]   for v in vehicles)
+    total_filled   = sum(v["filled_l"]     for v in vehicles)
+    total_drained  = sum(v["drained_l"]    for v in vehicles)
+    total_eng_hrs  = sum(v["engine_hours"] for v in vehicles)
+    drain_events   = sum(v["drain_events"] for v in vehicles)
+    fill_events    = sum(v["fill_events"]  for v in vehicles)
+    total_distance = sum(v["distance_km"] or 0 for v in vehicles)
+
+    drainers = sorted(
+        [v for v in vehicles if v["drained_l"] > 0 or v["drain_events"] > 0],
+        key=lambda v: v["drained_l"],
+        reverse=True,
+    )
+
+    return {
+        "from_date": from_date.isoformat(),
+        "to_date":   to_date.isoformat(),
+        "kpis": {
+            "days_in_range":     (to_date - from_date).days + 1,
+            "days_with_data":    len(daily),
+            "active_vehicles":   len([v for v in vehicles if v["consumed_l"] > 0]),
+            "total_vehicles":    len(vehicles),
+            "total_consumed_l":  _f2(total_consumed),
+            "total_filled_l":    _f2(total_filled),
+            "total_drained_l":   _f2(total_drained),
+            "total_engine_hours": _f2(total_eng_hrs, 2),
+            "total_distance_km": _f2(total_distance),
+            "drain_events":      drain_events,
+            "fill_events":       fill_events,
+            "avg_lph":           round(total_consumed / total_eng_hrs, 2) if total_eng_hrs > 0 else None,
+            "avg_consumed_per_day": _f2(total_consumed / len(daily)) if daily else 0.0,
+        },
+        "daily":    daily,
+        "vehicles": vehicles,
+        "drainers": drainers,
     }
