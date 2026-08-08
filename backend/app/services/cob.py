@@ -11,6 +11,20 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 
+# ── COB plant constants ───────────────────────────────────────
+# The COB plant is SAP plant 1210. Quality rows for the same material also
+# exist under plant 1200 (mines ROM sampling) at a materially different grade,
+# so the plant filter is required — without it the mines stream contaminates
+# the feed-grade average.
+PLANT_COB = "1210"
+
+# Match on MATERIAL_NO, not the description: material numbers are stable keys,
+# whereas SHORT_TEXT / MATERIAL_DESC can be edited in SAP and would silently
+# stop matching.
+MAT_LG_ORE      = "000000000025000003"  # LOW GRADE ORE(-40%CR2O3)      → feed  (input)
+MAT_CONCENTRATE = "000000000030000001"  # CONCENTRATE WITH STD MOISTURE → COB   (output)
+
+
 def _date_spine(from_date: date, to_date: date) -> list:
     n = (to_date - from_date).days + 1
     return [from_date + timedelta(days=i) for i in range(n)]
@@ -51,19 +65,32 @@ def _get_actuals(db: Session, from_date: date, to_date: date) -> dict:
 
 # ── 2. Quality from pp_quality_inspection ─────────────────────
 def _get_quality(db: Session, from_date: date, to_date: date) -> dict:
+    """Input (feed) and output (concentrate) Cr₂O₃ % per day.
+
+    Scoped to plant 1210 and keyed on MATERIAL_NO — see the constants above.
+    Dated on QLT_START_DATE (identical to POSTING_DATE across every row in the
+    table, and the column the plant reports against).
+    """
     sql = text("""
         SELECT
-            POSTING_DATE AS dt,
-            ROUND(AVG(CASE WHEN SHORT_TEXT = 'LOW GRADE ORE(-40%CR2O3)'     THEN RESULT END), 3) AS input_cr2o3,
-            ROUND(AVG(CASE WHEN SHORT_TEXT = 'CONCENTRATE WITH STD MOISTURE' THEN RESULT END), 3) AS output_cr2o3
+            QLT_START_DATE AS dt,
+            ROUND(AVG(CASE WHEN MATERIAL_NO = :mat_lg   THEN RESULT END), 3) AS input_cr2o3,
+            ROUND(AVG(CASE WHEN MATERIAL_NO = :mat_conc THEN RESULT END), 3) AS output_cr2o3
         FROM pp_quality_inspection
         WHERE SHORT_TEXT_INS_CHAR = 'Cr2O3'
-          AND SHORT_TEXT IN ('LOW GRADE ORE(-40%CR2O3)', 'CONCENTRATE WITH STD MOISTURE')
-          AND POSTING_DATE BETWEEN :from_date AND :to_date
-        GROUP BY POSTING_DATE
-        ORDER BY POSTING_DATE
+          AND PLANT       = :plant
+          AND MATERIAL_NO IN (:mat_lg, :mat_conc)
+          AND QLT_START_DATE BETWEEN :from_date AND :to_date
+        GROUP BY QLT_START_DATE
+        ORDER BY QLT_START_DATE
     """)
-    rows = db.execute(sql, {"from_date": from_date, "to_date": to_date}).fetchall()
+    rows = db.execute(sql, {
+        "plant":     PLANT_COB,
+        "mat_lg":    MAT_LG_ORE,
+        "mat_conc":  MAT_CONCENTRATE,
+        "from_date": from_date,
+        "to_date":   to_date,
+    }).fetchall()
     return {r.dt: dict(r._mapping) for r in rows}
 
 
