@@ -7,6 +7,7 @@ import {
   CheckCircle, Clock,
 } from "lucide-react";
 import { useFuelManagement } from "@/hooks/useFuelManagement";
+import FuelSummarySection from "@/components/sections/FuelSummarySection";
 import VehicleDrawer from "@/components/fuel/VehicleDrawer";
 import { equipPhoto } from "@/lib/equip-photo";
 import type { FuelVehicle, FuelOverviewResponse } from "@/types";
@@ -506,8 +507,16 @@ function VehicleRow({ v, onSelect }: { v: FuelVehicle; onSelect: (v: FuelVehicle
 }
 
 // ── Main component ─────────────────────────────────────────────
+type FuelTab = "live" | "summary";
+
+const TABS: { id: FuelTab; label: string }[] = [
+  { id: "live",    label: "Live Overview" },
+  { id: "summary", label: "Fuel Summary"  },
+];
+
 export default function FuelManagementSection() {
   const { data, loading, error, lastUpdated, refetch } = useFuelManagement();
+  const [tab,             setTab]             = useState<FuelTab>("live");
   const [search,          setSearch]          = useState("");
   const [filterStatus,    setFilterStatus]    = useState<string>("all");
   const [filterCategory,  setFilterCategory]  = useState<string>("all");
@@ -553,24 +562,55 @@ export default function FuelManagementSection() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          {lastUpdated && (
+          {tab === "live" && lastUpdated && (
             <span className="hidden sm:flex items-center gap-1.5 text-[10px] text-txt-light font-mono">
               <Activity size={10} />
               {fmtTime(lastUpdated)}
             </span>
           )}
-          <button
-            onClick={refetch}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-white hover:bg-bg-section text-txt-secondary hover:text-navy transition text-[11px] font-condensed font-bold tracking-widest border border-border shadow-sm"
-          >
-            <RefreshCw size={11} />
-            REFRESH
-          </button>
+          {tab === "live" && (
+            <button
+              onClick={refetch}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-white hover:bg-bg-section text-txt-secondary hover:text-navy transition text-[11px] font-condensed font-bold tracking-widest border border-border shadow-sm"
+            >
+              <RefreshCw size={11} />
+              REFRESH
+            </button>
+          )}
         </div>
       </div>
 
+      {/* ── Sub-tabs ──────────────────────────────────────── */}
+      <div className="flex items-stretch gap-1 border-b border-border px-1">
+        {TABS.map(({ id, label }) => {
+          const active = tab === id;
+          return (
+            <button
+              key={id}
+              onClick={() => setTab(id)}
+              className={`
+                relative px-4 py-2.5 font-condensed text-[11px] font-bold tracking-[.1em] uppercase
+                transition-colors duration-150
+                ${active ? "text-[#c8960c]" : "text-[#8899bb] hover:text-[#3a4a6b] hover:bg-[#f8fafd]"}
+              `}
+            >
+              {active && <span className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#c8960c]" />}
+              {label}
+            </button>
+          );
+        })}
+        {tab === "summary" && (
+          <span className="ml-auto self-center text-[10px] text-txt-light font-mono pr-2 hidden sm:inline">
+            Uses the date filter in the header
+          </span>
+        )}
+      </div>
+
+      {/* ── FUEL SUMMARY tab ──────────────────────────────── */}
+      {tab === "summary" && <FuelSummarySection />}
+
       {/* ── Loading / Error ───────────────────────────────── */}
-      {loading && (
+      {tab === "live" && loading && (
         <div className="flex items-center justify-center py-24">
           <div className="flex flex-col items-center gap-3">
             <div className="w-8 h-8 border-2 border-border border-t-[#c8960c] rounded-full animate-spin" />
@@ -581,7 +621,7 @@ export default function FuelManagementSection() {
         </div>
       )}
 
-      {error && !loading && (
+      {tab === "live" && error && !loading && (
         <div className="mx-1 mt-4 p-4 rounded-lg bg-red-50 border border-red-200 flex items-center gap-3">
           <AlertTriangle size={16} className="text-[#c62828] shrink-0" />
           <span className="text-[12px] text-[#c62828]">{error}</span>
@@ -594,7 +634,7 @@ export default function FuelManagementSection() {
         </div>
       )}
 
-      {!loading && data && (
+      {tab === "live" && !loading && data && (
         <>
           {/* ── Stale-feed banner ──────────────────────────── */}
           {data.is_stale && (

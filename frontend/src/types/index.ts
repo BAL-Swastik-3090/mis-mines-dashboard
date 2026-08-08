@@ -601,6 +601,61 @@ export interface FuelOverviewResponse {
   trend:          FuelTrendDay[];
 }
 
+// ── Fuel Summary (historical, date-range driven) ──────────────
+export interface FuelSummaryKpis {
+  days_in_range:        number;
+  days_with_data:       number;
+  active_vehicles:      number;
+  total_vehicles:       number;
+  total_consumed_l:     number;
+  total_filled_l:       number;
+  total_drained_l:      number;
+  total_engine_hours:   number;
+  total_distance_km:    number;
+  drain_events:         number;
+  fill_events:          number;
+  avg_lph:              number | null;
+  avg_consumed_per_day: number;
+}
+
+export interface FuelSummaryDay {
+  date:               string;
+  consumed_l:         number;
+  filled_l:           number;
+  drained_l:          number;
+  drain_events:       number;
+  fill_events:        number;
+  distance_km:        number;
+  engine_hours:       number;
+  vehicles_reporting: number;
+}
+
+export interface FuelSummaryVehicle {
+  vehicle_desc:  string;
+  display_name:  string;
+  category:      string;
+  source:        "man" | "equipment";
+  consumed_l:    number;
+  filled_l:      number;
+  drained_l:     number;
+  drain_events:  number;
+  fill_events:   number;
+  engine_hours:  number;
+  distance_km:   number | null;   // MAN tippers only
+  avg_lph:       number | null;
+  kmpl:          number | null;   // MAN tippers only
+  days_reported: number;
+}
+
+export interface FuelSummaryResponse {
+  from_date: string;
+  to_date:   string;
+  kpis:      FuelSummaryKpis;
+  daily:     FuelSummaryDay[];
+  vehicles:  FuelSummaryVehicle[];
+  drainers:  FuelSummaryVehicle[];
+}
+
 export interface FuelVehicleHistoryDay {
   date:           string;
   engine_hours:   number;
