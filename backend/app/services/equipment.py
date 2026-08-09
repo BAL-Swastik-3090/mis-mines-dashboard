@@ -213,12 +213,33 @@ def get_breakdown_details(
     db: Session, machine_sap_name: str, from_date: date, to_date: date
 ) -> list[dict]:
     """Return individual breakdown events for a machine in the date range.
-    Tries a full-column query first; if any column is missing in the SAP export
-    table it falls back to the minimal confirmed-column query so the modal
-    always shows data rather than silently returning empty.
+
+    Column names matter here — the SAP export table has NOTIFICATION and
+    DESCRIPTION, not NOTIFICATION_NO / SHORT_TEXT. Date and clock time are also
+    stored in separate columns, so they are recombined into a real timestamp;
+    passing the bare date made every event render at 00:00 (05:30 IST).
+
+    Deliberately no try/except fallback: a mistyped column should surface as an
+    error rather than quietly degrade into blank notification numbers and
+    'Not specified' reasons.
     """
-    params = {"machine": machine_sap_name, "f": from_date, "t": to_date}
-    _where = """
+    sql = text("""
+        SELECT
+            NOTIFICATION AS notification_no,
+
+            CASE WHEN MALFUNCTION_START_TIME IS NOT NULL
+                 THEN TIMESTAMP(MALFUNCTION_START, MALFUNCTION_START_TIME)
+                 ELSE MALFUNCTION_START
+            END AS start_at,
+
+            CASE WHEN MALFUNCTION_END IS NULL THEN NULL
+                 WHEN MALFUNCTION_END_TIME IS NOT NULL
+                 THEN TIMESTAMP(MALFUNCTION_END, MALFUNCTION_END_TIME)
+                 ELSE MALFUNCTION_END
+            END AS end_at,
+
+            ROUND(BREAKDOWN_DURAION / 3600.0, 2) AS bd_hrs,
+            DESCRIPTION                          AS reason
         FROM   zpm_iw29_notifications
         WHERE  MAINTENANCE_PLANT = '1200'
           AND  MAIN_WORK_CENTER  = 'MINEAUTO'
@@ -226,54 +247,28 @@ def get_breakdown_details(
           AND  MALFUNCTION_START IS NOT NULL
           AND  MALFUNCTION_START BETWEEN :f AND :t
           AND  DESC_TECH_OBJECT  = :machine
-        ORDER BY MALFUNCTION_START DESC
-    """
+        ORDER BY MALFUNCTION_START DESC, MALFUNCTION_START_TIME DESC
+    """)
+    rows = db.execute(
+        sql, {"machine": machine_sap_name, "f": from_date, "t": to_date}
+    ).fetchall()
 
-    # ── Attempt 1: full column set ────────────────────────────────
-    try:
-        rows = db.execute(text(f"""
-            SELECT NOTIFICATION_NO,
-                   MALFUNCTION_START,
-                   MALFUNCTION_END,
-                   ROUND(BREAKDOWN_DURAION / 3600.0, 2) AS bd_hrs,
-                   SHORT_TEXT                             AS reason
-            {_where}
-        """), params).fetchall()
-        return [
-            {
-                "notification_no": str(r.NOTIFICATION_NO or ""),
-                "start":  str(r.MALFUNCTION_START) if r.MALFUNCTION_START else None,
-                "end":    str(r.MALFUNCTION_END)   if r.MALFUNCTION_END   else None,
-                "bd_hrs": float(r.bd_hrs)           if r.bd_hrs is not None else None,
-                "reason": (str(r.reason or "").strip() or None),
-            }
-            for r in rows
-        ]
-    except Exception:
-        try:
-            db.rollback()
-        except Exception:
-            pass
+    def _iso(v):
+        if v is None:
+            return None
+        return v.isoformat() if hasattr(v, "isoformat") else str(v)
 
-    # ── Attempt 2: minimal confirmed columns only ─────────────────
-    try:
-        rows = db.execute(text(f"""
-            SELECT MALFUNCTION_START,
-                   ROUND(BREAKDOWN_DURAION / 3600.0, 2) AS bd_hrs
-            {_where}
-        """), params).fetchall()
-        return [
-            {
-                "notification_no": "",
-                "start":  str(r.MALFUNCTION_START) if r.MALFUNCTION_START else None,
-                "end":    None,
-                "bd_hrs": float(r.bd_hrs) if r.bd_hrs is not None else None,
-                "reason": None,
-            }
-            for r in rows
-        ]
-    except Exception:
-        return []
+    return [
+        {
+            # SAP pads notification numbers to 12 chars — strip for display
+            "notification_no": str(r.notification_no or "").lstrip("0") or None,
+            "start":  _iso(r.start_at),
+            "end":    _iso(r.end_at),
+            "bd_hrs": float(r.bd_hrs) if r.bd_hrs is not None else None,
+            "reason": (str(r.reason or "").strip() or None),
+        }
+        for r in rows
+    ]
 
 
 # ── Public service functions ───────────────────────────────────
