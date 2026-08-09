@@ -67,27 +67,54 @@ function Kpi({ icon: Icon, label, value, unit, sub, accent, loading }: KpiProps)
 // ── Day-wise bar chart (pure CSS, no chart lib) ───────────────
 function DailyBars({ days }: { days: { date: string; consumed_l: number }[] }) {
   const max = Math.max(...days.map((d) => d.consumed_l), 1);
+  const avg = days.reduce((s, d) => s + d.consumed_l, 0) / (days.length || 1);
+  const avgPct = (avg / max) * 100;
+
   return (
-    <div className="flex items-end gap-1 h-[110px] px-1">
-      {days.map((d) => {
-        const pct = (d.consumed_l / max) * 100;
-        return (
-          <div key={d.date} className="flex-1 flex flex-col items-center justify-end h-full group relative">
-            <div
-              className="w-full rounded-t bg-[#1565c0] hover:bg-[#1976d2] transition-colors min-h-[2px]"
-              style={{ height: `${pct}%` }}
-            />
-            <span className="text-[8px] text-txt-light mt-1 font-mono whitespace-nowrap">
-              {fmtDate(d.date).split(" ")[0]}
-            </span>
-            {/* tooltip */}
-            <div className="pointer-events-none absolute bottom-full mb-1 opacity-0 group-hover:opacity-100 transition-opacity z-10
-                            bg-[#0f1c35] text-white text-[10px] font-mono px-2 py-1 rounded whitespace-nowrap shadow-lg">
-              {fmtDate(d.date)} · {fmt(d.consumed_l, 1)} L
-            </div>
-          </div>
-        );
-      })}
+    <div className="px-3">
+      {/* plot area */}
+      <div className="relative h-[150px]">
+        {/* average reference line */}
+        <div
+          className="absolute left-0 right-0 border-t border-dashed border-[#c8960c]/50 z-[1]"
+          style={{ bottom: `${avgPct}%` }}
+        >
+          <span className="absolute right-0 -top-3.5 text-[8px] font-mono text-[#c8960c] bg-white px-1">
+            avg {fmt(avg, 0)} L
+          </span>
+        </div>
+
+        <div className="flex items-end gap-2 h-full">
+          {days.map((d) => {
+            const pct = (d.consumed_l / max) * 100;
+            return (
+              <div key={d.date} className="flex-1 flex flex-col items-center justify-end h-full group relative">
+                <span className="text-[8px] font-mono text-txt-light mb-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                  {fmt(d.consumed_l, 0)}
+                </span>
+                <div
+                  className="w-full max-w-[46px] rounded-t bg-[#1565c0] hover:bg-[#1976d2] transition-colors min-h-[2px] z-[2]"
+                  style={{ height: `${pct}%` }}
+                />
+                {/* tooltip */}
+                <div className="pointer-events-none absolute bottom-full mb-1 opacity-0 group-hover:opacity-100 transition-opacity z-20
+                                bg-[#0f1c35] text-white text-[10px] font-mono px-2 py-1 rounded whitespace-nowrap shadow-lg">
+                  {fmtDate(d.date)} · {fmt(d.consumed_l, 1)} L
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* x-axis */}
+      <div className="flex gap-2 border-t border-border-light pt-1.5 mt-0.5">
+        {days.map((d) => (
+          <span key={d.date} className="flex-1 text-center text-[9px] text-txt-light font-mono whitespace-nowrap">
+            {fmtDate(d.date)}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -165,60 +192,104 @@ export default function FuelSummarySection() {
              sub="tippers only" />
       </div>
 
-      {/* Day-wise */}
+      {/* ── Day-wise · chart ─────────────────────────────── */}
       <div className="bg-white border border-border rounded-lg shadow-sm overflow-hidden">
-        <div className="px-4 pt-3 pb-2.5 border-b border-border-light flex items-center justify-between">
+        <div className="px-4 pt-3 pb-2.5 border-b border-border-light flex items-center justify-between flex-wrap gap-2">
           <span className="font-condensed font-bold text-[13px] text-navy tracking-widest uppercase">
             Day-wise Fuel Consumption
           </span>
           {data && data.daily.length > 0 && (
+            <div className="flex items-center gap-3 text-[10px] font-mono text-txt-light">
+              <span>peak {fmt(Math.max(...data.daily.map((d) => d.consumed_l)), 1)} L</span>
+              <span className="text-txt-light/40">|</span>
+              <span>avg {fmt(k?.avg_consumed_per_day, 1)} L/day</span>
+              <span className="text-txt-light/40">|</span>
+              <span className="font-bold text-[#1565c0]">Σ {fmt(k?.total_consumed_l, 1)} L</span>
+            </div>
+          )}
+        </div>
+
+        {isLoading ? (
+          <div className="h-[190px] flex items-center justify-center bg-bg-light">
+            <span className="text-txt-muted text-sm animate-pulse">Loading…</span>
+          </div>
+        ) : !data || data.daily.length === 0 ? (
+          <div className="py-12 text-center text-txt-muted text-sm">No fuel data in this period</div>
+        ) : (
+          <div className="pt-5 pb-3 px-2">
+            <DailyBars days={data.daily} />
+          </div>
+        )}
+
+        <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
+          <p className="text-[9px] font-mono text-success/70 leading-tight">
+            <span className="font-semibold text-success/60">ACTUAL · </span>Technoton
+          </p>
+        </div>
+      </div>
+
+      {/* ── Day-wise · table ─────────────────────────────── */}
+      <div className="bg-white border border-border rounded-lg shadow-sm overflow-hidden">
+        <div className="px-4 pt-3 pb-2.5 border-b border-border-light flex items-center justify-between flex-wrap gap-2">
+          <span className="font-condensed font-bold text-[13px] text-navy tracking-widest uppercase">
+            Day-wise Breakdown
+          </span>
+          {data && data.daily.length > 0 && (
             <span className="text-[10px] font-mono text-txt-light">
-              Σ {fmt(k?.total_consumed_l, 1)} L
+              {data.daily.length} day{data.daily.length !== 1 ? "s" : ""} with data
             </span>
           )}
         </div>
 
         {isLoading ? (
-          <div className="h-[180px] flex items-center justify-center bg-bg-light">
+          <div className="h-[160px] flex items-center justify-center bg-bg-light">
             <span className="text-txt-muted text-sm animate-pulse">Loading…</span>
           </div>
         ) : !data || data.daily.length === 0 ? (
-          <div className="py-10 text-center text-txt-muted text-sm">No fuel data in this period</div>
+          <div className="py-12 text-center text-txt-muted text-sm">No fuel data in this period</div>
         ) : (
-          <>
-            <div className="pt-4 pb-2">
-              <DailyBars days={data.daily} />
-            </div>
-            <div className="overflow-x-auto border-t border-border-light">
-              <table className="w-full text-[12px] font-mono">
-                <thead>
-                  <tr className="bg-bg-section border-b border-border-light">
-                    {["Date", "Consumed (L)", "Filled (L)", "Drained (L)", "Engine Hrs", "Distance (km)", "Vehicles"].map((h) => (
-                      <th key={h} className="px-3 py-2 text-left text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary whitespace-nowrap">
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border-light/60">
-                  {data.daily.map((d) => (
-                    <tr key={d.date} className="hover:bg-bg-section/50 transition-colors">
-                      <td className="px-3 py-2 font-condensed font-bold text-navy whitespace-nowrap">{fmtDate(d.date)}</td>
-                      <td className="px-3 py-2 text-[#1565c0] font-semibold">{fmt(d.consumed_l, 1)}</td>
-                      <td className="px-3 py-2 text-[#2e7d32]">{fmt(d.filled_l, 1)}</td>
-                      <td className={`px-3 py-2 ${d.drained_l > 0 ? "text-[#c62828] font-semibold" : "text-txt-light"}`}>
-                        {fmt(d.drained_l, 1)}
-                      </td>
-                      <td className="px-3 py-2 text-txt-secondary">{fmt(d.engine_hours, 1)}</td>
-                      <td className="px-3 py-2 text-txt-secondary">{fmt(d.distance_km, 1)}</td>
-                      <td className="px-3 py-2 text-txt-light">{d.vehicles_reporting}</td>
-                    </tr>
+          <div className="overflow-x-auto">
+            <table className="w-full text-[12px] font-mono">
+              <thead>
+                <tr className="bg-bg-section border-b border-border-light">
+                  {["Date", "Consumed (L)", "Filled (L)", "Drained (L)", "Engine Hrs", "Distance (km)", "Vehicles"].map((h) => (
+                    <th key={h} className="px-3 py-2 text-left text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary whitespace-nowrap">
+                      {h}
+                    </th>
                   ))}
-                </tbody>
-              </table>
-            </div>
-          </>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border-light/60">
+                {data.daily.map((d) => (
+                  <tr key={d.date} className="hover:bg-bg-section/50 transition-colors">
+                    <td className="px-3 py-2 font-condensed font-bold text-navy whitespace-nowrap">{fmtDate(d.date)}</td>
+                    <td className="px-3 py-2 text-[#1565c0] font-semibold">{fmt(d.consumed_l, 1)}</td>
+                    <td className="px-3 py-2 text-[#2e7d32]">{fmt(d.filled_l, 1)}</td>
+                    <td className={`px-3 py-2 ${d.drained_l > 0 ? "text-[#c62828] font-semibold" : "text-txt-light"}`}>
+                      {fmt(d.drained_l, 1)}
+                    </td>
+                    <td className="px-3 py-2 text-txt-secondary">{fmt(d.engine_hours, 1)}</td>
+                    <td className="px-3 py-2 text-txt-secondary">{fmt(d.distance_km, 1)}</td>
+                    <td className="px-3 py-2 text-txt-light">{d.vehicles_reporting}</td>
+                  </tr>
+                ))}
+              </tbody>
+              {/* period totals */}
+              <tfoot>
+                <tr className="bg-navy text-white border-t-2 border-navy">
+                  <td className="px-3 py-2 font-condensed font-bold tracking-widest uppercase text-[11px]">Total</td>
+                  <td className="px-3 py-2 font-bold">{fmt(k?.total_consumed_l, 1)}</td>
+                  <td className="px-3 py-2 font-bold">{fmt(k?.total_filled_l, 1)}</td>
+                  <td className="px-3 py-2 font-bold">{fmt(k?.total_drained_l, 1)}</td>
+                  <td className="px-3 py-2 font-bold">{fmt(k?.total_engine_hours, 1)}</td>
+                  <td className="px-3 py-2 font-bold">{fmt(k?.total_distance_km, 1)}</td>
+                  <td className="px-3 py-2 text-white/50">—</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
         )}
+
         <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
           <p className="text-[9px] font-mono text-success/70 leading-tight">
             <span className="font-semibold text-success/60">ACTUAL · </span>Technoton
