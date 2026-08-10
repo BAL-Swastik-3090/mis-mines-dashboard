@@ -738,6 +738,8 @@ export interface OEEMachineRow {
   holiday_hrs:    number;
   no_plan_hrs:    number;
   planned_sd_hrs: number;
+  loss_hrs:       number;
+  ideal_time:     number;   // God − Loss; Availability denominator
   bd_hours:       number;
   pm_hours:       number;
   operating_hrs:  number;
@@ -747,11 +749,38 @@ export interface OEEMachineRow {
   performance:    number;
   quality:        number;
   oee:            number;
+  // reporting only — feeds no OEE formula
+  deviation_hrs:  number;
+  running_hrs:    number;
+  shift_hours:    number;
+  deviation_pct:  number | null;
+}
+
+/** Weighted fleet roll-up computed server-side. Never average the machine
+ *  percentages client-side — it overstates the fleet figure badly. */
+export interface OEEFleet {
+  god_hours:     number;
+  loss_hrs:      number;
+  ideal_time:    number;
+  bd_hours:      number;
+  pm_hours:      number;
+  operating_hrs: number;
+  actual_cum:    number;
+  ideal_cum:     number;
+  availability:  number;
+  performance:   number;
+  quality:       number;
+  oee:           number;
+  deviation_hrs: number;
+  shift_hours:   number;
+  deviation_pct: number | null;
+  machine_count: number;
 }
 
 export interface OEEResponse {
   from_date: string;
   to_date:   string;
   machines:  OEEMachineRow[];
+  fleet:     OEEFleet;
 }
 

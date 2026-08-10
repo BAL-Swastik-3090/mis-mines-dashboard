@@ -21,5 +21,10 @@ def get_oee(
     if not to_date:
         to_date = today
 
-    machines = svc.get_oee_per_machine(db, from_date, to_date)
-    return OEEResponse(from_date=from_date, to_date=to_date, machines=machines)
+    result = svc.get_oee_per_machine(db, from_date, to_date)
+    return OEEResponse(
+        from_date=from_date,
+        to_date=to_date,
+        machines=result["machines"],
+        fleet=result["fleet"],
+    )
