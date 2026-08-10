@@ -2,11 +2,12 @@
 import { Activity } from "lucide-react";
 import { useDateFilter }  from "@/contexts/useDateFilter";
 import { useOEE }         from "@/hooks/useOEE";
-import type { OEEMachineRow } from "@/types";
+import type { OEEMachineRow, OEEFleet } from "@/types";
 import { formatIndian }   from "@/lib/utils";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function fmt1(v: number) { return v.toFixed(1); }
+function fmt1(v: number) { return formatIndian(Number(v.toFixed(1))); }
+function fmt2(v: number) { return v.toFixed(2); }
 function fmt0(v: number) { return formatIndian(Math.round(v)); }
 
 function pctColor(v: number, threshHigh = 75, threshMid = 50) {
@@ -32,49 +33,44 @@ function tillLabel(apiTo: string) {
 }
 
 // ── Fleet-level summary KPI strip ─────────────────────────────────────────────
-function FleetKpis({ machines, loading }: { machines: OEEMachineRow[]; loading: boolean }) {
-  const count = machines.length || 1;
-  const avgOee          = machines.reduce((s, m) => s + m.oee, 0) / count;
-  const avgAvail        = machines.reduce((s, m) => s + m.availability, 0) / count;
-  const avgPerf         = machines.reduce((s, m) => s + m.performance, 0) / count;
-  const totalBd         = machines.reduce((s, m) => s + m.bd_hours, 0);
-  const totalPm         = machines.reduce((s, m) => s + m.pm_hours, 0);
-  const totalActualCum  = machines.reduce((s, m) => s + m.actual_cum, 0);
-
+// Figures come straight from the server's weighted roll-up. Averaging the
+// machine percentages here would overstate fleet Performance and OEE by ~50%,
+// because a machine that barely ran would count as much as one that ran all month.
+function FleetKpis({ fleet, loading }: { fleet: OEEFleet | undefined; loading: boolean }) {
   const cards = [
     {
       label: "Fleet OEE",
-      sub: "avg across excavators",
-      value: loading ? null : avgOee,
+      sub: "weighted · avail × perf × qual",
+      value: loading ? null : fleet?.oee ?? null,
       unit: "%",
       colorFn: (v: number) => pctColor(v),
     },
     {
       label: "Availability",
-      sub: "avg — operating / god hrs",
-      value: loading ? null : avgAvail,
+      sub: "Σ operating ÷ Σ ideal time",
+      value: loading ? null : fleet?.availability ?? null,
       unit: "%",
       colorFn: (v: number) => pctColor(v, 85, 70),
     },
     {
       label: "Performance",
-      sub: "avg — actual / ideal CuM",
-      value: loading ? null : avgPerf,
+      sub: "Σ actual ÷ Σ ideal CuM",
+      value: loading ? null : fleet?.performance ?? null,
       unit: "%",
       colorFn: (v: number) => pctColor(v, 85, 70),
     },
     {
       label: "Total Breakdown",
-      sub: "hrs across all excavators",
-      value: loading ? null : totalBd,
+      sub: "hrs · SAP M2 notifications",
+      value: loading ? null : fleet?.bd_hours ?? null,
       unit: " hrs",
       colorFn: () => "text-[#c62828]",
       fmt: fmt1,
     },
     {
-      label: "Total PM",
-      sub: "hrs planned maintenance",
-      value: loading ? null : totalPm,
+      label: "Deviation Hrs",
+      sub: fleet?.deviation_pct != null ? `${fleet.deviation_pct}% of shift hrs` : "unplanned idle",
+      value: loading ? null : fleet?.deviation_hrs ?? null,
       unit: " hrs",
       colorFn: () => "text-[#c8960c]",
       fmt: fmt1,
@@ -82,7 +78,7 @@ function FleetKpis({ machines, loading }: { machines: OEEMachineRow[]; loading: 
     {
       label: "Actual Excavation",
       sub: "fleet total CuM",
-      value: loading ? null : totalActualCum,
+      value: loading ? null : fleet?.actual_cum ?? null,
       unit: " M³",
       colorFn: () => "text-[#1565c0]",
       fmt: fmt0,
@@ -114,7 +110,7 @@ function FleetKpis({ machines, loading }: { machines: OEEMachineRow[]; loading: 
 }
 
 // ── Per-machine OEE table ──────────────────────────────────────────────────────
-function OEETable({ machines, loading }: { machines: OEEMachineRow[]; loading: boolean }) {
+function OEETable({ machines, fleet, loading }: { machines: OEEMachineRow[]; fleet: OEEFleet | undefined; loading: boolean }) {
   return (
     <div className="bg-white border border-border rounded-lg shadow-sm overflow-hidden">
       {/* Card header */}
@@ -130,10 +126,10 @@ function OEETable({ machines, loading }: { machines: OEEMachineRow[]; loading: b
           <thead>
             <tr className="bg-bg-section border-b border-border-light">
               {[
-                "Machine", "Ideal Cap\n(CuM/hr)", "God Hrs",
-                "BD Hrs", "PM Hrs", "Op Hrs",
+                "Excavator", "God Hrs",
+                "BD Hrs", "PM Hrs", "Deviation Hrs", "Operating Hrs",
                 "Actual CuM", "Ideal CuM",
-                "Availability", "Performance", "Quality", "OEE",
+                "Availability %", "Performance %", "Quality %", "OEE %",
               ].map((h) => (
                 <th
                   key={h}
@@ -164,56 +160,79 @@ function OEETable({ machines, loading }: { machines: OEEMachineRow[]; loading: b
             ) : (
               machines.map((m) => (
                 <tr key={m.machine} className="hover:bg-bg-section/50 transition-colors">
-                  {/* Machine name */}
-                  <td className="px-3 py-2.5 font-condensed font-bold text-[12px] text-navy whitespace-nowrap">
-                    {m.machine}
+                  {/* Machine + ideal capacity underneath */}
+                  <td className="px-3 py-2.5 whitespace-nowrap">
+                    <div className="font-condensed font-bold text-[12px] text-navy">{m.machine}</div>
+                    <div className="text-[9px] text-txt-light">{fmt1(m.ideal_cap)} CuM/hr</div>
                   </td>
-                  {/* Ideal cap */}
-                  <td className="px-3 py-2.5 text-txt-secondary">{fmt1(m.ideal_cap)}</td>
                   {/* God hrs */}
                   <td className="px-3 py-2.5 text-txt-secondary">{fmt1(m.god_hours)}</td>
                   {/* BD hrs */}
                   <td className={`px-3 py-2.5 font-semibold ${m.bd_hours > 0 ? "text-[#c62828]" : "text-txt-light"}`}>
-                    {fmt1(m.bd_hours)}
+                    {fmt2(m.bd_hours)}
                   </td>
                   {/* PM hrs */}
                   <td className={`px-3 py-2.5 font-semibold ${m.pm_hours > 0 ? "text-[#c8960c]" : "text-txt-light"}`}>
-                    {fmt1(m.pm_hours)}
+                    {fmt2(m.pm_hours)}
                   </td>
-                  {/* Op hrs */}
-                  <td className="px-3 py-2.5 text-[#1565c0] font-semibold">{fmt1(m.operating_hrs)}</td>
-                  {/* Actual CuM */}
-                  <td className="px-3 py-2.5 text-txt-secondary">{fmt0(m.actual_cum)}</td>
-                  {/* Ideal CuM */}
-                  <td className="px-3 py-2.5 text-txt-light">{fmt0(m.ideal_cum)}</td>
-                  {/* Availability */}
+                  {/* Deviation hrs — reporting only, feeds no formula */}
                   <td className="px-3 py-2.5">
-                    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-bold ${pctBadge(m.availability, 85, 70)}`}>
-                      {fmt1(m.availability)}%
-                    </span>
+                    <div className="text-navy font-semibold">{fmt2(m.deviation_hrs)}</div>
+                    {m.deviation_pct != null && (
+                      <div className="text-[9px] text-txt-light">{m.deviation_pct}% of shift</div>
+                    )}
+                  </td>
+                  {/* Operating hrs */}
+                  <td className="px-3 py-2.5 text-[#1565c0] font-semibold">{fmt2(m.operating_hrs)}</td>
+                  {/* Actual CuM */}
+                  <td className="px-3 py-2.5 text-txt-secondary">{fmt1(m.actual_cum)}</td>
+                  {/* Ideal CuM */}
+                  <td className="px-3 py-2.5 text-txt-light">{fmt1(m.ideal_cum)}</td>
+                  {/* Availability */}
+                  <td className={`px-3 py-2.5 font-bold ${pctColor(m.availability, 85, 70)}`}>
+                    {fmt2(m.availability)}
                   </td>
                   {/* Performance */}
-                  <td className="px-3 py-2.5">
-                    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-bold ${pctBadge(m.performance, 85, 70)}`}>
-                      {fmt1(m.performance)}%
-                    </span>
+                  <td className={`px-3 py-2.5 font-bold ${pctColor(m.performance, 85, 70)}`}>
+                    {fmt2(m.performance)}
                   </td>
-                  {/* Quality */}
-                  <td className="px-3 py-2.5">
-                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-bold bg-[#e8f5e9] text-[#2e7d32] border-[#a5d6a7]">
-                      100%
-                    </span>
-                  </td>
+                  {/* Quality — fixed 100, no regrade loss is captured anywhere */}
+                  <td className="px-3 py-2.5 text-txt-secondary">{fmt2(m.quality)}</td>
                   {/* OEE */}
-                  <td className="px-3 py-2.5">
-                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[11px] font-extrabold ${pctBadge(m.oee)}`}>
-                      {fmt1(m.oee)}%
-                    </span>
+                  <td className={`px-3 py-2.5 font-extrabold ${pctColor(m.oee)}`}>
+                    {fmt2(m.oee)}
                   </td>
                 </tr>
               ))
             )}
           </tbody>
+
+          {/* Weighted fleet roll-up — from the server, not averaged here */}
+          {!loading && fleet && machines.length > 0 && (
+            <tfoot>
+              <tr className="bg-bg-section border-t-2 border-border font-bold">
+                <td className="px-3 py-3 font-condensed text-[12px] text-navy tracking-widest uppercase">
+                  Overall
+                </td>
+                <td className="px-3 py-3 text-navy">{fmt1(fleet.god_hours)}</td>
+                <td className="px-3 py-3 text-[#c62828]">{fmt2(fleet.bd_hours)}</td>
+                <td className="px-3 py-3 text-[#c8960c]">{fmt2(fleet.pm_hours)}</td>
+                <td className="px-3 py-3">
+                  <div className="text-navy">{fmt2(fleet.deviation_hrs)}</div>
+                  {fleet.deviation_pct != null && (
+                    <div className="text-[9px] font-normal text-txt-light">{fleet.deviation_pct}% of shift</div>
+                  )}
+                </td>
+                <td className="px-3 py-3 text-[#1565c0]">{fmt2(fleet.operating_hrs)}</td>
+                <td className="px-3 py-3 text-navy">{fmt1(fleet.actual_cum)}</td>
+                <td className="px-3 py-3 text-txt-secondary">{fmt1(fleet.ideal_cum)}</td>
+                <td className={`px-3 py-3 ${pctColor(fleet.availability, 85, 70)}`}>{fmt2(fleet.availability)}</td>
+                <td className={`px-3 py-3 ${pctColor(fleet.performance, 85, 70)}`}>{fmt2(fleet.performance)}</td>
+                <td className="px-3 py-3 text-txt-secondary">{fmt2(fleet.quality)}</td>
+                <td className="px-3 py-3 text-[#0288d1] font-extrabold">{fmt2(fleet.oee)}</td>
+              </tr>
+            </tfoot>
+          )}
         </table>
       </div>
 
@@ -249,8 +268,8 @@ function FormulaCard() {
         {[
           {
             label: "Availability",
-            formula: "Operating Hrs ÷ God Hrs × 100",
-            note: "God Hrs = Days × 24",
+            formula: "Operating Hrs ÷ Ideal Time × 100",
+            note: "Ideal Time = God − planned loss",
             color: "text-[#1565c0]",
             border: "border-l-[#1565c0]",
           },
@@ -285,9 +304,16 @@ function FormulaCard() {
           </div>
         ))}
       </div>
-      <div className="px-4 pb-3 pt-0">
+      <div className="px-4 pb-3 pt-0 space-y-1">
         <div className="text-[9px] font-mono text-txt-muted">
-          <span className="font-semibold">Operating Hrs</span> = God Hrs − (Weekly Off + No Plan + Planned Shutdown) − (Breakdown + PM)
+          <span className="font-semibold">Ideal Time</span> = God Hrs − (Weekly Off + No Plan + Planned Shutdown)
+          &nbsp;·&nbsp;
+          <span className="font-semibold">Operating Hrs</span> = Ideal Time − (Breakdown + PM)
+        </div>
+        <div className="text-[9px] font-mono text-txt-muted">
+          <span className="font-semibold">Fleet figures are weighted</span> (Σ operating ÷ Σ ideal time), not averaged across machines
+          &nbsp;·&nbsp;
+          <span className="font-semibold">Deviation Hrs</span> is reporting only and feeds no formula
         </div>
       </div>
     </div>
@@ -322,10 +348,10 @@ export default function OEESection() {
       </div>
 
       {/* Fleet KPI strip */}
-      <FleetKpis machines={machines} loading={isLoading} />
+      <FleetKpis fleet={data?.fleet} loading={isLoading} />
 
       {/* Per-machine breakdown table */}
-      <OEETable machines={machines} loading={isLoading} />
+      <OEETable machines={machines} fleet={data?.fleet} loading={isLoading} />
 
       {/* Formula reference */}
       <FormulaCard />
