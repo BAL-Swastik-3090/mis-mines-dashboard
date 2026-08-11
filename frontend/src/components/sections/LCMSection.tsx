@@ -128,18 +128,18 @@ export default function LCMSection() {
         </div>
       </div>
 
-      {/* Controllable split */}
+      {/* Period totals */}
       {!isLoading && t && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           {[
-            { label: "Controllable Ore Loss",     value: `${f0(t.controllable_ore_loss)} MT`,
-              sub: `${fmt(t.controllable_ore_hours, 1)} hrs`, accent: "#c62828" },
-            { label: "Total Ore Loss",            value: `${f0(t.planned_ore_loss)} MT`,
-              sub: `${fmt(t.ore_hours, 1)} hrs`, accent: "#1565c0" },
-            { label: "Controllable OB Loss",      value: `${f0(t.controllable_ob_loss)} CuM`,
-              sub: `${fmt(t.controllable_ob_hours, 1)} hrs`, accent: "#c62828" },
-            { label: "Total OB Loss",             value: `${f0(t.planned_ob_loss)} CuM`,
-              sub: `${fmt(t.ob_hours, 1)} hrs`, accent: "#2e7d32" },
+            { label: "Total Ore Loss",       value: `${f0(t.planned_ore_loss)} MT`,
+              sub: "planned ore not excavated", accent: "#1565c0" },
+            { label: "Ore Loss Hours",       value: `${fmt(t.ore_hours, 1)} hrs`,
+              sub: `across ${data?.rows.length ?? 0} loss heads`, accent: "#6a1b9a" },
+            { label: "Total OB Loss",        value: `${f0(t.planned_ob_loss)} CuM`,
+              sub: "planned OB not excavated", accent: "#2e7d32" },
+            { label: "OB Loss Hours",        value: `${fmt(t.ob_hours, 1)} hrs`,
+              sub: `across ${data?.rows.length ?? 0} loss heads`, accent: "#c8960c" },
           ].map((k) => (
             <div key={k.label} className="bg-white border border-border rounded-lg shadow-sm overflow-hidden border-t-2"
                  style={{ borderTopColor: k.accent }}>
@@ -179,14 +179,12 @@ export default function LCMSection() {
                 <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#1565c0]">Planned Ore<br/>Loss (MT)</th>
                 <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#2e7d32]">OB Production<br/>Hour Loss</th>
                 <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#2e7d32]">Planned OB<br/>Loss (CuM)</th>
-                <th className="px-3 py-2 text-left text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary">Loss Type</th>
-                <th className="px-3 py-2 text-left text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary">KAM</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border-light/60">
               {isLoading ? (
                 Array.from({ length: 8 }).map((_, i) => (
-                  <tr key={i}>{Array.from({ length: 8 }).map((__, j) => (
+                  <tr key={i}>{Array.from({ length: 6 }).map((__, j) => (
                     <td key={j} className="px-3 py-2.5"><Shimmer w="w-14" h="h-4" /></td>
                   ))}</tr>
                 ))
@@ -202,16 +200,6 @@ export default function LCMSection() {
                     <td className="px-3 py-2 text-right font-semibold text-[#1565c0]">{fmt(r.planned_ore_loss, 1)}</td>
                     <td className="px-3 py-2 text-right text-navy">{fmt(r.ob_hours, 2)}</td>
                     <td className="px-3 py-2 text-right font-semibold text-[#2e7d32]">{f0(r.planned_ob_loss)}</td>
-                    <td className="px-3 py-2">
-                      <span className={`inline-flex px-1.5 py-0.5 rounded border text-[9px] font-bold whitespace-nowrap ${
-                        r.loss_type === "Controllable"
-                          ? "bg-[#ffebee] text-[#c62828] border-[#ef9a9a]"
-                          : "bg-[#eceef3] text-[#5a6480] border-[#c5cbd8]"
-                      }`}>
-                        {r.loss_type}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-[10.5px] text-txt-light whitespace-nowrap">{r.kam}</td>
                   </tr>
                 );
               })}
@@ -225,7 +213,6 @@ export default function LCMSection() {
                   <td className="px-3 py-2.5 text-right">{fmt(t.planned_ore_loss, 1)}</td>
                   <td className="px-3 py-2.5 text-right">{fmt(t.ob_hours, 2)}</td>
                   <td className="px-3 py-2.5 text-right">{f0(t.planned_ob_loss)}</td>
-                  <td className="px-3 py-2.5" colSpan={2} />
                 </tr>
               </tfoot>
             )}
@@ -268,9 +255,7 @@ export default function LCMSection() {
                       {r.loss_description}
                     </span>
                     <div className="flex-1 h-[16px] bg-bg-section rounded overflow-hidden">
-                      <div className="h-full rounded"
-                           style={{ width: `${pct}%`,
-                                    backgroundColor: r.loss_type === "Controllable" ? "#c62828" : "#5a6480" }} />
+                      <div className="h-full rounded bg-[#1565c0]" style={{ width: `${pct}%` }} />
                     </div>
                     <span className="w-[120px] shrink-0 text-right text-[11px] font-mono text-navy">
                       {f0(r.planned_ore_loss)} MT
@@ -280,13 +265,10 @@ export default function LCMSection() {
                 );
               })}
           </div>
-          <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40 flex gap-3">
-            <span className="text-[9px] font-mono text-txt-muted flex items-center gap-1">
-              <span className="w-2 h-2 rounded-sm bg-[#c62828] inline-block" /> Controllable
-            </span>
-            <span className="text-[9px] font-mono text-txt-muted flex items-center gap-1">
-              <span className="w-2 h-2 rounded-sm bg-[#5a6480] inline-block" /> Non Controllable
-            </span>
+          <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
+            <p className="text-[9px] font-mono text-txt-muted leading-tight">
+              Share is of total planned ore loss for the period
+            </p>
           </div>
         </div>
       )}
