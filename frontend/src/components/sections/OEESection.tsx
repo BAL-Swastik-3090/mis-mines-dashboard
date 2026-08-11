@@ -1,6 +1,5 @@
 "use client";
-import { useState } from "react";
-import { Activity } from "lucide-react";
+import { Activity, Layers } from "lucide-react";
 import LCMSection from "@/components/sections/LCMSection";
 import { useDateFilter }  from "@/contexts/useDateFilter";
 import { useOEE }         from "@/hooks/useOEE";
@@ -323,18 +322,10 @@ function FormulaCard() {
 }
 
 // ── Main section ──────────────────────────────────────────────────────────────
-type OeeTab = "oee" | "lcm";
-
-const TABS: { id: OeeTab; label: string }[] = [
-  { id: "oee", label: "OEE" },
-  { id: "lcm", label: "LCM — Lost Cost Matrix" },
-];
-
 export default function OEESection() {
-  const { apiTo }                        = useDateFilter();
-  const { data, isLoading }              = useOEE();
-  const machines                         = data?.machines ?? [];
-  const [tab, setTab]                    = useState<OeeTab>("oee");
+  const { apiTo }           = useDateFilter();
+  const { data, isLoading } = useOEE();
+  const machines            = data?.machines ?? [];
 
   return (
     <div className="space-y-4">
@@ -357,41 +348,30 @@ export default function OEESection() {
         )}
       </div>
 
-      {/* Sub-tabs */}
-      <div className="flex items-stretch gap-1 border-b border-border">
-        {TABS.map(({ id, label }) => {
-          const active = tab === id;
-          return (
-            <button
-              key={id}
-              onClick={() => setTab(id)}
-              className={`
-                relative px-4 py-2.5 font-condensed text-[11px] font-bold tracking-[.1em] uppercase
-                transition-colors duration-150
-                ${active ? "text-[#6a1b9a]" : "text-[#8899bb] hover:text-[#3a4a6b] hover:bg-[#f8fafd]"}
-              `}
-            >
-              {active && <span className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#6a1b9a]" />}
-              {label}
-            </button>
-          );
-        })}
+      {/* Fleet KPI strip */}
+      <FleetKpis fleet={data?.fleet} loading={isLoading} />
+
+      {/* Per-machine breakdown table */}
+      <OEETable machines={machines} fleet={data?.fleet} loading={isLoading} />
+
+      {/* Formula reference */}
+      <FormulaCard />
+
+      {/* ── LCM — Lost Cost Matrix, inline below the OEE reference ────── */}
+      <div className="flex items-center gap-2 pt-3">
+        <Layers size={17} className="text-[#6a1b9a]" />
+        <h2 className="font-condensed font-extrabold text-[15px] tracking-widest uppercase text-navy">
+          LCM — Lost Cost Matrix
+        </h2>
+        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-[#f3e5f5] text-[#6a1b9a] border-[#ce93d8] tracking-widest uppercase font-mono">
+          Own Equipment
+        </span>
+        <span className="ml-auto text-[10px] font-mono text-txt-muted hidden sm:inline">
+          Ore · 470(7), 470(2)&nbsp;&nbsp;|&nbsp;&nbsp;OB · 370(5), 370(4), 220(8)
+        </span>
       </div>
 
-      {tab === "oee" && (
-        <>
-          {/* Fleet KPI strip */}
-          <FleetKpis fleet={data?.fleet} loading={isLoading} />
-
-          {/* Per-machine breakdown table */}
-          <OEETable machines={machines} fleet={data?.fleet} loading={isLoading} />
-
-          {/* Formula reference */}
-          <FormulaCard />
-        </>
-      )}
-
-      {tab === "lcm" && <LCMSection />}
+      <LCMSection />
 
     </div>
   );
