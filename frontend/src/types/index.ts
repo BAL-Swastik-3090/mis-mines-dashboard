@@ -784,3 +784,59 @@ export interface OEEResponse {
   fleet:     OEEFleet;
 }
 
+// ── LCM (Lost Cost Matrix) ────────────────────────────────────
+export interface LCMRow {
+  sl_no:            number;
+  loss_description: string;
+  ore_hours:        number;
+  planned_ore_loss: number;   // MT
+  ob_hours:         number;
+  planned_ob_loss:  number;   // CuM
+  loss_type:        "Controllable" | "Non Controllable";
+  kam:              string;
+}
+
+export interface LCMBasis {
+  days:                  number;
+  ore_plan:              number;
+  ore_actual:            number;
+  ore_deviation:         number;
+  ob_plan:               number;
+  ob_actual:             number;
+  ob_deviation:          number;
+  total_ore_loss_hours:  number;
+  total_ob_loss_hours:   number;
+  ore_factor:            number;   // MT per hour
+  ob_factor:             number;   // CuM per hour
+  ore_machines:          string[];
+  ob_machines:           string[];
+}
+
+export interface LCMCoverage {
+  days_in_period:   number;
+  ore_days_present: number;
+  ob_days_present:  number;
+  ore_rows:         number;
+  ob_rows:          number;
+}
+
+export interface LCMTotals {
+  ore_hours:               number;
+  planned_ore_loss:        number;
+  ob_hours:                number;
+  planned_ob_loss:         number;
+  controllable_ore_loss:   number;
+  controllable_ob_loss:    number;
+  controllable_ore_hours:  number;
+  controllable_ob_hours:   number;
+}
+
+export interface LCMResponse {
+  from_date: string;
+  to_date:   string;
+  basis:     LCMBasis;
+  coverage:  LCMCoverage;
+  rows:      LCMRow[];
+  totals:    LCMTotals;
+}
+

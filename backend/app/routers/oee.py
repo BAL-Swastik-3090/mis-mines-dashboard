@@ -5,6 +5,7 @@ from datetime import date
 from app.database import get_db
 from app.schemas.oee import OEEResponse
 import app.services.oee as svc
+from app.services.lcm import get_lcm
 
 router = APIRouter(prefix="/api/oee", tags=["OEE"])
 
@@ -28,3 +29,18 @@ def get_oee(
         machines=result["machines"],
         fleet=result["fleet"],
     )
+
+
+@router.get("/lcm")
+def lcm(
+    from_date: date = Query(default=None),
+    to_date:   date = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    """Lost Cost Matrix — loss hours and planned ore/OB loss per loss head."""
+    today = date.today()
+    if not from_date:
+        from_date = today.replace(day=1)
+    if not to_date:
+        to_date = today
+    return get_lcm(db, from_date, to_date)
