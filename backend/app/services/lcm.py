@@ -1,0 +1,286 @@
+"""
+LCM (Lost Cost Matrix) — Kaliapani Mines excavators, plant 1200.
+
+Mirrors the mine's "LCM Summary (Own Equipment)" / "Loss Heads (Own Equipment)"
+workbook sheets. Own equipment only.
+
+    Ore Deviation = Plan Ore − Actual Ore                       (MT)
+    OB  Deviation = Plan OB  − Actual OB                        (CuM)
+
+    Ore Factor    = Ore Deviation ÷ Σ Ore Production Hour Loss  (MT/hr)
+    OB  Factor    = OB  Deviation ÷ Σ OB  Production Hour Loss  (CuM/hr)
+
+    Planned Ore Loss (head) = Ore Hour Loss (head) × Ore Factor
+    Planned OB  Loss (head) = OB  Hour Loss (head) × OB  Factor
+
+Because each factor is derived from the same hour total it divides, the Planned
+Loss column always sums back to the Deviation exactly. That also means changing
+one head's source only reallocates share between heads — it never breaks the total.
+
+Machine split supplied by the mine:
+    Ore excavation → TATA-470(7), TATA-470(2)
+    OB  excavation → TATA-370(5), TATA-370(4), TATA-220(8)
+"""
+from __future__ import annotations
+from datetime import date
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+# ── Machine groups (own equipment only) ───────────────────────────────────────
+ORE_MACHINES = [
+    {"name": "TATA-470(7)", "code": "470-7", "sap_eq": "000000000000700086"},
+    {"name": "TATA-470(2)", "code": "470-2", "sap_eq": "000000000000700042"},
+]
+OB_MACHINES = [
+    {"name": "TATA-370(5)", "code": "370-5", "sap_eq": "000000000000700064"},
+    {"name": "TATA-370(4)", "code": "370-4", "sap_eq": "000000000000700053"},
+    {"name": "TATA-220(8)", "code": "220-8", "sap_eq": "000000000000700090"},
+]
+
+# Plan / actual sources — identical to the Production and OB sections so the
+# LCM denominators always agree with what those pages already display.
+ORE_MATERIALS = ("000000000025000002", "000000000025000001", "000000000025000003")
+OB_MATERIAL   = "000000000016000009"
+PLANT         = "1200"
+WORK_CENTRE   = "MINEAUTO"
+
+# Mining Restriction carries no column in mines_tipper_details. The mine's
+# workbook books a flat 48 hrs per machine per month, so it is applied as a
+# constant here, prorated by period length.
+MINING_RESTRICTION_HRS_PER_MACHINE_MONTH = 48.0
+
+# sl_no, label, source, loss_type, kam
+#   source: a mines_tipper_details column, or 'SAP_BD' / 'SAP_PM' / 'CONST_MR'
+LOSS_HEADS: list[tuple] = [
+    (1,  "Breakdown",                   "SAP_BD",               "Controllable",     "Amarendra Sarangi"),
+    (2,  "Preventive Maintenance",      "SAP_PM",               "Non Controllable", "Amarendra Sarangi"),
+    (3,  "LATE START",                  "late_start",           "Controllable",     "Pramod Kumar"),
+    (4,  "TIFFIN",                      "tiffin",               "Non Controllable", "Bhabani Shankar"),
+    (5,  "H.S.D SHORTAGE",              "hsd_shortage",         "Controllable",     "Bhimsen Barik"),
+    (6,  "STRIKE",                      "strike",               "Controllable",     "Bhabani Shankar"),
+    (7,  "IDLE REQU BASIC",             "idle_requ_basic",      "Controllable",     "Pramod Kumar"),
+    (8,  "SAFETY TALK",                 "safety_talk",          "Non Controllable", "Pramod Kumar"),
+    (9,  "DUMP JAM",                    "dump_jam",             "Controllable",     "Pramod Kumar"),
+    (10, "LMV UNAVAILIBILITY",          "lmv_availability",     "Controllable",     "Bhabani Shankar"),
+    (11, "ILLUMINATION PROBLEM",        "illumination_problem", "Controllable",     "K L Das"),
+    (12, "ABSENCE OF OPERATOR",         "absence_operator",     "Controllable",     "Bhabani Shankar"),
+    (13, "IDLE (NO WORK)",              "idle",                 "Controllable",     "Pramod Kumar"),
+    (14, "TIPPER SHORTAGE",             "tipper_shortage",      "Controllable",     "Amarendra Sarangi"),
+    (15, "EARLY CLOSE",                 "early_close",          "Controllable",     "Pramod Kumar"),
+    (16, "H.S.D FILLING",               "hsd_filling",          "Non Controllable", "Bhimsen Barik"),
+    (17, "NOT IN OPERATION",            "not_operation",        "Controllable",     "Pramod Kumar"),
+    (18, "RAIN & SLIPPERY PROBLEM",     "rain_slippery",        "Non Controllable", "Pramod Kumar"),
+    (19, "TRANS. TRUCK JAM",            "trains_truck",         "Controllable",     "Maheswar Mohanty"),
+    (20, "IMFA BLASTING",               "imfa_blasting",        "Non Controllable", "Pramod Kumar"),
+    (21, "FACE PREPARATION",            "face_preparation",     "Non Controllable", "Pramod Kumar"),
+    (22, "JOB ALLOCATION",              "job_allocation",       "Controllable",     "Pramod Kumar"),
+    (24, "IDLE DUE TO SAFETY CONCERN",  "idle_safety",          "Controllable",     "Pramod Kumar"),
+    (25, "OTHER",                       "other",                "Controllable",     "Pramod Kumar"),
+    (26, "Mining Restriction",          "CONST_MR",             "Non Controllable", "Pramod Kumar"),
+]
+
+SHIFT_COLUMNS = [s for (_, _, s, _, _) in LOSS_HEADS if s not in ("SAP_BD", "SAP_PM", "CONST_MR")]
+
+
+def _n(v) -> float:
+    try:
+        return float(v) if v is not None else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _machine_filter(machines: list[dict]) -> str:
+    """equipment_name switched from a CSV of excavator + tippers (pre-July 2026)
+    to a single full name. Both forms must match."""
+    return " OR ".join(
+        f"(FIND_IN_SET(:c{i}, equipment_name) > 0 OR equipment_name = :n{i})"
+        for i in range(len(machines))
+    )
+
+
+def _shift_hours(db: Session, machines: list[dict], fd: date, td: date) -> dict:
+    """Per-head hour totals from the IMOS shift log for one machine group."""
+    sums = ", ".join(
+        f"SUM(COALESCE(CAST(NULLIF({c},'') AS DECIMAL(14,2)),0)) AS s_{c}" for c in SHIFT_COLUMNS
+    )
+    params: dict = {"fd": fd, "td": td}
+    for i, m in enumerate(machines):
+        params[f"c{i}"] = m["code"]
+        params[f"n{i}"] = m["name"]
+
+    row = db.execute(text(f"""
+        SELECT COUNT(*) AS n_rows,
+               COUNT(DISTINCT Prod_date) AS n_days,
+               {sums}
+        FROM mines_tipper_details
+        WHERE Prod_date BETWEEN :fd AND :td AND ({_machine_filter(machines)})
+    """), params).fetchone()
+
+    m = dict(row._mapping) if row else {}
+    out = {c: _n(m.get(f"s_{c}")) for c in SHIFT_COLUMNS}
+    out["_rows"] = int(m.get("n_rows") or 0)
+    out["_days"] = int(m.get("n_days") or 0)
+    return out
+
+
+def _sap_breakdown(db: Session, machines: list[dict], fd: date, td: date) -> float:
+    """SAP M2 notification hours. BREAKDOWN_DURAION is stored in SECONDS."""
+    ph = ", ".join(f":e{i}" for i in range(len(machines)))
+    params: dict = {"fd": fd, "td": td, "plant": PLANT, "wc": WORK_CENTRE}
+    for i, m in enumerate(machines):
+        params[f"e{i}"] = m["sap_eq"]
+    row = db.execute(text(f"""
+        SELECT COALESCE(SUM(BREAKDOWN_DURAION), 0) / 3600.0 AS hrs
+        FROM zpm_iw29_notifications
+        WHERE MAINTENANCE_PLANT = :plant AND NOTIFICATION_TYPE = 'M2'
+          AND MAIN_WORK_CENTER = :wc AND EQUIPMENT IN ({ph})
+          AND MALFUNCTION_START BETWEEN :fd AND :td
+    """), params).fetchone()
+    return _n(row.hrs) if row else 0.0
+
+
+def _sap_pm(db: Session, machines: list[dict], fd: date, td: date) -> float:
+    """SAP BA03 order hours. WORK_HOURS is the only usable duration column —
+    DATEDIFF(completion, start) is 0 because orders open and close same-day."""
+    ph = ", ".join(f":e{i}" for i in range(len(machines)))
+    params: dict = {"fd": fd, "td": td, "plant": PLANT, "wc": WORK_CENTRE}
+    for i, m in enumerate(machines):
+        params[f"e{i}"] = m["sap_eq"]
+    row = db.execute(text(f"""
+        SELECT COALESCE(SUM(WORK_HOURS), 0) AS hrs
+        FROM mm_plant_maint_calibration
+        WHERE ORDER_TYPE = 'BA03' AND PLANT = :plant AND MAIN_WORK_CTR = :wc
+          AND EQUIPMENT_NO IN ({ph}) AND BASIC_START_DATE BETWEEN :fd AND :td
+    """), params).fetchone()
+    return _n(row.hrs) if row else 0.0
+
+
+def _plan_actual(db: Session, fd: date, td: date) -> dict:
+    """Plan from IMOS, actual from SAP — the same expressions the Production and
+    OB sections use, so LCM never disagrees with those pages."""
+    ore_plan = db.execute(text("""
+        SELECT COALESCE(SUM(ORE_QTY), 0) AS q FROM mines_daily_excavation_plan
+        WHERE Prod_date BETWEEN :fd AND :td
+    """), {"fd": fd, "td": td}).fetchone()
+
+    # OB_QTY_Cum is cumulative within a date → MAX per date, then sum the dates
+    ob_plan = db.execute(text("""
+        SELECT COALESCE(SUM(dmax), 0) AS q FROM (
+            SELECT MAX(CAST(NULLIF(OB_QTY_Cum,'') AS DECIMAL(14,3))) AS dmax
+            FROM mines_daily_excavation_plan
+            WHERE Prod_date BETWEEN :fd AND :td
+            GROUP BY Prod_date
+        ) d
+    """), {"fd": fd, "td": td}).fetchone()
+
+    ph = ", ".join(f":m{i}" for i in range(len(ORE_MATERIALS)))
+    p = {"fd": fd, "td": td, "plant": PLANT}
+    for i, mat in enumerate(ORE_MATERIALS):
+        p[f"m{i}"] = mat
+    ore_act = db.execute(text(f"""
+        SELECT COALESCE(SUM(QUANTITY), 0) AS q FROM pp_production
+        WHERE PLANT = :plant AND MATERIAL_NO IN ({ph})
+          AND POSTING_DATE BETWEEN :fd AND :td
+    """), p).fetchone()
+
+    ob_act = db.execute(text("""
+        SELECT COALESCE(SUM(QUANTITY), 0) AS q FROM pp_production
+        WHERE PLANT = :plant AND MATERIAL_NO = :mat
+          AND POSTING_DATE BETWEEN :fd AND :td
+    """), {"plant": PLANT, "mat": OB_MATERIAL, "fd": fd, "td": td}).fetchone()
+
+    return {
+        "ore_plan":   _n(ore_plan.q),
+        "ob_plan":    _n(ob_plan.q),
+        "ore_actual": _n(ore_act.q),
+        "ob_actual":  _n(ob_act.q),
+    }
+
+
+def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
+    days = (to_date - from_date).days + 1
+
+    pa = _plan_actual(db, from_date, to_date)
+    # Clamp at 0 — a period where actual beats plan has no production loss to
+    # distribute, and a negative factor would render every row as a negative loss.
+    ore_dev = max(pa["ore_plan"] - pa["ore_actual"], 0.0)
+    ob_dev  = max(pa["ob_plan"]  - pa["ob_actual"],  0.0)
+
+    ore_shift = _shift_hours(db, ORE_MACHINES, from_date, to_date)
+    ob_shift  = _shift_hours(db, OB_MACHINES,  from_date, to_date)
+
+    ore_bd = _sap_breakdown(db, ORE_MACHINES, from_date, to_date)
+    ob_bd  = _sap_breakdown(db, OB_MACHINES,  from_date, to_date)
+    ore_pm = _sap_pm(db, ORE_MACHINES, from_date, to_date)
+    ob_pm  = _sap_pm(db, OB_MACHINES,  from_date, to_date)
+
+    mr_per_machine = MINING_RESTRICTION_HRS_PER_MACHINE_MONTH * (days / 30.0)
+    ore_mr = mr_per_machine * len(ORE_MACHINES)
+    ob_mr  = mr_per_machine * len(OB_MACHINES)
+
+    def hours(source: str) -> tuple[float, float]:
+        if source == "SAP_BD":   return ore_bd, ob_bd
+        if source == "SAP_PM":   return ore_pm, ob_pm
+        if source == "CONST_MR": return ore_mr, ob_mr
+        return ore_shift.get(source, 0.0), ob_shift.get(source, 0.0)
+
+    raw = [(sl, label, *hours(src), lt, kam) for (sl, label, src, lt, kam) in LOSS_HEADS]
+
+    tot_ore_hrs = sum(r[2] for r in raw)
+    tot_ob_hrs  = sum(r[3] for r in raw)
+
+    ore_factor = (ore_dev / tot_ore_hrs) if tot_ore_hrs > 0 else 0.0
+    ob_factor  = (ob_dev  / tot_ob_hrs)  if tot_ob_hrs  > 0 else 0.0
+
+    rows = [{
+        "sl_no":            sl,
+        "loss_description": label,
+        "ore_hours":        round(oh, 2),
+        "planned_ore_loss": round(oh * ore_factor, 1),
+        "ob_hours":         round(bh, 2),
+        "planned_ob_loss":  round(bh * ob_factor, 0),
+        "loss_type":        lt,
+        "kam":              kam,
+    } for (sl, label, oh, bh, lt, kam) in raw]
+
+    controllable = [r for r in rows if r["loss_type"] == "Controllable"]
+
+    return {
+        "from_date": from_date.isoformat(),
+        "to_date":   to_date.isoformat(),
+        "basis": {
+            "days":       days,
+            "ore_plan":   round(pa["ore_plan"], 2),
+            "ore_actual": round(pa["ore_actual"], 2),
+            "ore_deviation": round(ore_dev, 2),
+            "ob_plan":    round(pa["ob_plan"], 2),
+            "ob_actual":  round(pa["ob_actual"], 2),
+            "ob_deviation":  round(ob_dev, 2),
+            "total_ore_loss_hours": round(tot_ore_hrs, 2),
+            "total_ob_loss_hours":  round(tot_ob_hrs, 2),
+            "ore_factor": round(ore_factor, 4),
+            "ob_factor":  round(ob_factor, 4),
+            "ore_machines": [m["name"] for m in ORE_MACHINES],
+            "ob_machines":  [m["name"] for m in OB_MACHINES],
+        },
+        # Shift-log completeness. A thin month understates every hour figure, so
+        # the page surfaces this rather than reporting a low total as fact.
+        "coverage": {
+            "days_in_period":   days,
+            "ore_days_present": ore_shift["_days"],
+            "ob_days_present":  ob_shift["_days"],
+            "ore_rows":         ore_shift["_rows"],
+            "ob_rows":          ob_shift["_rows"],
+        },
+        "rows": rows,
+        "totals": {
+            "ore_hours":        round(tot_ore_hrs, 2),
+            "planned_ore_loss": round(sum(r["planned_ore_loss"] for r in rows), 1),
+            "ob_hours":         round(tot_ob_hrs, 2),
+            "planned_ob_loss":  round(sum(r["planned_ob_loss"] for r in rows), 0),
+            "controllable_ore_loss":     round(sum(r["planned_ore_loss"] for r in controllable), 1),
+            "controllable_ob_loss":      round(sum(r["planned_ob_loss"] for r in controllable), 0),
+            "controllable_ore_hours":    round(sum(r["ore_hours"] for r in controllable), 2),
+            "controllable_ob_hours":     round(sum(r["ob_hours"] for r in controllable), 2),
+        },
+    }

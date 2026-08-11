@@ -1,5 +1,7 @@
 "use client";
+import { useState } from "react";
 import { Activity } from "lucide-react";
+import LCMSection from "@/components/sections/LCMSection";
 import { useDateFilter }  from "@/contexts/useDateFilter";
 import { useOEE }         from "@/hooks/useOEE";
 import type { OEEMachineRow, OEEFleet } from "@/types";
@@ -321,10 +323,18 @@ function FormulaCard() {
 }
 
 // ── Main section ──────────────────────────────────────────────────────────────
+type OeeTab = "oee" | "lcm";
+
+const TABS: { id: OeeTab; label: string }[] = [
+  { id: "oee", label: "OEE" },
+  { id: "lcm", label: "LCM — Lost Cost Matrix" },
+];
+
 export default function OEESection() {
   const { apiTo }                        = useDateFilter();
   const { data, isLoading }              = useOEE();
   const machines                         = data?.machines ?? [];
+  const [tab, setTab]                    = useState<OeeTab>("oee");
 
   return (
     <div className="space-y-4">
@@ -347,14 +357,41 @@ export default function OEESection() {
         )}
       </div>
 
-      {/* Fleet KPI strip */}
-      <FleetKpis fleet={data?.fleet} loading={isLoading} />
+      {/* Sub-tabs */}
+      <div className="flex items-stretch gap-1 border-b border-border">
+        {TABS.map(({ id, label }) => {
+          const active = tab === id;
+          return (
+            <button
+              key={id}
+              onClick={() => setTab(id)}
+              className={`
+                relative px-4 py-2.5 font-condensed text-[11px] font-bold tracking-[.1em] uppercase
+                transition-colors duration-150
+                ${active ? "text-[#6a1b9a]" : "text-[#8899bb] hover:text-[#3a4a6b] hover:bg-[#f8fafd]"}
+              `}
+            >
+              {active && <span className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#6a1b9a]" />}
+              {label}
+            </button>
+          );
+        })}
+      </div>
 
-      {/* Per-machine breakdown table */}
-      <OEETable machines={machines} fleet={data?.fleet} loading={isLoading} />
+      {tab === "oee" && (
+        <>
+          {/* Fleet KPI strip */}
+          <FleetKpis fleet={data?.fleet} loading={isLoading} />
 
-      {/* Formula reference */}
-      <FormulaCard />
+          {/* Per-machine breakdown table */}
+          <OEETable machines={machines} fleet={data?.fleet} loading={isLoading} />
+
+          {/* Formula reference */}
+          <FormulaCard />
+        </>
+      )}
+
+      {tab === "lcm" && <LCMSection />}
 
     </div>
   );
