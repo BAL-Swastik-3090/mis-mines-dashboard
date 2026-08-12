@@ -44,10 +44,12 @@ OB_MATERIAL   = "000000000016000009"
 PLANT         = "1200"
 WORK_CENTRE   = "MINEAUTO"
 
-# Mining Restriction carries no column in mines_tipper_details. The mine's
-# workbook books a flat 48 hrs per machine per month, so it is applied as a
-# constant here, prorated by period length.
-MINING_RESTRICTION_HRS_PER_MACHINE_MONTH = 48.0
+# Mining Restriction carries no column in mines_tipper_details, and the mine
+# enters it by hand rather than by rule — 48.00 hrs/machine in July 2026 but
+# 5.00 hrs/machine for 1-11 Aug. It is therefore NOT derivable, and any constant
+# here would be invented. Left at 0 until a real source exists; the page footnote
+# says so, so the row reads as unsourced rather than as a measured zero.
+MINING_RESTRICTION_HRS_PER_MACHINE = 0.0
 
 # sl_no, label, source, loss_type, kam
 #   source: a mines_tipper_details column, or 'SAP_BD' / 'SAP_PM' / 'CONST_MR'
@@ -214,9 +216,8 @@ def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
     ore_pm = _sap_pm(db, ORE_MACHINES, from_date, to_date)
     ob_pm  = _sap_pm(db, OB_MACHINES,  from_date, to_date)
 
-    mr_per_machine = MINING_RESTRICTION_HRS_PER_MACHINE_MONTH * (days / 30.0)
-    ore_mr = mr_per_machine * len(ORE_MACHINES)
-    ob_mr  = mr_per_machine * len(OB_MACHINES)
+    ore_mr = MINING_RESTRICTION_HRS_PER_MACHINE * len(ORE_MACHINES)
+    ob_mr  = MINING_RESTRICTION_HRS_PER_MACHINE * len(OB_MACHINES)
 
     def hours(source: str) -> tuple[float, float]:
         if source == "SAP_BD":   return ore_bd, ob_bd
