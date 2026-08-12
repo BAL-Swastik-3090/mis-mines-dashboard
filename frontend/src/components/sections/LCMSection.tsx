@@ -225,7 +225,7 @@ export default function LCMSection() {
           </p>
           <p className="text-[9px] font-mono text-txt-muted leading-tight">
             Breakdown and Preventive Maintenance come from SAP; the other heads from the IMOS shift log.
-            Mining Restriction is a flat 48 hrs per machine per month, prorated by period.
+            Mining Restriction has no source in the database and is entered manually by the mine, so it reads 0 here.
           </p>
         </div>
       </div>
