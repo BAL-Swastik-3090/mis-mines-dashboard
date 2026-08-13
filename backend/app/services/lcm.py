@@ -165,14 +165,16 @@ def _plan_actual(db: Session, fd: date, td: date) -> dict:
         WHERE Prod_date BETWEEN :fd AND :td
     """), {"fd": fd, "td": td}).fetchone()
 
-    # OB_QTY_Cum is cumulative within a date → MAX per date, then sum the dates
+    # OB_QTY_Cum is NOT cumulative despite the name — the table is one row per
+    # shift per location per face, and the value repeats identically across
+    # shifts A/B/C for a given face (e.g. 2026-08-04 loc 26 reads 446.5 three
+    # times). It is a per-shift-per-face plan quantity, the same grain as
+    # ORE_QTY, so it sums the same way. MAX-per-date discards every row but one
+    # and understates the OB plan roughly fivefold.
     ob_plan = db.execute(text("""
-        SELECT COALESCE(SUM(dmax), 0) AS q FROM (
-            SELECT MAX(CAST(NULLIF(OB_QTY_Cum,'') AS DECIMAL(14,3))) AS dmax
-            FROM mines_daily_excavation_plan
-            WHERE Prod_date BETWEEN :fd AND :td
-            GROUP BY Prod_date
-        ) d
+        SELECT COALESCE(SUM(CAST(NULLIF(OB_QTY_Cum,'') AS DECIMAL(16,3))), 0) AS q
+        FROM mines_daily_excavation_plan
+        WHERE Prod_date BETWEEN :fd AND :td
     """), {"fd": fd, "td": td}).fetchone()
 
     ph = ", ".join(f":m{i}" for i in range(len(ORE_MATERIALS)))
