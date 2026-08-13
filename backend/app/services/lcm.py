@@ -44,6 +44,39 @@ OB_MATERIAL   = "000000000016000009"
 PLANT         = "1200"
 WORK_CENTRE   = "MINEAUTO"
 
+# ── Costing ──────────────────────────────────────────────────────────────────
+# Loss Amount values the planned ore loss at the IBM (Indian Bureau of Mines)
+# published rate. The rate is grade-wise, so the single figure applied to the
+# loss column is the plan-weighted average across HG/MG/LG:
+#
+#     Weighted Rate = Σ(Plan Qty[g] × IBM Rate[g]) ÷ Σ Plan Qty[g]
+#     Loss Amount   = Planned Ore Loss (MT) × Weighted Rate
+#
+# The weighting uses the PLAN mix, not the actual mix — the loss being valued is
+# ore that was planned and never came out of the ground, so it carries the grade
+# mix the plan intended. Being a ratio, the weighting is scale-invariant: it does
+# not matter whether HG+MG+LG equals ORE_QTY exactly, only their proportions.
+#
+# Rates are supplied by the mine today and are to be scraped from the IBM site
+# later, behind a user confirmation step — hence the explicit `source` field, so
+# the page can always state where the number in use came from.
+IBM_RATE_SOURCE = "Pending — awaiting grade-wise rates from user"
+
+# ₹ per MT, grade-wise. None = not yet supplied. While ANY grade carrying plan
+# quantity has no rate, the whole Loss Amount column reports null rather than a
+# number: dropping the unpriced grade would silently understate every row, which
+# is worse than showing nothing.
+IBM_RATES: dict[str, float | None] = {
+    "HG": None,   # +52% CHROME ORE
+    "MG": None,   # 40-52% CHROME ORE
+    "LG": None,   # LOW GRADE ORE (-40% Cr2O3)
+}
+
+# OB carries no rupee value. It is waste rock moved to expose ore, not a saleable
+# product, so there is no IBM rate for it — the OB loss stays a volume in CuM.
+# If the mine later wants OB costed at an internal ₹/CuM excavation cost, that is
+# a different figure with a different meaning and should be labelled as such.
+
 # Mining Restriction carries no column in mines_tipper_details, and the mine
 # enters it by hand rather than by rule — 48.00 hrs/machine in July 2026 but
 # 5.00 hrs/machine for 1-11 Aug. It is therefore NOT derivable, and any constant
@@ -201,6 +234,61 @@ def _plan_actual(db: Session, fd: date, td: date) -> dict:
     }
 
 
+def _grade_plan(db: Session, fd: date, td: date) -> dict[str, float]:
+    """Grade-wise planned ore (MT) from IMOS.
+
+    HG_QTY / MG_QTY / LG_QTY sit on mines_daily_excavation_plan at the same
+    shift x location x face grain as ORE_QTY, so they sum the same way.
+    """
+    r = db.execute(text("""
+        SELECT COALESCE(SUM(HG_QTY), 0) AS hg,
+               COALESCE(SUM(MG_QTY), 0) AS mg,
+               COALESCE(SUM(LG_QTY), 0) AS lg
+        FROM mines_daily_excavation_plan
+        WHERE Prod_date BETWEEN :fd AND :td
+    """), {"fd": fd, "td": td}).fetchone()
+    return {"HG": _n(r.hg), "MG": _n(r.mg), "LG": _n(r.lg)}
+
+
+def _weighted_rate(grade_qty: dict[str, float]) -> dict:
+    """Plan-weighted average IBM rate across the grades.
+
+    Returns the rate plus the full per-grade working, so the page can show how
+    the number was arrived at instead of asking anyone to trust a bare figure.
+    """
+    total_qty = sum(grade_qty.values())
+    missing   = [g for g, q in grade_qty.items() if q > 0 and IBM_RATES.get(g) is None]
+
+    breakdown = [{
+        "grade":  g,
+        "qty":    round(grade_qty.get(g, 0.0), 3),
+        "rate":   IBM_RATES.get(g),
+        "share":  round(grade_qty.get(g, 0.0) / total_qty * 100, 2) if total_qty > 0 else 0.0,
+        "value":  round(grade_qty.get(g, 0.0) * IBM_RATES[g], 2) if IBM_RATES.get(g) is not None else None,
+    } for g in ("HG", "MG", "LG")]
+
+    if total_qty <= 0:
+        status, rate = "no_plan_qty", None
+    elif missing:
+        status, rate = "rate_missing", None
+    else:
+        # Only grades actually carrying plan quantity contribute. A grade with
+        # zero qty is skipped outright rather than multiplied by its rate — it
+        # adds nothing to either side of the ratio, and skipping it means an
+        # unpriced-but-unplanned grade cannot break the calculation.
+        rate = sum(q * IBM_RATES[g] for g, q in grade_qty.items() if q > 0) / total_qty
+        status = "ok"
+
+    return {
+        "weighted_rate":   round(rate, 2) if rate is not None else None,
+        "status":          status,
+        "missing_grades":  missing,
+        "total_plan_qty":  round(total_qty, 3),
+        "source":          IBM_RATE_SOURCE,
+        "breakdown":       breakdown,
+    }
+
+
 def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
     days = (to_date - from_date).days + 1
 
@@ -235,6 +323,13 @@ def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
     ore_factor = (ore_dev / tot_ore_hrs) if tot_ore_hrs > 0 else 0.0
     ob_factor  = (ob_dev  / tot_ob_hrs)  if tot_ob_hrs  > 0 else 0.0
 
+    grade_qty = _grade_plan(db, from_date, to_date)
+    costing   = _weighted_rate(grade_qty)
+    rate      = costing["weighted_rate"]
+
+    def amount(ore_loss_mt: float) -> float | None:
+        return round(ore_loss_mt * rate, 2) if rate is not None else None
+
     rows = [{
         "sl_no":            sl,
         "loss_description": label,
@@ -242,6 +337,7 @@ def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
         "planned_ore_loss": round(oh * ore_factor, 1),
         "ob_hours":         round(bh, 2),
         "planned_ob_loss":  round(bh * ob_factor, 0),
+        "loss_amount":      amount(oh * ore_factor),
         "loss_type":        lt,
         "kam":              kam,
     } for (sl, label, oh, bh, lt, kam) in raw]
@@ -266,6 +362,18 @@ def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
             "ore_machines": [m["name"] for m in ORE_MACHINES],
             "ob_machines":  [m["name"] for m in OB_MACHINES],
         },
+        # Grade-wise plan feeding the weighted IBM rate. ore_plan is carried
+        # alongside grade_plan_total so a mismatch between ORE_QTY and
+        # HG+MG+LG is visible rather than silently absorbed — it does not
+        # affect the rate (a ratio) but it does signal incomplete grade entry.
+        "costing": {
+            **costing,
+            "ore_plan":         round(pa["ore_plan"], 2),
+            "grade_plan_total": costing["total_plan_qty"],
+            "grade_plan_matches_ore_plan":
+                abs(costing["total_plan_qty"] - pa["ore_plan"]) < 0.5,
+            "ob_costed": False,
+        },
         # Shift-log completeness. A thin month understates every hour figure, so
         # the page surfaces this rather than reporting a low total as fact.
         "coverage": {
@@ -285,5 +393,7 @@ def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
             "controllable_ob_loss":      round(sum(r["planned_ob_loss"] for r in controllable), 0),
             "controllable_ore_hours":    round(sum(r["ore_hours"] for r in controllable), 2),
             "controllable_ob_hours":     round(sum(r["ob_hours"] for r in controllable), 2),
+            "loss_amount":               amount(sum(r["planned_ore_loss"] for r in rows)),
+            "controllable_loss_amount":  amount(sum(r["planned_ore_loss"] for r in controllable)),
         },
     }

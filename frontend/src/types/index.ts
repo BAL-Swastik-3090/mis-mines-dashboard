@@ -792,8 +792,30 @@ export interface LCMRow {
   planned_ore_loss: number;   // MT
   ob_hours:         number;
   planned_ob_loss:  number;   // CuM
+  loss_amount:      number | null;   // Rs — null while the IBM rate is unset
   loss_type:        "Controllable" | "Non Controllable";
   kam:              string;
+}
+
+export interface LCMGradeRate {
+  grade: "HG" | "MG" | "LG";
+  qty:   number;          // planned MT
+  rate:  number | null;   // IBM Rs/MT
+  share: number;          // % of planned ore
+  value: number | null;   // qty x rate
+}
+
+export interface LCMCosting {
+  weighted_rate:  number | null;   // Rs/MT, plan-weighted across grades
+  status:         "ok" | "rate_missing" | "no_plan_qty";
+  missing_grades: string[];
+  total_plan_qty: number;
+  source:         string;
+  breakdown:      LCMGradeRate[];
+  ore_plan:       number;
+  grade_plan_total: number;
+  grade_plan_matches_ore_plan: boolean;
+  ob_costed:      boolean;
 }
 
 export interface LCMBasis {
@@ -829,12 +851,15 @@ export interface LCMTotals {
   controllable_ob_loss:    number;
   controllable_ore_hours:  number;
   controllable_ob_hours:   number;
+  loss_amount:              number | null;
+  controllable_loss_amount: number | null;
 }
 
 export interface LCMResponse {
   from_date: string;
   to_date:   string;
   basis:     LCMBasis;
+  costing:   LCMCosting;
   coverage:  LCMCoverage;
   rows:      LCMRow[];
   totals:    LCMTotals;

@@ -1,5 +1,5 @@
 "use client";
-import { AlertTriangle, Calculator, TrendingDown, Layers } from "lucide-react";
+import { AlertTriangle, Calculator, TrendingDown, Layers, IndianRupee } from "lucide-react";
 import { useLCM } from "@/hooks/useLCM";
 import { formatIndian } from "@/lib/utils";
 
@@ -10,6 +10,15 @@ function fmt(v: number | null | undefined, dp = 2) {
 function f0(v: number | null | undefined) {
   return v == null ? "—" : formatIndian(Math.round(v));
 }
+/** Rupees, Indian grouping. Null means the IBM rate is not configured yet. */
+function rs(v: number | null | undefined) {
+  return v == null ? "—" : `₹${formatIndian(Math.round(v))}`;
+}
+/** Large rupee figures read better in lakhs on a summary line. */
+function rsLakh(v: number | null | undefined) {
+  return v == null ? "—" : `₹${(v / 100000).toLocaleString("en-IN", {
+    minimumFractionDigits: 2, maximumFractionDigits: 2 })} L`;
+}
 function Shimmer({ w = "w-20", h = "h-5" }: { w?: string; h?: string }) {
   return <div className={`${h} ${w} bg-bg-section animate-pulse rounded`} />;
 }
@@ -19,6 +28,7 @@ export default function LCMSection() {
   const b = data?.basis;
   const t = data?.totals;
   const c = data?.coverage;
+  const cost = data?.costing;
 
   if (isError) {
     return (
@@ -128,6 +138,129 @@ export default function LCMSection() {
         </div>
       </div>
 
+      {/* Costing basis — grade-wise IBM rate and the plan-weighted average */}
+      {!isLoading && cost && (
+        <div className="bg-white border border-border rounded-lg shadow-sm overflow-hidden">
+          <div className="px-4 pt-3 pb-2.5 border-b border-border-light flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2">
+              <IndianRupee size={14} className="text-[#ad1457]" />
+              <span className="font-condensed font-bold text-[13px] text-navy tracking-widest uppercase">
+                Costing Basis — IBM Rate
+              </span>
+            </div>
+            <span className="text-[10px] font-mono text-txt-light">{cost.source}</span>
+          </div>
+
+          {cost.status !== "ok" && (
+            <div className="px-4 py-2.5 bg-[#fff8e1] border-b border-[#ffe082] flex items-start gap-2.5">
+              <AlertTriangle size={15} className="text-[#c8960c] shrink-0 mt-[1px]" />
+              <div className="text-[11.5px] text-txt-secondary leading-relaxed">
+                {cost.status === "rate_missing" ? (
+                  <>
+                    <span className="font-bold text-navy">
+                      IBM rate not configured for {cost.missing_grades.join(", ")}.
+                    </span>{" "}
+                    The Loss Amount column is blank rather than partial — pricing only the
+                    grades that have a rate would understate every row.
+                  </>
+                ) : (
+                  <span className="font-bold text-navy">
+                    No planned ore quantity in this period, so no rate can be weighted.
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-[12px] font-mono">
+              <thead>
+                <tr className="bg-bg-section border-b border-border-light">
+                  <th className="px-3 py-2 text-left  text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary">Grade</th>
+                  <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary">Plan Qty (MT)</th>
+                  <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary">Mix %</th>
+                  <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#ad1457]">IBM Rate (₹/MT)</th>
+                  <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary">Qty × Rate</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border-light/60">
+                {cost.breakdown.map((g) => (
+                  <tr key={g.grade} className={g.qty === 0 ? "opacity-45" : ""}>
+                    <td className="px-3 py-2 font-condensed font-bold text-[12px] text-navy">{g.grade}</td>
+                    <td className="px-3 py-2 text-right text-navy">{fmt(g.qty, 2)}</td>
+                    <td className="px-3 py-2 text-right text-txt-secondary">{fmt(g.share, 1)}%</td>
+                    <td className={`px-3 py-2 text-right font-semibold ${g.rate == null ? "text-[#c62828]" : "text-[#ad1457]"}`}>
+                      {g.rate == null ? "not set" : rs(g.rate)}
+                    </td>
+                    <td className="px-3 py-2 text-right text-navy">{rs(g.value)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="bg-navy text-white font-bold">
+                  <td className="px-3 py-2.5 font-condensed tracking-widest uppercase text-[11px]">Weighted</td>
+                  <td className="px-3 py-2.5 text-right">{fmt(cost.grade_plan_total, 2)}</td>
+                  <td className="px-3 py-2.5 text-right">100.0%</td>
+                  <td className="px-3 py-2.5 text-right">{cost.weighted_rate == null ? "—" : rs(cost.weighted_rate)}</td>
+                  <td className="px-3 py-2.5 text-right">{rs(t?.loss_amount)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+
+          {!cost.grade_plan_matches_ore_plan && (
+            <div className="px-3 py-2 border-t border-border-light/40 bg-[#fff8e1]/60">
+              <p className="text-[9.5px] font-mono text-[#8d6e00] leading-tight">
+                Grade split totals {fmt(cost.grade_plan_total, 2)} MT against an ore plan of{" "}
+                {fmt(cost.ore_plan, 2)} MT — the grade columns are not fully entered for this
+                period. The weighted rate is a ratio so it is unaffected, but the mix shown
+                above reflects only the graded portion.
+              </p>
+            </div>
+          )}
+
+          {cost.status === "ok" && t && (
+            <div className="px-4 py-3 border-t border-border-light grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <div className="text-[9.5px] font-bold tracking-widest uppercase font-condensed text-txt-secondary">
+                  Total Loss Value
+                </div>
+                <div className="font-condensed font-extrabold text-[22px] leading-none text-navy mt-1">
+                  {rsLakh(t.loss_amount)}
+                </div>
+                <div className="text-[9.5px] text-txt-light font-mono mt-0.5">
+                  {f0(t.planned_ore_loss)} MT × {rs(cost.weighted_rate)}/MT
+                </div>
+              </div>
+              <div>
+                <div className="text-[9.5px] font-bold tracking-widest uppercase font-condensed text-txt-secondary">
+                  Controllable Share
+                </div>
+                <div className="font-condensed font-extrabold text-[22px] leading-none text-[#c62828] mt-1">
+                  {rsLakh(t.controllable_loss_amount)}
+                </div>
+                <div className="text-[9.5px] text-txt-light font-mono mt-0.5">
+                  {t.loss_amount && t.controllable_loss_amount != null && t.loss_amount > 0
+                    ? `${((t.controllable_loss_amount / t.loss_amount) * 100).toFixed(1)}% of total loss value`
+                    : "recoverable with action"}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40 space-y-0.5">
+            <p className="text-[9px] font-mono text-txt-muted leading-tight">
+              Weighted Rate = Σ(Plan Qty × IBM Rate) ÷ Σ Plan Qty, weighted on the planned
+              grade mix. Loss Amount = Planned Ore Loss × Weighted Rate.
+            </p>
+            <p className="text-[9px] font-mono text-txt-muted leading-tight">
+              OB carries no rupee value — it is waste rock moved to expose ore, not a saleable
+              product, so OB loss stays a volume in CuM.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Period totals */}
       {!isLoading && t && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -179,12 +312,13 @@ export default function LCMSection() {
                 <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#1565c0]">Planned Ore<br/>Loss (MT)</th>
                 <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#2e7d32]">OB Production<br/>Hour Loss</th>
                 <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#2e7d32]">Planned OB<br/>Loss (CuM)</th>
+                <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#ad1457]">Loss Amount<br/>(₹)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border-light/60">
               {isLoading ? (
                 Array.from({ length: 8 }).map((_, i) => (
-                  <tr key={i}>{Array.from({ length: 6 }).map((__, j) => (
+                  <tr key={i}>{Array.from({ length: 7 }).map((__, j) => (
                     <td key={j} className="px-3 py-2.5"><Shimmer w="w-14" h="h-4" /></td>
                   ))}</tr>
                 ))
@@ -200,6 +334,7 @@ export default function LCMSection() {
                     <td className="px-3 py-2 text-right font-semibold text-[#1565c0]">{fmt(r.planned_ore_loss, 1)}</td>
                     <td className="px-3 py-2 text-right text-navy">{fmt(r.ob_hours, 2)}</td>
                     <td className="px-3 py-2 text-right font-semibold text-[#2e7d32]">{f0(r.planned_ob_loss)}</td>
+                    <td className="px-3 py-2 text-right font-semibold text-[#ad1457]">{rs(r.loss_amount)}</td>
                   </tr>
                 );
               })}
@@ -213,6 +348,7 @@ export default function LCMSection() {
                   <td className="px-3 py-2.5 text-right">{fmt(t.planned_ore_loss, 1)}</td>
                   <td className="px-3 py-2.5 text-right">{fmt(t.ob_hours, 2)}</td>
                   <td className="px-3 py-2.5 text-right">{f0(t.planned_ob_loss)}</td>
+                  <td className="px-3 py-2.5 text-right">{rs(t.loss_amount)}</td>
                 </tr>
               </tfoot>
             )}
