@@ -353,17 +353,27 @@ def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
     def amount(ore_loss_mt: float) -> float | None:
         return round(ore_loss_mt * rate, 2) if rate is not None else None
 
-    rows = [{
-        "sl_no":            sl,
-        "loss_description": label,
-        "ore_hours":        round(oh, 2),
-        "planned_ore_loss": round(oh * ore_factor, 1),
-        "ob_hours":         round(bh, 2),
-        "planned_ob_loss":  round(bh * ob_factor, 0),
-        "loss_amount":      amount(oh * ore_factor),
-        "loss_type":        lt,
-        "kam":              kam,
-    } for (sl, label, oh, bh, lt, kam) in raw]
+    # Loss Amount is costed off the ROUNDED planned ore loss — the same figure
+    # the page prints — so that every row is reproducible by hand from what is on
+    # screen, and the column foots exactly to the total. Costing the unrounded
+    # value instead is marginally more precise but leaves the printed table not
+    # adding up: rows drifted from their own displayed MT by up to ~Rs 530, and
+    # the column missed its own total by ~Rs 640. On a Rs 4.5 crore figure the
+    # precision is worth nothing and the inconsistency costs trust.
+    rows = []
+    for (sl, label, oh, bh, lt, kam) in raw:
+        pol = round(oh * ore_factor, 1)
+        rows.append({
+            "sl_no":            sl,
+            "loss_description": label,
+            "ore_hours":        round(oh, 2),
+            "planned_ore_loss": pol,
+            "ob_hours":         round(bh, 2),
+            "planned_ob_loss":  round(bh * ob_factor, 0),
+            "loss_amount":      amount(pol),
+            "loss_type":        lt,
+            "kam":              kam,
+        })
 
     controllable = [r for r in rows if r["loss_type"] == "Controllable"]
 
@@ -416,7 +426,13 @@ def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
             "controllable_ob_loss":      round(sum(r["planned_ob_loss"] for r in controllable), 0),
             "controllable_ore_hours":    round(sum(r["ore_hours"] for r in controllable), 2),
             "controllable_ob_hours":     round(sum(r["ob_hours"] for r in controllable), 2),
-            "loss_amount":               amount(sum(r["planned_ore_loss"] for r in rows)),
-            "controllable_loss_amount":  amount(sum(r["planned_ore_loss"] for r in controllable)),
+            # Sum the rows' own amounts rather than re-costing the total, so the
+            # printed column adds up to the printed total exactly.
+            "loss_amount":
+                round(sum(r["loss_amount"] for r in rows), 2)
+                if rate is not None else None,
+            "controllable_loss_amount":
+                round(sum(r["loss_amount"] for r in controllable), 2)
+                if rate is not None else None,
         },
     }
