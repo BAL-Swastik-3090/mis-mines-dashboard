@@ -73,8 +73,10 @@ def _latest_plan_month(db: Session) -> tuple[date, date]:
 
 def _ore_ob_full_month_plan(db: Session, first: date, last: date) -> dict:
     row = db.execute(text("""
-        SELECT COALESCE(SUM(ORE_QTY), 0)                          AS ore_plan,
-               COALESCE(MAX(CAST(OB_QTY_Cum AS DECIMAL(14,3))), 0) AS ob_plan
+        SELECT COALESCE(SUM(ORE_QTY), 0)                                        AS ore_plan,
+               -- OB_QTY_Cum is per shift x location x face, not cumulative — sum
+               -- it like ORE_QTY. MAX returned a single row for the whole month.
+               COALESCE(SUM(CAST(NULLIF(OB_QTY_Cum,'') AS DECIMAL(16,3))), 0)    AS ob_plan
         FROM   mines_daily_excavation_plan
         WHERE  Prod_date BETWEEN :f AND :t
     """), {"f": first, "t": last}).fetchone()

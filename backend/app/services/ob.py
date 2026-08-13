@@ -30,9 +30,14 @@ def _get_bal_and_plan(db: Session, from_date: date, to_date: date):
         GROUP BY POSTING_DATE
         ORDER BY POSTING_DATE
     """)
+    # OB_QTY_Cum is NOT cumulative despite the name. The table holds one row per
+    # shift per location per face and the value repeats across shifts A/B/C for a
+    # face (2026-08-04 loc 26 reads 446.5 three times) — a running total would
+    # climb. It is a per-shift-per-face quantity at the same grain as ORE_QTY, so
+    # it sums. MAX kept one row per day and understated the plan ~4x.
     sql_plan = text("""
         SELECT Prod_date AS dt,
-               ROUND(MAX(CAST(OB_QTY_Cum AS DECIMAL(13,3))), 2) AS ob_plan
+               ROUND(COALESCE(SUM(CAST(NULLIF(OB_QTY_Cum,'') AS DECIMAL(16,3))), 0), 2) AS ob_plan
         FROM mines_daily_excavation_plan
         WHERE Prod_date BETWEEN :f AND :t
         GROUP BY Prod_date ORDER BY Prod_date
