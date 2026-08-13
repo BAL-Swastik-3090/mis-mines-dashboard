@@ -254,6 +254,12 @@ export default function LCMSection() {
               grade mix. Loss Amount = Planned Ore Loss × Weighted Rate.
             </p>
             <p className="text-[9px] font-mono text-txt-muted leading-tight">
+              IBM prices by Cr₂O₃ band, so each grade takes its representative band — HG the
+              52–54% band, MG the 46–48% band at the midpoint of its 40–52% range. IBM
+              publishes no band below 42%, so LG is valued at zero; since LG is COB feed and
+              does realise value as concentrate, a period carrying LG tonnage is understated.
+            </p>
+            <p className="text-[9px] font-mono text-txt-muted leading-tight">
               OB carries no rupee value — it is waste rock moved to expose ore, not a saleable
               product, so OB loss stays a volume in CuM.
             </p>
