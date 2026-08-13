@@ -178,9 +178,8 @@ export default function LCMSection() {
                 <tr className="bg-bg-section border-b border-border-light">
                   <th className="px-3 py-2 text-left  text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary">Grade</th>
                   <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary">Plan Qty (MT)</th>
-                  <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary">Mix %</th>
                   <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#ad1457]">IBM Rate (₹/MT)</th>
-                  <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary">Qty × Rate</th>
+                  <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary">Plan Value<br/>(Qty × Rate)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-light/60">
@@ -188,7 +187,6 @@ export default function LCMSection() {
                   <tr key={g.grade} className={g.qty === 0 ? "opacity-45" : ""}>
                     <td className="px-3 py-2 font-condensed font-bold text-[12px] text-navy">{g.grade}</td>
                     <td className="px-3 py-2 text-right text-navy">{fmt(g.qty, 2)}</td>
-                    <td className="px-3 py-2 text-right text-txt-secondary">{fmt(g.share, 1)}%</td>
                     <td className={`px-3 py-2 text-right font-semibold ${g.rate == null ? "text-[#c62828]" : "text-[#ad1457]"}`}>
                       {g.rate == null ? "not set" : rs(g.rate)}
                     </td>
@@ -200,9 +198,14 @@ export default function LCMSection() {
                 <tr className="bg-navy text-white font-bold">
                   <td className="px-3 py-2.5 font-condensed tracking-widest uppercase text-[11px]">Weighted</td>
                   <td className="px-3 py-2.5 text-right">{fmt(cost.grade_plan_total, 2)}</td>
-                  <td className="px-3 py-2.5 text-right">100.0%</td>
                   <td className="px-3 py-2.5 text-right">{cost.weighted_rate == null ? "—" : rs(cost.weighted_rate)}</td>
-                  <td className="px-3 py-2.5 text-right">{rs(t?.loss_amount)}</td>
+                  {/* This is the true total of the column above — the value of the
+                      whole planned ore. The LOST slice of it is the tile below. */}
+                  <td className="px-3 py-2.5 text-right">
+                    {cost.breakdown.some((g) => g.value == null)
+                      ? "—"
+                      : rs(cost.breakdown.reduce((s, g) => s + (g.value ?? 0), 0))}
+                  </td>
                 </tr>
               </tfoot>
             </table>
@@ -252,6 +255,11 @@ export default function LCMSection() {
             <p className="text-[9px] font-mono text-txt-muted leading-tight">
               Weighted Rate = Σ(Plan Qty × IBM Rate) ÷ Σ Plan Qty, weighted on the planned
               grade mix. Loss Amount = Planned Ore Loss × Weighted Rate.
+            </p>
+            <p className="text-[9px] font-mono text-txt-muted leading-tight">
+              Plan Value is the whole planned ore valued at these rates. Total Loss Value below
+              is only the portion that was planned and never excavated — a slice of it, not a
+              total of it.
             </p>
             <p className="text-[9px] font-mono text-txt-muted leading-tight">
               IBM prices by Cr₂O₃ band, so each grade takes its representative band — HG the
