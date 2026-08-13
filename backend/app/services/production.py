@@ -84,8 +84,9 @@ def get_daily_ore_ob_plan(db: Session, from_date: date, to_date: date) -> list[d
     sql = text("""
         SELECT
             Prod_date                                    AS dt,
-            SUM(ORE_QTY)                                 AS ore_plan,
-            MAX(CAST(OB_QTY_Cum AS DECIMAL(13,3)))       AS ob_plan,
+            SUM(ORE_QTY)                                            AS ore_plan,
+            -- per shift x location x face, not cumulative — sum like ORE_QTY
+            COALESCE(SUM(CAST(NULLIF(OB_QTY_Cum,'') AS DECIMAL(16,3))), 0) AS ob_plan,
             SUM(HG_QTY)                                  AS hg_plan,
             SUM(MG_QTY)                                  AS mg_plan,
             SUM(LG_QTY)                                  AS lg_plan
@@ -198,8 +199,9 @@ def get_mtd_totals(db: Session, from_date: date, to_date: date) -> dict:
 
     sql_plan = text("""
         SELECT
-            SUM(ORE_QTY)                            AS ore_plan,
-            MAX(CAST(OB_QTY_Cum AS DECIMAL(13,3)))  AS ob_plan,
+            SUM(ORE_QTY)                                            AS ore_plan,
+            -- per shift x location x face, not cumulative — sum like ORE_QTY
+            COALESCE(SUM(CAST(NULLIF(OB_QTY_Cum,'') AS DECIMAL(16,3))), 0) AS ob_plan,
             SUM(HG_QTY)                             AS hg_plan,
             SUM(MG_QTY)                             AS mg_plan,
             SUM(LG_QTY)                             AS lg_plan
