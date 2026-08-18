@@ -262,10 +262,10 @@ export default function LCMSection() {
               total of it.
             </p>
             <p className="text-[9px] font-mono text-txt-muted leading-tight">
-              IBM prices by Cr₂O₃ band, so each grade takes its representative band — HG the
-              52–54% band, MG the 46–48% band at the midpoint of its 40–52% range. IBM
-              publishes no band below 42%, so LG is valued at zero; since LG is COB feed and
-              does realise value as concentrate, a period carrying LG tonnage is understated.
+              IBM's published bands map one-to-one onto HG (52% and above), MG (40% to below
+              52%) and LG (below 40%), so no band has to be chosen as representative. These
+              are fines prices — the plan does not split lump from fines, so every planned
+              tonne is valued as fines.
             </p>
             <p className="text-[9px] font-mono text-txt-muted leading-tight">
               OB carries no rupee value — it is waste rock moved to expose ore, not a saleable
