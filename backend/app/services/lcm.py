@@ -60,39 +60,28 @@ WORK_CENTRE   = "MINEAUTO"
 # Rates are supplied by the mine today and are to be scraped from the IBM site
 # later, behind a user confirmation step — hence the explicit `source` field, so
 # the page can always state where the number in use came from.
-IBM_RATE_SOURCE = "IBM weighted average price — South Kaliapani Chromite Mines"
+IBM_RATE_SOURCE = "IBM average sale price, June 2026 — chrome ore fines"
 
-# IBM publishes a price per Cr2O3 band, not per the HG/MG/LG buckets the mine
-# plans in, so each bucket is mapped to the band that represents it:
+# IBM's published bands map one-to-one onto the HG/MG/LG buckets the mine plans
+# in, so no band has to be chosen as representative:
 #
-#   Band      Basis   Rs/WMT     Bucket
-#   +54%       54%    28,718     HG
-#   52-54%     52%    27,740     HG  <- selected: the band starting at the
-#                                       52% HG threshold, so it represents the
-#                                       bulk of HG rather than only its top end
-#   48-50%     48%    25,785     MG
-#   46-48%     46%    24,225     MG  <- selected: basis 46% is the midpoint of
-#                                       the 40-52% MG range
-#   44-46%     44%    23,171     MG
-#   42-44%     42%    22,118     MG
+#   IBM band                       Rs/MT     Bucket
+#   52% and above Cr2O3, Fines     28,436    HG   (+52% CHROME ORE)
+#   40% to below 52% Cr2O3, Fines  23,551    MG   (40-52% CHROME ORE)
+#   Below 40% Cr2O3, Fines         11,294    LG   (-40% Cr2O3)
 #
-# Choosing the representative band, rather than averaging the bands, is
-# deliberate: an unweighted average of published bands would assume the mine
-# produces equally across them, which nothing in the data supports.
+# These are FINES prices. The plan carries only the HG/MG/LG columns and does
+# not split lump from fines, so every planned tonne is valued as fines. If the
+# mine later plans lump separately it needs its own rate — lump prices differ.
 #
-# ₹ per MT (WMT). None = not yet determined. While ANY grade carrying plan
-# quantity has no rate, the whole Loss Amount column reports null rather than a
-# number: dropping the unpriced grade would silently understate every row, which
-# is worse than showing nothing.
+# ₹ per MT. None = not yet determined. While ANY grade carrying plan quantity
+# has no rate, the whole Loss Amount column reports null rather than a number:
+# dropping the unpriced grade would silently understate every row, which is
+# worse than showing nothing.
 IBM_RATES: dict[str, float | None] = {
-    "HG": 27740.0,   # +52% CHROME ORE            -> IBM 52-54% band
-    "MG": 24225.0,   # 40-52% CHROME ORE          -> IBM 46-48% band (midpoint)
-    # IBM publishes no band below 42%, so LG has no listed price. Valued at zero
-    # by the mine's decision — NOT a missing rate awaiting a number. Note this is
-    # conservative: LG is the COB plant's feed material, so it does eventually
-    # realise value as concentrate. Costing it at zero therefore understates the
-    # true loss whenever a period's plan carries LG tonnage.
-    "LG": 0.0,       # LOW GRADE ORE (-40% Cr2O3) -> no IBM band; valued at zero
+    "HG": 28436.0,   # +52% CHROME ORE            -> 52% and above, Fines
+    "MG": 23551.0,   # 40-52% CHROME ORE          -> 40% to below 52%, Fines
+    "LG": 11294.0,   # LOW GRADE ORE (-40% Cr2O3) -> Below 40%, Fines
 }
 
 # OB carries no rupee value. It is waste rock moved to expose ore, not a saleable
