@@ -15,6 +15,7 @@ Enhancements active:
 """
 from datetime import date, datetime, timedelta
 import calendar
+import re
 import json
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -71,16 +72,80 @@ def _latest_plan_month(db: Session) -> tuple[date, date]:
     return first, last
 
 
+# OB volume is NOT in the Tonnage column of the monthly plan. Every OB row in
+# mines_monthly_excavation_plan carries Tonnage = 0 — all 30 rows across all
+# nine months present — and the cubic-metre figure is typed into the free-text
+# Remarks field instead, in whatever format the entry clerk used that month:
+#
+#     '38097 CUM'  '23134 cum'  '4238cum'  '21,638'  '36712'  '14248 Cubic Meter'
+#
+# So OB has to be parsed out of Remarks. This regex takes the leading number,
+# tolerating thousands separators and any trailing unit text. A row whose
+# Remarks does not start with a number is counted as unparsed and reported
+# rather than silently treated as zero — Remarks is a free-text field and could
+# one day hold an actual remark.
+_OB_REMARK_NUM = re.compile(r"^\s*([\d,]+(?:\.\d+)?)")
+
+
+def _parse_ob_remark(remark: str | None) -> float | None:
+    if not remark:
+        return None
+    m = _OB_REMARK_NUM.match(remark)
+    if not m:
+        return None
+    try:
+        return float(m.group(1).replace(",", ""))
+    except ValueError:
+        return None
+
+
 def _ore_ob_full_month_plan(db: Session, first: date, last: date) -> dict:
-    row = db.execute(text("""
-        SELECT COALESCE(SUM(ORE_QTY), 0)                                        AS ore_plan,
-               -- OB_QTY_Cum is per shift x location x face, not cumulative — sum
-               -- it like ORE_QTY. MAX returned a single row for the whole month.
-               COALESCE(SUM(CAST(NULLIF(OB_QTY_Cum,'') AS DECIMAL(16,3))), 0)    AS ob_plan
-        FROM   mines_daily_excavation_plan
-        WHERE  Prod_date BETWEEN :f AND :t
-    """), {"f": first, "t": last}).fetchone()
-    return {"ore": _f(row.ore_plan), "ob": _f(row.ob_plan)}
+    """Full-month ore and OB plan from mines_monthly_excavation_plan.
+
+    This is the mine's monthly target, entered once per month, and is the right
+    denominator for a month-end feasibility view. The daily table
+    (mines_daily_excavation_plan) is populated day by day as the month runs, so
+    summing it mid-month yields an elapsed-days figure, not a full-month plan —
+    for 1-18 Aug it held only 17 of 31 days and understated the month by ~82%.
+    The daily table remains the correct source anywhere the question is
+    "plan for these specific dates" (day-wise charts, LCM); it is only wrong as
+    a month-end target.
+
+    Falls back to the daily table if the month has no monthly-plan row yet, and
+    reports which source was used so the caller can label it.
+    """
+    month = first.strftime("%Y-%m")
+
+    ore_row = db.execute(text("""
+        SELECT COALESCE(SUM(Tonnage), 0) AS ore_plan
+        FROM   mines_monthly_excavation_plan
+        WHERE  Prod_Month = :m AND Mode = 'ORE'
+    """), {"m": month}).fetchone()
+
+    ob_rows = db.execute(text("""
+        SELECT Remarks AS rmk
+        FROM   mines_monthly_excavation_plan
+        WHERE  Prod_Month = :m AND Mode = 'OB'
+    """), {"m": month}).fetchall()
+
+    ore = _f(ore_row.ore_plan) if ore_row else 0.0
+    parsed = [_parse_ob_remark(r.rmk) for r in ob_rows]
+    ob = sum(v for v in parsed if v is not None)
+    ob_unparsed = sum(1 for v in parsed if v is None)
+
+    if ore <= 0 and ob <= 0:
+        # No monthly plan filed for this month — fall back so the panel still
+        # shows something, but say so rather than implying a full-month figure.
+        row = db.execute(text("""
+            SELECT COALESCE(SUM(ORE_QTY), 0)                                     AS ore_plan,
+                   COALESCE(SUM(CAST(NULLIF(OB_QTY_Cum,'') AS DECIMAL(16,3))), 0) AS ob_plan
+            FROM   mines_daily_excavation_plan
+            WHERE  Prod_date BETWEEN :f AND :t
+        """), {"f": first, "t": last}).fetchone()
+        return {"ore": _f(row.ore_plan), "ob": _f(row.ob_plan),
+                "source": "daily_elapsed", "ob_unparsed": 0}
+
+    return {"ore": ore, "ob": ob, "source": "monthly", "ob_unparsed": ob_unparsed}
 
 
 def _cob_full_month_plan(db: Session, first: date, last: date) -> float:
@@ -106,10 +171,16 @@ def _despatch_full_month_plan(db: Session, first: date, last: date) -> float:
 def _production_mtd(db: Session, from_date: date, to_date: date) -> dict:
     row = db.execute(text("""
         SELECT
-            SUM(CASE WHEN PLANT='1200' AND MATERIAL_DESC IN (
-                    'LOW GRADE ORE(-40%CR2O3)',
-                    '40-52%        CHROME ORE',
-                    '+52% CHROME ORE')     THEN QUANTITY ELSE 0 END) AS ore,
+            -- Match on MATERIAL_NO, not MATERIAL_DESC. The description list
+            -- carried '40-52%        CHROME ORE' with eight spaces while the
+            -- data holds '40-52% CHROME ORE' with one, so every MG posting was
+            -- silently dropped: 6,210 of 9,304 MT for 1-18 Aug, 67% of the ore
+            -- actual. Codes are stable, descriptions are not, and Production
+            -- and LCM already key on the codes.
+            SUM(CASE WHEN PLANT='1200' AND MATERIAL_NO IN (
+                    '000000000025000001',
+                    '000000000025000002',
+                    '000000000025000003')  THEN QUANTITY ELSE 0 END) AS ore,
             SUM(CASE WHEN PLANT='1200' AND MATERIAL_DESC='OVERBURDEN'
                                            THEN QUANTITY ELSE 0 END) AS ob,
             SUM(CASE WHEN PLANT='1210' AND MATERIAL_DESC='CONCENTRATE WITH STD MOISTURE'
@@ -213,7 +284,11 @@ def compute_reality_check(
     desp_act      = _despatch_mtd_actual(db, from_date, to_date)
 
     plan_month_label = first.strftime("%b %Y")
-    plan_fallback    = False
+    # Ore/OB now come from the monthly plan. If that month has not been filed
+    # yet we fall back to summing the daily table, which mid-month covers only
+    # elapsed days — flag it so the panel does not present a partial figure as
+    # a full-month target.
+    plan_fallback    = plans.get("source") == "daily_elapsed"
 
     def make_row(kpi, unit, plan, actual) -> RealityCheckRow:
         if actual is None:
