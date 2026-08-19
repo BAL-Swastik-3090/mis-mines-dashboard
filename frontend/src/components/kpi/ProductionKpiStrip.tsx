@@ -150,23 +150,33 @@ function KpiCard({
             </>
           ) : (
             <>
+              {/* Column key — without it the two numbers per row are ambiguous */}
+              <div className="flex items-center justify-between pb-0.5">
+                <span className="text-[9px] text-txt-light uppercase tracking-widest font-bold">Grade</span>
+                <div className="flex items-baseline gap-1">
+                  <span className="text-[9px] text-txt-light uppercase tracking-widest font-bold w-[58px] text-right">Actual</span>
+                  <span className="text-[9px] text-txt-light">/</span>
+                  <span className="text-[9px] text-txt-light uppercase tracking-widest font-bold w-[52px] text-right">Plan</span>
+                </div>
+              </div>
               {[
-                { label: "HG >52%",  value: data?.hg_actual, color: "bg-gold" },
-                { label: "MG 40–52%", value: data?.mg_actual, color: "bg-accent" },
-                { label: "LG <40%",  value: data?.lg_actual, color: "bg-[#e65100]" },
-              ].map(({ label: gl, value, color }) => (
+                { label: "HG >52%",   value: data?.hg_actual, plan: data?.hg_plan, color: "bg-gold" },
+                { label: "MG 40–52%", value: data?.mg_actual, plan: data?.mg_plan, color: "bg-accent" },
+                { label: "LG <40%",   value: data?.lg_actual, plan: data?.lg_plan, color: "bg-[#e65100]" },
+              ].map(({ label: gl, value, plan, color }) => (
                 <div key={gl} className="flex items-center justify-between">
                   <div className="flex items-center gap-1.5">
                     <span className={`w-2 h-2 rounded-full ${color} inline-block shrink-0`} />
                     <span className="text-[11px] text-txt-muted font-medium w-[72px] shrink-0">{gl}</span>
                   </div>
-                  <div className="flex items-baseline gap-0.5 min-w-[64px] justify-end">
-                    <span className="font-mono text-[11px] font-semibold text-navy tabular-nums">
+                  <div className="flex items-baseline gap-1">
+                    <span className="font-mono text-[11px] font-semibold text-navy tabular-nums w-[58px] text-right">
                       {value != null && value > 0 ? formatIndian(value) : "—"}
                     </span>
-                    {value != null && value > 0 && (
-                      <span className="text-[9px] text-txt-light">MT</span>
-                    )}
+                    <span className="text-[9px] text-txt-light">/</span>
+                    <span className="font-mono text-[11px] text-txt-muted tabular-nums w-[52px] text-right">
+                      {plan != null && plan > 0 ? formatIndian(plan) : "—"}
+                    </span>
                   </div>
                 </div>
               ))}

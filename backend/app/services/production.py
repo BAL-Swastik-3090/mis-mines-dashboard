@@ -229,6 +229,10 @@ def get_mtd_totals(db: Session, from_date: date, to_date: date) -> dict:
         "hg_actual":  _f(ar.hg_mtd)   or 0.0,
         "mg_actual":  _f(ar.mg_mtd)   or 0.0,
         "lg_actual":  _f(ar.lg_mtd)   or 0.0,
+        # sql_plan already computed these — they were being discarded
+        "hg_plan":    _f(pr.hg_plan)  or 0.0,
+        "mg_plan":    _f(pr.mg_plan)  or 0.0,
+        "lg_plan":    _f(pr.lg_plan)  or 0.0,
     }
 
 

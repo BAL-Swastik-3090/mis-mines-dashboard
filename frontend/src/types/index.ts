@@ -92,6 +92,9 @@ export interface ProductionKpiCard {
   hg_actual?:   number | null;
   mg_actual?:   number | null;
   lg_actual?:   number | null;
+  hg_plan?:     number | null;
+  mg_plan?:     number | null;
+  lg_plan?:     number | null;
 }
 
 export interface ProductionSummaryResponse {
