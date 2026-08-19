@@ -12,10 +12,15 @@ class KpiCard(BaseModel):
     mtd_plan:       Optional[float] = None
     mtd_pct:        Optional[float] = None
     unit:           str
-    # Grade breakdown — only populated for the Ore card
+    # Grade breakdown — only populated for the Ore card.
+    # The plan split comes from the same daily table as mtd_plan, so
+    # hg_plan + mg_plan + lg_plan foots to mtd_plan.
     hg_actual:      Optional[float] = None
     mg_actual:      Optional[float] = None
     lg_actual:      Optional[float] = None
+    hg_plan:        Optional[float] = None
+    mg_plan:        Optional[float] = None
+    lg_plan:        Optional[float] = None
 
 
 # ── Production summary (all KPIs in one response) ─────────────

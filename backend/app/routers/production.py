@@ -60,6 +60,9 @@ def production_summary(
             hg_actual    = mtd["hg_actual"],
             mg_actual    = mtd["mg_actual"],
             lg_actual    = mtd["lg_actual"],
+            hg_plan      = mtd["hg_plan"],
+            mg_plan      = mtd["mg_plan"],
+            lg_plan      = mtd["lg_plan"],
         ),
         ob = KpiCard(
             today_actual = svc._f(td_actual.get("ob_qty")),
