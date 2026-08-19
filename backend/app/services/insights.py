@@ -72,18 +72,19 @@ def _latest_plan_month(db: Session) -> tuple[date, date]:
     return first, last
 
 
-# OB volume is NOT in the Tonnage column of the monthly plan. Every OB row in
-# mines_monthly_excavation_plan carries Tonnage = 0 — all 30 rows across all
-# nine months present — and the cubic-metre figure is typed into the free-text
-# Remarks field instead, in whatever format the entry clerk used that month:
+# OB volume is entered in the Remarks column, by the mine's convention — this
+# is deliberate, not a data-entry error. Tonnage is a tonnes column and OB is
+# measured in cubic metres, so every OB row in mines_monthly_excavation_plan
+# carries Tonnage = 0 (all 30 rows across all nine months) and the CuM figure
+# goes into Remarks, in whatever format the entry clerk used that month:
 #
 #     '38097 CUM'  '23134 cum'  '4238cum'  '21,638'  '36712'  '14248 Cubic Meter'
 #
-# So OB has to be parsed out of Remarks. This regex takes the leading number,
-# tolerating thousands separators and any trailing unit text. A row whose
-# Remarks does not start with a number is counted as unparsed and reported
-# rather than silently treated as zero — Remarks is a free-text field and could
-# one day hold an actual remark.
+# OB is therefore parsed out of Remarks. This regex takes the leading number,
+# tolerating thousands separators and any trailing unit text; it handles all 30
+# rows present. Because the field is free text, a row whose Remarks does not
+# start with a number is counted as unparsed and reported rather than silently
+# treated as zero — that is the one failure mode this convention exposes.
 _OB_REMARK_NUM = re.compile(r"^\s*([\d,]+(?:\.\d+)?)")
 
 
