@@ -322,6 +322,8 @@ export default function LCMSection() {
               <tr className="bg-bg-section border-b border-border-light">
                 <th className="px-3 py-2 text-left text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary">Sl.</th>
                 <th className="px-3 py-2 text-left text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary">Loss Description</th>
+                <th className="px-3 py-2 text-left text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary">KAM</th>
+                <th className="px-3 py-2 text-left text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary">Loss Type</th>
                 <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#1565c0]">Production<br/>Hour Loss</th>
                 <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#1565c0]">Planned Ore<br/>Loss (MT)</th>
                 <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#2e7d32]">OB Production<br/>Hour Loss</th>
@@ -332,7 +334,7 @@ export default function LCMSection() {
             <tbody className="divide-y divide-border-light/60">
               {isLoading ? (
                 Array.from({ length: 8 }).map((_, i) => (
-                  <tr key={i}>{Array.from({ length: 7 }).map((__, j) => (
+                  <tr key={i}>{Array.from({ length: 9 }).map((__, j) => (
                     <td key={j} className="px-3 py-2.5"><Shimmer w="w-14" h="h-4" /></td>
                   ))}</tr>
                 ))
@@ -343,6 +345,16 @@ export default function LCMSection() {
                     <td className="px-3 py-2 text-txt-light">{r.sl_no}</td>
                     <td className="px-3 py-2 font-condensed font-bold text-[12px] text-navy whitespace-nowrap">
                       {r.loss_description}
+                    </td>
+                    <td className="px-3 py-2 text-txt-secondary whitespace-nowrap">{r.kam}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      <span className={`inline-block px-1.5 py-0.5 rounded text-[9.5px] font-condensed font-bold tracking-wider uppercase ${
+                        r.loss_type === "Controllable"
+                          ? "bg-[#fdecea] text-[#c62828]"
+                          : "bg-bg-section text-txt-light"
+                      }`}>
+                        {r.loss_type === "Controllable" ? "Controllable" : "Non Ctrl"}
+                      </span>
                     </td>
                     <td className="px-3 py-2 text-right text-navy">{fmt(r.ore_hours, 2)}</td>
                     <td className="px-3 py-2 text-right font-semibold text-[#1565c0]">{fmt(r.planned_ore_loss, 1)}</td>
@@ -358,6 +370,8 @@ export default function LCMSection() {
                 <tr className="bg-navy text-white border-t-2 border-navy font-bold">
                   <td className="px-3 py-2.5" />
                   <td className="px-3 py-2.5 font-condensed tracking-widest uppercase text-[11px]">Total</td>
+                  <td className="px-3 py-2.5" />
+                  <td className="px-3 py-2.5" />
                   <td className="px-3 py-2.5 text-right">{fmt(t.ore_hours, 2)}</td>
                   <td className="px-3 py-2.5 text-right">{fmt(t.planned_ore_loss, 1)}</td>
                   <td className="px-3 py-2.5 text-right">{fmt(t.ob_hours, 2)}</td>
