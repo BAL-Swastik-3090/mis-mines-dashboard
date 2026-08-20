@@ -253,15 +253,6 @@ export default function LCMSection() {
 
           <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40 space-y-0.5">
             <p className="text-[9px] font-mono text-txt-muted leading-tight">
-              Weighted Rate = Σ(Plan Qty × IBM Rate) ÷ Σ Plan Qty, weighted on the planned
-              grade mix. Loss Amount = Planned Ore Loss × Weighted Rate.
-            </p>
-            <p className="text-[9px] font-mono text-txt-muted leading-tight">
-              Plan Value is the whole planned ore valued at these rates. Total Loss Value below
-              is only the portion that was planned and never excavated — a slice of it, not a
-              total of it.
-            </p>
-            <p className="text-[9px] font-mono text-txt-muted leading-tight">
               IBM's published bands map one-to-one onto HG (52% and above), MG (40% to below
               52%) and LG (below 40%), so no band has to be chosen as representative. These
               are fines prices — the plan does not split lump from fines, so every planned
@@ -393,17 +384,13 @@ export default function LCMSection() {
 
         <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40 space-y-0.5">
           <p className="text-[9px] font-mono text-txt-muted leading-tight">
-            Planned Loss = Hour Loss × Multiplying Factor. The column totals back to the Deviation by construction.
-          </p>
-          <p className="text-[9px] font-mono text-txt-muted leading-tight">
             Breakdown and Preventive Maintenance come from SAP; the other heads from the IMOS shift log.
             Mining Restriction has no source in the database and is entered manually by the mine, so it reads 0 here.
           </p>
           <p className="text-[9px] font-mono text-txt-muted leading-tight">
             Loss Amount is shown in ₹ Lakh to two decimals, i.e. rounded to the nearest ₹100, so
             the column can differ from the Total by a few hundred rupees. The Total is the exact
-            figure. Loss Share = Loss Amount ÷ Total Loss Amount, and its own total is the true
-            sum of the rows rather than a forced 100%.
+            figure. The Loss Share total is the true sum of the rows, not a forced 100%.
           </p>
         </div>
       </div>

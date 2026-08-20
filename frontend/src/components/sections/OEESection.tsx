@@ -1,5 +1,7 @@
 "use client";
-import { Activity, Layers } from "lucide-react";
+import { useState } from "react";
+import { Activity, Layers, Info } from "lucide-react";
+import FormulaModal from "@/components/sections/FormulaModal";
 import LCMSection from "@/components/sections/LCMSection";
 import { useDateFilter }  from "@/contexts/useDateFilter";
 import { useOEE }         from "@/hooks/useOEE";
@@ -256,79 +258,33 @@ function OEETable({ machines, fleet, loading }: { machines: OEEMachineRow[]; fle
   );
 }
 
-// ── OEE formula reference card ────────────────────────────────────────────────
-function FormulaCard() {
-  return (
-    <div className="bg-white border border-border rounded-lg shadow-sm overflow-hidden">
-      <div className="px-4 pt-3 pb-2.5 border-b border-border-light">
-        <span className="font-condensed font-bold text-[13px] text-navy tracking-widest uppercase">
-          OEE Calculation Reference
-        </span>
-      </div>
-      <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {[
-          {
-            label: "Availability",
-            formula: "Operating Hrs ÷ Ideal Time × 100",
-            note: "Ideal Time = God − planned loss",
-            color: "text-[#1565c0]",
-            border: "border-l-[#1565c0]",
-          },
-          {
-            label: "Performance",
-            formula: "Actual CuM ÷ (Ideal Cap × Op Hrs) × 100",
-            note: "Capped at 100%",
-            color: "text-[#c8960c]",
-            border: "border-l-[#c8960c]",
-          },
-          {
-            label: "Quality",
-            formula: "100% (fixed)",
-            note: "No quality losses tracked",
-            color: "text-[#2e7d32]",
-            border: "border-l-[#2e7d32]",
-          },
-          {
-            label: "OEE",
-            formula: "Availability × Performance × Quality",
-            note: "Target: ≥ 75%",
-            color: "text-[#6a1b9a]",
-            border: "border-l-[#6a1b9a]",
-          },
-        ].map((f) => (
-          <div key={f.label} className={`border-l-2 pl-3 ${f.border}`}>
-            <div className={`font-condensed font-bold text-[11px] tracking-widest uppercase mb-1 ${f.color}`}>
-              {f.label}
-            </div>
-            <div className="font-mono text-[10px] text-navy leading-relaxed">{f.formula}</div>
-            <div className="text-[9px] text-txt-muted mt-0.5">{f.note}</div>
-          </div>
-        ))}
-      </div>
-      <div className="px-4 pb-3 pt-0 space-y-1">
-        <div className="text-[9px] font-mono text-txt-muted">
-          <span className="font-semibold">Ideal Time</span> = God Hrs − (Weekly Off + No Plan + Planned Shutdown)
-          &nbsp;·&nbsp;
-          <span className="font-semibold">Operating Hrs</span> = Ideal Time − (Breakdown + PM)
-        </div>
-        <div className="text-[9px] font-mono text-txt-muted">
-          <span className="font-semibold">Fleet figures are weighted</span> (Σ operating ÷ Σ ideal time), not averaged across machines
-          &nbsp;·&nbsp;
-          <span className="font-semibold">Deviation Hrs</span> is reporting only and feeds no formula
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ── Main section ──────────────────────────────────────────────────────────────
 export default function OEESection() {
   const { apiTo }           = useDateFilter();
   const { data, isLoading } = useOEE();
   const machines            = data?.machines ?? [];
+  const [showFormulae, setShowFormulae] = useState(false);
 
   return (
     <div className="space-y-4">
+
+      {/* Formula reference trigger — deliberately its own element at the top-left
+          of the section, above and outside the section header. Opens the modal
+          that now holds every formula for both OEE and LCM. */}
+      <div className="flex">
+        <button
+          type="button"
+          onClick={() => setShowFormulae(true)}
+          title="View all OEE / LCM formulae"
+          aria-label="View all OEE / LCM formulae"
+          className="w-6 h-6 rounded-full border border-[#ce93d8] bg-[#f3e5f5] text-[#6a1b9a]
+                     flex items-center justify-center hover:bg-[#e1bee7] transition-colors shrink-0"
+        >
+          <Info size={13} />
+        </button>
+      </div>
+
+      <FormulaModal open={showFormulae} onClose={() => setShowFormulae(false)} />
 
       {/* Section header */}
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -353,9 +309,6 @@ export default function OEESection() {
 
       {/* Per-machine breakdown table */}
       <OEETable machines={machines} fleet={data?.fleet} loading={isLoading} />
-
-      {/* Formula reference */}
-      <FormulaCard />
 
       {/* ── LCM — Lost Cost Matrix, inline below the OEE reference ────── */}
       <div className="flex items-center gap-2 pt-3">
