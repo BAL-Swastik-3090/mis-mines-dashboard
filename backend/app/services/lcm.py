@@ -98,32 +98,40 @@ MINING_RESTRICTION_HRS_PER_MACHINE = 0.0
 
 # sl_no, label, source, loss_type, kam
 #   source: a mines_tipper_details column, or 'SAP_BD' / 'SAP_PM' / 'CONST_MR'
+#
+# Label provenance: the 22 shift-log heads are the mine's own names, taken from
+# the LCM workbook sheet 'Loss Heads (Own Equipment)' where they are written in
+# capitals. Breakdown, Preventive Maintenance and Mining Restriction do not come
+# from that sheet - they are SAP and constant sources - so they were written by
+# hand in title case, which is exactly why the column's casing was inconsistent.
+# All labels are now sentence case, with H.S.D, LMV and IMFA left capitalised
+# since lowercasing an acronym reads worse than the inconsistency did.
 LOSS_HEADS: list[tuple] = [
     (1,  "Breakdown",                   "SAP_BD",               "Controllable",     "Amarendra Sarangi"),
-    (2,  "Preventive Maintenance",      "SAP_PM",               "Non Controllable", "Amarendra Sarangi"),
-    (3,  "LATE START",                  "late_start",           "Controllable",     "Pramod Kumar"),
-    (4,  "TIFFIN",                      "tiffin",               "Non Controllable", "Gurpreet Singh"),
-    (5,  "H.S.D SHORTAGE",              "hsd_shortage",         "Controllable",     "Bhimsen Barik"),
-    (6,  "STRIKE",                      "strike",               "Controllable",     "Gurpreet Singh"),
-    (7,  "IDLE REQU BASIC",             "idle_requ_basic",      "Controllable",     "Pramod Kumar"),
-    (8,  "SAFETY TALK",                 "safety_talk",          "Non Controllable", "Pramod Kumar"),
-    (9,  "DUMP JAM",                    "dump_jam",             "Controllable",     "Pramod Kumar"),
-    (10, "LMV UNAVAILIBILITY",          "lmv_availability",     "Controllable",     "Gurpreet Singh"),
-    (11, "ILLUMINATION PROBLEM",        "illumination_problem", "Controllable",     "K L Das"),
-    (12, "ABSENCE OF OPERATOR",         "absence_operator",     "Controllable",     "Gurpreet Singh"),
-    (13, "IDLE (NO WORK)",              "idle",                 "Controllable",     "Pramod Kumar"),
-    (14, "TIPPER SHORTAGE",             "tipper_shortage",      "Controllable",     "Amarendra Sarangi"),
-    (15, "EARLY CLOSE",                 "early_close",          "Controllable",     "Pramod Kumar"),
-    (16, "H.S.D FILLING",               "hsd_filling",          "Non Controllable", "Bhimsen Barik"),
-    (17, "NOT IN OPERATION",            "not_operation",        "Controllable",     "Pramod Kumar"),
-    (18, "RAIN & SLIPPERY PROBLEM",     "rain_slippery",        "Non Controllable", "Pramod Kumar"),
-    (19, "TRANS. TRUCK JAM",            "trains_truck",         "Controllable",     "Maheswar Mohanty"),
-    (20, "IMFA BLASTING",               "imfa_blasting",        "Non Controllable", "Pramod Kumar"),
-    (21, "FACE PREPARATION",            "face_preparation",     "Non Controllable", "Pramod Kumar"),
-    (22, "JOB ALLOCATION",              "job_allocation",       "Controllable",     "Pramod Kumar"),
-    (24, "IDLE DUE TO SAFETY CONCERN",  "idle_safety",          "Controllable",     "Pramod Kumar"),
-    (25, "OTHER",                       "other",                "Controllable",     "Pramod Kumar"),
-    (26, "Mining Restriction",          "CONST_MR",             "Non Controllable", "Pramod Kumar"),
+    (2,  "Preventive maintenance",      "SAP_PM",               "Non Controllable", "Amarendra Sarangi"),
+    (3,  "Late start",                  "late_start",           "Controllable",     "Pramod Kumar"),
+    (4,  "Tiffin",                      "tiffin",               "Non Controllable", "Gurpreet Singh"),
+    (5,  "H.S.D shortage",              "hsd_shortage",         "Controllable",     "Bhimsen Barik"),
+    (6,  "Strike",                      "strike",               "Controllable",     "Gurpreet Singh"),
+    (7,  "Idle requ basic",             "idle_requ_basic",      "Controllable",     "Pramod Kumar"),
+    (8,  "Safety talk",                 "safety_talk",          "Non Controllable", "Pramod Kumar"),
+    (9,  "Dump jam",                    "dump_jam",             "Controllable",     "Pramod Kumar"),
+    (10, "LMV unavailibility",          "lmv_availability",     "Controllable",     "Gurpreet Singh"),
+    (11, "Illumination problem",        "illumination_problem", "Controllable",     "K L Das"),
+    (12, "Absence of operator",         "absence_operator",     "Controllable",     "Gurpreet Singh"),
+    (13, "Idle (no work)",              "idle",                 "Controllable",     "Pramod Kumar"),
+    (14, "Tipper shortage",             "tipper_shortage",      "Controllable",     "Amarendra Sarangi"),
+    (15, "Early close",                 "early_close",          "Controllable",     "Pramod Kumar"),
+    (16, "H.S.D filling",               "hsd_filling",          "Non Controllable", "Bhimsen Barik"),
+    (17, "Not in operation",            "not_operation",        "Controllable",     "Pramod Kumar"),
+    (18, "Rain & slippery problem",     "rain_slippery",        "Non Controllable", "Pramod Kumar"),
+    (19, "Trans. truck jam",            "trains_truck",         "Controllable",     "Maheswar Mohanty"),
+    (20, "IMFA blasting",               "imfa_blasting",        "Non Controllable", "Pramod Kumar"),
+    (21, "Face preparation",            "face_preparation",     "Non Controllable", "Pramod Kumar"),
+    (22, "Job allocation",              "job_allocation",       "Controllable",     "Pramod Kumar"),
+    (24, "Idle due to safety concern",  "idle_safety",          "Controllable",     "Pramod Kumar"),
+    (25, "Other",                       "other",                "Controllable",     "Pramod Kumar"),
+    (26, "Mining restriction",          "CONST_MR",             "Non Controllable", "Pramod Kumar"),
 ]
 
 SHIFT_COLUMNS = [s for (_, _, s, _, _) in LOSS_HEADS if s not in ("SAP_BD", "SAP_PM", "CONST_MR")]
