@@ -803,7 +803,7 @@ export interface LCMRow {
   planned_ob_loss:  number;   // CuM
   loss_amount:      number | null;   // Rs — null while the IBM rate is unset
   loss_share_pct:   number | null;   // % of the period's total loss amount
-  loss_type:        "Controllable" | "Non Controllable";
+  loss_type:        "Controllable" | "Non Controllable" | "Unclassified";
   kam:              string;
 }
 
