@@ -360,9 +360,32 @@ def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
             "ob_hours":         round(bh, 2),
             "planned_ob_loss":  round(bh * ob_factor, 0),
             "loss_amount":      amount(pol),
+            "loss_share_pct":   None,   # filled below, once the total is known
             "loss_type":        lt,
             "kam":              kam,
         })
+
+    # Loss Share — each head's rupee loss as a percentage of the period total.
+    #
+    #     Loss Share % = Loss Amount (head) / Total Loss Amount x 100
+    #
+    # Computed from the ROUNDED row amounts, i.e. the figures the page prints,
+    # so the column reconciles against what a reader can add up by hand. Held to
+    # one decimal: at two the independently-rounded shares drifted to 100.01%.
+    #
+    # Note this is numerically identical to the share of planned ore loss (MT)
+    # and of ore loss hours, because planned loss is hours x one factor and
+    # rupees is that x one rate — both constants cancel in a ratio. The rupee
+    # basis was chosen deliberately, which does mean the column goes null
+    # alongside Loss Amount if an IBM rate is ever missing.
+    # A period where actual beat plan has a zero deviation and therefore a zero
+    # loss total. Share is then 0/0 — undefined, not zero — so every row and the
+    # footer stay None and the page renders a dash rather than a fabricated 0.0%.
+    total_amount = round(sum(r["loss_amount"] for r in rows), 2) if rate is not None else None
+    shares_valid = bool(total_amount)
+    if shares_valid:
+        for r in rows:
+            r["loss_share_pct"] = round(r["loss_amount"] / total_amount * 100, 1)
 
     controllable = [r for r in rows if r["loss_type"] == "Controllable"]
 
@@ -420,6 +443,12 @@ def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
             "loss_amount":
                 round(sum(r["loss_amount"] for r in rows), 2)
                 if rate is not None else None,
+            # The true sum of the per-row shares, not a hardcoded 100.0. Rounding
+            # can land it on 99.9 or 100.1; the page shows what the column
+            # actually adds to rather than a tidier number that disagrees with it.
+            "loss_share_pct":
+                round(sum(r["loss_share_pct"] for r in rows), 1)
+                if shares_valid else None,
             "controllable_loss_amount":
                 round(sum(r["loss_amount"] for r in controllable), 2)
                 if rate is not None else None,

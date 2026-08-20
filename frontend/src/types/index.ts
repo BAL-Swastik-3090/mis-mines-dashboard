@@ -796,6 +796,7 @@ export interface LCMRow {
   ob_hours:         number;
   planned_ob_loss:  number;   // CuM
   loss_amount:      number | null;   // Rs — null while the IBM rate is unset
+  loss_share_pct:   number | null;   // % of the period's total loss amount
   loss_type:        "Controllable" | "Non Controllable";
   kam:              string;
 }
@@ -856,6 +857,7 @@ export interface LCMTotals {
   controllable_ob_hours:   number;
   loss_amount:              number | null;
   controllable_loss_amount: number | null;
+  loss_share_pct:           number | null;
 }
 
 export interface LCMResponse {
