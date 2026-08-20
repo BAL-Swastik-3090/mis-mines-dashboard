@@ -328,7 +328,7 @@ export default function LCMSection() {
                 <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#1565c0]">Planned Ore<br/>Loss (MT)</th>
                 <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#2e7d32]">OB Production<br/>Hour Loss</th>
                 <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#2e7d32]">Planned OB<br/>Loss (CuM)</th>
-                <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#ad1457]">Loss Amount<br/>(₹)</th>
+                <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#ad1457]">Loss Amount<br/>(₹ Lakh)</th>
                 <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#ad1457]">Loss<br/>Share</th>
               </tr>
             </thead>
@@ -361,7 +361,7 @@ export default function LCMSection() {
                     <td className="px-3 py-2 text-right font-semibold text-[#1565c0]">{fmt(r.planned_ore_loss, 1)}</td>
                     <td className="px-3 py-2 text-right text-navy">{fmt(r.ob_hours, 2)}</td>
                     <td className="px-3 py-2 text-right font-semibold text-[#2e7d32]">{f0(r.planned_ob_loss)}</td>
-                    <td className="px-3 py-2 text-right font-semibold text-[#ad1457]">{rs(r.loss_amount)}</td>
+                    <td className="px-3 py-2 text-right font-semibold text-[#ad1457]">{rsLakh(r.loss_amount)}</td>
                     <td className="px-3 py-2 text-right text-txt-secondary tabular-nums">
                       {r.loss_share_pct != null && r.loss_share_pct > 0
                         ? `${r.loss_share_pct.toFixed(1)}%` : "—"}
@@ -381,7 +381,7 @@ export default function LCMSection() {
                   <td className="px-3 py-2.5 text-right">{fmt(t.planned_ore_loss, 1)}</td>
                   <td className="px-3 py-2.5 text-right">{fmt(t.ob_hours, 2)}</td>
                   <td className="px-3 py-2.5 text-right">{f0(t.planned_ob_loss)}</td>
-                  <td className="px-3 py-2.5 text-right">{rs(t.loss_amount)}</td>
+                  <td className="px-3 py-2.5 text-right">{rsLakh(t.loss_amount)}</td>
                   <td className="px-3 py-2.5 text-right">
                     {t.loss_share_pct != null ? `${t.loss_share_pct.toFixed(1)}%` : "—"}
                   </td>
@@ -398,6 +398,12 @@ export default function LCMSection() {
           <p className="text-[9px] font-mono text-txt-muted leading-tight">
             Breakdown and Preventive Maintenance come from SAP; the other heads from the IMOS shift log.
             Mining Restriction has no source in the database and is entered manually by the mine, so it reads 0 here.
+          </p>
+          <p className="text-[9px] font-mono text-txt-muted leading-tight">
+            Loss Amount is shown in ₹ Lakh to two decimals, i.e. rounded to the nearest ₹100, so
+            the column can differ from the Total by a few hundred rupees. The Total is the exact
+            figure. Loss Share = Loss Amount ÷ Total Loss Amount, and its own total is the true
+            sum of the rows rather than a forced 100%.
           </p>
         </div>
       </div>
