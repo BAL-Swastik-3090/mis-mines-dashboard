@@ -138,6 +138,24 @@ export default function LCMSection() {
         </div>
       </div>
 
+      {/* A loss column exists in the entry form but has no controllability /
+          owner mapping yet. Surfaced rather than guessed, because an
+          unclassified head is silently excluded from the Controllable Share. */}
+      {!isLoading && data && data.rows.some((r) => r.loss_type === "Unclassified") && (
+        <div className="p-3 rounded-lg bg-[#fff8e1] border border-[#ffe082] border-l-[3px] border-l-[#c8960c] flex items-start gap-2.5">
+          <AlertTriangle size={15} className="text-[#c8960c] shrink-0 mt-[1px]" />
+          <div className="text-[11.5px] text-txt-secondary leading-relaxed">
+            <span className="font-bold text-navy">
+              New loss reason{data.rows.filter((r) => r.loss_type === "Unclassified").length > 1 ? "s" : ""} awaiting classification
+              — {data.rows.filter((r) => r.loss_type === "Unclassified").map((r) => r.loss_description).join(", ")}.
+            </span>{" "}
+            Picked up automatically from the entry form. Hours and loss value are counted in
+            full, but until someone assigns Controllable / Non Controllable and a KAM they are
+            excluded from the Controllable Share.
+          </div>
+        </div>
+      )}
+
       {/* Costing basis — grade-wise IBM rate and the plan-weighted average */}
       {!isLoading && cost && (
         <div className="bg-white border border-border rounded-lg shadow-sm overflow-hidden">
@@ -329,11 +347,12 @@ export default function LCMSection() {
                     <td className="px-3 py-2 text-txt-secondary whitespace-nowrap">{r.kam}</td>
                     <td className="px-3 py-2 whitespace-nowrap">
                       <span className={`inline-block px-1.5 py-0.5 rounded text-[9.5px] font-condensed font-bold tracking-wider uppercase ${
-                        r.loss_type === "Controllable"
-                          ? "bg-[#fdecea] text-[#c62828]"
-                          : "bg-bg-section text-txt-light"
+                        r.loss_type === "Controllable"     ? "bg-[#fdecea] text-[#c62828]"
+                        : r.loss_type === "Non Controllable" ? "bg-bg-section text-txt-light"
+                        : "bg-[#fff8e1] text-[#8d6e00]"
                       }`}>
-                        {r.loss_type === "Controllable" ? "Controllable" : "Non Ctrl"}
+                        {r.loss_type === "Controllable" ? "Controllable"
+                         : r.loss_type === "Non Controllable" ? "Non Ctrl" : "Unclassified"}
                       </span>
                     </td>
                     <td className="px-3 py-2 text-right text-navy">{fmt(r.ore_hours, 2)}</td>

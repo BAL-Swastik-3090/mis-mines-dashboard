@@ -89,56 +89,141 @@ IBM_RATES: dict[str, float | None] = {
 # If the mine later wants OB costed at an internal ₹/CuM excavation cost, that is
 # a different figure with a different meaning and should be labelled as such.
 
-# Mining Restriction carries no column in mines_tipper_details, and the mine
-# enters it by hand rather than by rule — 48.00 hrs/machine in July 2026 but
-# 5.00 hrs/machine for 1-11 Aug. It is therefore NOT derivable, and any constant
-# here would be invented. Left at 0 until a real source exists; the page footnote
-# says so, so the row reads as unsourced rather than as a measured zero.
-MINING_RESTRICTION_HRS_PER_MACHINE = 0.0
-
-# sl_no, label, source, loss_type, kam
-#   source: a mines_tipper_details column, or 'SAP_BD' / 'SAP_PM' / 'CONST_MR'
+# ── Loss heads — discovered from the table, not hardcoded ─────────────────────
+# The head list is read from mines_tipper_details' own columns at request time.
+# A new loss reason added to the entry form therefore appears in the LCM matrix
+# on the next request, with no code change. This replaced a list copied out of
+# the mine's Excel workbook, which went stale the moment the form changed.
 #
-# Label provenance: the 22 shift-log heads are the mine's own names, taken from
-# the LCM workbook sheet 'Loss Heads (Own Equipment)' where they are written in
-# capitals. Breakdown, Preventive Maintenance and Mining Restriction do not come
-# from that sheet - they are SAP and constant sources - so they were written by
-# hand in title case, which is exactly why the column's casing was inconsistent.
-# All labels are now sentence case, with H.S.D, LMV and IMFA left capitalised
-# since lowercasing an acronym reads worse than the inconsistency did.
-#
-# Sl 10 deliberately diverges from the workbook: it is spelt 'UNAVAILIBILITY'
-# there, corrected to 'unavailability' here on the user's instruction. The DB
-# column is still lmv_availability - do not rename it to match the label.
-LOSS_HEADS: list[tuple] = [
-    (1,  "Breakdown",                   "SAP_BD",               "Controllable",     "Amarendra Sarangi"),
-    (2,  "Preventive maintenance",      "SAP_PM",               "Non Controllable", "Amarendra Sarangi"),
-    (3,  "Late start",                  "late_start",           "Controllable",     "Pramod Kumar"),
-    (4,  "Tiffin",                      "tiffin",               "Non Controllable", "Gurpreet Singh"),
-    (5,  "H.S.D shortage",              "hsd_shortage",         "Controllable",     "Bhimsen Barik"),
-    (6,  "Strike",                      "strike",               "Controllable",     "Gurpreet Singh"),
-    (7,  "Idle requ basic",             "idle_requ_basic",      "Controllable",     "Pramod Kumar"),
-    (8,  "Safety talk",                 "safety_talk",          "Non Controllable", "Pramod Kumar"),
-    (9,  "Dump jam",                    "dump_jam",             "Controllable",     "Pramod Kumar"),
-    (10, "LMV unavailability",           "lmv_availability",     "Controllable",     "Gurpreet Singh"),
-    (11, "Illumination problem",        "illumination_problem", "Controllable",     "K L Das"),
-    (12, "Absence of operator",         "absence_operator",     "Controllable",     "Gurpreet Singh"),
-    (13, "Idle (no work)",              "idle",                 "Controllable",     "Pramod Kumar"),
-    (14, "Tipper shortage",             "tipper_shortage",      "Controllable",     "Amarendra Sarangi"),
-    (15, "Early close",                 "early_close",          "Controllable",     "Pramod Kumar"),
-    (16, "H.S.D filling",               "hsd_filling",          "Non Controllable", "Bhimsen Barik"),
-    (17, "Not in operation",            "not_operation",        "Controllable",     "Pramod Kumar"),
-    (18, "Rain & slippery problem",     "rain_slippery",        "Non Controllable", "Pramod Kumar"),
-    (19, "Trans. truck jam",            "trains_truck",         "Controllable",     "Maheswar Mohanty"),
-    (20, "IMFA blasting",               "imfa_blasting",        "Non Controllable", "Pramod Kumar"),
-    (21, "Face preparation",            "face_preparation",     "Non Controllable", "Pramod Kumar"),
-    (22, "Job allocation",              "job_allocation",       "Controllable",     "Pramod Kumar"),
-    (24, "Idle due to safety concern",  "idle_safety",          "Controllable",     "Pramod Kumar"),
-    (25, "Other",                       "other",                "Controllable",     "Pramod Kumar"),
-    (26, "Mining restriction",          "CONST_MR",             "Non Controllable", "Pramod Kumar"),
-]
+# Everything in the table is a loss head EXCEPT the columns below. That is the
+# inverse of the old approach on purpose: an unrecognised column is treated as a
+# loss and shows up, rather than being silently dropped.
+NON_LOSS_COLUMNS = {
+    # identity / metadata
+    "entry_row_id", "prod_date", "shift", "loc_id", "type_work", "party_name",
+    "shift_incharge", "equipment_name", "remark", "entry_id", "entry_date",
+    # production quantities
+    "ore_quantity", "lg_quantity", "ob_quantity", "silt_quantity", "boulder",
+    "tailing", "feed_to_cobp",
+    # meters and worked hours
+    "omr", "cmr", "running_hours", "deviation_hours",
+    # a stored sum of the loss columns — including it would double the total
+    "total",
+    # PLANNED loss, excluded by the mine's definition: these three are deducted
+    # to reach Ideal Time in OEE and are not production loss heads
+    "sunday_holiday_weekly_off", "no_excavation_plan", "planned_shut_down_hr",
+}
 
-SHIFT_COLUMNS = [s for (_, _, s, _, _) in LOSS_HEADS if s not in ("SAP_BD", "SAP_PM", "CONST_MR")]
+# Breakdown and PM hours come from SAP, not the shift log, per the OEE spec the
+# calculation was validated against (78/78). The columns exist in the table, so
+# they are discovered like any other head — only their VALUE is overridden.
+SAP_SOURCED = {"breakdown": "SAP_BD", "maintenance": "SAP_PM"}
+
+# Acronyms that must not be sentence-cased into nonsense.
+_ACRONYMS = {"hsd": "H.S.D", "lmv": "LMV", "imfa": "IMFA"}
+
+# Labels for columns whose name does not say what the head means. Anything not
+# listed here is formatted from the column name, so a new column still gets a
+# readable label without being added to this map.
+LABEL_OVERRIDES = {
+    "maintenance":       "Preventive maintenance",
+    "lmv_availability":  "LMV unavailability",
+    "trains_truck":      "Trans. truck jam",
+    "idle":              "Idle (no work)",
+    "not_operation":     "Not in operation",
+    "idle_safety":       "Idle due to safety concern",
+    "absence_operator":  "Absence of operator",
+    "rain_slippery":     "Rain & slippery problem",
+    "mines_restriction": "Mining restriction",
+}
+
+# Controllability and ownership are business classifications with no home in the
+# database — see memory note on the deferred master table. Keyed by column so a
+# renamed label cannot break the mapping. A column absent from these maps is
+# reported as Unclassified rather than guessed at, and the page says so.
+LOSS_TYPE_BY_COLUMN = {
+    "breakdown": "Controllable",          "maintenance": "Non Controllable",
+    "late_start": "Controllable",         "tiffin": "Non Controllable",
+    "hsd_shortage": "Controllable",       "strike": "Controllable",
+    "idle_requ_basic": "Controllable",    "safety_talk": "Non Controllable",
+    "dump_jam": "Controllable",           "lmv_availability": "Controllable",
+    "illumination_problem": "Controllable", "absence_operator": "Controllable",
+    "idle": "Controllable",               "tipper_shortage": "Controllable",
+    "early_close": "Controllable",        "hsd_filling": "Non Controllable",
+    "not_operation": "Controllable",      "rain_slippery": "Non Controllable",
+    "trains_truck": "Controllable",       "imfa_blasting": "Non Controllable",
+    "face_preparation": "Non Controllable", "job_allocation": "Controllable",
+    "idle_safety": "Controllable",        "other": "Controllable",
+    "mines_restriction": "Non Controllable",
+}
+KAM_BY_COLUMN = {
+    "breakdown": "Amarendra Sarangi",     "maintenance": "Amarendra Sarangi",
+    "late_start": "Pramod Kumar",         "tiffin": "Gurpreet Singh",
+    "hsd_shortage": "Bhimsen Barik",      "strike": "Gurpreet Singh",
+    "idle_requ_basic": "Pramod Kumar",    "safety_talk": "Pramod Kumar",
+    "dump_jam": "Pramod Kumar",           "lmv_availability": "Gurpreet Singh",
+    "illumination_problem": "K L Das",    "absence_operator": "Gurpreet Singh",
+    "idle": "Pramod Kumar",               "tipper_shortage": "Amarendra Sarangi",
+    "early_close": "Pramod Kumar",        "hsd_filling": "Bhimsen Barik",
+    "not_operation": "Pramod Kumar",      "rain_slippery": "Pramod Kumar",
+    "trains_truck": "Maheswar Mohanty",   "imfa_blasting": "Pramod Kumar",
+    "face_preparation": "Pramod Kumar",   "job_allocation": "Pramod Kumar",
+    "idle_safety": "Pramod Kumar",        "other": "Pramod Kumar",
+    "mines_restriction": "Pramod Kumar",
+}
+UNCLASSIFIED = "Unclassified"
+
+
+def _label_from_column(col: str) -> str:
+    """snake_case column -> sentence-case label, acronyms preserved.
+
+    'late_start' -> 'Late start', 'hsd_filling' -> 'H.S.D filling'.
+    """
+    if col in LABEL_OVERRIDES:
+        return LABEL_OVERRIDES[col]
+    words = [_ACRONYMS.get(w, w) for w in col.split("_")]
+    out = []
+    for i, w in enumerate(words):
+        if w in _ACRONYMS.values():
+            out.append(w)                       # acronym: leave as-is
+        elif i == 0 or not out:
+            out.append(w.capitalize())
+        else:
+            out.append(w.lower())
+    # if the first token was an acronym the next word still starts the sentence
+    if out and out[0] in _ACRONYMS.values() and len(out) > 1:
+        out[1] = out[1].lower()
+    return " ".join(out)
+
+
+def discover_loss_heads(db: Session) -> list[dict]:
+    """Loss heads, in the table's own column order.
+
+    Ordering follows ORDINAL_POSITION so the matrix reflects the entry form
+    rather than a numbering copied from a spreadsheet.
+    """
+    rows = db.execute(text("""
+        SELECT COLUMN_NAME AS col
+        FROM   INFORMATION_SCHEMA.COLUMNS
+        WHERE  TABLE_SCHEMA = DATABASE()
+          AND  TABLE_NAME   = 'mines_tipper_details'
+        ORDER BY ORDINAL_POSITION
+    """)).fetchall()
+
+    heads = []
+    for r in rows:
+        col = r.col
+        if col.lower() in NON_LOSS_COLUMNS:
+            continue
+        heads.append({
+            "sl_no":     len(heads) + 1,
+            "column":    col,
+            "label":     _label_from_column(col),
+            "source":    SAP_SOURCED.get(col, col),
+            "loss_type": LOSS_TYPE_BY_COLUMN.get(col, UNCLASSIFIED),
+            "kam":       KAM_BY_COLUMN.get(col, "—"),
+        })
+    return heads
 
 
 def _n(v) -> float:
@@ -157,10 +242,15 @@ def _machine_filter(machines: list[dict]) -> str:
     )
 
 
-def _shift_hours(db: Session, machines: list[dict], fd: date, td: date) -> dict:
-    """Per-head hour totals from the IMOS shift log for one machine group."""
+def _shift_hours(db: Session, machines: list[dict], fd: date, td: date,
+                 columns: list[str]) -> dict:
+    """Per-head hour totals from the IMOS shift log for one machine group.
+
+    `columns` comes from discover_loss_heads(), so a newly added loss column is
+    summed here without this function changing.
+    """
     sums = ", ".join(
-        f"SUM(COALESCE(CAST(NULLIF({c},'') AS DECIMAL(14,2)),0)) AS s_{c}" for c in SHIFT_COLUMNS
+        f"SUM(COALESCE(CAST(NULLIF(`{c}`,'') AS DECIMAL(14,2)),0)) AS s_{c}" for c in columns
     )
     params: dict = {"fd": fd, "td": td}
     for i, m in enumerate(machines):
@@ -176,7 +266,7 @@ def _shift_hours(db: Session, machines: list[dict], fd: date, td: date) -> dict:
     """), params).fetchone()
 
     m = dict(row._mapping) if row else {}
-    out = {c: _n(m.get(f"s_{c}")) for c in SHIFT_COLUMNS}
+    out = {c: _n(m.get(f"s_{c}")) for c in columns}
     out["_rows"] = int(m.get("n_rows") or 0)
     out["_days"] = int(m.get("n_days") or 0)
     return out
@@ -322,24 +412,25 @@ def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
     ore_dev = max(pa["ore_plan"] - pa["ore_actual"], 0.0)
     ob_dev  = max(pa["ob_plan"]  - pa["ob_actual"],  0.0)
 
-    ore_shift = _shift_hours(db, ORE_MACHINES, from_date, to_date)
-    ob_shift  = _shift_hours(db, OB_MACHINES,  from_date, to_date)
+    # Head list comes from the table, so a new loss column needs no code change.
+    heads      = discover_loss_heads(db)
+    shift_cols = [h["column"] for h in heads if h["column"] not in SAP_SOURCED]
+
+    ore_shift = _shift_hours(db, ORE_MACHINES, from_date, to_date, shift_cols)
+    ob_shift  = _shift_hours(db, OB_MACHINES,  from_date, to_date, shift_cols)
 
     ore_bd = _sap_breakdown(db, ORE_MACHINES, from_date, to_date)
     ob_bd  = _sap_breakdown(db, OB_MACHINES,  from_date, to_date)
     ore_pm = _sap_pm(db, ORE_MACHINES, from_date, to_date)
     ob_pm  = _sap_pm(db, OB_MACHINES,  from_date, to_date)
 
-    ore_mr = MINING_RESTRICTION_HRS_PER_MACHINE * len(ORE_MACHINES)
-    ob_mr  = MINING_RESTRICTION_HRS_PER_MACHINE * len(OB_MACHINES)
-
     def hours(source: str) -> tuple[float, float]:
-        if source == "SAP_BD":   return ore_bd, ob_bd
-        if source == "SAP_PM":   return ore_pm, ob_pm
-        if source == "CONST_MR": return ore_mr, ob_mr
+        if source == "SAP_BD": return ore_bd, ob_bd
+        if source == "SAP_PM": return ore_pm, ob_pm
         return ore_shift.get(source, 0.0), ob_shift.get(source, 0.0)
 
-    raw = [(sl, label, *hours(src), lt, kam) for (sl, label, src, lt, kam) in LOSS_HEADS]
+    raw = [(h["sl_no"], h["label"], *hours(h["source"]), h["loss_type"], h["kam"])
+           for h in heads]
 
     tot_ore_hrs = sum(r[2] for r in raw)
     tot_ob_hrs  = sum(r[3] for r in raw)
