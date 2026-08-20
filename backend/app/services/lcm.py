@@ -106,6 +106,10 @@ MINING_RESTRICTION_HRS_PER_MACHINE = 0.0
 # hand in title case, which is exactly why the column's casing was inconsistent.
 # All labels are now sentence case, with H.S.D, LMV and IMFA left capitalised
 # since lowercasing an acronym reads worse than the inconsistency did.
+#
+# Sl 10 deliberately diverges from the workbook: it is spelt 'UNAVAILIBILITY'
+# there, corrected to 'unavailability' here on the user's instruction. The DB
+# column is still lmv_availability - do not rename it to match the label.
 LOSS_HEADS: list[tuple] = [
     (1,  "Breakdown",                   "SAP_BD",               "Controllable",     "Amarendra Sarangi"),
     (2,  "Preventive maintenance",      "SAP_PM",               "Non Controllable", "Amarendra Sarangi"),
@@ -116,7 +120,7 @@ LOSS_HEADS: list[tuple] = [
     (7,  "Idle requ basic",             "idle_requ_basic",      "Controllable",     "Pramod Kumar"),
     (8,  "Safety talk",                 "safety_talk",          "Non Controllable", "Pramod Kumar"),
     (9,  "Dump jam",                    "dump_jam",             "Controllable",     "Pramod Kumar"),
-    (10, "LMV unavailibility",          "lmv_availability",     "Controllable",     "Gurpreet Singh"),
+    (10, "LMV unavailability",           "lmv_availability",     "Controllable",     "Gurpreet Singh"),
     (11, "Illumination problem",        "illumination_problem", "Controllable",     "K L Das"),
     (12, "Absence of operator",         "absence_operator",     "Controllable",     "Gurpreet Singh"),
     (13, "Idle (no work)",              "idle",                 "Controllable",     "Pramod Kumar"),
