@@ -268,22 +268,6 @@ export default function OEESection() {
   return (
     <div className="space-y-4">
 
-      {/* Formula reference trigger — deliberately its own element at the top-left
-          of the section, above and outside the section header. Opens the modal
-          that now holds every formula for both OEE and LCM. */}
-      <div className="flex">
-        <button
-          type="button"
-          onClick={() => setShowFormulae(true)}
-          title="View all OEE / LCM formulae"
-          aria-label="View all OEE / LCM formulae"
-          className="w-6 h-6 rounded-full border border-[#ce93d8] bg-[#f3e5f5] text-[#6a1b9a]
-                     flex items-center justify-center hover:bg-[#e1bee7] transition-colors shrink-0"
-        >
-          <Info size={13} />
-        </button>
-      </div>
-
       <FormulaModal open={showFormulae} onClose={() => setShowFormulae(false)} />
 
       {/* Section header */}
@@ -297,11 +281,26 @@ export default function OEESection() {
             Excavators
           </span>
         </div>
-        {!isLoading && apiTo && (
-          <span className="text-[10px] font-mono text-txt-muted">
-            MTD till {tillLabel(apiTo)}
-          </span>
-        )}
+        {/* Right side — MTD label with the formula trigger beside it. The button
+            renders whether or not the label does, so it never disappears while
+            the section is loading. */}
+        <div className="flex items-center gap-2">
+          {!isLoading && apiTo && (
+            <span className="text-[10px] font-mono text-txt-muted">
+              MTD till {tillLabel(apiTo)}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => setShowFormulae(true)}
+            title="View all OEE / LCM formulae"
+            aria-label="View all OEE / LCM formulae"
+            className="w-6 h-6 rounded-full border border-[#ce93d8] bg-[#f3e5f5] text-[#6a1b9a]
+                       flex items-center justify-center hover:bg-[#e1bee7] transition-colors shrink-0"
+          >
+            <Info size={13} />
+          </button>
+        </div>
       </div>
 
       {/* Fleet KPI strip */}
