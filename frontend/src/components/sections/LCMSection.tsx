@@ -41,8 +41,8 @@ export default function LCMSection() {
   const t = data?.totals;
   const c = data?.coverage;
   const cost = data?.costing;
-  // Default is the workbook order the server returns; the toggle re-sorts by
-  // share without touching that order server-side.
+  // Default is the reporting sequence the server returns (Sl order); the toggle
+  // re-sorts by share client-side without touching that order server-side.
   const [sortByShare, setSortByShare] = useState(false);
   const matrixRows = useMemo(() => {
     const rows = data?.rows ?? [];
@@ -334,7 +334,7 @@ export default function LCMSection() {
             <button
               type="button"
               onClick={() => setSortByShare((v) => !v)}
-              title={sortByShare ? "Back to workbook order" : "Sort by loss share, high to low"}
+              title={sortByShare ? "Back to Sl. order" : "Sort by loss share, high to low"}
               className={`flex items-center gap-1 px-2 py-1 rounded border text-[9.5px] font-condensed font-bold
                           tracking-widest uppercase transition-colors ${
                 sortByShare
@@ -343,7 +343,7 @@ export default function LCMSection() {
               }`}
             >
               <ArrowUpDown size={11} />
-              {sortByShare ? "Loss share ↓" : "Workbook order"}
+              {sortByShare ? "Loss share ↓" : "Sl. order"}
             </button>
             <span className="text-[10px] font-mono text-txt-light">own equipment only</span>
           </div>
