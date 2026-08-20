@@ -7,9 +7,12 @@
  * rather than as a derivation, and so there is exactly one place to look when
  * someone asks how a number was arrived at.
  *
- * Data-source labels and interpretation caveats deliberately stay on the page:
- * they qualify the numbers being displayed rather than explain how to compute
- * them, and hiding a caveat behind a click would be the wrong trade.
+ * The interpretation caveats live here too, folded into the relevant formula's
+ * note rather than printed under the cards: the fines-vs-lump basis of the IBM
+ * rates, the lakh rounding on Loss Amount, Mining Restriction having no source,
+ * and OB carrying no rupee value. They were on the page until the user asked for
+ * the footnotes cleared — kept here so the qualification still exists somewhere
+ * rather than being dropped outright.
  */
 import { useEffect } from "react";
 import { X, Calculator } from "lucide-react";
@@ -52,13 +55,13 @@ const LCM_ROWS: Row[] = [
 
 const COST_ROWS: Row[] = [
   { label: "Weighted Rate",  formula: "Σ(Plan Qty[grade] × IBM Rate[grade]) ÷ Σ Plan Qty[grade]",
-    note: "Weighted on the planned grade mix, not the actual mix — the loss being valued is ore that was planned and never excavated. Being a ratio it is scale-invariant" },
+    note: "Weighted on the planned grade mix, not the actual mix — the loss being valued is ore that was planned and never excavated. Being a ratio it is scale-invariant. IBM's bands map one-to-one onto HG (52% and above), MG (40% to below 52%) and LG (below 40%); these are fines prices, and the plan does not split lump from fines, so every planned tonne is valued as fines" },
   { label: "Plan Value",     formula: "Σ(Plan Qty[grade] × IBM Rate[grade])",
     note: "The whole planned ore valued at these rates — the Loss Amount is a slice of it, not a total of it" },
   { label: "Loss Amount",    formula: "Planned Ore Loss (MT) × Weighted Rate",
-    note: "Costed off the rounded tonnage the page prints, so each row is reproducible by hand" },
+    note: "Costed off the rounded tonnage the page prints, so each row is reproducible by hand. Displayed in ₹ Lakh to two decimals — the nearest ₹100 — so the column can differ from the Total by a few hundred rupees; the Total is the exact figure" },
   { label: "Loss Share",     formula: "Loss Amount (head) ÷ Total Loss Amount × 100",
-    note: "Numerically identical to the share of planned ore loss and of ore loss hours — planned loss is hours × one factor and rupees is that × one rate, so both constants cancel" },
+    note: "Numerically identical to the share of planned ore loss and of ore loss hours — planned loss is hours × one factor and rupees is that × one rate, so both constants cancel. The column total is the true sum of the rows, not a forced 100%" },
 ];
 
 function Group({ title, rows, accent }: { title: string; rows: Row[]; accent: string }) {
@@ -140,8 +143,10 @@ export default function FormulaModal({ open, onClose }: { open: boolean; onClose
 
         <div className="px-4 py-2 border-t border-border-light bg-bg-section/40 shrink-0">
           <p className="text-[9px] font-mono text-txt-muted leading-tight">
-            Loss hours come from the IMOS shift log; Breakdown and PM from SAP. OB carries no
-            rupee value — it is waste rock moved to expose ore, so OB loss stays a volume in CuM.
+            Loss hours come from the IMOS shift log; Breakdown and Preventive Maintenance from
+            SAP. Mining Restriction has no source in the database — the mine enters it by hand —
+            so it reads 0. OB carries no rupee value: it is waste rock moved to expose ore, not a
+            saleable product, so OB loss stays a volume in CuM.
           </p>
         </div>
       </div>

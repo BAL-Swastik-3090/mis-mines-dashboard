@@ -251,18 +251,6 @@ export default function LCMSection() {
             </div>
           )}
 
-          <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40 space-y-0.5">
-            <p className="text-[9px] font-mono text-txt-muted leading-tight">
-              IBM's published bands map one-to-one onto HG (52% and above), MG (40% to below
-              52%) and LG (below 40%), so no band has to be chosen as representative. These
-              are fines prices — the plan does not split lump from fines, so every planned
-              tonne is valued as fines.
-            </p>
-            <p className="text-[9px] font-mono text-txt-muted leading-tight">
-              OB carries no rupee value — it is waste rock moved to expose ore, not a saleable
-              product, so OB loss stays a volume in CuM.
-            </p>
-          </div>
         </div>
       )}
 
@@ -382,17 +370,6 @@ export default function LCMSection() {
           </table>
         </div>
 
-        <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40 space-y-0.5">
-          <p className="text-[9px] font-mono text-txt-muted leading-tight">
-            Breakdown and Preventive Maintenance come from SAP; the other heads from the IMOS shift log.
-            Mining Restriction has no source in the database and is entered manually by the mine, so it reads 0 here.
-          </p>
-          <p className="text-[9px] font-mono text-txt-muted leading-tight">
-            Loss Amount is shown in ₹ Lakh to two decimals, i.e. rounded to the nearest ₹100, so
-            the column can differ from the Total by a few hundred rupees. The Total is the exact
-            figure. The Loss Share total is the true sum of the rows, not a forced 100%.
-          </p>
-        </div>
       </div>
 
       {/* Pareto — top controllable losses */}
@@ -429,11 +406,6 @@ export default function LCMSection() {
                   </div>
                 );
               })}
-          </div>
-          <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
-            <p className="text-[9px] font-mono text-txt-muted leading-tight">
-              Share is of total planned ore loss for the period
-            </p>
           </div>
         </div>
       )}
