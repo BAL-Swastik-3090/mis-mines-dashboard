@@ -49,35 +49,41 @@ export interface KpiValue {
   pct_vs_plan: number | null;
 }
 
-// ── Stock ─────────────────────────────────────────────────────
-export interface AllLocationsAPI {
-  mines_total: number;   // Mines (PLANT=1200) + COB at CST1
-  bal_plant:   number;   // BAL Plant (PLANT=1100)
-  suk_plant:   number;   // SUK Plant (PLANT=1110)
-  grand_total: number;   // mines + BAL + SUK
+// ── Stock (mines_stock — IMOS entry) ──────────────────────────
+export interface StockGradeRow {
+  grade_key:   "HG" | "MG" | "LG" | "COB";
+  grade_label: string;
+  mines:       number;
+  bal_plant:   number;
+  suk_plant:   number;
+  lg_for_cob:  number;
+  total:       number;
 }
 
-export interface StockLocationAPI {
-  store_loc:      string;
-  store_loc_desc: string;
-  stock:          number;
-  value:          number | null;
+export interface StockStatusRow {
+  label: string;
+  qty:   number;
 }
 
-export interface StockGradeAPI {
-  grade_key:   string;   // "HG" | "MG" | "LG" | "LUMP_H" | "LUMP_L"
-  grade_label: string;   // "High Grade >52%"
-  total_stock: number;
-  total_value: number | null;
-  locations:   StockLocationAPI[];
+export interface StockLocations {
+  mines:      number;
+  bal_plant:  number;
+  suk_plant:  number;
+  lg_for_cob: number;
+  total:      number;
 }
 
 export interface StockPositionResponse {
-  items:         StockGradeAPI[];
-  grand_total:   number;
-  by_location:   StockLocationAPI[];
-  all_locations: AllLocationsAPI;
-  note:          string;
+  snapshot_date:  string | null;
+  requested_date: string | null;
+  days_stale:     number | null;
+  is_stale:       boolean;
+  has_data:       boolean;
+  total_mines_stock: number;
+  total_stock:       number;
+  grades:    StockGradeRow[];
+  statuses:  StockStatusRow[];
+  locations: StockLocations;
 }
 
 // ── Production API Responses ─────────────────────────────────

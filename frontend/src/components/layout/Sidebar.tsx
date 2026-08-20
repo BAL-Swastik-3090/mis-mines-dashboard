@@ -1,6 +1,6 @@
 "use client";
 import {
-  Cloud, Building2, BarChart3,
+  Cloud, Package, Building2, BarChart3,
   Layers, FlaskConical, Wrench, Droplets,
   Target, Sparkles, ChevronLeft, ChevronRight,
 } from "lucide-react";
@@ -9,7 +9,7 @@ import { useSectionObserver }  from "@/hooks/useSectionObserver";
 
 const NAV_ITEMS = [
   { id: "weather",        label: "Weather",           icon: Cloud        },
-  // { id: "stock",          label: "Stock Position",    icon: Package      },  // hidden — SAP data not maintained
+  { id: "stock",          label: "Stock Position",    icon: Package      },
   { id: "plant",          label: "Plant Performance", icon: Building2    },
   { id: "production",     label: "Production",        icon: BarChart3    },
   { id: "ob",             label: "OB Excavation",     icon: Layers       },

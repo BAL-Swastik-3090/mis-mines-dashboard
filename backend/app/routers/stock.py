@@ -1,8 +1,11 @@
 """
-Stock router — current ore inventory position.
-No date params: table is a live SAP snapshot.
+Stock router — mines stock position from IMOS entry (`mines_stock`).
+
+Takes a date because the table is a snapshot per Stock_Date, not a live feed.
+The service resolves the latest snapshot on or before that date.
 """
-from fastapi import APIRouter, Depends
+from datetime import date
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -15,12 +18,10 @@ router = APIRouter()
 @router.get(
     "/position",
     response_model=StockPosition,
-    summary="Current ore stock position by grade & storage location",
+    summary="Mines stock position by grade, location and clearance status",
 )
-def stock_position(db: Session = Depends(get_db)):
-    """
-    Returns grade-wise and location-wise ore inventory from mm_mb52_inventory_new.
-    Always reflects the latest SAP snapshot — not filtered by date.
-    """
-    data = svc.get_stock_position(db)
-    return StockPosition(**data)
+def stock_position(
+    as_on: date = Query(default=None, description="Show the latest snapshot on or before this date"),
+    db: Session = Depends(get_db),
+):
+    return StockPosition(**svc.get_stock_position(db, as_on))

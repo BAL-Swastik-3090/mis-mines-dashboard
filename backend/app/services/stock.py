@@ -1,194 +1,180 @@
 """
-Stock service — reads current ore + COB inventory from mm_mb52_inventory_new.
-No date filtering: table is a live SAP snapshot (no date column).
+Mines stock position — sourced from IMOS data entry, table `mines_stock`.
 
-Sources:
-  PLANT='1200', MATERIAL_TYPE='ZORE'           → Ore grades (HG/MG/LG/LUMP)
-  PLANT='1210', STORE_LOC='CST1', CONCENTRATE  → COB production stock
+Replaces the previous SAP `mm_mb52_inventory_new` source, which was not being
+maintained (the section had been hidden for that reason).
+
+The table is a snapshot per Stock_Date, holding two sections whose COLUMNS MEAN
+DIFFERENT THINGS. This is the single most important thing to know about it:
+
+  Section B — mine stock by clearance status.
+      Row_Label = status (Total Stock, Permission in Hand, Awaiting Permission,
+                  Awaiting Verification, Awaiting Stacking)
+      Value     = HG_QTY + MG_QTY + COB_QTY + LG_QTY + LG_FOR_COB_QTY
+
+  Section C — stock by location, one row per grade.
+      Row_Label = grade (High Grade, Medium Grade, Low Grade, COB / COB Mix Grade)
+      Mines     = the grade column matching the row (High Grade -> HG_QTY, etc.)
+      BAL_QTY / SUK_QTY / LG_FOR_COB_QTY = the other locations
+
+Section A does not exist in the table and is not rendered.
+
+The two sections do NOT reconcile with each other and are not meant to: B is
+mine-side stock grouped by clearance status, C is stock across physical
+locations including the plants. They are returned as separate blocks so the UI
+never presents one as a breakdown of the other.
 """
+from datetime import date
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
+SECTION_STATUS   = "B"
+SECTION_LOCATION = "C"
 
-# ── Grade classification ──────────────────────────────────────────
-# material_desc → (grade_key, grade_label, sort_order)
-GRADE_MAP: dict[str, tuple[str, str, int]] = {
-    "+52% CHROME ORE":               ("HG",     "High Grade >52%",     1),
-    "40-52% CHROME ORE":             ("MG",     "Medium Grade 40–52%", 2),
-    "40-52% CHROME ORE-BPM EAST":    ("MG",     "Medium Grade 40–52%", 2),  # merged into MG
-    "LOW GRADE ORE(-40%CR2O3)":      ("LG",     "Low Grade <40%",      3),
-    "LUMP -100MM +40% CR2O3":        ("LUMP_H", "Lump >40% Cr₂O₃",    4),
-    "LUMP -100MM -40% CR2O3":        ("LUMP_L", "Lump <40% Cr₂O₃",    5),
-    "CONCENTRATE WITH STD MOISTURE": ("COB",    "COB Concentrate",     6),  # CST1
-}
+# Section B statuses, in form order. 'Total Stock' is deliberately absent: the
+# stored row is unreliable (it reads 0 while the four statuses carry 1,436 MT on
+# 20 Aug, and on 17 Aug it held figures that were not their sum), so the total is
+# computed from the four statuses instead. Excluding it here also means the total
+# cannot double-count if that row is ever filled in.
+STATUS_ROWS = [
+    "Permission in Hand",
+    "Awaiting Permission",
+    "Awaiting Verification",
+    "Awaiting Stacking",
+]
 
-# ── Human-readable location names (overrides SAP STORE_LOC_DESC) ──
-LOCATION_NAMES: dict[str, str] = {
-    "RYRD": "Remaining Stock after Despatch",
-    "DY01": "Despatch Stock",
-    "ROM1": "ROM Stock",
-    "LGCR": "Low Grade ROM Stock",
-    "CST1": "COB Production Stock",
-}
+# Section C grades, in form order, each mapped to the column holding its
+# mine-side quantity.
+GRADE_ROWS = [
+    ("High Grade",          "HG_QTY",  "HG"),
+    ("Medium Grade",        "MG_QTY",  "MG"),
+    ("Low Grade",           "LG_QTY",  "LG"),
+    ("COB / COB Mix Grade", "COB_QTY", "COB"),
+]
 
-# Fixed display order for locations in table
-LOCATION_ORDER = ["RYRD", "DY01", "ROM1", "LGCR", "CST1"]
-
-
-def _friendly(sloc: str, fallback: str) -> str:
-    """Return human-readable location name, falling back to SAP desc."""
-    return LOCATION_NAMES.get(sloc, fallback)
+# Row total for a Section B status. LG_FOR_COB_QTY is included per the mine's
+# definition; it is always 0 on Section B rows today, but including it means the
+# figure stays correct if that changes.
+_STATUS_TOTAL = ("COALESCE(HG_QTY,0) + COALESCE(MG_QTY,0) + COALESCE(COB_QTY,0) "
+                 "+ COALESCE(LG_QTY,0) + COALESCE(LG_FOR_COB_QTY,0)")
 
 
-def get_stock_position(db: Session) -> dict:
-    # ── Query 1: Ore stock (PLANT=1200) ──────────────────────────
-    sql_ore = text("""
-        SELECT
-            MATERIAL_DESC,
-            STORE_LOC,
-            COALESCE(STORE_LOC_DESC, STORE_LOC) AS raw_desc,
-            ROUND(SUM(UNRESTRICTED_STOCK), 2)   AS stock,
-            ROUND(SUM(UNRESTRICTED_VALUE), 2)   AS value
-        FROM mm_mb52_inventory_new
-        WHERE PLANT = '1200'
-          AND MATERIAL_TYPE = 'ZORE'
-        GROUP BY MATERIAL_DESC, STORE_LOC, STORE_LOC_DESC
-        ORDER BY MATERIAL_DESC, STORE_LOC
-    """)
+def _f(v) -> float:
+    try:
+        return float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
-    # ── Query 2: COB concentrate stock (PLANT=1210, CST1 only) ───
-    sql_cob = text("""
-        SELECT
-            MATERIAL_DESC,
-            STORE_LOC,
-            'COB Production Stock'              AS raw_desc,
-            ROUND(SUM(UNRESTRICTED_STOCK), 2)   AS stock,
-            ROUND(SUM(UNRESTRICTED_VALUE), 2)   AS value
-        FROM mm_mb52_inventory_new
-        WHERE PLANT = '1210'
-          AND STORE_LOC = 'CST1'
-          AND MATERIAL_DESC = 'CONCENTRATE WITH STD MOISTURE'
-        GROUP BY MATERIAL_DESC, STORE_LOC
-    """)
 
-    all_rows = list(db.execute(sql_ore).fetchall()) + \
-               list(db.execute(sql_cob).fetchall())
+def _resolve_snapshot_date(db: Session, as_on: date | None) -> date | None:
+    """Latest Stock_Date on or before `as_on`.
 
-    grade_agg: dict[str, dict] = {}
-    loc_agg:   dict[str, dict] = {}
+    Entry is not daily — the table currently holds 17, 18 and 20 Aug — so an
+    exact-date match would render an empty panel on any day nobody filed. Falling
+    back to the most recent earlier snapshot is what the mine means by "stock as
+    on"; the date is returned so the page states which snapshot it is showing.
+    """
+    if as_on is None:
+        return db.execute(text("SELECT MAX(Stock_Date) FROM mines_stock")).scalar()
+    return db.execute(text(
+        "SELECT MAX(Stock_Date) FROM mines_stock WHERE Stock_Date <= :d"
+    ), {"d": as_on}).scalar()
 
-    for r in all_rows:
-        mat  = (r.MATERIAL_DESC or "").strip()
-        info = GRADE_MAP.get(mat)
-        if not info:
-            continue
 
-        gk, glabel, gorder = info
-        stock = float(r.stock or 0)
-        value = float(r.value or 0)
-        sloc  = r.STORE_LOC
-        sdesc = _friendly(sloc, (r.raw_desc or sloc).strip())
+def get_stock_position(db: Session, as_on: date | None = None) -> dict:
+    snap = _resolve_snapshot_date(db, as_on)
 
-        # ── Grade aggregation ─────────────────────────────────────
-        if gk not in grade_agg:
-            grade_agg[gk] = {
-                "grade_key":   gk,
-                "grade_label": glabel,
-                "order":       gorder,
-                "total_stock": 0.0,
-                "total_value": 0.0,
-                "locations":   {},
-            }
-        ga = grade_agg[gk]
-        ga["total_stock"] += stock
-        ga["total_value"] += value
+    if snap is None:
+        return {
+            "snapshot_date": None, "requested_date": as_on, "days_stale": None,
+            "is_stale": False, "has_data": False,
+            "total_mines_stock": 0.0, "total_stock": 0.0,
+            "grades": [], "statuses": [],
+            "locations": {"mines": 0.0, "bal_plant": 0.0, "suk_plant": 0.0,
+                          "lg_for_cob": 0.0, "total": 0.0},
+        }
 
-        if sloc not in ga["locations"]:
-            ga["locations"][sloc] = {
-                "store_loc":      sloc,
-                "store_loc_desc": sdesc,
-                "stock":          0.0,
-                "value":          0.0,
-            }
-        ga["locations"][sloc]["stock"] += stock
-        ga["locations"][sloc]["value"] += value
+    # ── Section C — locations and grade-wise mine stock ───────────────────────
+    loc = db.execute(text("""
+        SELECT COALESCE(SUM(HG_QTY), 0)         AS hg,
+               COALESCE(SUM(MG_QTY), 0)         AS mg,
+               COALESCE(SUM(COB_QTY), 0)        AS cob,
+               COALESCE(SUM(LG_QTY), 0)         AS lg,
+               COALESCE(SUM(BAL_QTY), 0)        AS bal,
+               COALESCE(SUM(SUK_QTY), 0)        AS suk,
+               COALESCE(SUM(LG_FOR_COB_QTY), 0) AS lg_for_cob
+        FROM   mines_stock
+        WHERE  Stock_Date = :d AND Section = :sec
+    """), {"d": snap, "sec": SECTION_LOCATION}).fetchone()
 
-        # ── Location aggregation ──────────────────────────────────
-        if sloc not in loc_agg:
-            loc_agg[sloc] = {
-                "store_loc":      sloc,
-                "store_loc_desc": sdesc,
-                "stock":          0.0,
-                "value":          0.0,
-            }
-        loc_agg[sloc]["stock"] += stock
-        loc_agg[sloc]["value"] += value
+    mines      = _f(loc.hg) + _f(loc.mg) + _f(loc.cob) + _f(loc.lg)
+    bal        = _f(loc.bal)
+    suk        = _f(loc.suk)
+    lg_for_cob = _f(loc.lg_for_cob)
+    grand      = mines + bal + suk + lg_for_cob
 
-    # ── Build grade items (sorted by order) ──────────────────────
-    items = []
-    for ga in sorted(grade_agg.values(), key=lambda x: x["order"]):
-        # Sort locations by the fixed LOCATION_ORDER
-        locs = sorted(
-            [
-                {
-                    "store_loc":      k,
-                    "store_loc_desc": v["store_loc_desc"],
-                    "stock":          round(v["stock"], 2),
-                    "value":          round(v["value"], 2),
-                }
-                for k, v in ga["locations"].items()
-            ],
-            key=lambda x: LOCATION_ORDER.index(x["store_loc"])
-                          if x["store_loc"] in LOCATION_ORDER else 99,
-        )
-        items.append({
-            "grade_key":   ga["grade_key"],
-            "grade_label": ga["grade_label"],
-            "total_stock": round(ga["total_stock"], 2),
-            "total_value": round(ga["total_value"], 2),
-            "locations":   locs,
+    # Grade-wise mine stock — each row's own grade column. Rows are emitted for
+    # all four grades whether or not they carry stock, so a grade never silently
+    # appears or vanishes between snapshots.
+    grade_map = {
+        r.lbl: r for r in db.execute(text(f"""
+            SELECT Row_Label AS lbl,
+                   COALESCE(HG_QTY,0)  AS HG_QTY,
+                   COALESCE(MG_QTY,0)  AS MG_QTY,
+                   COALESCE(LG_QTY,0)  AS LG_QTY,
+                   COALESCE(COB_QTY,0) AS COB_QTY,
+                   COALESCE(BAL_QTY,0) AS bal,
+                   COALESCE(SUK_QTY,0) AS suk,
+                   COALESCE(LG_FOR_COB_QTY,0) AS lg_for_cob
+            FROM   mines_stock
+            WHERE  Stock_Date = :d AND Section = :sec
+        """), {"d": snap, "sec": SECTION_LOCATION}).fetchall()
+    }
+    grades = []
+    for label, col, key in GRADE_ROWS:
+        row = grade_map.get(label)
+        m   = _f(getattr(row, col)) if row is not None else 0.0
+        b   = _f(row.bal)        if row is not None else 0.0
+        s   = _f(row.suk)        if row is not None else 0.0
+        l4c = _f(row.lg_for_cob) if row is not None else 0.0
+        grades.append({
+            "grade_key":   key,
+            "grade_label": label,
+            "mines":       round(m, 2),
+            "bal_plant":   round(b, 2),
+            "suk_plant":   round(s, 2),
+            "lg_for_cob":  round(l4c, 2),
+            "total":       round(m + b + s + l4c, 2),
         })
 
-    grand_total = round(sum(g["total_stock"] for g in grade_agg.values()), 2)
+    # ── Section B — clearance status ──────────────────────────────────────────
+    status_map = {
+        r.lbl: _f(r.qty) for r in db.execute(text(f"""
+            SELECT Row_Label AS lbl, {_STATUS_TOTAL} AS qty
+            FROM   mines_stock
+            WHERE  Stock_Date = :d AND Section = :sec
+        """), {"d": snap, "sec": SECTION_STATUS}).fetchall()
+    }
+    statuses    = [{"label": s, "qty": round(status_map.get(s, 0.0), 2)} for s in STATUS_ROWS]
+    total_stock = round(sum(status_map.get(s, 0.0) for s in STATUS_ROWS), 2)
 
-    # ── Location totals in fixed display order ────────────────────
-    by_location = [
-        {
-            "store_loc":      sloc,
-            "store_loc_desc": loc_agg[sloc]["store_loc_desc"],
-            "stock":          round(loc_agg[sloc]["stock"], 2),
-            "value":          round(loc_agg[sloc]["value"], 2),
-        }
-        for sloc in LOCATION_ORDER
-        if sloc in loc_agg
-    ]
-
-    # ── All Locations totals (Mines + BAL Plant + SUK Plant) ─────
-    sql_plants = text("""
-        SELECT
-            PLANT,
-            ROUND(SUM(UNRESTRICTED_STOCK), 2) AS total
-        FROM mm_mb52_inventory_new
-        WHERE PLANT IN ('1100', '1110')
-          AND MATERIAL_TYPE = 'ZORE'
-        GROUP BY PLANT
-    """)
-    plant_rows = db.execute(sql_plants).fetchall()
-    plant_map  = {r.PLANT: float(r.total or 0) for r in plant_rows}
-
-    bal_stock = plant_map.get("1100", 0.0)
-    suk_stock = plant_map.get("1110", 0.0)
-    # Mines = grand_total already computed (PLANT=1200 ore + COB at CST1)
-    all_grand  = round(grand_total + bal_stock + suk_stock, 2)
+    days_stale = (as_on - snap).days if as_on else 0
 
     return {
-        "items":       items,
-        "grand_total": grand_total,
-        "by_location": by_location,
-        "all_locations": {
-            "mines_total": grand_total,
-            "bal_plant":   round(bal_stock, 2),
-            "suk_plant":   round(suk_stock, 2),
-            "grand_total": all_grand,
+        "snapshot_date":     snap,
+        "requested_date":    as_on,
+        "days_stale":        days_stale,
+        "is_stale":          days_stale > 0,
+        "has_data":          True,
+        "total_mines_stock": round(mines, 2),
+        "total_stock":       total_stock,
+        "grades":            grades,
+        "statuses":          statuses,
+        "locations": {
+            "mines":      round(mines, 2),
+            "bal_plant":  round(bal, 2),
+            "suk_plant":  round(suk, 2),
+            "lg_for_cob": round(lg_for_cob, 2),
+            "total":      round(grand, 2),
         },
     }
