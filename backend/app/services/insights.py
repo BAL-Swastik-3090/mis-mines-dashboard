@@ -454,32 +454,23 @@ def _cob_quality_mtd(db: Session, from_date: date, to_date: date) -> dict:
 
 
 def _stock_snapshot(db: Session) -> dict:
-    """Current ore + COB stock by grade from mm_mb52_inventory_new.
+    """Current ore + COB stock by grade, from the Stock section's own source.
 
-    Mirrors stock.py's get_stock_position() scope exactly:
-      - Ore  : PLANT='1200', MATERIAL_TYPE='ZORE'
-      - COB  : PLANT='1210', STORE_LOC='CST1', MATERIAL_DESC='CONCENTRATE WITH STD MOISTURE'
+    Was reading SAP mm_mb52_inventory_new. The Stock section moved to IMOS entry
+    (`mines_stock`), so this now delegates to the same service rather than
+    querying a second source — otherwise the digest and the Stock panel would
+    quote different stock figures on the same screen.
+
+    Grades follow mines_stock: HG, MG, LG, COB. There is no LUMP row in the new
+    source, so LUMP is no longer reported.
     """
     try:
-        rows = db.execute(text("""
-            SELECT
-                CASE
-                    WHEN MATERIAL_DESC = '+52% CHROME ORE'          THEN 'HG'
-                    WHEN MATERIAL_DESC LIKE '40-52%%'                THEN 'MG'
-                    WHEN MATERIAL_DESC = 'LOW GRADE ORE(-40%CR2O3)' THEN 'LG'
-                    WHEN MATERIAL_DESC LIKE '%LUMP%'                 THEN 'LUMP'
-                    WHEN MATERIAL_DESC = 'CONCENTRATE WITH STD MOISTURE' THEN 'COB'
-                    ELSE 'OTHER'
-                END AS grade,
-                ROUND(SUM(UNRESTRICTED_STOCK), 2) AS stock
-            FROM mm_mb52_inventory_new
-            WHERE (PLANT = '1200' AND MATERIAL_TYPE = 'ZORE')
-               OR (PLANT = '1210' AND STORE_LOC = 'CST1'
-                   AND MATERIAL_DESC = 'CONCENTRATE WITH STD MOISTURE')
-            GROUP BY 1
-        """)).fetchall()
-        result = {r.grade: float(r.stock or 0) for r in rows if r.grade != 'OTHER'}
-        result["total"] = round(sum(v for k, v in result.items()), 2)
+        from app.services.stock import get_stock_position
+        pos = get_stock_position(db, None)      # latest snapshot
+        if not pos.get("has_data"):
+            return {}
+        result = {g["grade_key"]: g["mines"] for g in pos["grades"]}
+        result["total"] = round(sum(result.values()), 2)
         return result
     except Exception:
         return {}
@@ -822,9 +813,9 @@ Average over this window: Ore {avg_ore:,} MT/day · OB {avg_ob:,} CuM/day
 - Input Cr₂O₃: {cob_qual.get('input_cr2o3', 'N/A')}% | Output Cr₂O₃: {cob_qual.get('output_cr2o3', 'N/A')}%
 - Note: Healthy output Cr₂O₃ benchmark = >44%; yield benchmark = >38%
 
-## STOCK POSITION (live snapshot)
+## STOCK POSITION (mine stock, IMOS entry — latest snapshot)
 - HG (>52%): {stock.get('HG', 0):,.0f} MT | MG (40-52%): {stock.get('MG', 0):,.0f} MT | LG (<40%): {stock.get('LG', 0):,.0f} MT
-- COB Concentrate: {stock.get('COB', 0):,.0f} MT | Lump: {stock.get('LUMP', 0):,.0f} MT
+- COB Concentrate: {stock.get('COB', 0):,.0f} MT
 - Total Mine Stock: {stock.get('total', 0):,.0f} MT
 
 ## DESPATCH & REVENUE PROJECTION (MTD)

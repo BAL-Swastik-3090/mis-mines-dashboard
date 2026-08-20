@@ -1,7 +1,6 @@
 "use client";
 import WeatherSection      from "@/components/sections/WeatherSection";
-// import StockSection        from "@/components/sections/StockSection";
-// import StockAllLocations   from "@/components/kpi/StockAllLocations";
+import StockSection        from "@/components/sections/StockSection";
 import PlantSection        from "@/components/sections/PlantSection";
 import ProductionSection   from "@/components/sections/ProductionSection";
 import ObSection           from "@/components/sections/ObSection";
@@ -22,13 +21,9 @@ export default function HomePage() {
         <WeatherSection />
       </section>
 
-      {/* Stock section hidden — SAP data not maintained, re-enable when data is reliable */}
-      {/* <section id="stock" className={S}>
+      <section id="stock" className={S}>
         <StockSection />
-        <div className="mt-4">
-          <StockAllLocations />
-        </div>
-      </section> */}
+      </section>
 
       <section id="plant" className={S}>
         <PlantSection />

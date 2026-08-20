@@ -1,32 +1,44 @@
 from pydantic import BaseModel
+from datetime import date
 from typing import Optional
 
 
-class StockLocation(BaseModel):
-    store_loc:      str
-    store_loc_desc: str
-    stock:          float = 0.0
-    value:          Optional[float] = None
+class StockGradeRow(BaseModel):
+    """One Section C row — a grade, across locations."""
+    grade_key:   str            # "HG" | "MG" | "LG" | "COB"
+    grade_label: str            # "High Grade"
+    mines:       float = 0.0
+    bal_plant:   float = 0.0
+    suk_plant:   float = 0.0
+    lg_for_cob:  float = 0.0
+    total:       float = 0.0
 
 
-class StockGrade(BaseModel):
-    grade_key:   str            # "HG" | "MG" | "LG" | "LUMP_H" | "LUMP_L"
-    grade_label: str            # "High Grade >52%"
-    total_stock: float = 0.0
-    total_value: Optional[float] = None
-    locations:   list[StockLocation] = []
+class StockStatusRow(BaseModel):
+    """One Section B row — a clearance status."""
+    label: str
+    qty:   float = 0.0
 
 
-class AllLocations(BaseModel):
-    mines_total: float = 0.0   # PLANT=1200 ore + COB at CST1
-    bal_plant:   float = 0.0   # PLANT=1100, MATERIAL_TYPE=ZORE
-    suk_plant:   float = 0.0   # PLANT=1110, MATERIAL_TYPE=ZORE
-    grand_total: float = 0.0   # mines + BAL + SUK
+class StockLocations(BaseModel):
+    mines:      float = 0.0
+    bal_plant:  float = 0.0
+    suk_plant:  float = 0.0
+    lg_for_cob: float = 0.0
+    total:      float = 0.0     # mines + bal + suk + lg_for_cob
 
 
 class StockPosition(BaseModel):
-    items:         list[StockGrade]
-    grand_total:   float = 0.0
-    by_location:   list[StockLocation]
-    all_locations: AllLocations
-    note:          str = "Current inventory snapshot — date filter not applicable"
+    # Entry is not daily, so the snapshot shown may predate the requested date.
+    snapshot_date:  Optional[date] = None
+    requested_date: Optional[date] = None
+    days_stale:     Optional[int]  = None
+    is_stale:       bool = False
+    has_data:       bool = False
+
+    total_mines_stock: float = 0.0   # Section C: HG+MG+COB+LG
+    total_stock:       float = 0.0   # Section B: sum of the four statuses
+
+    grades:    list[StockGradeRow]  = []
+    statuses:  list[StockStatusRow] = []
+    locations: StockLocations       = StockLocations()
