@@ -329,12 +329,13 @@ export default function LCMSection() {
                 <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#2e7d32]">OB Production<br/>Hour Loss</th>
                 <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#2e7d32]">Planned OB<br/>Loss (CuM)</th>
                 <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#ad1457]">Loss Amount<br/>(₹)</th>
+                <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#ad1457]">Loss<br/>Share</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border-light/60">
               {isLoading ? (
                 Array.from({ length: 8 }).map((_, i) => (
-                  <tr key={i}>{Array.from({ length: 9 }).map((__, j) => (
+                  <tr key={i}>{Array.from({ length: 10 }).map((__, j) => (
                     <td key={j} className="px-3 py-2.5"><Shimmer w="w-14" h="h-4" /></td>
                   ))}</tr>
                 ))
@@ -361,6 +362,10 @@ export default function LCMSection() {
                     <td className="px-3 py-2 text-right text-navy">{fmt(r.ob_hours, 2)}</td>
                     <td className="px-3 py-2 text-right font-semibold text-[#2e7d32]">{f0(r.planned_ob_loss)}</td>
                     <td className="px-3 py-2 text-right font-semibold text-[#ad1457]">{rs(r.loss_amount)}</td>
+                    <td className="px-3 py-2 text-right text-txt-secondary tabular-nums">
+                      {r.loss_share_pct != null && r.loss_share_pct > 0
+                        ? `${r.loss_share_pct.toFixed(1)}%` : "—"}
+                    </td>
                   </tr>
                 );
               })}
@@ -377,6 +382,9 @@ export default function LCMSection() {
                   <td className="px-3 py-2.5 text-right">{fmt(t.ob_hours, 2)}</td>
                   <td className="px-3 py-2.5 text-right">{f0(t.planned_ob_loss)}</td>
                   <td className="px-3 py-2.5 text-right">{rs(t.loss_amount)}</td>
+                  <td className="px-3 py-2.5 text-right">
+                    {t.loss_share_pct != null ? `${t.loss_share_pct.toFixed(1)}%` : "—"}
+                  </td>
                 </tr>
               </tfoot>
             )}
