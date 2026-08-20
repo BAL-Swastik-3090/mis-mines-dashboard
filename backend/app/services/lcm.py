@@ -1,8 +1,10 @@
 """
 LCM (Lost Cost Matrix) — Kaliapani Mines excavators, plant 1200.
 
-Mirrors the mine's "LCM Summary (Own Equipment)" / "Loss Heads (Own Equipment)"
-workbook sheets. Own equipment only.
+Own equipment only. Loss heads and hours come from the database — the shift log
+in mines_tipper_details and SAP for breakdown and PM. The mine's LCM spreadsheet
+was a reference for the layout and the controllability split; it is not a data
+source and nothing here reads from it.
 
     Ore Deviation = Plan Ore − Actual Ore                       (MT)
     OB  Deviation = Plan OB  − Actual OB                        (CuM)
@@ -93,7 +95,7 @@ IBM_RATES: dict[str, float | None] = {
 # The head list is read from mines_tipper_details' own columns at request time.
 # A new loss reason added to the entry form therefore appears in the LCM matrix
 # on the next request, with no code change. This replaced a list copied out of
-# the mine's Excel workbook, which went stale the moment the form changed.
+# a reference spreadsheet, which went stale the moment the form changed.
 #
 # Everything in the table is a loss head EXCEPT the columns below. That is the
 # inverse of the old approach on purpose: an unrecognised column is treated as a
@@ -173,12 +175,17 @@ KAM_BY_COLUMN = {
 }
 UNCLASSIFIED = "Unclassified"
 
-# Display order and Sl numbers follow the mine's workbook, not the table's column
-# order, so the matrix still reads the way the mine reads it — Breakdown first.
-# Discovery stays dynamic: a column absent from this map is appended after the
+# The mine's conventional reporting sequence for loss heads — equipment-related
+# heads first, then shift and operational ones, with Other and Mining Restriction
+# last. This governs DISPLAY ORDER and Sl numbers only; which heads exist comes
+# from the table. The sequence is a reporting convention, not a data source: the
+# reference spreadsheet happens to follow it, but nothing here is driven by that
+# file.
+#
+# Discovery stays dynamic — a column absent from this map is appended after the
 # highest known Sl rather than dropped, so a new loss reason appears at the
-# bottom of the table instead of vanishing.
-WORKBOOK_ORDER = {
+# bottom of the table instead of vanishing, and without renumbering the rest.
+DISPLAY_ORDER = {
     "breakdown": 1,             "maintenance": 2,          "late_start": 3,
     "tiffin": 4,                "hsd_shortage": 5,         "strike": 6,
     "idle_requ_basic": 7,       "safety_talk": 8,          "dump_jam": 9,
@@ -214,11 +221,11 @@ def _label_from_column(col: str) -> str:
 
 
 def discover_loss_heads(db: Session) -> list[dict]:
-    """Loss heads, discovered from the table and ordered per the workbook.
+    """Loss heads, discovered from the table, in the mine's reporting sequence.
 
     Which heads exist is dynamic — read from the table's columns. Only their
-    order and Sl numbers come from WORKBOOK_ORDER, so the matrix reads the way
-    the mine reads it while still picking up new columns automatically.
+    order and Sl numbers come from DISPLAY_ORDER, so the matrix reads in a
+    familiar sequence while still picking up new columns automatically.
     """
     rows = db.execute(text("""
         SELECT COLUMN_NAME AS col
@@ -230,13 +237,13 @@ def discover_loss_heads(db: Session) -> list[dict]:
 
     cols = [r.col for r in rows if r.col.lower() not in NON_LOSS_COLUMNS]
 
-    # Known columns take their workbook Sl; anything new is numbered after the
+    # Known columns keep their conventional Sl; anything new is numbered after the
     # highest one so it lands at the bottom rather than shifting the rest.
-    next_sl = max(WORKBOOK_ORDER.values(), default=0)
+    next_sl = max(DISPLAY_ORDER.values(), default=0)
     sl_of: dict[str, int] = {}
     for col in cols:
-        if col in WORKBOOK_ORDER:
-            sl_of[col] = WORKBOOK_ORDER[col]
+        if col in DISPLAY_ORDER:
+            sl_of[col] = DISPLAY_ORDER[col]
         else:
             next_sl += 1
             sl_of[col] = next_sl
