@@ -1,7 +1,10 @@
 "use client";
-import { AlertTriangle, Calculator, TrendingDown, Layers, IndianRupee } from "lucide-react";
+import { useState, useMemo } from "react";
+import dynamic from "next/dynamic";
+import { AlertTriangle, Calculator, TrendingDown, Layers, IndianRupee, ArrowUpDown } from "lucide-react";
 import { useLCM } from "@/hooks/useLCM";
 import { formatIndian } from "@/lib/utils";
+import type { LCMRow } from "@/types";
 
 function fmt(v: number | null | undefined, dp = 2) {
   if (v == null) return "—";
@@ -19,6 +22,15 @@ function rsLakh(v: number | null | undefined) {
   return v == null ? "—" : `₹${(v / 100000).toLocaleString("en-IN", {
     minimumFractionDigits: 2, maximumFractionDigits: 2 })} L`;
 }
+const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
+
+/** Distinct hues for the pie. Chosen to stay apart at small slice sizes rather
+ *  than to sit on a gradient — adjacent slices must not read as one block. */
+const PIE_COLORS = [
+  "#1565c0", "#c62828", "#2e7d32", "#c8960c", "#6a1b9a",
+  "#00838f", "#e65100", "#ad1457", "#37474f", "#558b2f",
+];
+
 function Shimmer({ w = "w-20", h = "h-5" }: { w?: string; h?: string }) {
   return <div className={`${h} ${w} bg-bg-section animate-pulse rounded`} />;
 }
@@ -29,6 +41,14 @@ export default function LCMSection() {
   const t = data?.totals;
   const c = data?.coverage;
   const cost = data?.costing;
+  // Default is the workbook order the server returns; the toggle re-sorts by
+  // share without touching that order server-side.
+  const [sortByShare, setSortByShare] = useState(false);
+  const matrixRows = useMemo(() => {
+    const rows = data?.rows ?? [];
+    if (!sortByShare) return rows;
+    return [...rows].sort((a, b) => (b.loss_share_pct ?? 0) - (a.loss_share_pct ?? 0));
+  }, [data?.rows, sortByShare]);
 
   if (isError) {
     return (
@@ -310,7 +330,23 @@ export default function LCMSection() {
               Lost Cost Matrix — Loss Heads
             </span>
           </div>
-          <span className="text-[10px] font-mono text-txt-light">own equipment only</span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSortByShare((v) => !v)}
+              title={sortByShare ? "Back to workbook order" : "Sort by loss share, high to low"}
+              className={`flex items-center gap-1 px-2 py-1 rounded border text-[9.5px] font-condensed font-bold
+                          tracking-widest uppercase transition-colors ${
+                sortByShare
+                  ? "border-[#ad1457] bg-[#fce4ec] text-[#ad1457]"
+                  : "border-border bg-white text-txt-secondary hover:bg-bg-section"
+              }`}
+            >
+              <ArrowUpDown size={11} />
+              {sortByShare ? "Loss share ↓" : "Workbook order"}
+            </button>
+            <span className="text-[10px] font-mono text-txt-light">own equipment only</span>
+          </div>
         </div>
 
         <div className="overflow-x-auto">
@@ -336,7 +372,7 @@ export default function LCMSection() {
                     <td key={j} className="px-3 py-2.5"><Shimmer w="w-14" h="h-4" /></td>
                   ))}</tr>
                 ))
-              ) : (data?.rows ?? []).map((r) => {
+              ) : matrixRows.map((r) => {
                 const idle = r.ore_hours === 0 && r.ob_hours === 0;
                 return (
                   <tr key={r.sl_no} className={`hover:bg-bg-section/50 transition-colors ${idle ? "opacity-45" : ""}`}>
@@ -391,44 +427,119 @@ export default function LCMSection() {
 
       </div>
 
-      {/* Pareto — top controllable losses */}
-      {!isLoading && data && data.rows.some((r) => r.planned_ore_loss > 0 || r.planned_ob_loss > 0) && (
+      {/* Composition of the ore loss — pie rather than bars, so the split
+          reads as parts of one whole. Slices are grouped and coloured to stay
+          distinguishable; anything below 2% is folded into "Others" because a
+          sliver is unreadable and unclickable. */}
+      {!isLoading && data && data.rows.some((r) => r.planned_ore_loss > 0) && (
         <div className="bg-white border border-border rounded-lg shadow-sm overflow-hidden">
           <div className="px-4 pt-3 pb-2.5 border-b border-border-light flex items-center gap-2">
             <TrendingDown size={14} className="text-[#c62828]" />
             <span className="font-condensed font-bold text-[13px] text-navy tracking-widest uppercase">
-              Biggest Losses — Ore
+              Loss Composition — Ore
+            </span>
+            <span className="ml-auto text-[10px] font-mono text-txt-light">
+              {f0(data.totals.planned_ore_loss)} MT total
             </span>
           </div>
-          <div className="p-4 space-y-2">
-            {[...data.rows]
-              .filter((r) => r.planned_ore_loss > 0)
-              .sort((a, bb) => bb.planned_ore_loss - a.planned_ore_loss)
-              .slice(0, 8)
-              .map((r) => {
-                const max = Math.max(...data.rows.map((x) => x.planned_ore_loss), 1);
-                const pct = (r.planned_ore_loss / max) * 100;
-                const share = data.totals.planned_ore_loss > 0
-                  ? (r.planned_ore_loss / data.totals.planned_ore_loss) * 100 : 0;
-                return (
-                  <div key={r.sl_no} className="flex items-center gap-3">
-                    <span className="w-[190px] shrink-0 text-[11px] font-condensed font-bold text-navy truncate">
-                      {r.loss_description}
-                    </span>
-                    <div className="flex-1 h-[16px] bg-bg-section rounded overflow-hidden">
-                      <div className="h-full rounded bg-[#1565c0]" style={{ width: `${pct}%` }} />
-                    </div>
-                    <span className="w-[120px] shrink-0 text-right text-[11px] font-mono text-navy">
-                      {f0(r.planned_ore_loss)} MT
-                      <span className="text-txt-light ml-1">({share.toFixed(1)}%)</span>
-                    </span>
-                  </div>
-                );
-              })}
-          </div>
+          <LossPie rows={data.rows} total={data.totals.planned_ore_loss} />
         </div>
       )}
 
     </div>
+  );
+}
+
+/** Ore-loss composition as a pie.
+ *
+ *  Slices below MIN_SLICE_PCT are collapsed into "Others": with one head at 64%
+ *  the tail is sub-1% slivers that cannot be told apart or hovered, and showing
+ *  them individually makes the chart less readable, not more. The collapsed
+ *  count is stated so nothing looks hidden.
+ *
+ *  Set at 1.5 rather than 2 so Preventive maintenance (1.8% for 1-20 Aug) keeps
+ *  its own slice — it is a named SAP-sourced head and the bar chart this
+ *  replaced showed it separately.
+ */
+const MIN_SLICE_PCT = 1.5;
+
+function LossPie({ rows, total }: { rows: LCMRow[]; total: number }) {
+  const { slices, groupedCount } = useMemo(() => {
+    const positive = rows
+      .filter((r) => r.planned_ore_loss > 0)
+      .sort((a, b) => b.planned_ore_loss - a.planned_ore_loss);
+    const big   = positive.filter((r) => (r.planned_ore_loss / total) * 100 >= MIN_SLICE_PCT);
+    const small = positive.filter((r) => (r.planned_ore_loss / total) * 100 <  MIN_SLICE_PCT);
+    const out = big.map((r) => ({ name: r.loss_description, value: r.planned_ore_loss }));
+    if (small.length) {
+      out.push({
+        name: `Others (${small.length})`,
+        value: small.reduce((sum, r) => sum + r.planned_ore_loss, 0),
+      });
+    }
+    return { slices: out, groupedCount: small.length };
+  }, [rows, total]);
+
+  const option = {
+    backgroundColor: "transparent",
+    color: PIE_COLORS,
+    tooltip: {
+      trigger: "item",
+      backgroundColor: "#0f1c35",
+      borderColor: "#2c4a7c",
+      borderWidth: 1,
+      padding: [8, 12],
+      textStyle: { color: "#e8eef8", fontSize: 13, fontFamily: "IBM Plex Sans" },
+      formatter: (p: { name: string; value: number; percent: number; color: string }) =>
+        `<div style="font-weight:700;margin-bottom:4px;color:${p.color}">${p.name}</div>` +
+        `<div style="font-family:'IBM Plex Mono'">${formatIndian(Math.round(p.value))} MT` +
+        `<span style="color:#8fa8d0"> · ${p.percent.toFixed(1)}%</span></div>`,
+    },
+    legend: {
+      type: "scroll",
+      orient: "vertical",
+      right: 8,
+      top: "middle",
+      itemWidth: 11,
+      itemHeight: 8,
+      textStyle: { fontSize: 11, color: "#6b7ea8", fontFamily: "IBM Plex Sans" },
+    },
+    series: [{
+      type: "pie",
+      // A donut: the hole carries the total, and equal-ish slices are easier to
+      // compare along an arc than as wedges meeting at a point.
+      radius: ["42%", "72%"],
+      center: ["31%", "50%"],
+      avoidLabelOverlap: true,
+      minAngle: 3,
+      itemStyle: { borderColor: "#fff", borderWidth: 2 },
+      label: {
+        show: true,
+        formatter: "{d}%",
+        fontSize: 11,
+        fontFamily: "IBM Plex Mono",
+        color: "#31415f",
+      },
+      labelLine: { length: 8, length2: 8 },
+      emphasis: {
+        scaleSize: 6,
+        label: { show: true, fontSize: 12, fontWeight: "bold" as const },
+      },
+      data: slices,
+    }],
+  };
+
+  return (
+    <>
+      <div className="px-2 pt-2">
+        <ReactECharts option={option} style={{ height: 300, width: "100%" }} notMerge />
+      </div>
+      <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
+        <p className="text-[9px] font-mono text-txt-muted leading-tight">
+          Share of total planned ore loss for the period
+          {groupedCount > 0 && <> · {groupedCount} head{groupedCount > 1 ? "s" : ""} below {MIN_SLICE_PCT}% grouped as Others</>}
+        </p>
+      </div>
+    </>
   );
 }

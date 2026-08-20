@@ -173,6 +173,23 @@ KAM_BY_COLUMN = {
 }
 UNCLASSIFIED = "Unclassified"
 
+# Display order and Sl numbers follow the mine's workbook, not the table's column
+# order, so the matrix still reads the way the mine reads it — Breakdown first.
+# Discovery stays dynamic: a column absent from this map is appended after the
+# highest known Sl rather than dropped, so a new loss reason appears at the
+# bottom of the table instead of vanishing.
+WORKBOOK_ORDER = {
+    "breakdown": 1,             "maintenance": 2,          "late_start": 3,
+    "tiffin": 4,                "hsd_shortage": 5,         "strike": 6,
+    "idle_requ_basic": 7,       "safety_talk": 8,          "dump_jam": 9,
+    "lmv_availability": 10,     "illumination_problem": 11, "absence_operator": 12,
+    "idle": 13,                 "tipper_shortage": 14,     "early_close": 15,
+    "hsd_filling": 16,          "not_operation": 17,       "rain_slippery": 18,
+    "trains_truck": 19,         "imfa_blasting": 20,       "face_preparation": 21,
+    "job_allocation": 22,       "idle_safety": 24,         "other": 25,
+    "mines_restriction": 26,
+}
+
 
 def _label_from_column(col: str) -> str:
     """snake_case column -> sentence-case label, acronyms preserved.
@@ -197,10 +214,11 @@ def _label_from_column(col: str) -> str:
 
 
 def discover_loss_heads(db: Session) -> list[dict]:
-    """Loss heads, in the table's own column order.
+    """Loss heads, discovered from the table and ordered per the workbook.
 
-    Ordering follows ORDINAL_POSITION so the matrix reflects the entry form
-    rather than a numbering copied from a spreadsheet.
+    Which heads exist is dynamic — read from the table's columns. Only their
+    order and Sl numbers come from WORKBOOK_ORDER, so the matrix reads the way
+    the mine reads it while still picking up new columns automatically.
     """
     rows = db.execute(text("""
         SELECT COLUMN_NAME AS col
@@ -210,19 +228,28 @@ def discover_loss_heads(db: Session) -> list[dict]:
         ORDER BY ORDINAL_POSITION
     """)).fetchall()
 
-    heads = []
-    for r in rows:
-        col = r.col
-        if col.lower() in NON_LOSS_COLUMNS:
-            continue
-        heads.append({
-            "sl_no":     len(heads) + 1,
-            "column":    col,
-            "label":     _label_from_column(col),
-            "source":    SAP_SOURCED.get(col, col),
-            "loss_type": LOSS_TYPE_BY_COLUMN.get(col, UNCLASSIFIED),
-            "kam":       KAM_BY_COLUMN.get(col, "—"),
-        })
+    cols = [r.col for r in rows if r.col.lower() not in NON_LOSS_COLUMNS]
+
+    # Known columns take their workbook Sl; anything new is numbered after the
+    # highest one so it lands at the bottom rather than shifting the rest.
+    next_sl = max(WORKBOOK_ORDER.values(), default=0)
+    sl_of: dict[str, int] = {}
+    for col in cols:
+        if col in WORKBOOK_ORDER:
+            sl_of[col] = WORKBOOK_ORDER[col]
+        else:
+            next_sl += 1
+            sl_of[col] = next_sl
+
+    heads = [{
+        "sl_no":     sl_of[col],
+        "column":    col,
+        "label":     _label_from_column(col),
+        "source":    SAP_SOURCED.get(col, col),
+        "loss_type": LOSS_TYPE_BY_COLUMN.get(col, UNCLASSIFIED),
+        "kam":       KAM_BY_COLUMN.get(col, "—"),
+    } for col in cols]
+    heads.sort(key=lambda h: h["sl_no"])
     return heads
 
 
