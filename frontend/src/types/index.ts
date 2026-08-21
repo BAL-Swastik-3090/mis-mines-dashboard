@@ -53,11 +53,7 @@ export interface KpiValue {
 export interface StockGradeRow {
   grade_key:   "HG" | "MG" | "LG" | "COB";
   grade_label: string;
-  mines:       number;
-  bal_plant:   number;
-  suk_plant:   number;
-  lg_for_cob:  number;
-  total:       number;
+  mines:       number;   // Section B, that grade's column across the 4 statuses
 }
 
 export interface StockStatusRow {
@@ -79,8 +75,7 @@ export interface StockPositionResponse {
   days_stale:     number | null;
   is_stale:       boolean;
   has_data:       boolean;
-  total_mines_stock: number;
-  total_stock:       number;
+  total_stock:       number;   // also the Mines location figure
   grades:    StockGradeRow[];
   statuses:  StockStatusRow[];
   locations: StockLocations;

@@ -4,14 +4,10 @@ from typing import Optional
 
 
 class StockGradeRow(BaseModel):
-    """One Section C row — a grade, across locations."""
+    """Mine stock for one grade — Section B read down its grade column."""
     grade_key:   str            # "HG" | "MG" | "LG" | "COB"
     grade_label: str            # "High Grade"
     mines:       float = 0.0
-    bal_plant:   float = 0.0
-    suk_plant:   float = 0.0
-    lg_for_cob:  float = 0.0
-    total:       float = 0.0
 
 
 class StockStatusRow(BaseModel):
@@ -36,8 +32,9 @@ class StockPosition(BaseModel):
     is_stale:       bool = False
     has_data:       bool = False
 
-    total_mines_stock: float = 0.0   # Section C: HG+MG+COB+LG
-    total_stock:       float = 0.0   # Section B: sum of the four statuses
+    # Section B, the four status rows summed across HG+MG+LG+COB. Also the
+    # Mines location figure — same quantity, reported in both places.
+    total_stock: float = 0.0
 
     grades:    list[StockGradeRow]  = []
     statuses:  list[StockStatusRow] = []

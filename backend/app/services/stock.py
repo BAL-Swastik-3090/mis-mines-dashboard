@@ -12,10 +12,17 @@ DIFFERENT THINGS. This is the single most important thing to know about it:
                   Awaiting Verification, Awaiting Stacking)
       Value     = HG_QTY + MG_QTY + COB_QTY + LG_QTY + LG_FOR_COB_QTY
 
-  Section C — stock by location, one row per grade.
-      Row_Label = grade (High Grade, Medium Grade, Low Grade, COB / COB Mix Grade)
-      Mines     = the grade column matching the row (High Grade -> HG_QTY, etc.)
-      BAL_QTY / SUK_QTY / LG_FOR_COB_QTY = the other locations
+  Section C — stock held at the plants, one row per grade.
+      BAL_QTY / SUK_QTY / LG_FOR_COB_QTY
+
+Mine-side stock comes from SECTION B, not Section C. Both the headline Total
+Stock and the Mines location figure are the same quantity — the four clearance
+status rows summed across HG, MG, LG and COB — so they are computed once and
+reported in both places rather than derived twice.
+
+The grade split shown under Mines is that same Section B block read down its
+columns instead of across its rows, which is why the four grades sum back to
+Total Stock exactly.
 
 Section A does not exist in the table and is not rendered.
 
@@ -43,20 +50,19 @@ STATUS_ROWS = [
     "Awaiting Stacking",
 ]
 
-# Section C grades, in form order, each mapped to the column holding its
-# mine-side quantity.
-GRADE_ROWS = [
-    ("High Grade",          "HG_QTY",  "HG"),
-    ("Medium Grade",        "MG_QTY",  "MG"),
-    ("Low Grade",           "LG_QTY",  "LG"),
-    ("COB / COB Mix Grade", "COB_QTY", "COB"),
-]
+# Row total for a Section B status: the four grades only. LG_FOR_COB_QTY is
+# deliberately NOT added here — it is a Section C plant column, and the mine's
+# definition of a status row is HG + MG + LG + COB.
+_STATUS_TOTAL = ("COALESCE(HG_QTY,0) + COALESCE(MG_QTY,0) "
+                 "+ COALESCE(LG_QTY,0) + COALESCE(COB_QTY,0)")
 
-# Row total for a Section B status. LG_FOR_COB_QTY is included per the mine's
-# definition; it is always 0 on Section B rows today, but including it means the
-# figure stays correct if that changes.
-_STATUS_TOTAL = ("COALESCE(HG_QTY,0) + COALESCE(MG_QTY,0) + COALESCE(COB_QTY,0) "
-                 "+ COALESCE(LG_QTY,0) + COALESCE(LG_FOR_COB_QTY,0)")
+# Grade columns, in display order, with the label shown under Mines.
+GRADE_COLUMNS = [
+    ("HG",  "HG_QTY",  "High Grade"),
+    ("MG",  "MG_QTY",  "Medium Grade"),
+    ("LG",  "LG_QTY",  "Low Grade"),
+    ("COB", "COB_QTY", "COB / COB Mix Grade"),
+]
 
 
 def _f(v) -> float:
@@ -88,66 +94,36 @@ def get_stock_position(db: Session, as_on: date | None = None) -> dict:
         return {
             "snapshot_date": None, "requested_date": as_on, "days_stale": None,
             "is_stale": False, "has_data": False,
-            "total_mines_stock": 0.0, "total_stock": 0.0,
+            "total_stock": 0.0,
             "grades": [], "statuses": [],
             "locations": {"mines": 0.0, "bal_plant": 0.0, "suk_plant": 0.0,
                           "lg_for_cob": 0.0, "total": 0.0},
         }
 
-    # ── Section C — locations and grade-wise mine stock ───────────────────────
-    loc = db.execute(text("""
-        SELECT COALESCE(SUM(HG_QTY), 0)         AS hg,
-               COALESCE(SUM(MG_QTY), 0)         AS mg,
-               COALESCE(SUM(COB_QTY), 0)        AS cob,
-               COALESCE(SUM(LG_QTY), 0)         AS lg,
-               COALESCE(SUM(BAL_QTY), 0)        AS bal,
-               COALESCE(SUM(SUK_QTY), 0)        AS suk,
-               COALESCE(SUM(LG_FOR_COB_QTY), 0) AS lg_for_cob
+    # ── Section B — mine stock, by status across and by grade down ────────────
+    grade_sel = ", ".join(f"COALESCE(SUM(`{col}`),0) AS g_{key.lower()}"
+                          for key, col, _ in GRADE_COLUMNS)
+    ph = ", ".join(f":s{i}" for i in range(len(STATUS_ROWS)))
+    params = {"d": snap, "sec": SECTION_STATUS}
+    for i, st in enumerate(STATUS_ROWS):
+        params[f"s{i}"] = st
+
+    # Read down the columns for the grade split. Restricted to the four status
+    # rows — the same scope the row totals use — so the grade split and the
+    # status totals are two views of one block and must agree.
+    gr = db.execute(text(f"""
+        SELECT {grade_sel}
         FROM   mines_stock
-        WHERE  Stock_Date = :d AND Section = :sec
-    """), {"d": snap, "sec": SECTION_LOCATION}).fetchone()
+        WHERE  Stock_Date = :d AND Section = :sec AND Row_Label IN ({ph})
+    """), params).fetchone()
 
-    mines      = _f(loc.hg) + _f(loc.mg) + _f(loc.cob) + _f(loc.lg)
-    bal        = _f(loc.bal)
-    suk        = _f(loc.suk)
-    lg_for_cob = _f(loc.lg_for_cob)
-    grand      = mines + bal + suk + lg_for_cob
+    grades = [{
+        "grade_key":   key,
+        "grade_label": label,
+        "mines":       round(_f(getattr(gr, f"g_{key.lower()}")) if gr else 0.0, 2),
+    } for key, _col, label in GRADE_COLUMNS]
 
-    # Grade-wise mine stock — each row's own grade column. Rows are emitted for
-    # all four grades whether or not they carry stock, so a grade never silently
-    # appears or vanishes between snapshots.
-    grade_map = {
-        r.lbl: r for r in db.execute(text(f"""
-            SELECT Row_Label AS lbl,
-                   COALESCE(HG_QTY,0)  AS HG_QTY,
-                   COALESCE(MG_QTY,0)  AS MG_QTY,
-                   COALESCE(LG_QTY,0)  AS LG_QTY,
-                   COALESCE(COB_QTY,0) AS COB_QTY,
-                   COALESCE(BAL_QTY,0) AS bal,
-                   COALESCE(SUK_QTY,0) AS suk,
-                   COALESCE(LG_FOR_COB_QTY,0) AS lg_for_cob
-            FROM   mines_stock
-            WHERE  Stock_Date = :d AND Section = :sec
-        """), {"d": snap, "sec": SECTION_LOCATION}).fetchall()
-    }
-    grades = []
-    for label, col, key in GRADE_ROWS:
-        row = grade_map.get(label)
-        m   = _f(getattr(row, col)) if row is not None else 0.0
-        b   = _f(row.bal)        if row is not None else 0.0
-        s   = _f(row.suk)        if row is not None else 0.0
-        l4c = _f(row.lg_for_cob) if row is not None else 0.0
-        grades.append({
-            "grade_key":   key,
-            "grade_label": label,
-            "mines":       round(m, 2),
-            "bal_plant":   round(b, 2),
-            "suk_plant":   round(s, 2),
-            "lg_for_cob":  round(l4c, 2),
-            "total":       round(m + b + s + l4c, 2),
-        })
-
-    # ── Section B — clearance status ──────────────────────────────────────────
+    # Read across the rows for the per-status totals.
     status_map = {
         r.lbl: _f(r.qty) for r in db.execute(text(f"""
             SELECT Row_Label AS lbl, {_STATUS_TOTAL} AS qty
@@ -155,8 +131,25 @@ def get_stock_position(db: Session, as_on: date | None = None) -> dict:
             WHERE  Stock_Date = :d AND Section = :sec
         """), {"d": snap, "sec": SECTION_STATUS}).fetchall()
     }
-    statuses    = [{"label": s, "qty": round(status_map.get(s, 0.0), 2)} for s in STATUS_ROWS]
-    total_stock = round(sum(status_map.get(s, 0.0) for s in STATUS_ROWS), 2)
+    statuses = [{"label": st, "qty": round(status_map.get(st, 0.0), 2)} for st in STATUS_ROWS]
+
+    # Total Stock and the Mines location are the same quantity by definition.
+    total_stock = round(sum(status_map.get(st, 0.0) for st in STATUS_ROWS), 2)
+    mines       = total_stock
+
+    # ── Section C — stock held at the plants ──────────────────────────────────
+    loc = db.execute(text("""
+        SELECT COALESCE(SUM(BAL_QTY), 0)        AS bal,
+               COALESCE(SUM(SUK_QTY), 0)        AS suk,
+               COALESCE(SUM(LG_FOR_COB_QTY), 0) AS lg_for_cob
+        FROM   mines_stock
+        WHERE  Stock_Date = :d AND Section = :sec
+    """), {"d": snap, "sec": SECTION_LOCATION}).fetchone()
+
+    bal        = _f(loc.bal) if loc else 0.0
+    suk        = _f(loc.suk) if loc else 0.0
+    lg_for_cob = _f(loc.lg_for_cob) if loc else 0.0
+    grand      = mines + bal + suk + lg_for_cob
 
     days_stale = (as_on - snap).days if as_on else 0
 
@@ -166,7 +159,6 @@ def get_stock_position(db: Session, as_on: date | None = None) -> dict:
         "days_stale":        days_stale,
         "is_stale":          days_stale > 0,
         "has_data":          True,
-        "total_mines_stock": round(mines, 2),
         "total_stock":       total_stock,
         "grades":            grades,
         "statuses":          statuses,
