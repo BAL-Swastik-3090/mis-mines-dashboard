@@ -2,14 +2,16 @@
 /**
  * Mines Stock Position — sourced from IMOS entry (`mines_stock`).
  *
- * Three blocks that deliberately do NOT reconcile with one another, because they
- * count different things:
+ * Mine stock all comes from Section B — the four clearance status rows. The page
+ * shows that one quantity three ways, and all three tie back to it:
  *
- *   Total Mines Stock  — Section C, the four grade columns (stock at the mine)
- *   All Locations      — Section C across Mines / BAL / SUK / LG for COB
- *   Clearance Status   — Section B, mine stock grouped by permission status
+ *   Total Stock       — the whole Section B block
+ *   Grade-wise        — the same block read down its HG/MG/LG/COB columns
+ *   Clearance Status  — the same block read across its status rows
  *
- * They are kept in separate blocks so none reads as a breakdown of another.
+ * So Grade-wise and Clearance Status each sum to Total Stock. Only the plant
+ * figures in All Locations come from Section C (BAL_QTY / SUK_QTY), and Mines
+ * there is Total Stock again rather than a separate number.
  */
 import { Package, AlertTriangle } from "lucide-react";
 import { useStockPosition } from "@/hooks/useStock";
@@ -101,12 +103,11 @@ export default function StockSection() {
       {(isLoading || data?.has_data) && (
         <>
           {/* Headline KPIs */}
-          <div className="p-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
             {[
-              { label: "Total Mines Stock", value: data?.total_mines_stock,
-                sub: "at the mine · Section C grades", accent: "#1565c0", strong: true },
-              { label: "Total Stock",       value: data?.total_stock,
-                sub: "sum of the four clearance statuses", accent: "#6a1b9a" },
+              { label: "Total Stock",        value: data?.total_stock,
+                sub: "mine stock · all grades, all clearance statuses",
+                accent: "#1565c0", strong: true },
               { label: "Permission in Hand", value: permission,
                 sub: "cleared · ready to lift", accent: "#2e7d32" },
             ].map((k) => (
@@ -161,7 +162,7 @@ export default function StockSection() {
               {[
                 { label: "Mines",      value: loc?.mines },
                 { label: "BAL Plant",  value: loc?.bal_plant },
-                { label: "SUK Plant",  value: loc?.suk_plant },
+                { label: "Sukinda Plant", value: loc?.suk_plant },
                 { label: "LG for COB", value: loc?.lg_for_cob },
                 { label: "Total",      value: loc?.total, strong: true },
               ].map((t) => (
