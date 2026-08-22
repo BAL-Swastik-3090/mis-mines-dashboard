@@ -69,86 +69,88 @@ export default function TipperTable() {
 
         {/* Scrollable body */}
         <div className="overflow-y-auto" style={{ maxHeight: "360px" }}>
-          <table className="w-full text-[12px] border-collapse">
-            <thead className="sticky top-0 z-10">
-              <tr className="bg-bg-section border-b border-border">
-                <th className="px-3 py-2.5 text-left  font-bold text-txt-secondary tracking-wide text-[11px]">VEHICLE</th>
-                <th className="px-3 py-2.5 text-right font-bold text-accent        tracking-wide text-[11px]">ENG-HR (MTD)</th>
-                <th className="px-3 py-2.5 text-right font-bold text-danger        tracking-wide text-[11px]">B/D HR</th>
-                <th className="px-3 py-2.5 text-right font-bold text-danger        tracking-wide text-[11px]">B/D COUNT</th>
-                <th className="px-3 py-2.5 text-right font-bold text-success       tracking-wide text-[11px]">AVAIL %</th>
-                <th className="px-3 py-2.5 text-right font-bold text-gold          tracking-wide text-[11px]">UTIL %</th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {isLoading ? (
-                Array.from({ length: 10 }).map((_, i) => <SkeletonRow key={i} />)
-              ) : machines.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-txt-muted text-sm">
-                    No tipper data for selected period
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-[12px] border-collapse">
+              <thead className="sticky top-0 z-10">
+                <tr className="bg-bg-section border-b border-border">
+                  <th className="px-3 py-2.5 text-left  font-bold text-txt-secondary tracking-wide text-[11px]">VEHICLE</th>
+                  <th className="px-3 py-2.5 text-right font-bold text-accent        tracking-wide text-[11px]">ENG-HR (MTD)</th>
+                  <th className="px-3 py-2.5 text-right font-bold text-danger        tracking-wide text-[11px]">B/D HR</th>
+                  <th className="px-3 py-2.5 text-right font-bold text-danger        tracking-wide text-[11px]">B/D COUNT</th>
+                  <th className="px-3 py-2.5 text-right font-bold text-success       tracking-wide text-[11px]">AVAIL %</th>
+                  <th className="px-3 py-2.5 text-right font-bold text-gold          tracking-wide text-[11px]">UTIL %</th>
                 </tr>
-              ) : (
-                machines.map((m) => (
-                  <tr
-                    key={m.vehicle_desc}
-                    onClick={() => setSelected({ sapName: m.sap_name, displayName: m.vehicle_desc })}
-                    className={`border-b border-border-light hover:bg-bg-light transition-colors cursor-pointer ${
-                      m.eng_hr_mtd === 0 && m.bd_hr === 0 ? "opacity-45" : ""
-                    }`}
-                    title="Click to view breakdown details"
-                  >
-                    <td className="px-3 py-2 font-mono text-[12px] text-navy font-semibold">
-                      {m.vehicle_desc}
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono text-[12px] text-navy">
-                      {m.eng_hr_mtd.toFixed(2)}
-                    </td>
-                    <td className={`px-3 py-2 text-right font-mono text-[12px] ${
-                      m.bd_hr > 0 ? "text-danger font-semibold" : "text-txt-muted"
-                    }`}>
-                      {m.bd_hr.toFixed(2)}
-                    </td>
-                    <td className={`px-3 py-2 text-right font-mono text-[12px] font-semibold ${
-                      m.bd_count_start > 0 ? "text-danger" : "text-txt-muted"
-                    }`}>
-                      {m.bd_count_start > 0 ? m.bd_count_start : "—"}
-                    </td>
-                    <td className="px-3 py-2">
-                      <AvailBar pct={m.avail_pct} />
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      <UtilPct pct={m.util_pct} />
+              </thead>
+
+              <tbody>
+                {isLoading ? (
+                  Array.from({ length: 10 }).map((_, i) => <SkeletonRow key={i} />)
+                ) : machines.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-8 text-center text-txt-muted text-sm">
+                      No tipper data for selected period
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
+                ) : (
+                  machines.map((m) => (
+                    <tr
+                      key={m.vehicle_desc}
+                      onClick={() => setSelected({ sapName: m.sap_name, displayName: m.vehicle_desc })}
+                      className={`border-b border-border-light hover:bg-bg-light transition-colors cursor-pointer ${
+                        m.eng_hr_mtd === 0 && m.bd_hr === 0 ? "opacity-45" : ""
+                      }`}
+                      title="Click to view breakdown details"
+                    >
+                      <td className="px-3 py-2 font-mono text-[12px] text-navy font-semibold">
+                        {m.vehicle_desc}
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono text-[12px] text-navy">
+                        {m.eng_hr_mtd.toFixed(2)}
+                      </td>
+                      <td className={`px-3 py-2 text-right font-mono text-[12px] ${
+                        m.bd_hr > 0 ? "text-danger font-semibold" : "text-txt-muted"
+                      }`}>
+                        {m.bd_hr.toFixed(2)}
+                      </td>
+                      <td className={`px-3 py-2 text-right font-mono text-[12px] font-semibold ${
+                        m.bd_count_start > 0 ? "text-danger" : "text-txt-muted"
+                      }`}>
+                        {m.bd_count_start > 0 ? m.bd_count_start : "—"}
+                      </td>
+                      <td className="px-3 py-2">
+                        <AvailBar pct={m.avail_pct} />
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <UtilPct pct={m.util_pct} />
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
 
-            {/* TOTAL FLEET footer */}
-            {!isLoading && data && machines.length > 0 && (
-              <tfoot>
-                <tr className="bg-navy-2">
-                  <td className="px-3 py-3 font-condensed font-bold text-[12px] text-white tracking-widest uppercase">
-                    Total Fleet
-                  </td>
-                  <td className="px-3 py-3 text-right font-mono font-bold text-white text-[12px]">
-                    {data.total_eng_hr.toFixed(2)}
-                  </td>
-                  <td className="px-3 py-3 text-right font-mono text-white/70 text-[12px]">
-                    {data.total_bd_hr.toFixed(2)}
-                  </td>
-                  <td className="px-3 py-3 text-right font-mono text-white/70 text-[12px]">
-                    {machines.reduce((s, m) => s + m.bd_count_start, 0) || "—"}
-                  </td>
-                  <td className="px-3 py-3 text-right font-mono text-white/40 text-[12px]">—</td>
-                  <td className="px-3 py-3 text-right font-mono text-white/40 text-[12px]">—</td>
-                </tr>
-              </tfoot>
-            )}
-          </table>
+              {/* TOTAL FLEET footer */}
+              {!isLoading && data && machines.length > 0 && (
+                <tfoot>
+                  <tr className="bg-navy-2">
+                    <td className="px-3 py-3 font-condensed font-bold text-[12px] text-white tracking-widest uppercase">
+                      Total Fleet
+                    </td>
+                    <td className="px-3 py-3 text-right font-mono font-bold text-white text-[12px]">
+                      {data.total_eng_hr.toFixed(2)}
+                    </td>
+                    <td className="px-3 py-3 text-right font-mono text-white/70 text-[12px]">
+                      {data.total_bd_hr.toFixed(2)}
+                    </td>
+                    <td className="px-3 py-3 text-right font-mono text-white/70 text-[12px]">
+                      {machines.reduce((s, m) => s + m.bd_count_start, 0) || "—"}
+                    </td>
+                    <td className="px-3 py-3 text-right font-mono text-white/40 text-[12px]">—</td>
+                    <td className="px-3 py-3 text-right font-mono text-white/40 text-[12px]">—</td>
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
         </div>
 
         {/* Data source attribution */}

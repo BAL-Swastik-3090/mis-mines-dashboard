@@ -49,14 +49,15 @@ export default function Header() {
       {/* Gold accent line */}
       <div className="h-[3px] bg-gradient-to-r from-[#c8960c] via-[#f5a623] to-[#c8960c]" />
 
-      <div className="flex items-stretch min-h-[68px]">
+      <div className="flex items-stretch min-h-[68px] min-w-0">
 
         {/* ── Brand ──────────────────────────────────────────── */}
-        <div className="flex flex-col justify-center px-5 pr-6 border-r border-white/10 min-w-[260px] xl:min-w-[300px]">
+        <div className="flex flex-col justify-center px-3 sm:px-5 pr-4 sm:pr-6 border-r border-white/10
+                        min-w-0 sm:min-w-[240px] xl:min-w-[300px]">
           <div className="text-[11px] font-semibold tracking-[.18em] text-[#f5a623] uppercase font-condensed">
             Balasore Alloys Limited
           </div>
-          <div className="font-condensed font-extrabold text-white text-[22px] xl:text-[26px] leading-tight tracking-[.01em]">
+          <div className="font-condensed font-extrabold text-white text-[17px] sm:text-[20px] xl:text-[26px] leading-tight tracking-[.01em]">
             Kaliapani Chromite Mines
           </div>
           <div className="text-[11px] text-white/40 tracking-[.04em] mt-0.5">

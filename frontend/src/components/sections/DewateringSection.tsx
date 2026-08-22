@@ -191,7 +191,7 @@ function DailyKpiRow({ today, loading }: { today: DewateringTodayKpi; loading: b
     : null;
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3 xl:gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 xl:gap-4">
       <PairCard
         label="Water Disposal"
         sub={`Day ${dn}`}
@@ -265,7 +265,7 @@ function MtdKpiRow({ mtd, loading }: { mtd: DewateringMtdKpi; loading: boolean }
     netChg >= 0    ? "text-success"   : "text-danger";
 
   return (
-    <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 xl:gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 xl:gap-4">
       <PairCard
         label="MTD Water Disposal"
         accentClass="accent-bar-teal"

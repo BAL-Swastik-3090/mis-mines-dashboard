@@ -202,10 +202,13 @@ export default function DateFilter() {
 
       {/* ── Dropdown ────────────────────────────────────────────── */}
       {open && (
-        <div className="absolute right-0 top-full mt-2 z-50 bg-white border border-border rounded-xl shadow-xl flex overflow-hidden min-w-[500px]">
+        <div className="absolute right-0 top-full mt-2 z-50 bg-white border border-border rounded-xl shadow-xl
+                        flex flex-col sm:flex-row overflow-hidden
+                        w-[calc(100vw-1.5rem)] sm:w-auto sm:min-w-[500px] max-w-[calc(100vw-1.5rem)]
+                        max-h-[calc(100vh-6rem)] overflow-y-auto">
 
           {/* ── Left sidebar: Quick selects ──────────────────────── */}
-          <div className="w-44 shrink-0 bg-bg-soft border-r border-border-light py-2 overflow-y-auto max-h-[420px]">
+          <div className="w-full sm:w-44 shrink-0 bg-bg-soft border-b sm:border-b-0 sm:border-r border-border-light py-2 overflow-y-auto max-h-[180px] sm:max-h-[420px]">
             {GROUPS.map((group) => (
               <div key={group.heading}>
                 <div className="px-3 pt-3 pb-1 text-[9px] font-extrabold tracking-[.16em] text-txt-light uppercase">
