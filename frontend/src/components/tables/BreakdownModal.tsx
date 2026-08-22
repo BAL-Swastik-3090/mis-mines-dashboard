@@ -73,36 +73,38 @@ export default function BreakdownModal({ machineName, sapName, onClose }: Props)
               <p className="text-sm font-mono">No breakdown events recorded for this machine in the selected period.</p>
             </div>
           ) : (
-            <table className="w-full text-[12px] border-collapse">
-              <thead className="sticky top-0 z-10">
-                <tr className="bg-bg-section border-b border-border">
-                  <th className="px-4 py-2.5 text-left  font-bold text-txt-secondary tracking-wide text-[11px]">#</th>
-                  <th className="px-4 py-2.5 text-left  font-bold text-txt-secondary tracking-wide text-[11px]">NOTIF NO.</th>
-                  <th className="px-4 py-2.5 text-left  font-bold text-danger        tracking-wide text-[11px]">BREAKDOWN START</th>
-                  <th className="px-4 py-2.5 text-left  font-bold text-success       tracking-wide text-[11px]">BREAKDOWN END</th>
-                  <th className="px-4 py-2.5 text-right font-bold text-gold          tracking-wide text-[11px]">DURATION (HRS)</th>
-                  <th className="px-4 py-2.5 text-left  font-bold text-txt-secondary tracking-wide text-[11px]">REASON</th>
-                </tr>
-              </thead>
-              <tbody>
-                {events.map((ev, idx) => (
-                  <tr key={idx} className="border-b border-border-light hover:bg-bg-light transition-colors">
-                    <td className="px-4 py-2.5 font-mono text-txt-muted text-[11px]">{idx + 1}</td>
-                    <td className="px-4 py-2.5 font-mono text-navy font-semibold">{ev.notification_no || "—"}</td>
-                    <td className="px-4 py-2.5 font-mono text-danger text-[11px]">{fmt(ev.start)}</td>
-                    <td className={`px-4 py-2.5 font-mono text-[11px] ${ev.end ? "text-success" : "text-txt-muted italic"}`}>
-                      {ev.end ? fmt(ev.end) : "Open / Not closed"}
-                    </td>
-                    <td className="px-4 py-2.5 text-right font-mono text-[12px] font-semibold text-gold">
-                      {ev.bd_hrs != null ? ev.bd_hrs.toFixed(2) : "—"}
-                    </td>
-                    <td className="px-4 py-2.5 text-txt-secondary text-[11px]">
-                      {ev.reason || <span className="text-txt-muted italic">Not specified</span>}
-                    </td>
+            <div className="overflow-x-auto">
+              <table className="w-full text-[12px] border-collapse">
+                <thead className="sticky top-0 z-10">
+                  <tr className="bg-bg-section border-b border-border">
+                    <th className="px-4 py-2.5 text-left  font-bold text-txt-secondary tracking-wide text-[11px]">#</th>
+                    <th className="px-4 py-2.5 text-left  font-bold text-txt-secondary tracking-wide text-[11px]">NOTIF NO.</th>
+                    <th className="px-4 py-2.5 text-left  font-bold text-danger        tracking-wide text-[11px]">BREAKDOWN START</th>
+                    <th className="px-4 py-2.5 text-left  font-bold text-success       tracking-wide text-[11px]">BREAKDOWN END</th>
+                    <th className="px-4 py-2.5 text-right font-bold text-gold          tracking-wide text-[11px]">DURATION (HRS)</th>
+                    <th className="px-4 py-2.5 text-left  font-bold text-txt-secondary tracking-wide text-[11px]">REASON</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {events.map((ev, idx) => (
+                    <tr key={idx} className="border-b border-border-light hover:bg-bg-light transition-colors">
+                      <td className="px-4 py-2.5 font-mono text-txt-muted text-[11px]">{idx + 1}</td>
+                      <td className="px-4 py-2.5 font-mono text-navy font-semibold">{ev.notification_no || "—"}</td>
+                      <td className="px-4 py-2.5 font-mono text-danger text-[11px]">{fmt(ev.start)}</td>
+                      <td className={`px-4 py-2.5 font-mono text-[11px] ${ev.end ? "text-success" : "text-txt-muted italic"}`}>
+                        {ev.end ? fmt(ev.end) : "Open / Not closed"}
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-mono text-[12px] font-semibold text-gold">
+                        {ev.bd_hrs != null ? ev.bd_hrs.toFixed(2) : "—"}
+                      </td>
+                      <td className="px-4 py-2.5 text-txt-secondary text-[11px]">
+                        {ev.reason || <span className="text-txt-muted italic">Not specified</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
 

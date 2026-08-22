@@ -171,7 +171,7 @@ export default function FuelSummarySection() {
       </div>
 
       {/* KPI strip */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
         <Kpi icon={Fuel} label="Total Consumed" accent="#1565c0" loading={isLoading}
              value={fmt(k?.total_consumed_l, 1)} unit="L"
              sub={k ? `${fmt(k.avg_consumed_per_day, 1)} L/day avg` : undefined} />

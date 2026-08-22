@@ -89,7 +89,7 @@ function FleetKpis({ fleet, loading }: { fleet: OEEFleet | undefined; loading: b
   ];
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3">
+    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
       {cards.map((c) => (
         <div key={c.label} className="bg-white border border-border rounded-lg shadow-sm overflow-hidden">
           <div className="px-4 pt-3 pb-1">

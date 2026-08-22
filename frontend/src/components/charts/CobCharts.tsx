@@ -175,7 +175,7 @@ export default function CobCharts() {
 
   if (isLoading) {
     return (
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-3 xl:gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 xl:gap-4">
         {[3, 2].map((span, i) => (
           <div key={i} className={`lg:col-span-${span} bg-white border border-border rounded-lg shadow-sm flex items-center justify-center`} style={{ height: 240 }}>
             <div className="text-txt-muted text-sm animate-pulse">Loading chart…</div>
@@ -189,7 +189,7 @@ export default function CobCharts() {
   const { avg_input_cr2o3, avg_output_cr2o3, avg_tailings_cr2o3 } = data ?? {};
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-5 gap-3 xl:gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 xl:gap-4">
 
       {/* Quantity chart — 3/5 */}
       <div className="lg:col-span-3 bg-white border border-border rounded-lg shadow-sm overflow-hidden">

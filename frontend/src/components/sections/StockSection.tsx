@@ -117,7 +117,7 @@ export default function StockSection() {
                   {k.label}
                 </div>
                 {isLoading ? <div className="mt-2"><div className="h-6 w-24 bg-bg-section animate-pulse rounded" /></div> : (
-                  <div className="font-condensed font-extrabold text-[26px] leading-none mt-1"
+                  <div className="font-condensed font-extrabold text-[22px] sm:text-[24px] xl:text-[26px] leading-none mt-1 break-words"
                        style={{ color: k.accent }}>
                     {mt(k.value)}
                     <span className="text-[11px] font-mono font-normal text-txt-muted ml-1">MT</span>
@@ -135,16 +135,21 @@ export default function StockSection() {
             </div>
             <div className="space-y-1.5">
               {(isLoading ? [] : grades).map((g) => (
-                <div key={g.grade_key} className="flex items-center gap-3">
-                  <span className="flex items-center gap-1.5 w-[124px] shrink-0">
+                /* Grid rather than fixed widths: the label column can shrink and
+                   truncate, the bar takes the slack, and the figure sizes to its
+                   own content so it is never clipped. The bar is dropped below
+                   sm — on a phone the number matters and 40px of bar does not. */
+                <div key={g.grade_key}
+                     className="grid grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(90px,0.9fr)_minmax(0,1fr)_auto] items-center gap-x-2 sm:gap-x-3">
+                  <span className="flex items-center gap-1.5 min-w-0">
                     <span className={`w-2 h-2 rounded-full shrink-0 ${GRADE_COLOR[g.grade_key] ?? "bg-accent"}`} />
-                    <span className="text-[11px] text-txt-muted font-medium">{g.grade_label}</span>
+                    <span className="text-[11px] text-txt-muted font-medium truncate">{g.grade_label}</span>
                   </span>
-                  <div className="flex-1 h-[14px] bg-bg-section rounded overflow-hidden">
+                  <div className="hidden sm:block h-[14px] bg-bg-section rounded overflow-hidden">
                     <div className={`h-full rounded ${GRADE_COLOR[g.grade_key] ?? "bg-accent"}`}
                          style={{ width: `${(g.mines / gradeMax) * 100}%` }} />
                   </div>
-                  <span className="w-[80px] shrink-0 text-right font-mono text-[11px] font-semibold text-navy tabular-nums">
+                  <span className="text-right font-mono text-[11px] font-semibold text-navy tabular-nums whitespace-nowrap">
                     {mt(g.mines)}<span className="text-[9px] text-txt-light ml-0.5">MT</span>
                   </span>
                 </div>
@@ -158,7 +163,7 @@ export default function StockSection() {
             <div className="text-[10px] font-bold tracking-widest uppercase font-condensed text-txt-secondary mb-2">
               All Locations — Total Stock
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
               {[
                 { label: "Mines",      value: loc?.mines },
                 { label: "BAL Plant",  value: loc?.bal_plant },
@@ -171,7 +176,7 @@ export default function StockSection() {
                   <div className="text-[9px] font-bold tracking-widest uppercase font-condensed text-txt-secondary">
                     {t.label}
                   </div>
-                  <div className={`font-condensed font-extrabold text-[17px] leading-none mt-1 ${t.strong ? "text-[#1565c0]" : "text-navy"}`}>
+                  <div className={`font-condensed font-extrabold text-[15px] sm:text-[16px] xl:text-[17px] leading-none mt-1 break-words ${t.strong ? "text-[#1565c0]" : "text-navy"}`}>
                     {isLoading ? "—" : mt(t.value)}
                   </div>
                 </div>

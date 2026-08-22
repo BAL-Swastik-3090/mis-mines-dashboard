@@ -294,7 +294,7 @@ export default function LCMSection() {
 
       {/* Period totals */}
       {!isLoading && t && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {[
             { label: "Total Ore Loss",       value: `${f0(t.planned_ore_loss)} MT`,
               sub: "planned ore not excavated", accent: "#1565c0" },

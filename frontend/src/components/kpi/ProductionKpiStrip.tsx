@@ -51,27 +51,31 @@ function KpiCard({
     <div className={`bg-white border border-border rounded-lg shadow-sm ${accentClass} flex flex-col overflow-hidden`}>
 
       {/* ── Header ──────────────────────────────────────────── */}
-      <div className="px-4 pt-3.5 pb-2.5 flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
+      <div className="px-4 pt-3.5 pb-2.5 flex items-start justify-between gap-2">
+        <div className="flex items-center gap-2.5 min-w-0">
           <div className={`w-8 h-8 rounded flex items-center justify-center shrink-0 ${iconBg}`}>
             <Icon size={16} className={iconColor} />
           </div>
-          <span className="font-condensed font-bold text-[13px] xl:text-[14px] text-navy tracking-widest uppercase leading-tight">
+          {/* min-w-0 + break-words: the title gives way instead of shoving the
+              badge off the card. tracking narrows a step on small screens so
+              two-word labels still fit on one line where they can. */}
+          <span className="font-condensed font-bold text-[12.5px] sm:text-[13px] xl:text-[14px] text-navy
+                           tracking-wider xl:tracking-widest uppercase leading-tight min-w-0 break-words">
             {label}
           </span>
         </div>
         {pending ? (
-          <span className="text-[10px] text-txt-light bg-bg-section px-2 py-0.5 rounded-full font-bold tracking-wider">
+          <span className="text-[10px] text-txt-light bg-bg-section px-2 py-0.5 rounded-full font-bold tracking-wider shrink-0">
             PENDING
           </span>
         ) : loading ? (
           <Shimmer w="w-16" h="h-5" />
         ) : data?.mtd_plan != null ? (
-          <span className={pctBgClass(mtdPct)}>
-            Achieve % {formatPct(mtdPct)}
+          <span className={`${pctBgClass(mtdPct)} shrink-0 whitespace-nowrap`}>
+            {formatPct(mtdPct)}
           </span>
         ) : (
-          <span className="text-[10px] text-txt-light bg-bg-section px-2 py-0.5 rounded-full font-bold tracking-wider">
+          <span className="text-[10px] text-txt-light bg-bg-section px-2 py-0.5 rounded-full font-bold tracking-wider shrink-0">
             ACTUAL
           </span>
         )}
@@ -85,17 +89,17 @@ function KpiCard({
             <div className="mt-1.5"><Shimmer w="w-48" h="h-3.5" /></div>
           </>
         ) : pending ? (
-          <div className="font-condensed font-extrabold text-[28px] xl:text-[32px] text-txt-light tracking-tight leading-none">
+          <div className="font-condensed font-extrabold text-[24px] sm:text-[26px] xl:text-[30px] 2xl:text-[32px] text-txt-light tracking-tight leading-none break-words">
             — <span className="text-xs font-normal text-txt-light ml-1">{data?.unit ?? "—"}</span>
           </div>
         ) : (
           <>
-            <div className="font-condensed font-extrabold text-[28px] xl:text-[32px] text-navy tracking-tight leading-none">
+            <div className="font-condensed font-extrabold text-[24px] sm:text-[26px] xl:text-[30px] 2xl:text-[32px] text-navy tracking-tight leading-none break-words">
               {formatIndian(data?.mtd_actual)}
               <span className="text-xs font-normal text-txt-muted ml-1.5">{data?.unit}</span>
               {showCuM && data?.mtd_actual != null && (
                 <>
-                  <span className="text-[20px] xl:text-[22px] font-normal text-txt-muted mx-1.5">/</span>
+                  <span className="text-[17px] sm:text-[19px] xl:text-[22px] font-normal text-txt-muted mx-1">/</span>
                   {formatIndian(Math.round(data.mtd_actual / 3))}
                   <span className="text-xs font-normal text-txt-muted ml-1.5">CuM</span>
                 </>
@@ -150,34 +154,37 @@ function KpiCard({
             </>
           ) : (
             <>
-              {/* Column key — without it the two numbers per row are ambiguous */}
-              <div className="flex items-center justify-between pb-0.5">
+              {/* Column key — without it the two numbers per row are ambiguous.
+                  Laid out with the same grid as the rows below so the headings
+                  stay over their columns at any width. */}
+              <div className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-baseline gap-x-1 pb-0.5">
                 <span className="text-[9px] text-txt-light uppercase tracking-widest font-bold">Grade</span>
-                <div className="flex items-baseline gap-1">
-                  <span className="text-[9px] text-txt-light uppercase tracking-widest font-bold w-[58px] text-right">Actual</span>
-                  <span className="text-[9px] text-txt-light">/</span>
-                  <span className="text-[9px] text-txt-light uppercase tracking-widest font-bold w-[52px] text-right">Plan</span>
-                </div>
+                <span className="text-[9px] text-txt-light uppercase tracking-widest font-bold text-right">Actual</span>
+                <span className="text-[9px] text-txt-light text-center">/</span>
+                <span className="text-[9px] text-txt-light uppercase tracking-widest font-bold text-right">Plan</span>
               </div>
               {[
                 { label: "HG >52%",   value: data?.hg_actual, plan: data?.hg_plan, color: "bg-gold" },
                 { label: "MG 40–52%", value: data?.mg_actual, plan: data?.mg_plan, color: "bg-accent" },
                 { label: "LG <40%",   value: data?.lg_actual, plan: data?.lg_plan, color: "bg-[#e65100]" },
               ].map(({ label: gl, value, plan, color }) => (
-                <div key={gl} className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
+                /* Grid, not flex with fixed pixel widths. The label column is
+                   minmax(0,1fr) so it truncates under pressure, while the two
+                   number columns size to their content and are never clipped —
+                   the previous w-[58px] / w-[52px] cut "7,575 / 7,412" down to
+                   "7,575 / 7" on a 1366px screen. */
+                <div key={gl} className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-baseline gap-x-1">
+                  <span className="flex items-center gap-1.5 min-w-0">
                     <span className={`w-2 h-2 rounded-full ${color} inline-block shrink-0`} />
-                    <span className="text-[11px] text-txt-muted font-medium w-[72px] shrink-0">{gl}</span>
-                  </div>
-                  <div className="flex items-baseline gap-1">
-                    <span className="font-mono text-[11px] font-semibold text-navy tabular-nums w-[58px] text-right">
-                      {value != null && value > 0 ? formatIndian(value) : "—"}
-                    </span>
-                    <span className="text-[9px] text-txt-light">/</span>
-                    <span className="font-mono text-[11px] text-txt-muted tabular-nums w-[52px] text-right">
-                      {plan != null && plan > 0 ? formatIndian(plan) : "—"}
-                    </span>
-                  </div>
+                    <span className="text-[11px] text-txt-muted font-medium truncate">{gl}</span>
+                  </span>
+                  <span className="font-mono text-[11px] font-semibold text-navy tabular-nums text-right whitespace-nowrap">
+                    {value != null && value > 0 ? formatIndian(value) : "—"}
+                  </span>
+                  <span className="text-[9px] text-txt-light text-center">/</span>
+                  <span className="font-mono text-[11px] text-txt-muted tabular-nums text-right whitespace-nowrap">
+                    {plan != null && plan > 0 ? formatIndian(plan) : "—"}
+                  </span>
                 </div>
               ))}
             </>
@@ -188,7 +195,7 @@ function KpiCard({
       <div className="border-t border-border-light mt-auto" />
 
       {/* ── Today footer ─────────────────────────────────────── */}
-      <div className="px-4 py-3 bg-bg-light flex items-center justify-between flex-1 gap-1">
+      <div className="px-4 py-3 bg-bg-light flex items-center justify-between flex-1 flex-wrap gap-x-2 gap-y-1.5">
         <div className="shrink-0">
           <div className="text-[10px] xl:text-[11px] text-txt-light uppercase tracking-widest font-bold mb-1 whitespace-nowrap">{tdLabel(tdDate)}</div>
           {loading ? <Shimmer w="w-24" h="h-5" /> : pending ? (
@@ -304,7 +311,7 @@ function DespatchKpiCard({
           </>
         ) : (
           <>
-            <div className="font-condensed font-extrabold text-[28px] xl:text-[32px] text-navy tracking-tight leading-none">
+            <div className="font-condensed font-extrabold text-[24px] sm:text-[26px] xl:text-[30px] 2xl:text-[32px] text-navy tracking-tight leading-none break-words">
               {mtdTotalActual != null ? formatIndian(mtdTotalActual) : formatIndian(mtdTotalPlan)}
               <span className="text-xs font-normal text-txt-muted ml-1.5">MT</span>
             </div>
@@ -475,7 +482,7 @@ export default function ProductionKpiStrip() {
 
   return (
     /* 2 columns on tablet, 5 on desktop/wide */
-    <div className="grid grid-cols-2 xl:grid-cols-5 gap-3 xl:gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3 xl:gap-4">
 
       {/* Production cards (Ore / OB / COB / De-Silting) */}
       {prodCards.map((c) => (
