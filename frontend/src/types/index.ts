@@ -856,9 +856,10 @@ export interface LCMTotals {
   controllable_ob_loss:    number;
   controllable_ore_hours:  number;
   controllable_ob_hours:   number;
-  loss_amount:              number | null;
-  controllable_loss_amount: number | null;
-  loss_share_pct:           number | null;
+  loss_amount:                  number | null;
+  controllable_loss_amount:     number | null;
+  non_controllable_loss_amount: number | null;
+  loss_share_pct:               number | null;
 }
 
 export interface LCMResponse {
