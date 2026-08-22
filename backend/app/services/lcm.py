@@ -524,7 +524,12 @@ def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
         for r in rows:
             r["loss_share_pct"] = round(r["loss_amount"] / total_amount * 100, 1)
 
-    controllable = [r for r in rows if r["loss_type"] == "Controllable"]
+    controllable     = [r for r in rows if r["loss_type"] == "Controllable"]
+    non_controllable = [r for r in rows if r["loss_type"] == "Non Controllable"]
+    # Anything Unclassified falls in neither bucket, so controllable +
+    # non-controllable can be less than the total. That is deliberate — a head
+    # nobody has classified should not be quietly counted as either, and the
+    # page already names it in a banner.
 
     return {
         "from_date": from_date.isoformat(),
@@ -588,6 +593,9 @@ def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
                 if shares_valid else None,
             "controllable_loss_amount":
                 round(sum(r["loss_amount"] for r in controllable), 2)
+                if rate is not None else None,
+            "non_controllable_loss_amount":
+                round(sum(r["loss_amount"] for r in non_controllable), 2)
                 if rate is not None else None,
         },
     }

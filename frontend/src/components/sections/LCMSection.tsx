@@ -31,6 +31,30 @@ const PIE_COLORS = [
   "#00838f", "#e65100", "#ad1457", "#37474f", "#558b2f",
 ];
 
+/** Loss figures are red, because a loss is bad news. A NEGATIVE loss is not a
+ *  loss at all — actual beat plan — so it flips to green.
+ *
+ *  Note: with the ore deviation clamped at 0 upstream, a negative amount cannot
+ *  arise today. This is here so the sign is never presented misleadingly if that
+ *  clamp is ever lifted, not because the green state is currently reachable. */
+/** "x% of total loss value", or a fallback when there is no total to divide by. */
+function shareOf(part: number | null | undefined, total: number | null | undefined, fallback: string) {
+  if (part == null || !total) return fallback;
+  return `${((part / total) * 100).toFixed(1)}% of total loss value`;
+}
+
+function lossColor(v: number | null | undefined) {
+  if (v == null) return "text-txt-muted";
+  return v < 0 ? "text-[#2e7d32]" : "text-[#c62828]";
+}
+
+/** Same rule for the navy total row, lightened — #c62828 on navy is unreadable,
+ *  so the sign is conveyed without sacrificing contrast. */
+function lossColorOnNavy(v: number | null | undefined) {
+  if (v == null) return "text-white/60";
+  return v < 0 ? "text-[#a5d6a7]" : "text-[#ff8a80]";
+}
+
 function Shimmer({ w = "w-20", h = "h-5" }: { w?: string; h?: string }) {
   return <div className={`${h} ${w} bg-bg-section animate-pulse rounded`} />;
 }
@@ -261,31 +285,25 @@ export default function LCMSection() {
           )}
 
           {cost.status === "ok" && t && (
-            <div className="px-4 py-3 border-t border-border-light grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <div className="text-[9.5px] font-bold tracking-widest uppercase font-condensed text-txt-secondary">
-                  Total Loss Value
+            <div className="px-4 py-3 border-t border-border-light grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {[
+                { label: "Total Loss Value", value: t.loss_amount,
+                  sub: `${f0(t.planned_ore_loss)} MT × ${rs(cost.weighted_rate)}/MT` },
+                { label: "Controllable",     value: t.controllable_loss_amount,
+                  sub: shareOf(t.controllable_loss_amount, t.loss_amount, "recoverable with action") },
+                { label: "Non Controllable", value: t.non_controllable_loss_amount,
+                  sub: shareOf(t.non_controllable_loss_amount, t.loss_amount, "rain, PM, statutory stoppages") },
+              ].map((k) => (
+                <div key={k.label}>
+                  <div className="text-[9.5px] font-bold tracking-widest uppercase font-condensed text-txt-secondary">
+                    {k.label}
+                  </div>
+                  <div className={`font-condensed font-extrabold text-[20px] xl:text-[22px] leading-none mt-1 break-words ${lossColor(k.value)}`}>
+                    {rsLakh(k.value)}
+                  </div>
+                  <div className="text-[9.5px] text-txt-light font-mono mt-0.5">{k.sub}</div>
                 </div>
-                <div className="font-condensed font-extrabold text-[22px] leading-none text-navy mt-1">
-                  {rsLakh(t.loss_amount)}
-                </div>
-                <div className="text-[9.5px] text-txt-light font-mono mt-0.5">
-                  {f0(t.planned_ore_loss)} MT × {rs(cost.weighted_rate)}/MT
-                </div>
-              </div>
-              <div>
-                <div className="text-[9.5px] font-bold tracking-widest uppercase font-condensed text-txt-secondary">
-                  Controllable Share
-                </div>
-                <div className="font-condensed font-extrabold text-[22px] leading-none text-[#c62828] mt-1">
-                  {rsLakh(t.controllable_loss_amount)}
-                </div>
-                <div className="text-[9.5px] text-txt-light font-mono mt-0.5">
-                  {t.loss_amount && t.controllable_loss_amount != null && t.loss_amount > 0
-                    ? `${((t.controllable_loss_amount / t.loss_amount) * 100).toFixed(1)}% of total loss value`
-                    : "recoverable with action"}
-                </div>
-              </div>
+              ))}
             </div>
           )}
 
@@ -395,7 +413,7 @@ export default function LCMSection() {
                     <td className="px-3 py-2 text-right font-semibold text-[#1565c0]">{fmt(r.planned_ore_loss, 1)}</td>
                     <td className="px-3 py-2 text-right text-navy">{fmt(r.ob_hours, 2)}</td>
                     <td className="px-3 py-2 text-right font-semibold text-[#2e7d32]">{f0(r.planned_ob_loss)}</td>
-                    <td className="px-3 py-2 text-right font-semibold text-[#ad1457]">{rsLakh(r.loss_amount)}</td>
+                    <td className={`px-3 py-2 text-right font-semibold ${lossColor(r.loss_amount)}`}>{rsLakh(r.loss_amount)}</td>
                     <td className="px-3 py-2 text-right text-txt-secondary tabular-nums">
                       {r.loss_share_pct != null && r.loss_share_pct > 0
                         ? `${r.loss_share_pct.toFixed(1)}%` : "—"}
@@ -415,7 +433,7 @@ export default function LCMSection() {
                   <td className="px-3 py-2.5 text-right">{fmt(t.planned_ore_loss, 1)}</td>
                   <td className="px-3 py-2.5 text-right">{fmt(t.ob_hours, 2)}</td>
                   <td className="px-3 py-2.5 text-right">{f0(t.planned_ob_loss)}</td>
-                  <td className="px-3 py-2.5 text-right">{rsLakh(t.loss_amount)}</td>
+                  <td className={`px-3 py-2.5 text-right ${lossColorOnNavy(t.loss_amount)}`}>{rsLakh(t.loss_amount)}</td>
                   <td className="px-3 py-2.5 text-right">
                     {t.loss_share_pct != null ? `${t.loss_share_pct.toFixed(1)}%` : "—"}
                   </td>
