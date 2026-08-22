@@ -13,6 +13,9 @@ class DewateringDayRow(BaseModel):
     disposal_act:   Optional[float]
     variance:       Optional[float]
     closing_stock:  Optional[float]
+    # kpi_id 42, "Reason for Variances in Dewatering" — free text, so it lives in
+    # text_value rather than calculation_value like every other KPI here.
+    variance_reason: Optional[str] = None
 
 
 class DewateringTodayKpi(BaseModel):

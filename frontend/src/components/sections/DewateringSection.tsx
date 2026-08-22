@@ -1,5 +1,6 @@
 "use client";
-import { Waves } from "lucide-react";
+import { useState, Fragment } from "react";
+import { Waves, MessageSquareText, ChevronDown } from "lucide-react";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import { useDewatering } from "@/hooks/useDewatering";
 import { formatIndian, formatPct, pctBgClass } from "@/lib/utils";
@@ -320,7 +321,10 @@ function MtdKpiRow({ mtd, loading }: { mtd: DewateringMtdKpi; loading: boolean }
 
 // ── Day-wise Table ────────────────────────────────────────────
 function DewateringTable({ rows, loading }: { rows: DewateringDayRow[]; loading: boolean }) {
-  const COLS = 10;
+  const COLS = 11;
+  // Only one reason open at a time — keyed by date, so re-rendering the table
+  // (date filter change) collapses it rather than leaving a stale row expanded.
+  const [openReason, setOpenReason] = useState<string | null>(null);
 
   const thCls =
     "px-3 py-2 text-left text-[10px] xl:text-[11px] font-bold text-txt-muted uppercase tracking-widest whitespace-nowrap select-none";
@@ -362,6 +366,9 @@ function DewateringTable({ rows, loading }: { rows: DewateringDayRow[]; loading:
               <th className={`${thCls} text-right`}>Disposal Act</th>
               <th className={`${thCls} text-right`}>Variance</th>
               <th className={`${thCls} text-right`}>Closing Stock</th>
+              <th className={`${thCls} text-center w-8`} title="Reason for variance">
+                <MessageSquareText size={12} className="inline text-txt-light" />
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -384,11 +391,16 @@ function DewateringTable({ rows, loading }: { rows: DewateringDayRow[]; loading:
             ) : (
               [...rows].reverse().map((r, idx) => {
                 const isLatest = idx === 0;
+                const hasReason = !!r.variance_reason;
+                const isOpen    = openReason === r.date;
                 return (
+                  <Fragment key={r.date}>
                   <tr
-                    key={r.date}
-                    className={`border-b border-border-light hover:bg-bg-light/60 transition-colors ${
+                    onClick={() => hasReason && setOpenReason(isOpen ? null : r.date)}
+                    className={`border-b border-border-light transition-colors ${
                       isLatest ? "bg-teal-50/30" : ""
+                    } ${hasReason ? "cursor-pointer hover:bg-bg-light/60" : "hover:bg-bg-light/40"} ${
+                      isOpen ? "bg-bg-light/70" : ""
                     }`}
                   >
                     <td className="px-3 py-2.5 font-semibold text-txt-secondary whitespace-nowrap">
@@ -423,7 +435,47 @@ function DewateringTable({ rows, loading }: { rows: DewateringDayRow[]; loading:
                     <td className="px-3 py-2.5 text-right font-mono font-semibold text-navy">
                       {r.closing_stock != null ? formatIndian(r.closing_stock) : <span className="text-txt-light/40">—</span>}
                     </td>
+                    {/* Icon only — the reason itself would blow the table width.
+                        Rendered as a real button so it is keyboard-reachable,
+                        not just clickable via the row. */}
+                    <td className="px-2 py-2.5 text-center">
+                      {hasReason ? (
+                        <button
+                          type="button"
+                          aria-label={isOpen ? "Hide reason for variance" : "Show reason for variance"}
+                          aria-expanded={isOpen}
+                          title="Reason for variance"
+                          onClick={(e) => { e.stopPropagation(); setOpenReason(isOpen ? null : r.date); }}
+                          className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors ${
+                            isOpen ? "bg-[#e0f2f1] text-[#00695c]" : "text-txt-light hover:bg-bg-section hover:text-navy"
+                          }`}
+                        >
+                          <MessageSquareText size={13} />
+                        </button>
+                      ) : (
+                        <span className="text-txt-light/30 text-[11px]">—</span>
+                      )}
+                    </td>
                   </tr>
+
+                  {isOpen && (
+                    <tr className="border-b border-border-light bg-[#f0f9f9]">
+                      <td colSpan={COLS} className="px-4 py-2.5">
+                        <div className="flex items-start gap-2">
+                          <ChevronDown size={13} className="text-[#00695c] shrink-0 mt-[2px]" />
+                          <div className="min-w-0">
+                            <div className="text-[9.5px] font-condensed font-bold tracking-widest uppercase text-[#00695c]">
+                              Reason for variance · {dateShort(r.date)}
+                            </div>
+                            <div className="text-[12px] text-txt-secondary leading-relaxed break-words">
+                              {r.variance_reason}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 );
               })
             )}
@@ -459,6 +511,9 @@ function DewateringTable({ rows, loading }: { rows: DewateringDayRow[]; loading:
                   {totVariance >= 0 ? "+" : ""}{formatIndian(totVariance)}
                 </td>
                 <td className="px-3 py-2.5 text-right font-mono text-txt-muted">—</td>
+                {/* spacer for the reason column — without it the whole MTD row
+                    shifts one cell left of its headings */}
+                <td className="px-2 py-2.5" />
               </tr>
             </tfoot>
           )}

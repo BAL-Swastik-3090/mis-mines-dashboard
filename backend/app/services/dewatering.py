@@ -24,6 +24,9 @@ KPI_VARIANCE        = 36
 KPI_CLOSING_STOCK   = 37
 KPI_PLAN_COMPLIANCE = 38
 KPI_EDDY_DAY        = 50
+# "Reason for Variances in Dewatering" — an input KPI whose value is free text,
+# so it is read from text_value, not calculation_value.
+KPI_VARIANCE_REASON = 42
 
 
 def _f(val) -> Optional[float]:
@@ -48,7 +51,12 @@ def get_summary(db: Session, from_date: date, to_date: date) -> DewateringSummar
             MAX(CASE WHEN d.kpi_id = :disposal_plan  THEN d.calculation_value END) AS disposal_plan,
             MAX(CASE WHEN d.kpi_id = :disposal_act   THEN d.calculation_value END) AS disposal_act,
             MAX(CASE WHEN d.kpi_id = :variance       THEN d.calculation_value END) AS variance,
-            MAX(CASE WHEN d.kpi_id = :closing_stock  THEN d.calculation_value END) AS closing_stock
+            MAX(CASE WHEN d.kpi_id = :closing_stock  THEN d.calculation_value END) AS closing_stock,
+            -- text_value, not calculation_value: this KPI is a free-text reason.
+            -- NULLIF on the trimmed string so a blank entry reads as absent
+            -- rather than as an empty reason.
+            MAX(CASE WHEN d.kpi_id = :variance_reason
+                     THEN NULLIF(TRIM(d.text_value), '') END)             AS variance_reason
         FROM mines_dewatering_daily_data d
         WHERE d.date BETWEEN :from_date AND :to_date
         GROUP BY d.date
@@ -65,6 +73,7 @@ def get_summary(db: Session, from_date: date, to_date: date) -> DewateringSummar
         "disposal_act": KPI_DISPOSAL_ACT,
         "variance":     KPI_VARIANCE,
         "closing_stock":KPI_CLOSING_STOCK,
+        "variance_reason": KPI_VARIANCE_REASON,
         "from_date":    from_date,
         "to_date":      to_date,
     }).fetchall()
@@ -82,6 +91,7 @@ def get_summary(db: Session, from_date: date, to_date: date) -> DewateringSummar
             disposal_act=_f(r.disposal_act),
             variance=_f(r.variance),
             closing_stock=_f(r.closing_stock),
+            variance_reason=r.variance_reason,
         )
         for r in raw_rows
     ]
@@ -93,7 +103,7 @@ def get_summary(db: Session, from_date: date, to_date: date) -> DewateringSummar
             date=str(dt),
             open_stock=None, rain_added=None, seepage=None, pump_plan_hr=None,
             pump_act_hr=None, disposal_plan=None, disposal_act=None,
-            variance=None, closing_stock=None,
+            variance=None, closing_stock=None, variance_reason=None,
         ))
         for dt in _date_spine(from_date, to_date)
     ]

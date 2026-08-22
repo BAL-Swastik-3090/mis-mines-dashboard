@@ -417,6 +417,7 @@ export interface DewateringDayRow {
   disposal_act:  number | null;
   variance:      number | null;
   closing_stock: number | null;
+  variance_reason: string | null;   // kpi_id 42, free text
 }
 
 export interface DewateringTodayKpi {
