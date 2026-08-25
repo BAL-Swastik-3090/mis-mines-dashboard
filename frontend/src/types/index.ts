@@ -873,3 +873,35 @@ export interface LCMResponse {
   totals:    LCMTotals;
 }
 
+
+// ── Ore grade weighted average (SAP quality inspection, ROM1) ──
+export interface OreGradeDetail {
+  grade_key:   "HG" | "MG" | "LG";
+  grade_label: string;
+  qty:         number;
+  cr2o3:       number | null;   // null when that grade had no lots
+}
+
+export interface OreGradePeriodDetail extends OreGradeDetail {
+  share_pct: number;
+}
+
+export interface OreGradeDayRow {
+  date:        string;
+  total_qty:   number;
+  weighted_cr: number | null;   // null = no inspection that day, a gap not a zero
+  lots:        number;
+  grades:      OreGradeDetail[];
+}
+
+export interface OreGradeResponse {
+  from_date: string;
+  to_date:   string;
+  rows:      OreGradeDayRow[];
+  period_weighted_cr: number | null;
+  period_total_qty:   number;
+  days_with_data:     number;
+  days_in_period:     number;
+  period_grades:      OreGradePeriodDetail[];
+  source:             string;
+}

@@ -105,3 +105,37 @@ class RehandlingDaywise(BaseModel):
     to_date:    date
     rows:       list[RehandlingDayRow]
     mtd_total:  float = 0.0
+
+
+# ── Grade-wise weighted average Cr2O3 ─────────────────────────
+class OreGradeDetail(BaseModel):
+    grade_key:   str              # "HG" | "MG" | "LG"
+    grade_label: str
+    qty:         float = 0.0      # TO
+    cr2o3:       Optional[float] = None   # None when that grade has no lots
+
+
+class OreGradePeriodDetail(OreGradeDetail):
+    share_pct: float = 0.0
+
+
+class OreGradeDayRow(BaseModel):
+    date:        str
+    total_qty:   float = 0.0
+    # None, not 0 — a day with no inspection is a gap in the line. Zero would
+    # read as ore assaying at 0% Cr2O3.
+    weighted_cr: Optional[float] = None
+    lots:        int = 0
+    grades:      list[OreGradeDetail] = []
+
+
+class OreGradeResponse(BaseModel):
+    from_date: str
+    to_date:   str
+    rows:      list[OreGradeDayRow]
+    period_weighted_cr: Optional[float] = None
+    period_total_qty:   float = 0.0
+    days_with_data:     int = 0
+    days_in_period:     int = 0
+    period_grades:      list[OreGradePeriodDetail] = []
+    source:             str = ""
