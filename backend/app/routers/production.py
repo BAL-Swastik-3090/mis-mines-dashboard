@@ -7,8 +7,10 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.schemas.production import ProductionSummary, ProductionDaywise, GradeBreakdown, KpiCard, RehandlingDaywise
+from app.schemas.production import (ProductionSummary, ProductionDaywise, GradeBreakdown,
+                                    KpiCard, RehandlingDaywise, OreGradeResponse)
 from app.services import production as svc
+from app.services.ore_grade import get_ore_grade_weighted
 
 router = APIRouter()
 
@@ -189,3 +191,24 @@ def rehandling_daywise(
         rows       = rows,
         mtd_total  = mtd,
     )
+
+
+# ── GET /api/production/ore-grade ─────────────────────────────
+@router.get(
+    "/ore-grade",
+    response_model=OreGradeResponse,
+    summary="Grade-wise weighted average Cr2O3 of ore production",
+)
+def ore_grade_weighted(
+    from_date: date = Query(default=None, description="Start date YYYY-MM-DD"),
+    to_date:   date = Query(default=None, description="End date   YYYY-MM-DD"),
+    db: Session = Depends(get_db),
+):
+    """Weighted Avg Cr2O3 = SUM(RESULT x ACTUAL_LOT_QUANTITY) / SUM(ACTUAL_LOT_QUANTITY),
+    from pp_quality_inspection at plant 1200, storage location ROM1."""
+    today = date.today()
+    if not from_date:
+        from_date = today.replace(day=1)
+    if not to_date:
+        to_date = today
+    return OreGradeResponse(**get_ore_grade_weighted(db, from_date, to_date))

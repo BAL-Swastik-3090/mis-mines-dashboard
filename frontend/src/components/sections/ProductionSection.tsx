@@ -3,6 +3,7 @@ import { TrendingUp } from "lucide-react";
 import ProductionKpiStrip from "@/components/kpi/ProductionKpiStrip";
 import ProductionCharts   from "@/components/charts/ProductionCharts";
 import GradeChart         from "@/components/charts/GradeChart";
+import OreGradeChart      from "@/components/charts/OreGradeChart";
 import DeSiltingChart     from "@/components/charts/DeSiltingChart";
 import DespatchCharts     from "@/components/charts/DespatchCharts";
 import DaywiseTable       from "@/components/tables/DaywiseTable";
@@ -29,10 +30,14 @@ export default function ProductionSection() {
         <DeSiltingChart />
       </div>
 
-      {/* Row 4 — Despatch Plan charts (Overall + Location-wise) */}
+      {/* Row 4 — Weighted average Cr₂O₃ of the ore produced (full width: the
+          bars are per-day per-grade and need the room) */}
+      <OreGradeChart />
+
+      {/* Row 5 — Despatch Plan charts (Overall + Location-wise) */}
       <DespatchCharts />
 
-      {/* Row 5 — Day-wise production + despatch table (full width) */}
+      {/* Row 6 — Day-wise production + despatch table (full width) */}
       <DaywiseTable />
 
     </section>
