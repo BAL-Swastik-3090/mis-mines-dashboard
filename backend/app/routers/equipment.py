@@ -81,3 +81,18 @@ def breakdown_details(
     t = to_date   or _today()
     events = svc.get_breakdown_details(db, machine, f, t)
     return {"machine": machine, "from_date": f, "to_date": t, "events": events}
+
+
+@router.get("/dumper/trips", response_model=DumperTripResponse,
+            summary="Dumper-wise trip count (MAN and PRIMA), by material")
+def dumper_trips(
+    from_date: date = None,
+    to_date:   date = None,
+    db: Session = Depends(get_db),
+):
+    """Trip counts from mines_tipper_details for the own dumper fleet.
+
+    MAN and PRIMA only — TATA HYVA vehicles sit in the same table but are not
+    part of this fleet and are excluded.
+    """
+    return svc.get_dumper_trips(db, from_date or _mstart(), to_date or _today())
