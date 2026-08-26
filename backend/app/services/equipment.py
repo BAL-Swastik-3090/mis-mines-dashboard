@@ -538,3 +538,122 @@ def get_tipper_fuel(db: Session, from_date: date, to_date: date) -> dict:
         "fleet_count": len(reporting),
         "oem_lph":     8.0,
     }
+
+
+# ── Dumper-wise trip count ────────────────────────────────────────────────────
+# Own dumper fleet is MAN and PRIMA only. TATA HYVA vehicles appear in the same
+# table with registration numbers and are deliberately excluded per the mine.
+DUMPER_PREFIXES = ("MAN-", "PRIMA-")
+
+# The seven material columns in mines_tipper_details hold TRIP COUNTS, not
+# tonnage — small per-shift integers. Order here is the display order.
+TRIP_COLUMNS: list[tuple[str, str]] = [
+    ("ore_quantity",  "Ore"),
+    ("lg_quantity",   "LG"),
+    ("ob_quantity",   "OB"),
+    ("silt_quantity", "Silt"),
+    ("boulder",       "Boulder"),
+    ("tailing",       "Tailing"),
+    ("feed_to_cobp",  "COB Feed"),
+]
+
+
+def _dumper_name_filter(alias: str = "") -> str:
+    """MAN / PRIMA match on the TRIMMED, UPPER-CASED name.
+
+    One value is stored as 'MAN-53 ' with a trailing space. Verified that no
+    dumper has two spelling variants, so trimming merges rather than splits.
+
+    Rows whose name contains a comma are excluded. Before July 2026 the column
+    held a CSV list of machines sharing one shift row — e.g.
+    'MAN-43,49,52,53,58,57,56,55,66,67,69,71,77,81'. That row's trip count
+    belongs to fourteen dumpers jointly and cannot be attributed to any one of
+    them: splitting it would invent per-machine detail, and counting it against
+    each would multiply the total. Those rows are therefore left out and
+    reported separately, so the gap is visible rather than silent.
+    """
+    col = f"UPPER(TRIM({alias}equipment_name))"
+    like = " OR ".join(f"{col} LIKE '{p}%'" for p in DUMPER_PREFIXES)
+    return f"({like}) AND {alias}equipment_name NOT LIKE '%,%'"
+
+
+def get_dumper_trips(db: Session, from_date: date, to_date: date) -> dict:
+    """Trip count per dumper, broken down by material.
+
+    Every dumper ever seen in the table is listed, so one that did no work in
+    the period reads 0 rather than disappearing — the mine asked for the full
+    roster, and a vanished row is easy to miss.
+    """
+    sums = ", ".join(
+        f"COALESCE(SUM(CAST(NULLIF(TRIM(`{col}`),'') AS DECIMAL(14,2))), 0) AS c_{col}"
+        for col, _ in TRIP_COLUMNS
+    )
+    # Period trips, keyed on the normalised name.
+    period = {
+        r.name: dict(r._mapping) for r in db.execute(text(f"""
+            SELECT UPPER(TRIM(equipment_name)) AS name, {sums},
+                   COUNT(*) AS shift_rows,
+                   COUNT(DISTINCT Prod_date) AS active_days
+            FROM   mines_tipper_details
+            WHERE  ({_dumper_name_filter()})
+              AND  Prod_date BETWEEN :fd AND :td
+            GROUP BY UPPER(TRIM(equipment_name))
+        """), {"fd": from_date, "td": to_date}).fetchall()
+    }
+
+    # Full roster, independent of the period.
+    roster = [r.name for r in db.execute(text(f"""
+        SELECT DISTINCT UPPER(TRIM(equipment_name)) AS name
+        FROM   mines_tipper_details
+        WHERE  ({_dumper_name_filter()})
+    """)).fetchall()]
+
+    rows = []
+    for name in roster:
+        p = period.get(name)
+        materials = {}
+        total = 0.0
+        for col, label in TRIP_COLUMNS:
+            v = _f(p[f"c_{col}"]) if p else 0.0
+            materials[col] = round(v, 2)
+            total += v
+        rows.append({
+            "dumper_name": name,
+            "materials":   materials,
+            "total_trips": round(total, 2),
+            "active_days": int(p["active_days"]) if p else 0,
+            "shift_rows":  int(p["shift_rows"]) if p else 0,
+        })
+
+    # Trip count descending; name as the tie-break so the order is stable
+    # between requests rather than depending on however MySQL returned it.
+    rows.sort(key=lambda r: (-r["total_trips"], r["dumper_name"]))
+
+    # Trips on pre-July CSV rows, which name several machines at once. Surfaced
+    # so a period covering May or June shows the shortfall rather than quietly
+    # reporting a total that is missing thousands of trips.
+    total_expr_csv = " + ".join(
+        f"COALESCE(CAST(NULLIF(TRIM(`{col}`),'') AS DECIMAL(14,2)), 0)" for col, _ in TRIP_COLUMNS
+    )
+    un = db.execute(text(f"""
+        SELECT COUNT(*) AS n, COALESCE(SUM({total_expr_csv}), 0) AS trips
+        FROM   mines_tipper_details
+        WHERE  equipment_name LIKE '%,%'
+          AND  (UPPER(TRIM(equipment_name)) LIKE 'MAN-%'
+                OR UPPER(TRIM(equipment_name)) LIKE 'PRIMA-%')
+          AND  Prod_date BETWEEN :fd AND :td
+    """), {"fd": from_date, "td": to_date}).fetchone()
+
+    totals = {col: round(sum(r["materials"][col] for r in rows), 2) for col, _ in TRIP_COLUMNS}
+    return {
+        "unattributed_rows":  int(un.n or 0) if un else 0,
+        "unattributed_trips": round(_f(un.trips), 2) if un else 0.0,
+        "from_date": from_date.isoformat(),
+        "to_date":   to_date.isoformat(),
+        "columns":   [{"key": col, "label": label} for col, label in TRIP_COLUMNS],
+        "rows":      rows,
+        "totals":    totals,
+        "total_trips":     round(sum(r["total_trips"] for r in rows), 2),
+        "dumpers_total":   len(rows),
+        "dumpers_active":  sum(1 for r in rows if r["total_trips"] > 0),
+    }

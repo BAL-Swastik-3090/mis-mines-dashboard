@@ -7,6 +7,7 @@ import ExcavatorFuelChart  from "@/components/charts/ExcavatorFuelChart";
 import ExcavatorTable      from "@/components/tables/ExcavatorTable";
 import TipperFuelChart     from "@/components/charts/TipperFuelChart";
 import TipperTable         from "@/components/tables/TipperTable";
+import DumperTripTable     from "@/components/tables/DumperTripTable";
 
 function tillLabel(apiTo: string): string {
   return new Date(apiTo + "T00:00:00")
@@ -179,6 +180,9 @@ export default function EquipmentSection() {
 
       {/* Row 3 — Tipper table (full width) */}
       <TipperTable />
+
+      {/* Row 4 — Dumper-wise trip count, directly below the tipper table */}
+      <DumperTripTable />
 
     </section>
   );
