@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from datetime import date
 
@@ -11,6 +11,7 @@ from ..schemas.equipment import (
     TipperSummaryResponse,
     TipperFuelResponse,
     BreakdownDetailsResponse,
+    DumperTripResponse,
 )
 
 router = APIRouter(tags=["Equipment"])

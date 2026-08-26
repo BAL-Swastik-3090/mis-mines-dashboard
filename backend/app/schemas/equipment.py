@@ -117,3 +117,34 @@ class TipperFuelResponse(BaseModel):
     avg_kmpl:    Optional[float] = None
     fleet_count: int   = 0
     oem_lph:     float = 8.0
+
+
+# ── Dumper-wise trip count ────────────────────────────────────
+class DumperTripColumn(BaseModel):
+    key:   str
+    label: str
+
+
+class DumperTripRow(BaseModel):
+    dumper_name: str
+    # keyed by the material column name, so the frontend renders whatever
+    # columns the service declares rather than hardcoding seven of them
+    materials:   dict[str, float] = {}
+    total_trips: float = 0.0
+    active_days: int = 0
+    shift_rows:  int = 0
+
+
+class DumperTripResponse(BaseModel):
+    from_date: str
+    to_date:   str
+    columns:   list[DumperTripColumn] = []
+    rows:      list[DumperTripRow] = []
+    totals:    dict[str, float] = {}
+    total_trips:    float = 0.0
+    dumpers_total:  int = 0
+    dumpers_active: int = 0
+    # Pre-July 2026 rows naming several machines at once; their trips cannot be
+    # attributed to one dumper, so they are excluded and counted here instead.
+    unattributed_rows:  int = 0
+    unattributed_trips: float = 0.0

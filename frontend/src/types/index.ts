@@ -905,3 +905,31 @@ export interface OreGradeResponse {
   period_grades:      OreGradePeriodDetail[];
   source:             string;
 }
+
+// ── Dumper-wise trip count (MAN / PRIMA) ──────────────────────
+export interface DumperTripColumn {
+  key:   string;
+  label: string;
+}
+
+export interface DumperTripRow {
+  dumper_name: string;
+  materials:   Record<string, number>;
+  total_trips: number;
+  active_days: number;
+  shift_rows:  number;
+}
+
+export interface DumperTripResponse {
+  from_date: string;
+  to_date:   string;
+  columns:   DumperTripColumn[];
+  rows:      DumperTripRow[];
+  totals:    Record<string, number>;
+  total_trips:    number;
+  dumpers_total:  number;
+  dumpers_active: number;
+  // pre-July 2026 CSV rows naming several machines at once
+  unattributed_rows:  number;
+  unattributed_trips: number;
+}
