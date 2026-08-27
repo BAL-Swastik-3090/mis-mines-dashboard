@@ -9,7 +9,7 @@ import sys
 from datetime import datetime, time, timedelta, date
 
 from app.config import get_settings
-from app.database import test_connection
+from app.database import test_connection, idle_connection_reaper, engine, pool_status
 
 settings = get_settings()
 logger = logging.getLogger("mines_dashboard")
@@ -35,21 +35,19 @@ async def _daily_insights_digest():
 
         try:
             today = date.today()
-            db    = SessionLocal()
-            result = await generate_insights(
-                db,
-                today.replace(day=1),
-                today,
-                use_cache=False,  # always regenerate at 7 AM
-            )
+            # Context manager rather than try/finally: the previous form assigned
+            # db inside the try, so a failure in SessionLocal() left db undefined
+            # and the cleanup raised NameError instead of releasing anything.
+            with SessionLocal() as db:
+                result = await generate_insights(
+                    db,
+                    today.replace(day=1),
+                    today,
+                    use_cache=False,  # always regenerate at 7 AM
+                )
             logger.info(f"✅ 7AM digest generated for {today} (model: {result.model_used})")
         except Exception as exc:
             logger.error(f"❌ 7AM digest failed: {exc}")
-        finally:
-            try:
-                db.close()
-            except Exception:
-                pass
 
 
 @asynccontextmanager
@@ -69,12 +67,20 @@ async def lifespan(app: FastAPI):
 
     # Start 7AM digest scheduler as a background task
     digest_task = asyncio.create_task(_daily_insights_digest())
+    # Release pooled connections when the app goes quiet. The MySQL instance is
+    # shared and has been refusing connections, so holding idle ones costs
+    # somebody else their connection.
+    reaper_task = asyncio.create_task(idle_connection_reaper())
 
     yield
 
     # ── Shutdown ─────────────────────────────────────────────
     digest_task.cancel()
-    logger.info("Shutting down Mines Dashboard API")
+    reaper_task.cancel()
+    # Close every pooled connection rather than leaving the server to time them
+    # out eight hours later.
+    engine.dispose()
+    logger.info("Shutting down Mines Dashboard API — connection pool disposed")
 
 
 app = FastAPI(
@@ -118,6 +124,9 @@ def health_check():
         "version": "1.0.0",
         "environment": settings.app_env,
         "database": db_status,
+        # Live pool state. checked_in is what this process is holding idle; it
+        # should fall to 0 a few minutes after the last request.
+        "pool": pool_status(),
     }
 
 
