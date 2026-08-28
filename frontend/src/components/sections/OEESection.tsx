@@ -1,8 +1,9 @@
 "use client";
 import { useState } from "react";
-import { Activity, Layers, Info } from "lucide-react";
+import { Activity, Layers, Info, Factory } from "lucide-react";
 import FormulaModal from "@/components/sections/FormulaModal";
 import LCMSection from "@/components/sections/LCMSection";
+import LCMCobSection from "@/components/sections/LCMCobSection";
 import { useDateFilter }  from "@/contexts/useDateFilter";
 import { useOEE }         from "@/hooks/useOEE";
 import type { OEEMachineRow, OEEFleet } from "@/types";
@@ -324,6 +325,26 @@ export default function OEESection() {
       </div>
 
       <LCMSection />
+
+      {/* ── LCM for COB — the beneficiation plant, below the mines matrix ──
+          Kept a separate block rather than extra columns on the matrix above:
+          the mines LCM distributes across loss heads from the shift log, and
+          the plant has no downtime log to draw heads from. Different object,
+          different shape, same period and costing conventions. */}
+      <div className="flex items-center gap-2 pt-3">
+        <Factory size={17} className="text-[#00838f]" />
+        <h2 className="font-condensed font-extrabold text-[15px] tracking-widest uppercase text-navy">
+          LCM for COB
+        </h2>
+        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-[#e0f7fa] text-[#00838f] border-[#80deea] tracking-widest uppercase font-mono">
+          Plant 1210
+        </span>
+        <span className="ml-auto text-[10px] font-mono text-txt-muted hidden sm:inline">
+          Concentrate deviation&nbsp;·&nbsp;feed volume vs recovery
+        </span>
+      </div>
+
+      <LCMCobSection />
 
     </div>
   );

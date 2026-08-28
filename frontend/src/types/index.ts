@@ -933,3 +933,77 @@ export interface DumperTripResponse {
   unattributed_rows:  number;
   unattributed_trips: number;
 }
+
+/* ── LCM for COB ──────────────────────────────────────────────────────────── */
+
+/** One attributed cause of the concentrate deviation.
+ *
+ *  level 1 rows (Feed volume, Recovery / yield) sum to the deviation.
+ *  level 2 rows break down their `parent` and must NOT be added to the total —
+ *  they are already inside it. */
+export interface CobLcmRow {
+  sl_no:            number;
+  loss_description: string;
+  level:            1 | 2;
+  parent:           string | null;
+  loss_mt:          number | null;
+  loss_amount:      number | null;
+  loss_share_pct:   number | null;
+}
+
+export interface CobLcmSide {
+  feed:                 number | null;
+  concentrate:          number | null;
+  recovery_pct:         number | null;
+  feed_grade:           number | null;
+  conc_grade:           number | null;
+  chrome_recovery_pct:  number | null;
+}
+
+export interface CobLcmResponse {
+  from_date: string;
+  to_date:   string;
+  days:      number;
+
+  plan: CobLcmSide & {
+    running_hours:   number | null;
+    shutdown_hours:  number | null;
+    available_hours: number | null;
+    feed_rate:       number | null;
+    plan_days:       number;
+  };
+  actual: CobLcmSide & {
+    achievable_recovery_pct: number | null;
+    posted_days:             number;
+    grade_weighted:          boolean;
+    grade_lots:              number;
+  };
+
+  deviation_mt: number | null;
+  has_plan:     boolean;
+  rows:         CobLcmRow[];
+  totals: {
+    loss_mt:        number | null;
+    loss_amount:    number | null;
+    loss_share_pct: number | null;
+  };
+
+  /** Hours are INFERRED from tonnage — the plant has no running-hours source. */
+  hours: {
+    planned:  number | null;
+    implied:  number | null;
+    lost:     number | null;
+    inferred: boolean;
+  };
+
+  posting: {
+    last_posted_date: string | null;
+    unposted_days:    number;
+  };
+
+  costing: {
+    rate:   number;
+    source: string;
+    basis:  string;
+  };
+}

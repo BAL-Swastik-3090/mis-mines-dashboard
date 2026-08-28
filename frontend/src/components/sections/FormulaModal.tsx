@@ -64,6 +64,37 @@ const COST_ROWS: Row[] = [
     note: "Numerically identical to the share of planned ore loss and of ore loss hours — planned loss is hours × one factor and rupees is that × one rate, so both constants cancel. The column total is the true sum of the rows, not a forced 100%" },
 ];
 
+/* ── LCM for COB ─────────────────────────────────────────────────────────────
+   A different shape from the mines LCM and worth saying why: the mines matrix
+   distributes across loss heads read from the shift log's own columns, and the
+   plant has no downtime log to read heads from. So the COB deviation is
+   attributed to measurable causes instead of reported reasons. */
+const COB_ROWS: Row[] = [
+  { label: "Deviation",         formula: "Plan Concentrate − Actual Concentrate     (MT)",
+    note: "Not clamped at 0, unlike the mines deviation. There the clamp protects a division; here the split is a plain identity, so a period that beat plan stays meaningful and renders green" },
+  { label: "Feed Volume Loss",  formula: "(Plan Feed − Actual Feed) × Plan Recovery",
+    note: "Ore that never reached the plant, valued at the recovery it would have carried" },
+  { label: "Recovery Loss",     formula: "Actual Feed × (Plan Recovery − Actual Recovery)",
+    note: "Ore that reached the plant but did not report to concentrate" },
+  { label: "Why they foot",     formula: "(Pf−Af)Rp + Af(Rp−Ra)  =  Pc − Ac",
+    note: "The two sum to the Deviation by algebra, not by rounding — the same self-normalising property the mines factor has" },
+  { label: "Plan Recovery",     formula: "Σ Plan Concentrate ÷ Σ Plan Feed",
+    note: "Derived from the summed quantities rather than read from the stored Weight_recovery column, so the plan cannot disagree with itself" },
+];
+
+const COB_SPLIT: Row[] = [
+  { label: "Achievable Recovery", formula: "(Actual Feed Grade ÷ Actual Conc Grade) × Plan Chrome Recovery",
+    note: "The recovery the feed entitles the plant to, by chrome balance. Leaner feed lowers this ceiling before the plant does anything at all" },
+  { label: "Feed Grade Loss",     formula: "Actual Feed × (Plan Recovery − Achievable Recovery)",
+    note: "Attributable to what the mine sent, not to the plant" },
+  { label: "Plant Efficiency",    formula: "Recovery Loss − Feed Grade Loss",
+    note: "Goes NEGATIVE, and renders green, when the plant beat its achievable ceiling — which it did in four of the five months on record" },
+  { label: "Loss Amount",         formula: "Concentrate Loss (MT) × ₹24,560/MT",
+    note: "IBM's CONCENTRATES line, June 2026 — not the Cr₂O₃-banded fines schedule the mines LCM uses, because a beneficiated product is not run-of-mine fines. One product, one rate, so no weighting is required" },
+  { label: "Hours Lost",          formula: "Planned Running Hrs − (Actual Feed ÷ Planned Feed Rate)",
+    note: "INFERRED, never measured — the plant has no running-hours source. Assumes the plant ran at rate whenever it ran, making this an upper bound. Splitting it into breakdown, no feed, power and shutdown needs a COB downtime log, which does not exist yet" },
+];
+
 function Group({ title, rows, accent }: { title: string; rows: Row[]; accent: string }) {
   return (
     <div>
@@ -138,6 +169,10 @@ export default function FormulaModal({ open, onClose }: { open: boolean; onClose
           <div className="border-t border-border-light pt-4 grid grid-cols-1 lg:grid-cols-2 gap-5">
             <Group title="LCM — loss distribution" rows={LCM_ROWS}  accent="#2e7d32" />
             <Group title="LCM — costing"           rows={COST_ROWS} accent="#ad1457" />
+          </div>
+          <div className="border-t border-border-light pt-4 grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <Group title="LCM for COB — attribution" rows={COB_ROWS}  accent="#00838f" />
+            <Group title="LCM for COB — split & cost" rows={COB_SPLIT} accent="#6a1b9a" />
           </div>
         </div>
 
