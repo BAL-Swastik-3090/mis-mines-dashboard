@@ -7,6 +7,11 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
+# Production is net of SAP reversal documents — see sap_movement for the rule and
+# the proof against SAP. Summing QUANTITY without this counts a mistaken posting
+# AND its correction: Aug 2026 ore read 19,982 MT against SAP's 16,542.
+from app.services.sap_movement import PRODUCTION_QTY
+
 
 # ── Material number constants (pp_production.MATERIAL_NO) ─────
 ORE_LG_NO = "000000000025000003"    # LOW GRADE ORE(-40%CR2O3)
@@ -42,22 +47,22 @@ def get_daily_actuals(db: Session, from_date: date, to_date: date) -> list[dict]
     Returns one row per POSTING_DATE with:
     ore_lg, ore_mg, ore_hg, ore_total, ob_qty, cob_qty
     """
-    sql = text("""
+    sql = text(f"""
         SELECT
-            POSTING_DATE                                                     AS dt,
+            POSTING_DATE                                                          AS dt,
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_NO = :lg       THEN QUANTITY ELSE 0 END) AS ore_lg,
+                      AND MATERIAL_NO = :lg       THEN ({PRODUCTION_QTY}) ELSE 0 END) AS ore_lg,
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_NO = :mg       THEN QUANTITY ELSE 0 END) AS ore_mg,
+                      AND MATERIAL_NO = :mg       THEN ({PRODUCTION_QTY}) ELSE 0 END) AS ore_mg,
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_NO = :hg       THEN QUANTITY ELSE 0 END) AS ore_hg,
+                      AND MATERIAL_NO = :hg       THEN ({PRODUCTION_QTY}) ELSE 0 END) AS ore_hg,
             SUM(CASE WHEN PLANT = :plant_mines
                       AND MATERIAL_NO IN (:lg, :mg, :hg)
-                                                  THEN QUANTITY ELSE 0 END) AS ore_total,
+                                                  THEN ({PRODUCTION_QTY}) ELSE 0 END) AS ore_total,
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_NO = :ob       THEN QUANTITY ELSE 0 END) AS ob_qty,
+                      AND MATERIAL_NO = :ob       THEN ({PRODUCTION_QTY}) ELSE 0 END) AS ob_qty,
             SUM(CASE WHEN PLANT = :plant_cobp
-                      AND MATERIAL_DESC = :cob    THEN QUANTITY ELSE 0 END) AS cob_qty
+                      AND MATERIAL_DESC = :cob    THEN ({PRODUCTION_QTY}) ELSE 0 END) AS cob_qty
         FROM pp_production
         WHERE POSTING_DATE BETWEEN :from_date AND :to_date
           AND PLANT IN (:plant_mines, :plant_cobp)
@@ -172,20 +177,20 @@ def get_production_daywise(db: Session, from_date: date, to_date: date) -> list[
 
 # ── 5. MTD totals ─────────────────────────────────────────────
 def get_mtd_totals(db: Session, from_date: date, to_date: date) -> dict:
-    sql_actual = text("""
+    sql_actual = text(f"""
         SELECT
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_NO IN (:lg, :mg, :hg)  THEN QUANTITY ELSE 0 END) AS ore_mtd,
+                      AND MATERIAL_NO IN (:lg, :mg, :hg)  THEN ({PRODUCTION_QTY}) ELSE 0 END) AS ore_mtd,
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_NO = :ob               THEN QUANTITY ELSE 0 END) AS ob_mtd,
+                      AND MATERIAL_NO = :ob               THEN ({PRODUCTION_QTY}) ELSE 0 END) AS ob_mtd,
             SUM(CASE WHEN PLANT = :plant_cobp
-                      AND MATERIAL_DESC = :cob            THEN QUANTITY ELSE 0 END) AS cob_mtd,
+                      AND MATERIAL_DESC = :cob            THEN ({PRODUCTION_QTY}) ELSE 0 END) AS cob_mtd,
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_NO = :hg               THEN QUANTITY ELSE 0 END) AS hg_mtd,
+                      AND MATERIAL_NO = :hg               THEN ({PRODUCTION_QTY}) ELSE 0 END) AS hg_mtd,
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_NO = :mg               THEN QUANTITY ELSE 0 END) AS mg_mtd,
+                      AND MATERIAL_NO = :mg               THEN ({PRODUCTION_QTY}) ELSE 0 END) AS mg_mtd,
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_NO = :lg               THEN QUANTITY ELSE 0 END) AS lg_mtd
+                      AND MATERIAL_NO = :lg               THEN ({PRODUCTION_QTY}) ELSE 0 END) AS lg_mtd
         FROM pp_production
         WHERE POSTING_DATE BETWEEN :from_date AND :to_date
           AND PLANT IN (:plant_mines, :plant_cobp)

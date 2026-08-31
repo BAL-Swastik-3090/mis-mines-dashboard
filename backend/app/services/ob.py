@@ -8,6 +8,8 @@ from datetime import date, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
+from app.services.sap_movement import PRODUCTION_QTY
+
 OB_MATERIAL_NO = "000000000016000009"   # OVERBURDEN in SAP pp_production
 OB_PLANT       = "1200"
 BAL_AGENCY     = "3"                    # BAL OWN agency ID in mines_day_wise_excavation
@@ -20,9 +22,11 @@ def _date_spine(from_date: date, to_date: date) -> list:
 
 def _get_bal_and_plan(db: Session, from_date: date, to_date: date):
     """Returns BAL actuals (from SAP pp_production) + OB plan merged by date."""
-    sql_bal = text("""
+    # Net of SAP reversals — see sap_movement. OB is received as by-product
+    # (531), so its correction is 532: Aug 2026 read 3,600 CuM against 3,072.
+    sql_bal = text(f"""
         SELECT POSTING_DATE AS dt,
-               ROUND(SUM(QUANTITY), 2) AS qty
+               ROUND(SUM({PRODUCTION_QTY}), 2) AS qty
         FROM   pp_production
         WHERE  PLANT       = :plant
           AND  MATERIAL_NO = :mat
