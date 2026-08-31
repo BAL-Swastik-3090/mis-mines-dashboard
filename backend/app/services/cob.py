@@ -10,6 +10,12 @@ from datetime import date, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
+# Feed is a goods ISSUE (261) and the outputs are RECEIPTS (101/531); both are
+# net of their reversals. Previously these filtered to the receipt/issue type
+# but never subtracted the correction, so Aug 2026 tailings read 2,484 MT
+# against 2,360. See sap_movement.
+from app.services.sap_movement import PRODUCTION_QTY, CONSUMPTION_QTY
+
 
 # ── COB plant constants ───────────────────────────────────────
 # The COB plant is SAP plant 1210. Quality rows for the same material also
@@ -47,12 +53,12 @@ def _avg(vals):
 
 # ── 1. Actuals from pp_production ─────────────────────────────
 def _get_actuals(db: Session, from_date: date, to_date: date) -> dict:
-    sql = text("""
+    sql = text(f"""
         SELECT
             POSTING_DATE AS dt,
-            SUM(CASE WHEN MATERIAL_DESC = 'LOW GRADE ORE(-40%CR2O3)'       AND MOVEMENT_TYPE = '261' THEN QUANTITY ELSE 0 END) AS feed_actual,
-            SUM(CASE WHEN MATERIAL_DESC = 'CONCENTRATE WITH STD MOISTURE'   AND MOVEMENT_TYPE = '101' THEN QUANTITY ELSE 0 END) AS cob_actual,
-            SUM(CASE WHEN MATERIAL_DESC = 'TAILINGS (+10% CR2O3)'           AND MOVEMENT_TYPE = '531' THEN QUANTITY ELSE 0 END) AS tailings_actual
+            SUM(CASE WHEN MATERIAL_DESC = 'LOW GRADE ORE(-40%CR2O3)'      THEN ({CONSUMPTION_QTY}) ELSE 0 END) AS feed_actual,
+            SUM(CASE WHEN MATERIAL_DESC = 'CONCENTRATE WITH STD MOISTURE' THEN ({PRODUCTION_QTY})  ELSE 0 END) AS cob_actual,
+            SUM(CASE WHEN MATERIAL_DESC = 'TAILINGS (+10% CR2O3)'         THEN ({PRODUCTION_QTY})  ELSE 0 END) AS tailings_actual
         FROM pp_production
         WHERE PLANT = '1210'
           AND POSTING_DATE BETWEEN :from_date AND :to_date

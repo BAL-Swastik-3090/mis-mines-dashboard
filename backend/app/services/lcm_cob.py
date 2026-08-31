@@ -48,6 +48,9 @@ from datetime import date
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+# Net of SAP reversal documents — see sap_movement.
+from app.services.sap_movement import PRODUCTION_QTY, CONSUMPTION_QTY
+
 # ── Plant and materials ──────────────────────────────────────────────────────
 # Reused verbatim from the COB Plant section so the two can never disagree on
 # what a tonne of feed or concentrate is. Matched on MATERIAL_NO, not the
@@ -143,12 +146,12 @@ def _actual_qty(db: Session, fd: date, td: date) -> dict:
     Movement types and material descriptions are those the COB Plant section
     already uses, so the LCM's denominators match what that page displays.
     """
-    sql = text("""
+    sql = text(f"""
         SELECT
             COALESCE(SUM(CASE WHEN MATERIAL_DESC = 'LOW GRADE ORE(-40%CR2O3)'
-                              AND  MOVEMENT_TYPE = '261' THEN QUANTITY END), 0) AS feed,
+                              THEN ({CONSUMPTION_QTY}) END), 0) AS feed,
             COALESCE(SUM(CASE WHEN MATERIAL_DESC = 'CONCENTRATE WITH STD MOISTURE'
-                              AND  MOVEMENT_TYPE = '101' THEN QUANTITY END), 0) AS concentrate,
+                              THEN ({PRODUCTION_QTY}) END), 0) AS concentrate,
             COUNT(DISTINCT POSTING_DATE) AS posted_days,
             MAX(POSTING_DATE)            AS last_posted
         FROM pp_production

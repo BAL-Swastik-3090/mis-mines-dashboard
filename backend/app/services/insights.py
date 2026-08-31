@@ -19,6 +19,9 @@ import re
 import json
 from sqlalchemy.orm import Session
 from sqlalchemy import text
+
+# Production figures are net of SAP reversal documents — see sap_movement.
+from app.services.sap_movement import PRODUCTION_QTY, CONSUMPTION_QTY
 from openai import AsyncOpenAI
 
 from ..config import get_settings
@@ -170,7 +173,7 @@ def _despatch_full_month_plan(db: Session, first: date, last: date) -> float:
 # ── actual queries ─────────────────────────────────────────────
 
 def _production_mtd(db: Session, from_date: date, to_date: date) -> dict:
-    row = db.execute(text("""
+    row = db.execute(text(f"""
         SELECT
             -- Match on MATERIAL_NO, not MATERIAL_DESC. The description list
             -- carried '40-52%        CHROME ORE' with eight spaces while the
@@ -181,11 +184,11 @@ def _production_mtd(db: Session, from_date: date, to_date: date) -> dict:
             SUM(CASE WHEN PLANT='1200' AND MATERIAL_NO IN (
                     '000000000025000001',
                     '000000000025000002',
-                    '000000000025000003')  THEN QUANTITY ELSE 0 END) AS ore,
+                    '000000000025000003')  THEN ({PRODUCTION_QTY}) ELSE 0 END) AS ore,
             SUM(CASE WHEN PLANT='1200' AND MATERIAL_DESC='OVERBURDEN'
-                                           THEN QUANTITY ELSE 0 END) AS ob,
+                                           THEN ({PRODUCTION_QTY}) ELSE 0 END) AS ob,
             SUM(CASE WHEN PLANT='1210' AND MATERIAL_DESC='CONCENTRATE WITH STD MOISTURE'
-                                           THEN QUANTITY ELSE 0 END) AS cob
+                                           THEN ({PRODUCTION_QTY}) ELSE 0 END) AS cob
         FROM pp_production
         WHERE POSTING_DATE BETWEEN :f AND :t
     """), {"f": from_date, "t": to_date}).fetchone()
@@ -338,17 +341,22 @@ def compute_reality_check(
 # ── daily production trend ────────────────────────────────────
 
 def _production_daily_rows(db: Session, from_date: date, to_date: date) -> list[dict]:
-    rows = db.execute(text("""
+    rows = db.execute(text(f"""
         SELECT
             POSTING_DATE                                                          AS dt,
-            SUM(CASE WHEN PLANT='1200' AND MATERIAL_DESC IN (
-                    'LOW GRADE ORE(-40%CR2O3)',
-                    '40-52%        CHROME ORE',
-                    '+52% CHROME ORE')        THEN QUANTITY ELSE 0 END)          AS ore,
+            -- Keyed on MATERIAL_NO, not MATERIAL_DESC. The description list here
+            -- still carried '40-52%' + eight spaces + 'CHROME ORE' against
+            -- the data's single space, so every MG posting was dropped from this
+            -- trend: 11,520 of 19,982 MT for Aug 2026. The MTD query above was
+            -- fixed for this earlier; this one was missed.
+            SUM(CASE WHEN PLANT='1200' AND MATERIAL_NO IN (
+                    '000000000025000001',
+                    '000000000025000002',
+                    '000000000025000003')      THEN ({PRODUCTION_QTY}) ELSE 0 END)  AS ore,
             SUM(CASE WHEN PLANT='1200' AND MATERIAL_DESC='OVERBURDEN'
-                                               THEN QUANTITY ELSE 0 END)          AS ob,
+                                               THEN ({PRODUCTION_QTY}) ELSE 0 END)  AS ob,
             SUM(CASE WHEN PLANT='1210' AND MATERIAL_DESC='CONCENTRATE WITH STD MOISTURE'
-                                               THEN QUANTITY ELSE 0 END)          AS cob
+                                               THEN ({PRODUCTION_QTY}) ELSE 0 END)  AS cob
         FROM pp_production
         WHERE POSTING_DATE BETWEEN :f AND :t
         GROUP BY POSTING_DATE
@@ -428,12 +436,12 @@ def _cob_quality_mtd(db: Session, from_date: date, to_date: date) -> dict:
               AND POSTING_DATE BETWEEN :f AND :t
         """), {"f": from_date, "t": to_date}).fetchone()
 
-        p_row = db.execute(text("""
+        p_row = db.execute(text(f"""
             SELECT
                 SUM(CASE WHEN MATERIAL_DESC = 'LOW GRADE ORE(-40%CR2O3)'
-                          AND MOVEMENT_TYPE = '261' THEN QUANTITY ELSE 0 END) AS feed,
+                          THEN ({CONSUMPTION_QTY}) ELSE 0 END) AS feed,
                 SUM(CASE WHEN MATERIAL_DESC = 'CONCENTRATE WITH STD MOISTURE'
-                          AND MOVEMENT_TYPE = '101' THEN QUANTITY ELSE 0 END) AS cob
+                          THEN ({PRODUCTION_QTY}) ELSE 0 END) AS cob
             FROM pp_production
             WHERE PLANT = '1210'
               AND POSTING_DATE BETWEEN :f AND :t

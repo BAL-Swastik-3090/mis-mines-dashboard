@@ -28,6 +28,11 @@ from datetime import date
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+# Actuals are net of SAP reversal documents. Without this the ore deviation
+# was UNDERSTATED — Aug 2026 read 8,366 MT / Rs 13.75 Cr instead of
+# 11,806 MT / Rs 19.41 Cr, because reversals inflated the actual.
+from app.services.sap_movement import PRODUCTION_QTY
+
 # ── Machine groups (own equipment only) ───────────────────────────────────────
 ORE_MACHINES = [
     {"name": "TATA-470(7)", "code": "470-7", "sap_eq": "000000000000700086"},
@@ -363,13 +368,13 @@ def _plan_actual(db: Session, fd: date, td: date) -> dict:
     for i, mat in enumerate(ORE_MATERIALS):
         p[f"m{i}"] = mat
     ore_act = db.execute(text(f"""
-        SELECT COALESCE(SUM(QUANTITY), 0) AS q FROM pp_production
+        SELECT COALESCE(SUM({PRODUCTION_QTY}), 0) AS q FROM pp_production
         WHERE PLANT = :plant AND MATERIAL_NO IN ({ph})
           AND POSTING_DATE BETWEEN :fd AND :td
     """), p).fetchone()
 
-    ob_act = db.execute(text("""
-        SELECT COALESCE(SUM(QUANTITY), 0) AS q FROM pp_production
+    ob_act = db.execute(text(f"""
+        SELECT COALESCE(SUM({PRODUCTION_QTY}), 0) AS q FROM pp_production
         WHERE PLANT = :plant AND MATERIAL_NO = :mat
           AND POSTING_DATE BETWEEN :fd AND :td
     """), {"plant": PLANT, "mat": OB_MATERIAL, "fd": fd, "td": td}).fetchone()
