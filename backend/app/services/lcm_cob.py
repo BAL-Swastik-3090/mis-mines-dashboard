@@ -355,6 +355,16 @@ def get_cob_lcm(db: Session, from_date: date, to_date: date) -> dict:
 
         "deviation_mt":  r2(deviation, 1),
         "has_plan":      plan["plan_days"] > 0,
+
+        # Achievement against plan, on concentrate — the output the plant is
+        # judged on, not feed. Deliberately NOT capped at 100%: a month that
+        # beat plan should say so, and capping would hide it.
+        #
+        #     % Achieved = Actual Concentrate / Plan Concentrate x 100
+        #
+        # This is the same pair of numbers the deviation is built from, so the
+        # two can never tell different stories.
+        "achieved_pct": r2(_div(act_conc, plan_conc) * 100) if _div(act_conc, plan_conc) is not None else None,
         "rows":         rows,
         "totals": {
             "loss_mt":        total_mt,
