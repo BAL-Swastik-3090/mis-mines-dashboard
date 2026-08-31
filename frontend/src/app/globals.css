@@ -309,24 +309,6 @@ html, body {
    neither expresses well inline, and both need to stay together.
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/* How the photograph is fitted. The source is 3:2 landscape, so the right
-   answer depends on the viewport's shape, not on a breakpoint width:
-
-     - Viewport at least as wide as it is tall  -> CONTAIN. The whole
-       composition stays visible and nothing is cropped. This is every desktop
-       and laptop, which is what the mine actually looks at.
-     - Narrower than square (a phone held upright) -> COVER. Contain there
-       shrinks a landscape photo to a thin strip across the middle, which the
-       login panel then sits on top of, so the screen becomes almost entirely
-       blurred fill and the mine disappears. Cropping is the lesser evil.
-
-   Keyed on min-aspect-ratio rather than min-width so a portrait tablet gets the
-   phone treatment and a small landscape window gets the desktop treatment. */
-.lg-photo-fit { object-fit: cover; }
-@media (min-aspect-ratio: 1/1) {
-  .lg-photo-fit { object-fit: contain; }
-}
-
 /* The frosted panel.
    The photograph carries no scrim — it is shown at its own brightness — so ALL
    of the text contrast has to come from this one element. A white-tinted fill
