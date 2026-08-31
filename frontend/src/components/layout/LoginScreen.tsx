@@ -20,6 +20,12 @@
  */
 import React, { useState } from "react";
 import Image from "next/image";
+// Imported as a MODULE, not referenced by URL. Next then serves it from a
+// content-hashed path, so replacing the file in public/ changes the URL and
+// every browser refetches. With a plain src="/Mines_Background.png" the URL is
+// identical after a swap and caches keep serving the previous picture — which
+// is exactly what happened when this image replaced the first one.
+import minesBackground from "../../../public/Mines_Background.png";
 import {
   Lock, User, AlertCircle, Loader2, ShieldCheck,
   Eye, EyeOff, ArrowRight,
@@ -38,10 +44,10 @@ function FieldLabel({ index, children, htmlFor }: {
   return (
     <label htmlFor={htmlFor}
            className="flex items-center gap-2 mb-2 font-condensed text-[10.5px] font-bold
-                      uppercase tracking-[0.2em] text-white/45">
+                      uppercase tracking-[0.2em] text-white/60">
       <span className="text-[#f5a623]/70 font-mono text-[10px] tracking-normal">{index}</span>
       <span className="h-[1px] w-3 bg-white/20" />
-      <span className="text-white/70">{children}</span>
+      <span className="text-white/85">{children}</span>
     </label>
   );
 }
@@ -108,29 +114,29 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           NO scrim, tint or overlay of any kind. All of the text contrast is the
           panel's own job — see .lg-panel in globals.css.
 
-          object-cover, edge to edge. The source is 3:2 and a monitor is not, so
-          something has to give: either the image is cropped, or the screen shows
-          bars. A previous attempt kept the image uncropped with object-contain
-          and filled the remainder with a blurred copy of itself — on a 2:1
-          window that read as flat dark letterbox bands with a visible seam, and
-          looked broken. Cropping the edges is by far the lesser evil: full-bleed
-          is what the image was made for and the composition still reads.
+          object-cover, edge to edge. The source is 1672x941 (16:9), matched to
+          the spec worked out for this page, so on a typical maximised browser
+          (~2.05) only about 6.7% comes off the top and bottom — against 13.4%
+          for the 3:2 image this replaced.
 
-          Anchored low (50% 62%) rather than dead centre. The vertical crop has
-          to come off somewhere, and the sky is the least costly place: at dead
-          centre the SAFE / SMART / SUSTAINABLE MINING line along the bottom gets
-          clipped, which is branding, whereas losing sky costs nothing. The left
-          callouts and the bottom line both survive at every size tested. */}
+          placeholder="blur" gives a tiny inline blur-up while the full picture
+          decodes, so the panel never appears over a flat void. Next generates
+          the blur data at build time from the static import.
+
+          Anchored at true centre. The earlier 62% offset existed only to save
+          the old image's bottom edge; this one is framed with margins, so
+          centring is correct and keeps the plant elevation and the pit benches
+          balanced. Nothing that matters sits within 13% of any edge. */}
       <Image
-        src="/Mines_Background.png"
+        src={minesBackground}
         alt=""
         aria-hidden="true"
         fill
         priority
         quality={90}
         sizes="100vw"
-        className="lg-photo object-cover"
-        style={{ objectPosition: "50% 62%" }}
+        placeholder="blur"
+        className="lg-photo object-cover object-center"
       />
       </div>
 
@@ -150,7 +156,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           </div>
 
           <div className="font-condensed text-[10px] font-bold uppercase
-                          tracking-[0.28em] text-[#f5a623]/85">
+                          tracking-[0.28em] text-[#f5a623] [text-shadow:0_1px_6px_rgba(0,0,0,.6)]">
             Balasore Alloys Limited
           </div>
 
@@ -166,7 +172,8 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                style={{ background:
                  "linear-gradient(90deg, transparent, rgba(245,166,35,.75) 50%, transparent)" }} />
 
-          <p className="font-mono text-[10.5px] tracking-[0.05em] text-white/50">
+          <p className="font-mono text-[10.5px] tracking-[0.05em] text-white/75
+                        [text-shadow:0_1px_6px_rgba(0,0,0,.55)]">
             MIS Portal &amp; Analytics Dashboard
           </p>
         </div>
@@ -292,12 +299,12 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
              style={{ animationDelay: "460ms" }}>
           <div className="flex items-center justify-center gap-2.5
                           font-condensed text-[10px] font-bold uppercase
-                          tracking-[0.16em] text-white/40">
+                          tracking-[0.16em] text-white/65">
             <span className="lg-dot h-1.5 w-1.5 rounded-full bg-[#43a047]" />
             <span>Validated against intranet credentials</span>
           </div>
           <div className="mt-2 text-center font-mono text-[9px]
-                          tracking-[0.08em] text-white/25">
+                          tracking-[0.08em] text-white/45">
             Internal use only · Private network
           </div>
         </div>
