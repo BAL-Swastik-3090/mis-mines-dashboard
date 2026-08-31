@@ -26,10 +26,11 @@ import Image from "next/image";
 // identical after a swap and caches keep serving the previous picture — which
 // is exactly what happened when this image replaced the first one.
 import minesBackground from "../../../public/Mines_Background.png";
-import {
-  Lock, User, AlertCircle, Loader2, ShieldCheck,
-  Eye, EyeOff, ArrowRight,
-} from "lucide-react";
+// Trimmed derivative of Mines_Logo.png: the supplied file carried 301px of
+// empty canvas above the artwork against 158px below, which rendered the mark
+// visibly low in any box. Mines_Logo.png is left untouched as the master.
+import logoMark from "../../../public/Mines_Logo_Mark.png";
+import { Lock, User, AlertCircle, Loader2, Eye, EyeOff, ArrowRight } from "lucide-react";
 import api from "@/lib/api";
 
 interface LoginScreenProps {
@@ -147,13 +148,24 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
 
         {/* Brand */}
         <div className="lg-rise text-center" style={{ animationDelay: "120ms" }}>
-          <div className="inline-flex h-14 w-14 items-center justify-center rounded-xl mb-4
-                          border border-[#f5a623]/30 text-[#f5a623]"
-               style={{ background:
-                 "linear-gradient(155deg, rgba(245,166,35,.20) 0%, rgba(245,166,35,.05) 100%)",
-                 boxShadow: "inset 0 1px 0 rgba(255,255,255,.18), 0 6px 18px -6px rgba(0,0,0,.7)" }}>
-            <ShieldCheck size={27} strokeWidth={1.9} />
-          </div>
+          {/* The company mark. It replaced a 56px gold-tiled shield icon, and the
+              tile went with it: that container was built to frame a single-colour
+              gold glyph, and a red/blue/navy/gold mark inside a gold-gradient
+              square with a gold border fights itself. The logo now stands free on
+              the glass, which is also the only way this artwork works — it is a
+              LANDSCAPE lockup (1.37:1), not a square icon, so a square tile would
+              have letterboxed it down to something illegible.
+
+              A drop shadow rather than a plate: the mark's navy terraces sit
+              close in value to the panel behind them, and without it the lower
+              half of the logo softens into the glass. */}
+          <Image
+            src={logoMark}
+            alt="Balasore Alloys Limited"
+            priority
+            className="mx-auto mb-4 h-auto w-[150px] sm:w-[168px]
+                       [filter:drop-shadow(0_4px_14px_rgba(0,0,0,.55))]"
+          />
 
           <div className="font-condensed text-[10px] font-bold uppercase
                           tracking-[0.28em] text-[#f5a623] [text-shadow:0_1px_6px_rgba(0,0,0,.6)]">
