@@ -312,16 +312,31 @@ html, body {
 /* The frosted panel.
    The photograph carries no scrim — it is shown at its own brightness — so ALL
    of the text contrast has to come from this one element. A white-tinted fill
-   was tried first and is wrong here: over a dusk photograph it lightens toward
-   the white text instead of away from it. A navy tint at 38% pushes the other
-   way, and paired with a heavy blur the pit is still clearly visible through the
-   glass. Anything below ~30% and the white labels start losing the mid-tones of
-   the pit wall behind them. */
+   was tried first and is wrong: it lightens toward the white text instead of
+   away from it. A navy tint pushes the other way, and paired with the blur the
+   pit is still clearly visible through the glass.
+
+   34% is the floor. The background is a bright, sunlit, high-contrast
+   photograph — white cloud, blue sky, pale rock all pass behind this panel —
+   and below roughly 30% the white labels start to dissolve into the light
+   patches. */
 .lg-panel {
-  background: rgba(10, 20, 38, 0.38);
-  -webkit-backdrop-filter: blur(26px) saturate(1.3);
-  backdrop-filter: blur(26px) saturate(1.3);
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  /* A GRADIENT, not a flat tint. On a landscape screen the panel sits over the
+     mid-tone pit and a flat 34% is plenty; in portrait the same panel's top half
+     lands on bright sky and cloud, where the brand line and the subtitle wash
+     out. Weighting the fill denser at the top and bottom and lightest through
+     the middle fixes that without touching the photograph, and keeps the
+     glassiest part of the panel where the form fields are. */
+  background: linear-gradient(
+      168deg,
+      rgba(10, 20, 38, 0.46) 0%,
+      rgba(10, 20, 38, 0.30) 46%,
+      rgba(10, 20, 38, 0.42) 100%);
+  -webkit-backdrop-filter: blur(24px) saturate(1.35);
+  backdrop-filter: blur(24px) saturate(1.35);
+  /* Brighter edge than a dark photograph would need: against the sunlit sky in
+     the top corners a 16% border disappears and the panel loses its outline. */
+  border: 1px solid rgba(255, 255, 255, 0.24);
   /* Top-edge highlight reads as a milled bevel catching the dusk light; the
      long soft shadow lifts the panel off the pit rather than pasting it on. */
   box-shadow:
