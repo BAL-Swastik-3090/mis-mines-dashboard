@@ -1,26 +1,32 @@
 "use client";
 /**
- * Grade-wise Despatch — two charts.
+ * Grade-wise Despatch — day-wise, as a chart.
  *
- *   DISTRIBUTION  2% bands. The HG/MG/LG scheme in the table keeps this section
- *                 consistent with the LCM and the IBM schedule, but it barely
- *                 discriminates here: nothing reaches HG in most months and MG
- *                 holds around three quarters of tonnage, so a three-bar chart
- *                 would say almost nothing. At 2% steps the same tonnage
- *                 resolves into a real shape — August 2026 peaks hard at 42-44%.
+ * This replaced a grade-band table. The table carried the same four numbers every
+ * month and said nothing about WHEN grade moved; the mine asked for the day-wise
+ * view instead, which is the question a despatch page should answer. The band
+ * totals survive as a summary strip beneath the bars — the weighted Cr₂O₃ and
+ * Cr/Fe per band are worth keeping and read fine as chart context rather than as
+ * rows.
  *
- *   DAILY TREND   Stacked by HG/MG/LG plus Unassayed, so a drift in despatched
- *                 grade across the month is visible, and so the Unassayed slice
- *                 can be seen concentrating at the end of the period where the
- *                 assay lag actually is.
+ * The day-wise chart used to sit as a second card further down; it is now the
+ * primary view, so that duplicate is gone.
+ *
+ * Second card is the 2% distribution. HG/MG/LG keeps this consistent with the LCM
+ * and the IBM schedule but discriminates poorly — nothing reaches HG in most
+ * months and MG holds around three quarters — so the shape only appears at
+ * finer steps.
  */
 import dynamic from "next/dynamic";
-import { BarChart3, TrendingUp } from "lucide-react";
+import { Layers, BarChart3 } from "lucide-react";
 import { useGradeDespatch } from "@/hooks/useGradeDespatch";
 import { formatIndian } from "@/lib/utils";
 
 const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
 
+/** HG/MG/LG follow the grade palette used elsewhere on the page. Unassayed is
+ *  deliberately grey — it is an absence of information, not a grade, and must
+ *  not look like one. */
 const BAND_COLOR: Record<string, string> = {
   HG: "#2e7d32",
   MG: "#1565c0",
@@ -33,6 +39,9 @@ const BAND_LABEL: Record<string, string> = {
   LG: "LG <40%",
   UNASSAYED: "Unassayed",
 };
+/** Stacked bottom-up: lowest grade at the base, Unassayed on top where it reads
+ *  as the residual it is. */
+const STACK_ORDER = ["LG", "MG", "HG", "UNASSAYED"] as const;
 
 const TOOLTIP = {
   backgroundColor: "#0f1c35",
@@ -43,19 +52,32 @@ const TOOLTIP = {
 };
 const AXIS_LABEL = { fontSize: 10, color: "#6b7ea8", fontFamily: "IBM Plex Mono" };
 
-function Card({ icon, title, right, children }: {
-  icon: React.ReactNode; title: string; right?: React.ReactNode; children: React.ReactNode;
+function n1(v: number | null | undefined) {
+  if (v == null) return "—";
+  return v.toLocaleString("en-IN", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+}
+function n0(v: number | null | undefined) {
+  return v == null ? "—" : formatIndian(Math.round(v));
+}
+function g(v: number | null | undefined, dp = 2) {
+  return v == null ? "—" : v.toFixed(dp);
+}
+
+function Card({ icon, title, right, children, foot }: {
+  icon: React.ReactNode; title: string; right?: React.ReactNode;
+  children: React.ReactNode; foot?: React.ReactNode;
 }) {
   return (
     <div className="bg-white border border-border rounded-lg shadow-sm overflow-hidden">
-      <div className="px-4 pt-3 pb-2.5 border-b border-border-light flex items-center gap-2">
+      <div className="px-4 pt-3 pb-2.5 border-b border-border-light flex items-center gap-2 flex-wrap">
         {icon}
         <span className="font-condensed font-bold text-[13px] text-navy tracking-widest uppercase">
           {title}
         </span>
-        {right && <span className="ml-auto text-[10px] font-mono text-txt-light">{right}</span>}
+        {right && <span className="ml-auto text-[10px] font-mono text-txt-muted">{right}</span>}
       </div>
       {children}
+      {foot}
     </div>
   );
 }
@@ -63,12 +85,72 @@ function Card({ icon, title, right, children }: {
 export default function GradeDespatchChart() {
   const { data, isLoading } = useGradeDespatch();
 
-  if (isLoading || !data || data.totals.tonnage === 0) return null;
+  if (isLoading) {
+    return (
+      <div className="bg-white border border-border rounded-lg shadow-sm p-4">
+        <div className="h-[300px] bg-bg-section animate-pulse rounded" />
+      </div>
+    );
+  }
+  if (!data || data.totals.tonnage === 0) return null;
 
+  const t = data.totals;
+  const cov = data.coverage;
   const fine = data.fine_bands.filter((f) => f.tonnage > 0);
+  const assayed = fine.reduce((s, f) => s + f.tonnage, 0);
 
-  /** Colour each 2% bar by the HG/MG/LG band its midpoint falls in, so the two
-   *  charts and the table read as one system rather than three palettes. */
+  // ── Day-wise stacked bars ──────────────────────────────────────────────
+  const dayWise = {
+    backgroundColor: "transparent",
+    grid: { left: 8, right: 16, top: 36, bottom: 4, containLabel: true },
+    legend: {
+      top: 0, itemWidth: 11, itemHeight: 8,
+      textStyle: { fontSize: 10, color: "#6b7ea8", fontFamily: "IBM Plex Sans" },
+      data: STACK_ORDER.map((k) => BAND_LABEL[k]),
+    },
+    tooltip: {
+      trigger: "axis", axisPointer: { type: "shadow" }, ...TOOLTIP,
+      formatter: (ps: { axisValue: string; seriesName: string; value: number; color: string }[]) => {
+        const total = ps.reduce((s, p) => s + (p.value || 0), 0);
+        const lines = ps
+          .filter((p) => p.value > 0)
+          .map((p) =>
+            `<div style="font-family:'IBM Plex Mono'">` +
+            `<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${p.color};margin-right:6px"></span>` +
+            `${p.seriesName} <span style="float:right;padding-left:14px">${formatIndian(Math.round(p.value))} MT</span></div>`)
+          .join("");
+        return `<div style="font-weight:700;margin-bottom:5px">${ps[0].axisValue}</div>${lines}` +
+          `<div style="font-family:'IBM Plex Mono';border-top:1px solid #2c4a7c;margin-top:5px;padding-top:4px">` +
+          `Total <span style="float:right;padding-left:14px;font-weight:700">${formatIndian(Math.round(total))} MT</span></div>`;
+      },
+    },
+    xAxis: {
+      type: "category",
+      // Day number only. The period is already stated in the header and the
+      // filter, and full dates at 31 categories collide.
+      data: data.daily.map((d) => d.date.slice(8, 10)),
+      axisLabel: { ...AXIS_LABEL, interval: 0 },
+      axisTick: { show: false },
+      axisLine: { lineStyle: { color: "#d0d9e8" } },
+    },
+    yAxis: {
+      type: "value",
+      name: "MT",
+      nameTextStyle: { ...AXIS_LABEL, align: "right" },
+      axisLabel: { ...AXIS_LABEL, formatter: (v: number) => formatIndian(v) },
+      splitLine: { lineStyle: { color: "#eef2f8" } },
+    },
+    series: STACK_ORDER.map((k) => ({
+      name: BAND_LABEL[k],
+      type: "bar",
+      stack: "grade",
+      barMaxWidth: 26,
+      itemStyle: { color: BAND_COLOR[k] },
+      data: data.daily.map((d) => d[k]),
+    })),
+  };
+
+  // ── 2% distribution ────────────────────────────────────────────────────
   const fineColor = (label: string) =>
     label.includes("≥ 52") ? BAND_COLOR.HG
       : (label.includes("< 38") || label.includes("38 – 40")) ? BAND_COLOR.LG
@@ -104,7 +186,7 @@ export default function GradeDespatchChart() {
     },
     series: [{
       type: "bar",
-      barMaxWidth: 46,
+      barMaxWidth: 52,
       data: fine.map((f) => ({
         value: f.tonnage,
         itemStyle: { color: fineColor(f.label), borderRadius: [3, 3, 0, 0] },
@@ -116,73 +198,102 @@ export default function GradeDespatchChart() {
     }],
   };
 
-  const bandKeys = ["LG", "MG", "HG", "UNASSAYED"] as const;
-  const trend = {
-    backgroundColor: "transparent",
-    grid: { left: 8, right: 16, top: 34, bottom: 4, containLabel: true },
-    legend: {
-      top: 0, itemWidth: 11, itemHeight: 8,
-      textStyle: { fontSize: 10, color: "#6b7ea8", fontFamily: "IBM Plex Sans" },
-      data: bandKeys.map((k) => BAND_LABEL[k]),
-    },
-    tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, ...TOOLTIP },
-    xAxis: {
-      type: "category",
-      data: data.daily.map((d) => d.date.slice(8, 10)),
-      axisLabel: AXIS_LABEL,
-      axisTick: { show: false },
-      axisLine: { lineStyle: { color: "#d0d9e8" } },
-    },
-    yAxis: {
-      type: "value",
-      name: "MT",
-      nameTextStyle: { ...AXIS_LABEL, align: "right" },
-      axisLabel: { ...AXIS_LABEL, formatter: (v: number) => formatIndian(v) },
-      splitLine: { lineStyle: { color: "#eef2f8" } },
-    },
-    series: bandKeys.map((k) => ({
-      name: BAND_LABEL[k],
-      type: "bar",
-      stack: "grade",
-      barMaxWidth: 22,
-      itemStyle: { color: BAND_COLOR[k] },
-      data: data.daily.map((d) => d[k]),
-    })),
-  };
-
   return (
-    <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 xl:gap-4">
+    <div className="space-y-3">
+
       <Card
-        icon={<BarChart3 size={14} className="text-accent" />}
-        title="Despatch Grade Distribution"
-        right={`${formatIndian(Math.round(fine.reduce((s, f) => s + f.tonnage, 0)))} MT assayed`}
+        icon={<Layers size={14} className="text-accent shrink-0" />}
+        title="Grade-wise Despatch"
+        right={
+          <>
+            <span className="font-bold text-navy text-[13px]">{n0(t.tonnage)}</span> MT
+            <span className="ml-1.5">· {n0(t.trips)} trips</span>
+            {cov.assayed_pct != null && <span className="ml-1.5">· {cov.assayed_pct.toFixed(1)}% assayed</span>}
+          </>
+        }
+        foot={
+          <>
+            {/* Band totals. Kept because the weighted Cr₂O₃ and Cr/Fe per band are
+                the two numbers the chart cannot show, and they read as chart
+                context rather than as a table. */}
+            <div className="px-4 py-2.5 border-t border-border-light bg-bg-light/40
+                            flex flex-wrap items-baseline gap-x-6 gap-y-2">
+              {data.bands.filter((b) => b.tonnage > 0).map((b) => (
+                <div key={b.key} className="flex items-baseline gap-2">
+                  <span className="h-2.5 w-2.5 rounded-sm shrink-0 translate-y-[1px]"
+                        style={{ background: BAND_COLOR[b.key] }} />
+                  <span className="text-[9.5px] font-condensed font-bold tracking-widest
+                                   uppercase text-txt-secondary">{b.label}</span>
+                  <span className="font-mono text-[12px] font-semibold text-navy tabular-nums">
+                    {n1(b.tonnage)} MT
+                  </span>
+                  <span className="font-mono text-[10px] text-txt-light">
+                    · {b.share_pct?.toFixed(1)}%
+                    {b.cr2o3 != null && <> · Cr₂O₃ {g(b.cr2o3)} · Cr/Fe {g(b.cr_fe, 3)}</>}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {/* Customer split */}
+            {data.customers.length > 0 && (
+              <div className="px-4 py-2.5 border-t border-border-light
+                              flex flex-wrap items-baseline gap-x-6 gap-y-2">
+                {data.customers.map((c) => (
+                  <div key={c.code} className="flex items-baseline gap-2">
+                    <span className="text-[9.5px] font-condensed font-bold tracking-widest
+                                     uppercase text-txt-secondary">{c.name}</span>
+                    <span className="font-mono text-[12px] font-semibold text-navy tabular-nums">
+                      {n1(c.tonnage)} MT
+                    </span>
+                    <span className="font-mono text-[10px] text-txt-light">
+                      · {n0(c.trips)} trips · Cr₂O₃ {g(c.cr2o3)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40 space-y-0.5">
+              <p className="text-[9px] font-mono text-success/70 leading-tight">
+                <span className="font-semibold text-success/60">TONNAGE · </span>SAP outbound despatch
+                &nbsp;·&nbsp;<span className="font-semibold text-success/60">GRADE · </span>
+                SAP quality inspection, joined on PO + batch
+              </p>
+              <p className="text-[9px] font-mono text-txt-muted leading-tight">
+                Bars are on the ASSAYED Cr₂O₃, not the billed material code. Grades are
+                tonnage-weighted, never an average of per-trip readings. Unassayed tonnage is
+                stacked rather than dropped, so the bars total the Despatch figures above.
+                Only days with despatch appear.
+              </p>
+            </div>
+          </>
+        }
       >
         <div className="px-2 pt-2">
-          <ReactECharts option={distribution} style={{ height: 280, width: "100%" }} notMerge />
-        </div>
-        <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
-          <p className="text-[9px] font-mono text-txt-muted leading-tight">
-            Assayed tonnage only, in 2% Cr₂O₃ steps. Bars are coloured by the HG/MG/LG band
-            they belong to. Shares are of assayed tonnage, not of total despatch.
-          </p>
+          <ReactECharts option={dayWise} style={{ height: 320, width: "100%" }} notMerge />
         </div>
       </Card>
 
       <Card
-        icon={<TrendingUp size={14} className="text-[#6a1b9a]" />}
-        title="Day-wise Despatch by Grade"
-        right={`${data.daily.length} despatch days`}
+        icon={<BarChart3 size={14} className="text-[#6a1b9a] shrink-0" />}
+        title="Despatch Grade Distribution"
+        right={`${formatIndian(Math.round(assayed))} MT assayed`}
+        foot={
+          <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
+            <p className="text-[9px] font-mono text-txt-muted leading-tight">
+              Assayed tonnage only, in 2% Cr₂O₃ steps — the HG/MG/LG split above holds most of
+              the month in one band, so the shape only shows at finer steps. Bars are coloured
+              by the band they belong to. Shares are of assayed tonnage, not of total despatch.
+            </p>
+          </div>
+        }
       >
         <div className="px-2 pt-2">
-          <ReactECharts option={trend} style={{ height: 280, width: "100%" }} notMerge />
-        </div>
-        <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
-          <p className="text-[9px] font-mono text-txt-muted leading-tight">
-            Only days with despatch appear. Unassayed tonnage clusters at the end of a period —
-            that is assay lag, not a change in what was shipped.
-          </p>
+          <ReactECharts option={distribution} style={{ height: 260, width: "100%" }} notMerge />
         </div>
       </Card>
+
     </div>
   );
 }
