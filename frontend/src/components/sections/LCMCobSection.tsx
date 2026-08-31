@@ -13,18 +13,22 @@
  *
  * The two sum to the deviation by algebra, so the total cannot drift.
  *
- * The section shows the basis, the headline figures, the composition and the
- * costing rate. The API also returns a level-2 split of Recovery (feed grade vs
- * plant efficiency) and an inferred running-hours figure; both were displayed
- * until the user asked for them removed on 2026-08-29. They are still computed
- * and still validated, so re-adding either is a UI-only change — nothing has to
- * be rebuilt on the server.
+ * The section shows the basis, four headline figures and the composition. The
+ * IBM rate rides on its own tile rather than a card of its own — the card was
+ * mostly caveat text, and the number every rupee here is built from is more
+ * useful sitting beside the rupees.
+ *
+ * The API also returns a level-2 split of Recovery (feed grade vs plant
+ * efficiency) and an inferred running-hours figure; both were displayed until
+ * the user asked for them removed on 2026-08-29. They are still computed and
+ * still validated, so re-adding either is a UI-only change — nothing has to be
+ * rebuilt on the server.
  */
 import { useMemo } from "react";
 import dynamic from "next/dynamic";
-import { AlertTriangle, TrendingDown, Gauge, IndianRupee } from "lucide-react";
+import { AlertTriangle, TrendingDown, Gauge } from "lucide-react";
 import { useCobLcm } from "@/hooks/useCobLcm";
-import { formatIndian } from "@/lib/utils";
+import { formatIndian, pctColor } from "@/lib/utils";
 
 const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
 
@@ -42,6 +46,9 @@ function rs(v: number | null | undefined) {
 function rsLakh(v: number | null | undefined) {
   return v == null ? "—" : `₹${(v / 100000).toLocaleString("en-IN", {
     minimumFractionDigits: 2, maximumFractionDigits: 2 })} L`;
+}
+function pct(v: number | null | undefined, dp = 2) {
+  return v == null ? "—" : `${v.toFixed(dp)}%`;
 }
 /** A loss is red. A NEGATIVE loss is not a loss — the plant beat plan — so it
  *  flips to green. */
@@ -192,13 +199,22 @@ export default function LCMCobSection() {
 
       {/* ── Period headline ───────────────────────────────────────────── */}
       {!isLoading && data?.has_plan && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {[
             { label: "Concentrate Deviation", value: `${f0(data.deviation_mt)} MT`,
               sub: "planned concentrate not produced", accent: "#1565c0" },
             { label: "Total Loss Value",      value: rsLakh(t?.loss_amount),
               sub: `${f0(t?.loss_mt)} MT × ${rs(data.costing.rate)}/MT`, accent: "#ad1457",
               color: lossColor(t?.loss_amount) },
+            // Carries the rate that used to sit in the Costing Basis card, so
+            // the figure every rupee on this page is built from stays visible.
+            { label: "Current IBM Cost",      value: `${rs(data.costing.rate)}/MT`,
+              sub: data.costing.source, accent: "#6a1b9a" },
+            // Achievement on concentrate, uncapped — see achieved_pct in the
+            // service. Coloured on the dashboard's standard 90/60 thresholds.
+            { label: "% Achieved",            value: pct(data.achieved_pct),
+              sub: `${f0(a?.concentrate)} of ${f0(p?.concentrate)} MT planned`,
+              accent: "#2e7d32", color: pctColor(data.achieved_pct) },
           ].map((k) => (
             <div key={k.label} className="bg-white border border-border rounded-lg shadow-sm overflow-hidden border-t-2"
                  style={{ borderTopColor: k.accent }}>
@@ -231,33 +247,6 @@ export default function LCMCobSection() {
             </span>
           </div>
           <LossPie rows={pieRows.map((r) => ({ name: r.loss_description, value: r.loss_mt ?? 0 }))} />
-        </div>
-      )}
-
-      {/* ── Costing basis ─────────────────────────────────────────────── */}
-      {!isLoading && data && (
-        <div className="bg-white border border-border rounded-lg shadow-sm overflow-hidden">
-          <div className="px-4 pt-3 pb-2.5 border-b border-border-light flex items-center gap-2">
-            <IndianRupee size={14} className="text-[#ad1457]" />
-            <span className="font-condensed font-bold text-[13px] text-navy tracking-widest uppercase">
-              Costing Basis
-            </span>
-          </div>
-          <div className="px-4 py-3 flex items-baseline gap-3 flex-wrap">
-            <span className="font-condensed font-extrabold text-[22px] text-[#ad1457] leading-none">
-              {rs(data.costing.rate)}
-            </span>
-            <span className="text-[11px] font-mono text-txt-secondary">per MT · {data.costing.basis}</span>
-            <span className="ml-auto text-[10px] font-mono text-txt-light">{data.costing.source}</span>
-          </div>
-          <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
-            <p className="text-[9px] font-mono text-txt-muted leading-tight">
-              COB output is valued on IBM&apos;s CONCENTRATES line, not the Cr₂O₃-banded fines
-              schedule the mines LCM uses — a beneficiated product is not run-of-mine fines.
-              One product, one rate, so no weighting is required. Tailings are not costed
-              separately: chrome reporting to tailings is already inside the Recovery head.
-            </p>
-          </div>
         </div>
       )}
 

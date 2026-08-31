@@ -89,6 +89,8 @@ const COB_SPLIT: Row[] = [
     note: "Cr₂O₃ units out over Cr₂O₃ units in. Derived the same way for plan and actual so the two are on the same footing" },
   { label: "Loss Amount",          formula: "Concentrate Loss (MT) × ₹24,560/MT",
     note: "IBM's CONCENTRATES line, June 2026 — not the Cr₂O₃-banded fines schedule the mines LCM uses, because a beneficiated product is not run-of-mine fines. One product, one rate, so no weighting is required. Tailings are not costed separately: chrome reporting to tailings is already inside the Recovery head" },
+  { label: "% Achieved",           formula: "Actual Concentrate ÷ Plan Concentrate × 100",
+    note: "On concentrate, the output the plant is judged on — not feed. NOT capped at 100%: a period that beat plan should say so. Built from the same two numbers as the Deviation, so the two can never tell different stories" },
   { label: "Loss Share",           formula: "Loss Amount (row) ÷ Total Loss Amount × 100",
     note: "Rupee basis, one decimal. A period that matched plan has a zero total, making the share 0/0 — undefined, so it reads as a dash rather than a fabricated 0%" },
 ];

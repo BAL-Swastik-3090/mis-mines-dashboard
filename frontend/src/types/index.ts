@@ -981,6 +981,8 @@ export interface CobLcmResponse {
 
   deviation_mt: number | null;
   has_plan:     boolean;
+  /** Actual ÷ Plan concentrate × 100. Not capped — a month that beat plan says so. */
+  achieved_pct: number | null;
   rows:         CobLcmRow[];
   totals: {
     loss_mt:        number | null;
