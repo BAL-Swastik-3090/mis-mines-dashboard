@@ -6,6 +6,8 @@ import GradeChart         from "@/components/charts/GradeChart";
 import OreGradeChart      from "@/components/charts/OreGradeChart";
 import DeSiltingChart     from "@/components/charts/DeSiltingChart";
 import DespatchCharts     from "@/components/charts/DespatchCharts";
+import GradeDespatchTable from "@/components/tables/GradeDespatchTable";
+import GradeDespatchChart from "@/components/charts/GradeDespatchChart";
 import DaywiseTable       from "@/components/tables/DaywiseTable";
 
 export default function ProductionSection() {
@@ -36,6 +38,14 @@ export default function ProductionSection() {
 
       {/* Row 5 — Despatch Plan charts (Overall + Location-wise) */}
       <DespatchCharts />
+
+      {/* Row 6 — Grade-wise despatch. Sits directly under the despatch charts
+          because it is despatch, shares their date filter, and its total is
+          deliberately the same figure those charts report. Bands are on the
+          ASSAYED Cr₂O₃ from SAP quality, joined to the outbound trips on
+          PO + batch — the despatch table itself carries no grade at all. */}
+      <GradeDespatchTable />
+      <GradeDespatchChart />
 
       {/* Row 6 — Day-wise production + despatch table (full width) */}
       <DaywiseTable />

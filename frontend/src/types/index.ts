@@ -1009,3 +1009,82 @@ export interface CobLcmResponse {
     basis:  string;
   };
 }
+
+/* ── Grade-wise Despatch ──────────────────────────────────────────────────── */
+
+/** One HG/MG/LG band, or the Unassayed row. Grades are null on Unassayed —
+ *  there is no assay to report, and 0 would be a lie. */
+export interface GradeBandRow {
+  key:       "HG" | "MG" | "LG" | "UNASSAYED";
+  label:     string;
+  trips:     number;
+  tonnage:   number;
+  share_pct: number | null;
+  cr2o3:     number | null;
+  cr_fe:     number | null;
+}
+
+/** A 2% distribution bucket. share_pct is of ASSAYED tonnage, not of the total. */
+export interface GradeFineBand {
+  label:     string;
+  tonnage:   number;
+  trips:     number;
+  share_pct: number | null;
+}
+
+/** What a tonne was billed as, against what it assayed. */
+export interface GradeSoldAsRow {
+  material_no:   string | null;
+  material_desc: string;
+  trips:         number;
+  tonnage:       number;
+  cr2o3:         number | null;
+  cr_min:        number | null;
+  cr_max:        number | null;
+  bands:         Record<string, number>;
+}
+
+export interface GradeCustomerRow {
+  code:    string;
+  name:    string;
+  trips:   number;
+  tonnage: number;
+  cr2o3:   number | null;
+  bands:   Record<string, number>;
+}
+
+export interface GradeDespatchResponse {
+  from_date: string;
+  to_date:   string;
+
+  bands:  GradeBandRow[];
+  totals: {
+    trips:     number;
+    tonnage:   number;
+    cr2o3:     number | null;
+    cr_fe:     number | null;
+    share_pct: number | null;
+  };
+
+  fine_bands: GradeFineBand[];
+  sold_as:    GradeSoldAsRow[];
+  customers:  GradeCustomerRow[];
+
+  /** Per-day tonnage split by band, for the trend. */
+  daily: Array<{ date: string; HG: number; MG: number; LG: number; UNASSAYED: number }>;
+
+  /** Mines despatch the transporter filter drops — reported, never hidden. */
+  excluded: {
+    trips:   number;
+    tonnage: number;
+    transporters: Array<{ transporter: string | null; trips: number; tonnage: number }>;
+  };
+
+  coverage: {
+    tier1_tonnage:     number;
+    tier2_tonnage:     number;
+    unassayed_tonnage: number;
+    assayed_pct:       number | null;
+    po_count:          number;
+  };
+}

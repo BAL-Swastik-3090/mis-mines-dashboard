@@ -4,6 +4,7 @@ from datetime import date
 
 from ..database import get_db
 from ..services import despatch as svc
+from ..services import despatch_grade as grade_svc
 from ..schemas.despatch import DespatchSummary, DespatchDaywise
 
 router = APIRouter(tags=["Despatch"])
@@ -67,3 +68,15 @@ def daywise(
         mtd_suk_actual=mtd_act["suk_actual"],
         mtd_unsynced_count=mtd_act["unsynced_count"],
     )
+
+
+@router.get("/grade-wise")
+def grade_wise(
+    from_date: date = None,
+    to_date:   date = None,
+    db: Session = Depends(get_db),
+):
+    """Despatch tonnage banded by ASSAYED Cr2O3, with a sold-as reconciliation."""
+    f = from_date or _month_start()
+    t = to_date   or _today()
+    return grade_svc.get_grade_wise_despatch(db, f, t)
