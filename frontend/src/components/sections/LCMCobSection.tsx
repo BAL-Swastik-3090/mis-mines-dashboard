@@ -208,7 +208,7 @@ export default function LCMCobSection() {
               color: lossColor(t?.loss_amount) },
             // Carries the rate that used to sit in the Costing Basis card, so
             // the figure every rupee on this page is built from stays visible.
-            { label: "Current IBM Cost",      value: `${rs(data.costing.rate)}/MT`,
+            { label: "Current IBM Price",     value: `${rs(data.costing.rate)}/MT`,
               sub: data.costing.source, accent: "#6a1b9a" },
             // Achievement on concentrate, uncapped — see achieved_pct in the
             // service. Coloured on the dashboard's standard 90/60 thresholds.
