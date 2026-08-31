@@ -10,18 +10,19 @@
  *
  *   Feed volume     — ore that never reached the plant
  *   Recovery/yield  — ore that reached it but did not report to concentrate
- *     Feed grade      — leaner feed lowered the achievable recovery
- *     Plant efficiency— what the plant did against that achievable ceiling
  *
- * The two level-1 rows sum to the deviation by algebra. The two level-2 rows sum
- * to Recovery, and are indented to make clear they are inside it rather than
- * additional to it — adding all four would double-count.
+ * The two sum to the deviation by algebra, so the total cannot drift.
+ *
+ * The section shows the basis, the headline figures, the composition and the
+ * costing rate. The API also returns a level-2 split of Recovery (feed grade vs
+ * plant efficiency) and an inferred running-hours figure; both were displayed
+ * until the user asked for them removed on 2026-08-29. They are still computed
+ * and still validated, so re-adding either is a UI-only change — nothing has to
+ * be rebuilt on the server.
  */
 import { useMemo } from "react";
 import dynamic from "next/dynamic";
-import {
-  AlertTriangle, Layers, TrendingDown, Gauge, Clock, IndianRupee,
-} from "lucide-react";
+import { AlertTriangle, TrendingDown, Gauge, IndianRupee } from "lucide-react";
 import { useCobLcm } from "@/hooks/useCobLcm";
 import { formatIndian } from "@/lib/utils";
 
@@ -42,21 +43,11 @@ function rsLakh(v: number | null | undefined) {
   return v == null ? "—" : `₹${(v / 100000).toLocaleString("en-IN", {
     minimumFractionDigits: 2, maximumFractionDigits: 2 })} L`;
 }
-function pct(v: number | null | undefined, dp = 2) {
-  return v == null ? "—" : `${v.toFixed(dp)}%`;
-}
-
 /** A loss is red. A NEGATIVE loss is not a loss — the plant beat plan — so it
- *  flips to green. Unlike the mines matrix, where the deviation is clamped and
- *  the green state is unreachable, this happens routinely here: Plant efficiency
- *  ran favourable in four of the five months on record. */
+ *  flips to green. */
 function lossColor(v: number | null | undefined) {
   if (v == null) return "text-txt-muted";
   return v < 0 ? "text-[#2e7d32]" : "text-[#c62828]";
-}
-function lossColorOnNavy(v: number | null | undefined) {
-  if (v == null) return "text-white/60";
-  return v < 0 ? "text-[#a5d6a7]" : "text-[#ff8a80]";
 }
 
 function Shimmer({ w = "w-20", h = "h-5" }: { w?: string; h?: string }) {
@@ -99,7 +90,7 @@ export default function LCMCobSection() {
           <div className="text-[11.5px] text-txt-secondary leading-relaxed">
             <span className="font-bold text-navy">No COB plan entered for this period.</span>{" "}
             Deviation is measured against plan, so it cannot be calculated without one.
-            The plan begins April 2026 — pick a later period to see the matrix.
+            The plan begins April 2026 — pick a later period to see the loss.
           </div>
         </div>
       )}
@@ -201,17 +192,13 @@ export default function LCMCobSection() {
 
       {/* ── Period headline ───────────────────────────────────────────── */}
       {!isLoading && data?.has_plan && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {[
             { label: "Concentrate Deviation", value: `${f0(data.deviation_mt)} MT`,
               sub: "planned concentrate not produced", accent: "#1565c0" },
             { label: "Total Loss Value",      value: rsLakh(t?.loss_amount),
               sub: `${f0(t?.loss_mt)} MT × ${rs(data.costing.rate)}/MT`, accent: "#ad1457",
               color: lossColor(t?.loss_amount) },
-            { label: "Hours Lost (inferred)", value: `${fmt(data.hours.lost, 1)} hrs`,
-              sub: `of ${fmt(data.hours.planned, 0)} planned running hrs`, accent: "#c8960c" },
-            { label: "Achievable Recovery",   value: pct(a?.achievable_recovery_pct),
-              sub: `plant delivered ${pct(a?.recovery_pct)}`, accent: "#2e7d32" },
           ].map((k) => (
             <div key={k.label} className="bg-white border border-border rounded-lg shadow-sm overflow-hidden border-t-2"
                  style={{ borderTopColor: k.accent }}>
@@ -231,91 +218,6 @@ export default function LCMCobSection() {
         </div>
       )}
 
-      {/* ── The matrix ────────────────────────────────────────────────── */}
-      <div className="bg-white border border-border rounded-lg shadow-sm overflow-hidden">
-        <div className="px-4 pt-3 pb-2.5 border-b border-border-light flex items-center justify-between flex-wrap gap-2">
-          <div className="flex items-center gap-2">
-            <Layers size={14} className="text-[#6a1b9a]" />
-            <span className="font-condensed font-bold text-[13px] text-navy tracking-widest uppercase">
-              Concentrate Loss — Attribution
-            </span>
-          </div>
-          <span className="text-[10px] font-mono text-txt-light">
-            valued on IBM concentrates · {rs(data?.costing.rate)}/MT
-          </span>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-[12px] font-mono">
-            <thead>
-              <tr className="bg-bg-section border-b border-border-light">
-                <th className="px-3 py-2 text-left  text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary">Sl.</th>
-                <th className="px-3 py-2 text-left  text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary">Loss Description</th>
-                <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#1565c0]">Concentrate<br/>Loss (MT)</th>
-                <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#ad1457]">Loss Amount<br/>(₹ Lakh)</th>
-                <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#ad1457]">Loss<br/>Share</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border-light/60">
-              {isLoading ? (
-                Array.from({ length: 4 }).map((_, i) => (
-                  <tr key={i}>{Array.from({ length: 5 }).map((__, j) => (
-                    <td key={j} className="px-3 py-2.5"><Shimmer w="w-14" h="h-4" /></td>
-                  ))}</tr>
-                ))
-              ) : rows.map((r) => {
-                const sub = r.level === 2;
-                return (
-                  <tr key={r.sl_no}
-                      className={`hover:bg-bg-section/50 transition-colors ${sub ? "bg-bg-section/25" : ""}`}>
-                    <td className="px-3 py-2 text-txt-light">{sub ? "" : r.sl_no}</td>
-                    <td className={`py-2 whitespace-nowrap ${
-                      sub ? "pl-7 pr-3 font-mono text-[11.5px] text-txt-secondary"
-                          : "px-3 font-condensed font-bold text-[12px] text-navy"}`}>
-                      {sub && <span className="text-txt-light mr-1.5">└</span>}
-                      {r.loss_description}
-                    </td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${
-                      sub ? "text-txt-secondary" : "font-semibold text-[#1565c0]"}`}>
-                      {fmt(r.loss_mt, 1)}
-                    </td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${sub ? "" : "font-semibold"} ${lossColor(r.loss_amount)}`}>
-                      {rsLakh(r.loss_amount)}
-                    </td>
-                    <td className="px-3 py-2 text-right text-txt-secondary tabular-nums">
-                      {r.loss_share_pct != null ? `${r.loss_share_pct.toFixed(1)}%` : "—"}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-            {!isLoading && t && (
-              <tfoot>
-                <tr className="bg-navy text-white border-t-2 border-navy font-bold">
-                  <td className="px-3 py-2.5" />
-                  <td className="px-3 py-2.5 font-condensed tracking-widest uppercase text-[11px]">Total</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums">{fmt(t.loss_mt, 1)}</td>
-                  <td className={`px-3 py-2.5 text-right tabular-nums ${lossColorOnNavy(t.loss_amount)}`}>
-                    {rsLakh(t.loss_amount)}
-                  </td>
-                  <td className="px-3 py-2.5 text-right tabular-nums">
-                    {t.loss_share_pct != null ? `${t.loss_share_pct.toFixed(1)}%` : "—"}
-                  </td>
-                </tr>
-              </tfoot>
-            )}
-          </table>
-        </div>
-
-        <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40 space-y-0.5">
-          <p className="text-[9px] font-mono text-txt-muted leading-tight">
-            Indented rows break down Recovery / yield and are already inside it — the Total is
-            the two top-level rows only. A negative row is a gain: the plant beat what its feed
-            entitled it to.
-          </p>
-        </div>
-      </div>
-
       {/* ── Composition ───────────────────────────────────────────────── */}
       {!isLoading && pieRows.length > 0 && t?.loss_mt != null && (
         <div className="bg-white border border-border rounded-lg shadow-sm overflow-hidden">
@@ -329,45 +231,6 @@ export default function LCMCobSection() {
             </span>
           </div>
           <LossPie rows={pieRows.map((r) => ({ name: r.loss_description, value: r.loss_mt ?? 0 }))} />
-        </div>
-      )}
-
-      {/* ── Hours, stated for what they are ───────────────────────────── */}
-      {!isLoading && data?.has_plan && data.hours.implied != null && (
-        <div className="bg-white border border-border rounded-lg shadow-sm overflow-hidden">
-          <div className="px-4 pt-3 pb-2.5 border-b border-border-light flex items-center gap-2">
-            <Clock size={14} className="text-[#c8960c]" />
-            <span className="font-condensed font-bold text-[13px] text-navy tracking-widest uppercase">
-              Running Hours — Inferred
-            </span>
-          </div>
-          <div className="px-4 py-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {[
-              { label: "Planned Running Hrs", value: fmt(data.hours.planned, 1), sub: "from the COB plan" },
-              { label: "Implied Running Hrs", value: fmt(data.hours.implied, 1),
-                sub: `actual feed ÷ ${fmt(p?.feed_rate, 1)} MT/hr` },
-              { label: "Hours Lost",          value: fmt(data.hours.lost, 1), sub: "upper bound", red: true },
-            ].map((k) => (
-              <div key={k.label}>
-                <div className="text-[9.5px] font-bold tracking-widest uppercase font-condensed text-txt-secondary">
-                  {k.label}
-                </div>
-                <div className={`font-condensed font-extrabold text-[20px] leading-none mt-1 ${
-                  k.red ? "text-[#c62828]" : "text-navy"}`}>
-                  {k.value}
-                </div>
-                <div className="text-[9.5px] text-txt-light font-mono mt-0.5">{k.sub}</div>
-              </div>
-            ))}
-          </div>
-          <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
-            <p className="text-[9px] font-mono text-txt-muted leading-tight">
-              The plant has no actual running-hours source, so hours are backed out of tonnage at
-              the planned feed rate. This assumes the plant ran at rate whenever it ran, which
-              makes Hours Lost an upper bound, not a measurement. Splitting it into breakdown,
-              no feed, power and shutdown needs a COB downtime log, which does not exist yet.
-            </p>
-          </div>
         </div>
       )}
 

@@ -83,16 +83,14 @@ const COB_ROWS: Row[] = [
 ];
 
 const COB_SPLIT: Row[] = [
-  { label: "Achievable Recovery", formula: "(Actual Feed Grade ÷ Actual Conc Grade) × Plan Chrome Recovery",
-    note: "The recovery the feed entitles the plant to, by chrome balance. Leaner feed lowers this ceiling before the plant does anything at all" },
-  { label: "Feed Grade Loss",     formula: "Actual Feed × (Plan Recovery − Achievable Recovery)",
-    note: "Attributable to what the mine sent, not to the plant" },
-  { label: "Plant Efficiency",    formula: "Recovery Loss − Feed Grade Loss",
-    note: "Goes NEGATIVE, and renders green, when the plant beat its achievable ceiling — which it did in four of the five months on record" },
-  { label: "Loss Amount",         formula: "Concentrate Loss (MT) × ₹24,560/MT",
-    note: "IBM's CONCENTRATES line, June 2026 — not the Cr₂O₃-banded fines schedule the mines LCM uses, because a beneficiated product is not run-of-mine fines. One product, one rate, so no weighting is required" },
-  { label: "Hours Lost",          formula: "Planned Running Hrs − (Actual Feed ÷ Planned Feed Rate)",
-    note: "INFERRED, never measured — the plant has no running-hours source. Assumes the plant ran at rate whenever it ran, making this an upper bound. Splitting it into breakdown, no feed, power and shutdown needs a COB downtime log, which does not exist yet" },
+  { label: "Plan / Actual Grades", formula: "Σ(Cr₂O₃ × Lot Qty) ÷ Σ Lot Qty",
+    note: "Tonnage-weighted on both sides, never an average of daily percentages. Plan grades weight on planned quantity, actual grades on ACTUAL_LOT_QUANTITY from the SAP inspection lots" },
+  { label: "Chrome Recovery",      formula: "(Concentrate × Conc Grade) ÷ (Feed × Feed Grade)",
+    note: "Cr₂O₃ units out over Cr₂O₃ units in. Derived the same way for plan and actual so the two are on the same footing" },
+  { label: "Loss Amount",          formula: "Concentrate Loss (MT) × ₹24,560/MT",
+    note: "IBM's CONCENTRATES line, June 2026 — not the Cr₂O₃-banded fines schedule the mines LCM uses, because a beneficiated product is not run-of-mine fines. One product, one rate, so no weighting is required. Tailings are not costed separately: chrome reporting to tailings is already inside the Recovery head" },
+  { label: "Loss Share",           formula: "Loss Amount (row) ÷ Total Loss Amount × 100",
+    note: "Rupee basis, one decimal. A period that matched plan has a zero total, making the share 0/0 — undefined, so it reads as a dash rather than a fabricated 0%" },
 ];
 
 function Group({ title, rows, accent }: { title: string; rows: Row[]; accent: string }) {
