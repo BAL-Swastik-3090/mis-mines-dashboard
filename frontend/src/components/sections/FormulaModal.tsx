@@ -78,21 +78,19 @@ const COB_ROWS: Row[] = [
     note: "Ore that reached the plant but did not report to concentrate" },
   { label: "Why they foot",     formula: "(Pf−Af)Rp + Af(Rp−Ra)  =  Pc − Ac",
     note: "The two sum to the Deviation by algebra, not by rounding — the same self-normalising property the mines factor has" },
-  { label: "Plan Recovery",     formula: "Σ Plan Concentrate ÷ Σ Plan Feed",
-    note: "Derived from the summed quantities rather than read from the stored Weight_recovery column, so the plan cannot disagree with itself" },
 ];
 
 const COB_SPLIT: Row[] = [
   { label: "Plan / Actual Grades", formula: "Σ(Cr₂O₃ × Lot Qty) ÷ Σ Lot Qty",
     note: "Tonnage-weighted on both sides, never an average of daily percentages. Plan grades weight on planned quantity, actual grades on ACTUAL_LOT_QUANTITY from the SAP inspection lots" },
-  { label: "Chrome Recovery",      formula: "(Concentrate × Conc Grade) ÷ (Feed × Feed Grade)",
-    note: "Cr₂O₃ units out over Cr₂O₃ units in. Derived the same way for plan and actual so the two are on the same footing" },
+  { label: "Weight Recovery",      formula: "Σ Concentrate ÷ Σ Feed × 100",
+    note: "Tonnes out over tonnes in. Derived from the summed quantities on both sides — never read from the stored Weight_recovery column and never an average of daily percentages — so plan and actual are on the same footing and the plan cannot disagree with itself. This is the Plan Recovery the loss formulae opposite are built on" },
+  { label: "Chrome Recovery",      formula: "(Concentrate × Conc Grade) ÷ (Feed × Feed Grade) × 100",
+    note: "Cr₂O₃ units out over Cr₂O₃ units in — the metal recovery, as against Weight Recovery's tonnage. Derived the same way for plan and actual" },
   { label: "Loss Amount",          formula: "Concentrate Loss (MT) × ₹24,560/MT",
     note: "IBM's CONCENTRATES line, June 2026 — not the Cr₂O₃-banded fines schedule the mines LCM uses, because a beneficiated product is not run-of-mine fines. One product, one rate, so no weighting is required. Tailings are not costed separately: chrome reporting to tailings is already inside the Recovery head" },
   { label: "% Achieved",           formula: "Actual Concentrate ÷ Plan Concentrate × 100",
     note: "On concentrate, the output the plant is judged on — not feed. NOT capped at 100%: a period that beat plan should say so. Built from the same two numbers as the Deviation, so the two can never tell different stories" },
-  { label: "Loss Share",           formula: "Loss Amount (row) ÷ Total Loss Amount × 100",
-    note: "Rupee basis, one decimal. A period that matched plan has a zero total, making the share 0/0 — undefined, so it reads as a dash rather than a fabricated 0%" },
 ];
 
 function Group({ title, rows, accent }: { title: string; rows: Row[]; accent: string }) {
@@ -172,7 +170,7 @@ export default function FormulaModal({ open, onClose }: { open: boolean; onClose
           </div>
           <div className="border-t border-border-light pt-4 grid grid-cols-1 lg:grid-cols-2 gap-5">
             <Group title="LCM for COB — attribution" rows={COB_ROWS}  accent="#00838f" />
-            <Group title="LCM for COB — split & cost" rows={COB_SPLIT} accent="#6a1b9a" />
+            <Group title="LCM for COB — recovery & cost" rows={COB_SPLIT} accent="#6a1b9a" />
           </div>
         </div>
 
