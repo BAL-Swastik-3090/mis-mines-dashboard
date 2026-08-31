@@ -309,14 +309,36 @@ html, body {
    neither expresses well inline, and both need to stay together.
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/* The frosted panel. Fill is deliberately low (7%) and the blur high: the pit
-   silhouette should still read THROUGH the glass, because that photograph is
-   the reason the page looks like anything. Legibility comes from the blur and
-   the scrim behind, not from painting over the image. */
+/* How the photograph is fitted. The source is 3:2 landscape, so the right
+   answer depends on the viewport's shape, not on a breakpoint width:
+
+     - Viewport at least as wide as it is tall  -> CONTAIN. The whole
+       composition stays visible and nothing is cropped. This is every desktop
+       and laptop, which is what the mine actually looks at.
+     - Narrower than square (a phone held upright) -> COVER. Contain there
+       shrinks a landscape photo to a thin strip across the middle, which the
+       login panel then sits on top of, so the screen becomes almost entirely
+       blurred fill and the mine disappears. Cropping is the lesser evil.
+
+   Keyed on min-aspect-ratio rather than min-width so a portrait tablet gets the
+   phone treatment and a small landscape window gets the desktop treatment. */
+.lg-photo-fit { object-fit: cover; }
+@media (min-aspect-ratio: 1/1) {
+  .lg-photo-fit { object-fit: contain; }
+}
+
+/* The frosted panel.
+   The photograph carries no scrim — it is shown at its own brightness — so ALL
+   of the text contrast has to come from this one element. A white-tinted fill
+   was tried first and is wrong here: over a dusk photograph it lightens toward
+   the white text instead of away from it. A navy tint at 38% pushes the other
+   way, and paired with a heavy blur the pit is still clearly visible through the
+   glass. Anything below ~30% and the white labels start losing the mid-tones of
+   the pit wall behind them. */
 .lg-panel {
-  background: rgba(255, 255, 255, 0.07);
-  -webkit-backdrop-filter: blur(28px) saturate(1.25);
-  backdrop-filter: blur(28px) saturate(1.25);
+  background: rgba(10, 20, 38, 0.38);
+  -webkit-backdrop-filter: blur(26px) saturate(1.3);
+  backdrop-filter: blur(26px) saturate(1.3);
   border: 1px solid rgba(255, 255, 255, 0.16);
   /* Top-edge highlight reads as a milled bevel catching the dusk light; the
      long soft shadow lifts the panel off the pit rather than pasting it on. */

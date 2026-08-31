@@ -8,11 +8,11 @@
  * numbered fields, mono type for anything typed, Barlow Condensed at wide
  * tracking for anything labelled.
  *
- * Two layout constraints came from the photograph itself: it carries baked-in
- * callouts down the left (PRODUCTION / DESPATCH / LOSS ANALYSIS …) and widget
- * graphics down the right. The panel is therefore CENTRED, in the clear band
- * between them — and centred is also the only position that survives an
- * arbitrary viewport crop, since object-cover trims the sides first.
+ * The photograph dictates the layout: it carries baked-in callouts down the
+ * left (PRODUCTION / DESPATCH / LOSS ANALYSIS …) and widget graphics down the
+ * right, so the panel is CENTRED in the clear band between them and does not
+ * cover either. The photograph is shown whole and undimmed — see the background
+ * block below for how, and why an earlier scrim was removed.
  *
  * The auth flow is untouched from the previous version: same endpoint, same
  * localStorage keys, same onLoginSuccess contract with AuthWrapper. This is a
@@ -104,41 +104,53 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
     <div className="fixed inset-0 overflow-y-auto overflow-x-hidden bg-[#0b1526] select-none">
       <div aria-hidden className="fixed inset-0 overflow-hidden">
 
-      {/* ── The photograph ──────────────────────────────────────────────────
-          next/image rather than a CSS background: the source PNG is 2.4 MB at
-          1536x1024, and the Next optimiser serves it as sized WebP instead.
-          `priority` because it is the largest contentful paint on the only
-          screen an unauthenticated user ever sees. */}
+      {/* ── The photograph, whole and at its own brightness ─────────────────
+          NO scrim, tint or overlay of any kind sits on the image. An earlier
+          version laid a navy wash and a radial pool over it for text contrast;
+          that dimmed the mine, which the user rejected. Contrast is now the
+          panel's own job — see .lg-panel in globals.css — so the photograph is
+          left exactly as supplied.
+
+          TWO LAYERS, because the image is 1536x1024 (3:2) and a monitor is not:
+            - The FILL layer is object-cover, scaled up and heavily blurred. It
+              exists only to continue the photograph past the edges of the
+              layer above, so there are no flat letterbox bars. On a 1920x1080
+              screen object-contain would otherwise leave ~260px of dead colour
+              down each side. It is dimmed and blurred hard on purpose: at a
+              light blur it reads as a mismatched band butting against the real
+              image, whereas at this strength it reads as ambient surround and
+              the eye goes to the photograph. Note this dims only the SURROUND —
+              the photograph itself is untouched.
+            - The IMAGE layer is the photograph itself, fitted by .lg-photo-fit:
+              contain on any viewport at least as wide as it is tall, so the full
+              composition survives uncropped — callouts down the left, widget
+              graphics down the right, the sky and the network dots at the
+              bottom. On a portrait phone it falls back to cover, because contain
+              there leaves a thin strip the panel covers entirely. See the rule
+              in globals.css for why that is keyed on aspect ratio, not width.
+
+          Both point at the same file, so the browser fetches and decodes it
+          once and the second layer is free. */}
       <Image
         src="/Mines_Background.png"
         alt=""
         aria-hidden="true"
         fill
         priority
-        quality={82}
+        quality={70}
         sizes="100vw"
-        className="lg-photo object-cover object-center"
+        className="object-cover object-center scale-125 blur-[72px] brightness-[.78] saturate-[1.15]"
       />
-
-      {/* ── Scrim ───────────────────────────────────────────────────────────
-          Two layers. A diagonal navy wash deepest at the corners, where the
-          photograph's own callouts and widgets sit, so they recede without
-          disappearing; then a soft radial pool behind the panel so white text
-          has something consistent to sit on regardless of how the image is
-          cropped by the viewport. Never rely on the photo alone for contrast —
-          object-cover means you do not know which part of it is behind you. */}
-      <div aria-hidden className="absolute inset-0 pointer-events-none"
-           style={{ background:
-             "linear-gradient(135deg, rgba(9,18,34,.82) 0%, rgba(11,21,38,.46) 42%, " +
-             "rgba(11,21,38,.52) 62%, rgba(9,18,34,.86) 100%)" }} />
-      <div aria-hidden className="absolute inset-0 pointer-events-none"
-           style={{ background:
-             "radial-gradient(58% 48% at 50% 50%, rgba(9,18,34,.62) 0%, transparent 72%)" }} />
-      {/* A gold horizon glow, picked out of the dusk sky already in the image —
-          ties the brand colour to the photograph instead of imposing it. */}
-      <div aria-hidden className="absolute inset-x-0 top-0 h-56 pointer-events-none"
-           style={{ background:
-             "linear-gradient(180deg, rgba(245,166,35,.09) 0%, transparent 100%)" }} />
+      <Image
+        src="/Mines_Background.png"
+        alt=""
+        aria-hidden="true"
+        fill
+        priority
+        quality={88}
+        sizes="100vw"
+        className="lg-photo lg-photo-fit object-center"
+      />
       </div>
 
       {/* ── The panel ───────────────────────────────────────────────────── */}
