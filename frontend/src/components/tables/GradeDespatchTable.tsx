@@ -1,22 +1,24 @@
 "use client";
 /**
- * Grade-wise Despatch — what grade actually left the mine.
+ * Grade-wise Despatch — the reconciliation, and the caveats.
  *
- * Two tables, because they answer different questions:
+ * The grade-band table that used to head this file is gone: the mine asked for a
+ * day-wise bar graph instead, and the band totals now sit as a summary strip
+ * under those bars in GradeDespatchChart. What remains here is the one thing that
+ * genuinely needs to be a table.
  *
- *   1. BANDS      — how much tonnage went out at what grade, on the ASSAY.
- *   2. SOLD AS    — what that same tonnage was billed as, and the assay range
- *                   inside each billed grade. This is the one that earns its
- *                   place: MG-billed material assaying below the 40% LG
- *                   boundary, and LG-billed material reaching above it.
+ * SOLD AS vs ASSAYED is the reason the whole feature exists. What a load was
+ * billed as and what it tested are different things — August 2026 had material
+ * billed 40-52% assaying down to 35.90, and low-grade material assaying up to
+ * 41.22. A billed grade whose assay range crosses a band boundary is flagged red;
+ * banding on MATERIAL_DESC would have shown two clean rows and hidden all of it.
  *
- * The Unassayed row is always shown, never folded into a band, so the table
- * foots to the same total the Despatch section reports above it.
+ * The two banners below it are deliberately not hidden: assay coverage, and the
+ * tonnage the Despatch section's transporter filter drops.
  */
-import { Layers, AlertTriangle, Scale } from "lucide-react";
+import { AlertTriangle, Scale } from "lucide-react";
 import { useGradeDespatch } from "@/hooks/useGradeDespatch";
 import { formatIndian } from "@/lib/utils";
-import type { GradeBandRow } from "@/types";
 
 function n1(v: number | null | undefined) {
   if (v == null) return "—";
@@ -32,9 +34,6 @@ function g(v: number | null | undefined, dp = 2) {
   return v == null ? "—" : v.toFixed(dp);
 }
 
-/** Band colours. HG/MG/LG follow the dashboard's grade palette used by the
- *  production grade chart; Unassayed is deliberately grey — it is an absence of
- *  information, not a grade, and must not look like one. */
 const BAND_COLOR: Record<string, string> = {
   HG: "#2e7d32",
   MG: "#1565c0",
@@ -44,15 +43,8 @@ const BAND_COLOR: Record<string, string> = {
 
 const thCls = "px-3 py-2 text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary";
 
-function Shimmer() {
-  return <div className="h-3.5 bg-bg-section animate-pulse rounded" />;
-}
-
 export default function GradeDespatchTable() {
   const { data, isLoading, isError, error } = useGradeDespatch();
-  const bands = data?.bands ?? [];
-  const t = data?.totals;
-  const cov = data?.coverage;
 
   if (isError) {
     return (
@@ -65,130 +57,16 @@ export default function GradeDespatchTable() {
     );
   }
 
-  const unassayed = bands.find((b) => b.key === "UNASSAYED");
+  if (isLoading || !data || data.totals.tonnage === 0) return null;
+
+  const unassayed = data.bands.find((b) => b.key === "UNASSAYED");
+  const cov = data.coverage;
 
   return (
     <div className="space-y-3">
 
-      {/* ── Bands ─────────────────────────────────────────────────────── */}
-      <div className="bg-white border border-border rounded-lg shadow-sm overflow-hidden">
-        <div className="px-4 pt-3 pb-2.5 border-b border-border-light flex items-center justify-between flex-wrap gap-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <Layers size={14} className="text-accent shrink-0" />
-            <span className="font-condensed font-bold text-[13px] text-navy tracking-widest uppercase">
-              Grade-wise Despatch
-            </span>
-          </div>
-          {!isLoading && t && (
-            <span className="text-[10px] font-mono text-txt-muted whitespace-nowrap">
-              <span className="font-bold text-navy text-[13px]">{n0(t.tonnage)}</span> MT
-              <span className="ml-1.5">· {n0(t.trips)} trips</span>
-              {cov?.assayed_pct != null && (
-                <span className="ml-1.5">· {pct(cov.assayed_pct)} assayed</span>
-              )}
-            </span>
-          )}
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-[12px] font-mono">
-            <thead>
-              <tr className="bg-bg-section border-b border-border-light">
-                <th className={`${thCls} text-left`}>Grade Band</th>
-                <th className={`${thCls} text-right`}>Trips</th>
-                <th className={`${thCls} text-right text-[#1565c0]`}>Tonnage (MT)</th>
-                <th className={`${thCls} text-right`}>Share</th>
-                <th className={`${thCls} text-right text-[#6a1b9a]`}>Wtd Cr₂O₃ %</th>
-                <th className={`${thCls} text-right text-[#6a1b9a]`}>Wtd Cr/Fe</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border-light/60">
-              {isLoading ? (
-                Array.from({ length: 4 }).map((_, i) => (
-                  <tr key={i}>{Array.from({ length: 6 }).map((__, j) => (
-                    <td key={j} className="px-3 py-2.5"><Shimmer /></td>
-                  ))}</tr>
-                ))
-              ) : bands.length === 0 || (t?.tonnage ?? 0) === 0 ? (
-                <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-txt-muted text-sm">
-                    No despatch in the selected period
-                  </td>
-                </tr>
-              ) : bands.map((b: GradeBandRow) => {
-                const empty = b.tonnage === 0;
-                const isUn = b.key === "UNASSAYED";
-                return (
-                  <tr key={b.key}
-                      className={`hover:bg-bg-section/50 transition-colors ${empty ? "opacity-45" : ""} ${
-                        isUn ? "bg-bg-section/30" : ""}`}>
-                    <td className="px-3 py-2 whitespace-nowrap">
-                      <span className="inline-flex items-center gap-2">
-                        <span className="h-2.5 w-2.5 rounded-sm shrink-0"
-                              style={{ background: BAND_COLOR[b.key] }} />
-                        <span className={`font-condensed font-bold text-[12px] ${
-                          isUn ? "text-txt-muted" : "text-navy"}`}>{b.label}</span>
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums text-txt-secondary">{n0(b.trips)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums font-semibold text-navy">{n1(b.tonnage)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums text-txt-secondary">{pct(b.share_pct)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums text-[#6a1b9a]">{g(b.cr2o3, 2)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums text-[#6a1b9a]">{g(b.cr_fe, 3)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-            {!isLoading && t && t.tonnage > 0 && (
-              <tfoot>
-                <tr className="bg-navy text-white border-t-2 border-navy font-bold">
-                  <td className="px-3 py-2.5 font-condensed tracking-widest uppercase text-[11px]">Total</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums">{n0(t.trips)}</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums">{n1(t.tonnage)}</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums">100.0%</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums">{g(t.cr2o3, 2)}</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums">{g(t.cr_fe, 3)}</td>
-                </tr>
-              </tfoot>
-            )}
-          </table>
-        </div>
-
-        {/* Customer split — compact, since it is a secondary cut */}
-        {!isLoading && data && data.customers.length > 0 && (
-          <div className="px-4 py-2.5 border-t border-border-light bg-bg-light/40
-                          flex flex-wrap items-center gap-x-6 gap-y-2">
-            {data.customers.map((c) => (
-              <div key={c.code} className="flex items-baseline gap-2">
-                <span className="text-[9.5px] font-condensed font-bold tracking-widest
-                                 uppercase text-txt-secondary">{c.name}</span>
-                <span className="font-mono text-[12px] font-semibold text-navy tabular-nums">
-                  {n1(c.tonnage)} MT
-                </span>
-                <span className="font-mono text-[10px] text-txt-light">
-                  · {n0(c.trips)} trips · Cr₂O₃ {g(c.cr2o3, 2)}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40 space-y-0.5">
-          <p className="text-[9px] font-mono text-success/70 leading-tight">
-            <span className="font-semibold text-success/60">TONNAGE · </span>SAP outbound despatch
-            &nbsp;·&nbsp;<span className="font-semibold text-success/60">GRADE · </span>
-            SAP quality inspection, joined on PO + batch
-          </p>
-          <p className="text-[9px] font-mono text-txt-muted leading-tight">
-            Bands are on the ASSAYED Cr₂O₃, not the billed material code. Grades are
-            tonnage-weighted, never an average of per-trip readings. The Unassayed row is
-            never folded into a band, so the total matches the Despatch figures above.
-          </p>
-        </div>
-      </div>
-
-      {/* ── Assay coverage caveat ─────────────────────────────────────── */}
-      {!isLoading && cov && (unassayed?.tonnage ?? 0) > 0 && (
+      {/* ── Assay coverage ────────────────────────────────────────────── */}
+      {(unassayed?.tonnage ?? 0) > 0 && (
         <div className="p-3 rounded-lg bg-[#fff8e1] border border-[#ffe082]
                         border-l-[3px] border-l-[#c8960c] flex items-start gap-2.5">
           <AlertTriangle size={15} className="text-[#c8960c] shrink-0 mt-[1px]" />
@@ -205,7 +83,7 @@ export default function GradeDespatchTable() {
       )}
 
       {/* ── Transporter exclusion ─────────────────────────────────────── */}
-      {!isLoading && data && data.excluded.tonnage > 0 && (
+      {data.excluded.tonnage > 0 && (
         <div className="p-3 rounded-lg bg-bg-section border border-border
                         border-l-[3px] border-l-[#8899bb] flex items-start gap-2.5">
           <AlertTriangle size={15} className="text-txt-muted shrink-0 mt-[1px]" />
@@ -214,7 +92,7 @@ export default function GradeDespatchTable() {
               A further {n1(data.excluded.tonnage)} MT across {n0(data.excluded.trips)} trips is
               outside these figures.
             </span>{" "}
-            The Despatch section scopes actuals to one transporter and this table matches it so
+            The Despatch section scopes actuals to one transporter and this section matches it so
             the two agree. That excludes{" "}
             {data.excluded.transporters.map((x) => x.transporter || "(blank)").join(", ")}.
             Worth a decision — widening it would move the headline Despatch numbers too.
@@ -223,7 +101,7 @@ export default function GradeDespatchTable() {
       )}
 
       {/* ── Sold as vs assayed ────────────────────────────────────────── */}
-      {!isLoading && data && data.sold_as.length > 0 && (
+      {data.sold_as.length > 0 && (
         <div className="bg-white border border-border rounded-lg shadow-sm overflow-hidden">
           <div className="px-4 pt-3 pb-2.5 border-b border-border-light flex items-center gap-2">
             <Scale size={14} className="text-[#ad1457]" />
@@ -261,10 +139,10 @@ export default function GradeDespatchTable() {
                         )}
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums font-semibold text-navy">{n1(s.tonnage)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums text-[#6a1b9a]">{g(s.cr2o3, 2)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-[#6a1b9a]">{g(s.cr2o3)}</td>
                       <td className={`px-3 py-2 text-right tabular-nums whitespace-nowrap ${
                         straddles ? "text-[#c62828] font-semibold" : "text-txt-secondary"}`}>
-                        {s.cr_min == null ? "—" : `${g(s.cr_min, 2)} – ${g(s.cr_max, 2)}`}
+                        {s.cr_min == null ? "—" : `${g(s.cr_min)} – ${g(s.cr_max)}`}
                       </td>
                       <td className="px-3 py-2">
                         <span className="inline-flex flex-wrap gap-1">
@@ -289,7 +167,7 @@ export default function GradeDespatchTable() {
           <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
             <p className="text-[9px] font-mono text-txt-muted leading-tight">
               An assay range shown in red crosses a band boundary — material billed at one grade
-              that tested into another. This is why the bands above are built on the assay and
+              that tested into another. This is why the bars above are built on the assay and
               not on the material code.
             </p>
           </div>
