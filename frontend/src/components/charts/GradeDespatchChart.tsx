@@ -31,17 +31,21 @@ const BAND_COLOR: Record<string, string> = {
   HG: "#2e7d32",
   MG: "#1565c0",
   LG: "#e65100",
+  // Teal, matching how the COB plant is coloured elsewhere on the dashboard, and
+  // deliberately outside the HG/MG/LG family — it is a different product.
+  COB: "#00838f",
   UNASSAYED: "#b0bdd4",
 };
 const BAND_LABEL: Record<string, string> = {
   HG: "HG ≥52%",
   MG: "MG 40–52%",
   LG: "LG <40%",
+  COB: "COB Concentrate",
   UNASSAYED: "Unassayed",
 };
-/** Stacked bottom-up: lowest grade at the base, Unassayed on top where it reads
- *  as the residual it is. */
-const STACK_ORDER = ["LG", "MG", "HG", "UNASSAYED"] as const;
+/** Stacked bottom-up: mine ore lowest-grade-first, then COB concentrate as its
+ *  own product, then Unassayed on top where it reads as the residual it is. */
+const STACK_ORDER = ["LG", "MG", "HG", "COB", "UNASSAYED"] as const;
 
 const TOOLTIP = {
   backgroundColor: "#0f1c35",
@@ -215,7 +219,8 @@ export default function GradeDespatchChart() {
           <>
             {/* Band totals. Kept because the weighted Cr₂O₃ and Cr/Fe per band are
                 the two numbers the chart cannot show, and they read as chart
-                context rather than as a table. */}
+                context rather than as a table. COB carries its own grade here —
+                it is a product line, not a grade band. */}
             <div className="px-4 py-2.5 border-t border-border-light bg-bg-light/40
                             flex flex-wrap items-baseline gap-x-6 gap-y-2">
               {data.bands.filter((b) => b.tonnage > 0).map((b) => (
@@ -262,9 +267,10 @@ export default function GradeDespatchChart() {
               </p>
               <p className="text-[9px] font-mono text-txt-muted leading-tight">
                 Bars are on the ASSAYED Cr₂O₃, not the billed material code. Grades are
-                tonnage-weighted, never an average of per-trip readings. Unassayed tonnage is
-                stacked rather than dropped, so the bars total the Despatch figures above.
-                Only days with despatch appear.
+                tonnage-weighted, never an average of per-trip readings. COB concentrate is
+                assayed at the plant and kept as its own product rather than banded against a
+                run-of-mine schedule. Unassayed tonnage is stacked rather than dropped, so the
+                bars total the Despatch figures above. Only days with despatch appear.
               </p>
             </div>
           </>
@@ -278,13 +284,14 @@ export default function GradeDespatchChart() {
       <Card
         icon={<BarChart3 size={14} className="text-[#6a1b9a] shrink-0" />}
         title="Despatch Grade Distribution"
-        right={`${formatIndian(Math.round(assayed))} MT assayed`}
+        right={`${formatIndian(Math.round(assayed))} MT ore assayed`}
         foot={
           <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
             <p className="text-[9px] font-mono text-txt-muted leading-tight">
-              Assayed tonnage only, in 2% Cr₂O₃ steps — the HG/MG/LG split above holds most of
-              the month in one band, so the shape only shows at finer steps. Bars are coloured
-              by the band they belong to. Shares are of assayed tonnage, not of total despatch.
+              MINE ORE only, in 2% Cr₂O₃ steps — COB concentrate is excluded because it would
+              pile into the middle and describe a mix that does not exist. The HG/MG/LG split
+              above holds most of the month in one band, so the shape only shows at finer
+              steps. Shares are of assayed ore tonnage, not of total despatch.
             </p>
           </div>
         }
