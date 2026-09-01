@@ -112,7 +112,7 @@ export default function GradeDespatchTable() {
                 <tr className="bg-bg-section border-b border-border-light">
                   <th className={`${thCls} text-left`}>Billed As (SAP Material)</th>
                   <th className={`${thCls} text-right`}>Tonnage (MT)</th>
-                  <th className={`${thCls} text-right text-[#6a1b9a]`}>Wtd Cr₂O₃ %</th>
+                  <th className={`${thCls} text-right text-[#6a1b9a]`}>Weighted Cr₂O₃ %</th>
                   <th className={`${thCls} text-right`}>Assay Range</th>
                 </tr>
               </thead>
