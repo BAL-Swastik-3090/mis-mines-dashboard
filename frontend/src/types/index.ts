@@ -1015,7 +1015,7 @@ export interface CobLcmResponse {
 /** One HG/MG/LG band, or the Unassayed row. Grades are null on Unassayed —
  *  there is no assay to report, and 0 would be a lie. */
 export interface GradeBandRow {
-  key:       "HG" | "MG" | "LG" | "UNASSAYED";
+  key:       "HG" | "MG" | "LG" | "COB" | "UNASSAYED";
   label:     string;
   trips:     number;
   tonnage:   number;
@@ -1061,9 +1061,12 @@ export interface GradeDespatchResponse {
   totals: {
     trips:     number;
     tonnage:   number;
-    cr2o3:     number | null;
-    cr_fe:     number | null;
-    share_pct: number | null;
+    /** MINE ORE ONLY. Concentrate is a different product and is reported on its
+     *  own band row rather than blended into a run-of-mine average. */
+    cr2o3:       number | null;
+    cr_fe:       number | null;
+    ore_tonnage: number;
+    share_pct:   number | null;
   };
 
   fine_bands: GradeFineBand[];
@@ -1071,7 +1074,8 @@ export interface GradeDespatchResponse {
   customers:  GradeCustomerRow[];
 
   /** Per-day tonnage split by band, for the trend. */
-  daily: Array<{ date: string; HG: number; MG: number; LG: number; UNASSAYED: number }>;
+  daily: Array<{ date: string; HG: number; MG: number; LG: number;
+                 COB: number; UNASSAYED: number }>;
 
   /** Mines despatch the transporter filter drops — reported, never hidden. */
   excluded: {
@@ -1084,6 +1088,7 @@ export interface GradeDespatchResponse {
     tier1_tonnage:     number;
     tier2_tonnage:     number;
     unassayed_tonnage: number;
+    cob_tonnage:       number;
     assayed_pct:       number | null;
     po_count:          number;
   };

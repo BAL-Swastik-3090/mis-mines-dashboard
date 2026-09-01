@@ -74,9 +74,24 @@ CUSTOMER_LABELS = {"BAL": "Balasore Plant", "JABAMOYEE": "Sukinda Plant"}
 # the exclusion is surfaced in the payload as `excluded` rather than hidden.
 DESPATCH_TRANSPORTER = "SHREE GANESH LOGISTICS"
 
-QUALITY_PLANT = "1200"
-CHAR_CR2O3    = "Cr2O3"
-CHAR_CRFE     = "Cr/Fe Ratio"
+# Quality lives in TWO plants and both must be read.
+#
+# 1200 is the mine — run-of-mine chrome ore, banded HG/MG/LG.
+# 1210 is the COB plant — CONCENTRATE WITH STD MOISTURE.
+#
+# Scoping this to 1200 alone was a real defect: every tonne of COB concentrate
+# despatched fell through as "Unassayed", and the page then blamed assay lag for
+# it. The match was exact every month — May 157 trips/1,858.1 MT, Jun 157/1,851.3,
+# Jul 159/1,864.7, Aug 103/1,207.2 — the whole Unassayed band was concentrate,
+# never missing assays. The mine's own user department caught it.
+#
+# The assays were always there and are good: trips == lots exactly and tonnage
+# matching to the kilogram, the same one-lot-per-truck signature as the ore.
+QUALITY_PLANTS = ("1200", "1210")
+PLANT_MINE     = "1200"
+PLANT_COB      = "1210"
+CHAR_CR2O3     = "Cr2O3"
+CHAR_CRFE      = "Cr/Fe Ratio"
 
 # Headline bands — the HG/MG/LG cut-offs the LCM and the IBM schedule use.
 # (key, label, lower inclusive, upper exclusive)
@@ -98,6 +113,13 @@ FINE_BANDS = [
     ("48 – 52%",  48.0, 52.0),
     ("≥ 52%",     52.0, 1e9),
 ]
+
+# COB concentrate is NOT banded with the ore. It is a beneficiated product: at
+# roughly 40% Cr2O3 it would land in MG/LG and distort the run-of-mine mix, and
+# it is valued on IBM's CONCENTRATES line rather than the fines schedule — the
+# same separation the LCM for COB already makes.
+COB_KEY   = "COB"
+COB_LABEL = "COB Concentrate"
 
 UNASSAYED_KEY   = "UNASSAYED"
 UNASSAYED_LABEL = "Unassayed"
@@ -213,7 +235,7 @@ def _excluded_rows(db: Session, fd: date, td: date) -> dict:
     }
 
 
-def _quality(db: Session, pos: list[str]) -> tuple[dict, dict, dict, dict]:
+def _quality(db: Session, pos: list[str]) -> tuple[dict, dict, dict, dict, dict]:
     """Assays for the POs in play, aggregated three ways.
 
     Scoped by PO rather than by date: an assay can be raised days after the
@@ -221,20 +243,28 @@ def _quality(db: Session, pos: list[str]) -> tuple[dict, dict, dict, dict]:
     drop late lots and inflate the Unassayed row. The PO is the correct scope
     because it is the key the mine gave.
 
+    Reads BOTH plants — mine ore at 1200 and COB concentrate at 1210. Which one
+    a PO belongs to is returned separately: verified across Apr-Aug 2026, no PO
+    ever carries rows from both, so the plant classifies the PO cleanly.
+
     Returns (assay by (po,batch), assay by po, material by (po,batch),
-    material by po) — all tonnage-weighted.
+    material by po, is-COB by po) — all tonnage-weighted.
     """
     if not pos:
-        return {}, {}, {}, {}
+        return {}, {}, {}, {}, {}
 
     ph = ", ".join(f":p{i}" for i in range(len(pos)))
     params = {f"p{i}": p for i, p in enumerate(pos)}
-    params.update({"plant": QUALITY_PLANT, "cr": CHAR_CR2O3, "fe": CHAR_CRFE})
+    plant_ph = ", ".join(f":pl{i}" for i in range(len(QUALITY_PLANTS)))
+    for i, pl in enumerate(QUALITY_PLANTS):
+        params[f"pl{i}"] = pl
+    params.update({"cr": CHAR_CR2O3, "fe": CHAR_CRFE})
 
     sql = text(f"""
         SELECT
             PO_NO        AS po,
             BATCH        AS batch,
+            PLANT        AS plant,
             MATERIAL_NO  AS material_no,
             MATERIAL_DESC AS material_desc,
             SUM(CASE WHEN SHORT_TEXT_INS_CHAR = :cr
@@ -249,10 +279,10 @@ def _quality(db: Session, pos: list[str]) -> tuple[dict, dict, dict, dict]:
             MAX(CASE WHEN SHORT_TEXT_INS_CHAR = :cr THEN RESULT END)           AS cr_max,
             COUNT(DISTINCT LOT_NUMBER)                                         AS lots
         FROM pp_quality_inspection
-        WHERE PLANT = :plant
+        WHERE PLANT IN ({plant_ph})
           AND SHORT_TEXT_INS_CHAR IN (:cr, :fe)
           AND PO_NO IN ({ph})
-        GROUP BY PO_NO, BATCH, MATERIAL_NO, MATERIAL_DESC
+        GROUP BY PO_NO, BATCH, PLANT, MATERIAL_NO, MATERIAL_DESC
     """)
     rows = db.execute(sql, params).fetchall()
 
@@ -263,8 +293,16 @@ def _quality(db: Session, pos: list[str]) -> tuple[dict, dict, dict, dict]:
     po_acc:    dict = {}
     mat_acc:   dict = {}
     mat_by_po: dict = {}
+    is_cob:    dict = {}
 
     for r in rows:
+        # A PO belongs to whichever plant assayed it. Checked across Apr-Aug
+        # 2026: never both, so this cannot flip mid-PO.
+        if r.plant == PLANT_COB:
+            is_cob[r.po] = True
+        else:
+            is_cob.setdefault(r.po, False)
+
         cr = ratio(r.cr_num, r.cr_den)
         fe = ratio(r.fe_num, r.fe_den)
         qty = _f(r.cr_den)
@@ -305,17 +343,19 @@ def _quality(db: Session, pos: list[str]) -> tuple[dict, dict, dict, dict]:
             "fe": round(v["fe_num"] / v["fe_den"], 4) if v["fe_den"] else None,
         } for k, v in d.items()}
 
-    return finish(by_batch), finish(po_acc), mat_acc, mat_by_po
+    return finish(by_batch), finish(po_acc), mat_acc, mat_by_po, is_cob
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 def get_grade_wise_despatch(db: Session, from_date: date, to_date: date) -> dict:
     trips = _despatch_rows(db, from_date, to_date)
     pos = sorted({r.po for r in trips if r.po})
-    by_batch, by_po, by_material, mat_by_po = _quality(db, pos)
+    by_batch, by_po, by_material, mat_by_po, po_is_cob = _quality(db, pos)
 
     bands:     dict[str, _Acc] = {k: _Acc() for k, *_ in GRADE_BANDS}
+    bands[COB_KEY]       = _Acc()
     bands[UNASSAYED_KEY] = _Acc()
+    ore = _Acc()   # mine ore only — the basis for the total weighted grade
     fine:      dict[str, _Acc] = {label: _Acc() for label, _lo, _hi in FINE_BANDS}
     customers: dict[str, dict] = {}
     sold_as:   dict[str, dict] = {}
@@ -336,7 +376,12 @@ def get_grade_wise_despatch(db: Session, from_date: date, to_date: date) -> dict
 
         cr = q["cr"] if q else None
         fe = q["fe"] if q else None
-        band = _band_of(cr)
+
+        # COB concentrate is a product, not a grade band. It keeps its own row
+        # rather than being banded against a run-of-mine schedule it was never
+        # priced on. A concentrate PO with no assay yet still falls to Unassayed.
+        is_cob = po_is_cob.get(t.po, False)
+        band = COB_KEY if (is_cob and cr is not None) else _band_of(cr)
 
         if tier == 1:   tier1 += wt
         elif tier == 2: tier2 += wt
@@ -344,8 +389,13 @@ def get_grade_wise_despatch(db: Session, from_date: date, to_date: date) -> dict
 
         bands[band].add(wt, cr, fe)
         total.add(wt, cr, fe)
+        if not is_cob:
+            ore.add(wt, cr, fe)
 
-        fb = _fine_band_of(cr)
+        # The distribution chart is the ORE grade profile. Concentrate assays
+        # around 40% and would pile into the middle of it, describing a mix that
+        # does not exist.
+        fb = _fine_band_of(cr) if not is_cob else None
         if fb:
             fine[fb].add(wt, cr, fe)
 
@@ -390,6 +440,15 @@ def get_grade_wise_despatch(db: Session, from_date: date, to_date: date) -> dict
     } for key, label, _lo, _hi in GRADE_BANDS]
 
     band_rows.append({
+        "key": COB_KEY, "label": COB_LABEL,
+        "trips": bands[COB_KEY].trips,
+        "tonnage": round(bands[COB_KEY].tonnage, 3),
+        "share_pct": share(bands[COB_KEY].tonnage),
+        "cr2o3": bands[COB_KEY].cr,
+        "cr_fe": bands[COB_KEY].fe,
+    })
+
+    band_rows.append({
         "key": UNASSAYED_KEY, "label": UNASSAYED_LABEL,
         "trips": bands[UNASSAYED_KEY].trips,
         "tonnage": round(bands[UNASSAYED_KEY].tonnage, 3),
@@ -397,7 +456,8 @@ def get_grade_wise_despatch(db: Session, from_date: date, to_date: date) -> dict
         "cr2o3": None, "cr_fe": None,
     })
 
-    assayed = tot_wt - bands[UNASSAYED_KEY].tonnage
+    # Fine bands describe ore only, so their shares divide by ore assayed tonnage.
+    assayed = ore.tonnage - bands[UNASSAYED_KEY].tonnage
 
     return {
         "from_date": from_date,
@@ -407,10 +467,15 @@ def get_grade_wise_despatch(db: Session, from_date: date, to_date: date) -> dict
         "totals": {
             "trips":   total.trips,
             "tonnage": round(tot_wt, 3),
-            # Weighted over ASSAYED tonnage only — an unassayed tonne has no
-            # grade to contribute and must not drag the average toward zero.
-            "cr2o3":   total.cr,
-            "cr_fe":   total.fe,
+            # MINE ORE ONLY, weighted over assayed tonnage. Tonnage above covers
+            # everything despatched, but blending a beneficiated concentrate
+            # grade into a run-of-mine average produces a number that describes
+            # nothing physical, so concentrate is reported on its own row and
+            # excluded here. An unassayed tonne contributes nothing either — it
+            # has no grade, and must not drag the average toward zero.
+            "cr2o3":   ore.cr,
+            "cr_fe":   ore.fe,
+            "ore_tonnage": round(ore.tonnage, 3),
             "share_pct": 100.0 if tot_wt else None,
         },
 
@@ -447,7 +512,7 @@ def get_grade_wise_despatch(db: Session, from_date: date, to_date: date) -> dict
         "daily": [{
             "date": day,
             **{k: round(daily[day].get(k, 0.0), 3)
-               for k in [b[0] for b in GRADE_BANDS] + [UNASSAYED_KEY]},
+               for k in [b[0] for b in GRADE_BANDS] + [COB_KEY, UNASSAYED_KEY]},
         } for day in sorted(daily)],
 
         "excluded": _excluded_rows(db, from_date, to_date),
@@ -456,6 +521,7 @@ def get_grade_wise_despatch(db: Session, from_date: date, to_date: date) -> dict
             "tier1_tonnage": round(tier1, 3),
             "tier2_tonnage": round(tier2, 3),
             "unassayed_tonnage": round(tier3, 3),
+            "cob_tonnage": round(bands[COB_KEY].tonnage, 3),
             "assayed_pct": round((tier1 + tier2) / tot_wt * 100, 1) if tot_wt else None,
             "po_count": len(pos),
         },

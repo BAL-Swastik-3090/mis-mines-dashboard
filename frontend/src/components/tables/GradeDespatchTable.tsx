@@ -15,6 +15,10 @@
  *
  * The two banners below it are deliberately not hidden: assay coverage, and the
  * tonnage the Despatch section's transporter filter drops.
+ *
+ * The coverage banner used to blame assay lag for the Unassayed row. That was
+ * wrong — the whole row was COB concentrate, assayed at plant 1210, which the
+ * query was not reading. Corrected; Unassayed now means what it says.
  */
 import { AlertTriangle, Scale } from "lucide-react";
 import { useGradeDespatch } from "@/hooks/useGradeDespatch";
@@ -38,6 +42,7 @@ const BAND_COLOR: Record<string, string> = {
   HG: "#2e7d32",
   MG: "#1565c0",
   LG: "#e65100",
+  COB: "#00838f",
   UNASSAYED: "#8899bb",
 };
 
@@ -72,12 +77,12 @@ export default function GradeDespatchTable() {
           <AlertTriangle size={15} className="text-[#c8960c] shrink-0 mt-[1px]" />
           <div className="text-[11.5px] text-txt-secondary leading-relaxed">
             <span className="font-bold text-navy">
-              {n1(unassayed?.tonnage)} MT ({pct(unassayed?.share_pct)}) has no assay linked yet.
+              {n1(unassayed?.tonnage)} MT ({pct(unassayed?.share_pct)}) has no assay linked.
             </span>{" "}
             Of the graded tonnage, {n1(cov.tier1_tonnage)} MT is matched to its own consignment
-            (PO + batch) and {n1(cov.tier2_tonnage)} MT falls back to the PO average. Unassayed
-            tonnage is mostly late-month despatch whose lots have not been raised — it shrinks
-            as SAP catches up, so this figure is expected to be highest for the current month.
+            (PO + batch) and {n1(cov.tier2_tonnage)} MT falls back to the PO average. This row
+            is genuinely missing lab results — it is not COB concentrate, which is assayed at
+            the plant and carries its own band.
           </div>
         </div>
       )}
@@ -146,7 +151,7 @@ export default function GradeDespatchTable() {
                       </td>
                       <td className="px-3 py-2">
                         <span className="inline-flex flex-wrap gap-1">
-                          {(["HG", "MG", "LG", "UNASSAYED"] as const)
+                          {(["HG", "MG", "LG", "COB", "UNASSAYED"] as const)
                             .filter((k) => (s.bands[k] ?? 0) > 0)
                             .map((k) => (
                               <span key={k}
