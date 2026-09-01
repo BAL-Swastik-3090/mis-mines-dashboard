@@ -38,14 +38,6 @@ function g(v: number | null | undefined, dp = 2) {
   return v == null ? "—" : v.toFixed(dp);
 }
 
-const BAND_COLOR: Record<string, string> = {
-  HG: "#2e7d32",
-  MG: "#1565c0",
-  LG: "#e65100",
-  COB: "#00838f",
-  UNASSAYED: "#8899bb",
-};
-
 const thCls = "px-3 py-2 text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary";
 
 export default function GradeDespatchTable() {
@@ -122,7 +114,6 @@ export default function GradeDespatchTable() {
                   <th className={`${thCls} text-right`}>Tonnage (MT)</th>
                   <th className={`${thCls} text-right text-[#6a1b9a]`}>Wtd Cr₂O₃ %</th>
                   <th className={`${thCls} text-right`}>Assay Range</th>
-                  <th className={`${thCls} text-left`}>Falls Into Bands</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-light/60">
@@ -148,20 +139,6 @@ export default function GradeDespatchTable() {
                       <td className={`px-3 py-2 text-right tabular-nums whitespace-nowrap ${
                         straddles ? "text-[#c62828] font-semibold" : "text-txt-secondary"}`}>
                         {s.cr_min == null ? "—" : `${g(s.cr_min)} – ${g(s.cr_max)}`}
-                      </td>
-                      <td className="px-3 py-2">
-                        <span className="inline-flex flex-wrap gap-1">
-                          {(["HG", "MG", "LG", "COB", "UNASSAYED"] as const)
-                            .filter((k) => (s.bands[k] ?? 0) > 0)
-                            .map((k) => (
-                              <span key={k}
-                                    className="inline-block px-1.5 py-0.5 rounded text-[9.5px]
-                                               font-condensed font-bold tracking-wider uppercase text-white"
-                                    style={{ background: BAND_COLOR[k] }}>
-                                {k === "UNASSAYED" ? "N/A" : k} {n0(s.bands[k])}
-                              </span>
-                            ))}
-                        </span>
                       </td>
                     </tr>
                   );
