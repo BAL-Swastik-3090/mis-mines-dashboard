@@ -7,7 +7,7 @@
  * under those bars in GradeDespatchChart. What remains here is the one thing that
  * genuinely needs to be a table.
  *
- * SOLD AS vs ASSAYED is the reason the whole feature exists. What a load was
+ * DESPATCH GRADE vs LAB ASSAY is the reason the whole feature exists. What a load was
  * billed as and what it tested are different things — August 2026 had material
  * billed 40-52% assaying down to 35.90, and low-grade material assaying up to
  * 41.22. A billed grade whose assay range crosses a band boundary is flagged red;
@@ -97,13 +97,13 @@ export default function GradeDespatchTable() {
         </div>
       )}
 
-      {/* ── Sold as vs assayed ────────────────────────────────────────── */}
+      {/* ── Despatch grade vs lab assay ────────────────────────────────────────── */}
       {data.sold_as.length > 0 && (
         <div className="bg-white border border-border rounded-lg shadow-sm overflow-hidden">
           <div className="px-4 pt-3 pb-2.5 border-b border-border-light flex items-center gap-2">
             <Scale size={14} className="text-[#ad1457]" />
             <span className="font-condensed font-bold text-[13px] text-navy tracking-widest uppercase">
-              Sold As vs Assayed
+              Despatch Grade vs Lab Assay
             </span>
           </div>
           <div className="overflow-x-auto">
