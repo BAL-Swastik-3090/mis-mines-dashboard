@@ -8,21 +8,27 @@ BAL vs SUK classification via CUSTOMERNO:
   CUSTOMERNO = 'BAL'       → Balasore Alloys Plant
   CUSTOMERNO = 'JABAMOYEE' → Sukinda Plant
 
-Mines despatch is scoped by CUSTOMERNO alone — deliberately NOT by transporter.
+Mines despatch is TRANSPORTER = 'SHREE GANESH LOGISTICS' only. Confirmed by the
+mine on 2026-09-03: Ganesh is the despatch haulier, and the other carriers on
+this table are not despatch at all.
 
-It used to also require TRANSPORTER = 'SHREE GANESH LOGISTICS'. That exact-string
-match silently dropped real tonnage to the same two plants: ODISHA LOGISTIC
-(2,460.4 MT May-Sep), OMM GOODS CARRIER (210.0 MT), and a misspelled
-'ODISHA LOGOSTIC' entry (20.0 MT) — 2.6% of August, 6.0% of May.
+The data agrees, and the real distinction is the product form rather than the
+carrier. May-Sep:
 
-Widened on 2026-09-03 because the plan side (mines_despatch_plan.Grand_Total_Qty)
-covers ALL despatch, so a filtered actual over a full plan understated achievement
-by up to 3.4 points (May 53.1% -> 56.5%). Comparing the two required the same
-scope on both sides.
+    SHREE GANESH LOGISTICS   5,433 rows   0 bagged   avg 11.79 MT   batch on every row
+    ODISHA LOGISTIC             99 rows  95 bagged   avg 24.85 MT   16 with no batch
+    OMM GOODS CARRIER            8 rows   8 bagged   avg 26.25 MT
+    ODISHA LOGOSTIC              1 row    1 bagged   avg 20.00 MT
 
-DO NOT reintroduce a transporter filter. Matching on carrier name means any new
-haulier, or any typo in SAP entry, vanishes with no error — which is exactly what
-'ODISHA LOGOSTIC' was.
+The bag profile is exact — 25 bags to 25.002 MT, 1.000 MT per bag, so jumbo bags.
+Of 104 bagged loads across 5 POs, NOT ONE has a row in pp_quality_inspection at
+any plant: that material is never assayed, so it could never carry a grade.
+
+This filter was briefly removed on 2026-09-03 while plan was added, on the theory
+that mines_despatch_plan covers all despatch and both sides needed the same
+scope. That was wrong. The plan carries MG/LG/COB — bulk ore and concentrate —
+which is exactly what Ganesh hauls, so plan and actual already agree in scope.
+Restored the same day.
 """
 from datetime import date, timedelta
 from sqlalchemy.orm import Session
@@ -93,6 +99,7 @@ _ACTUAL_SQL = """
         FROM zsd_outbound_despatch
         WHERE DATE(GATEINDATE) BETWEEN :f AND :t
           AND CUSTOMERNO IN ('BAL', 'JABAMOYEE')
+          AND TRANSPORTER = 'SHREE GANESH LOGISTICS'
         GROUP BY DELIVERYNO
     ) z
     GROUP BY DATE(z.GATEINDATE)
@@ -128,7 +135,8 @@ def get_actuals_summary(db: Session, from_date: date, to_date: date) -> dict:
             FROM zsd_outbound_despatch
             WHERE DATE(GATEINDATE) BETWEEN :f AND :t
               AND CUSTOMERNO IN ('BAL', 'JABAMOYEE')
-                GROUP BY DELIVERYNO
+              AND TRANSPORTER = 'SHREE GANESH LOGISTICS'
+            GROUP BY DELIVERYNO
         ) z
     """)
     row = db.execute(sql, {"f": from_date, "t": to_date}).fetchone()
