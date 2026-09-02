@@ -13,10 +13,8 @@
  * 41.22. A billed grade whose assay range crosses a band boundary is flagged red;
  * banding on MATERIAL_DESC would have shown two clean rows and hidden all of it.
  *
- * The assay-coverage banner below it is deliberately not hidden.
- *
- * The transporter-exclusion banner that used to sit here is gone: the filter it
- * warned about was removed on 2026-09-03, so nothing is excluded any more.
+ * Two banners below it are deliberately not hidden: assay coverage, and the
+ * bagged material on the same SAP table that is not despatch.
  *
  * The coverage banner used to blame assay lag for the Unassayed row. That was
  * wrong — the whole row was COB concentrate, assayed at plant 1210, which the
@@ -77,6 +75,27 @@ export default function GradeDespatchTable() {
             (PO + batch) and {n1(cov.tier2_tonnage)} MT falls back to the PO average. This row
             is genuinely missing lab results — it is not COB concentrate, which is assayed at
             the plant and carries its own band.
+          </div>
+        </div>
+      )}
+
+      {/* ── Non-despatch movements on the same table ──────────────────── */}
+      {data.excluded.tonnage > 0 && (
+        <div className="p-3 rounded-lg bg-bg-section border border-border
+                        border-l-[3px] border-l-[#8899bb] flex items-start gap-2.5">
+          <AlertTriangle size={15} className="text-txt-muted shrink-0 mt-[1px]" />
+          <div className="text-[11.5px] text-txt-secondary leading-relaxed">
+            <span className="font-bold text-navy">
+              {n1(data.excluded.tonnage)} MT across {n0(data.excluded.trips)} trips on this
+              SAP table is not despatch and is excluded.
+            </span>{" "}
+            {data.excluded.bagged_trips > 0 && (
+              <>{n0(data.excluded.bagged_trips)} of those trips are bagged material — 1 MT
+              jumbo bags, hauled by{" "}
+              {data.excluded.transporters.map((x) => x.transporter || "(blank)").join(", ")},
+              and never assayed in SAP QM, so it could not carry a grade even if included. </>
+            )}
+            Despatch is Shree Ganesh Logistics, confirmed by the mine.
           </div>
         </div>
       )}

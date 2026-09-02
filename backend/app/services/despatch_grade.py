@@ -58,23 +58,29 @@ from sqlalchemy.orm import Session
 MINES_CUSTOMERS = ("BAL", "JABAMOYEE")
 CUSTOMER_LABELS = {"BAL": "Balasore Plant", "JABAMOYEE": "Sukinda Plant"}
 
-# NO TRANSPORTER FILTER — scoped by CUSTOMERNO alone, same as the Despatch section.
+# Mines despatch is TRANSPORTER = 'SHREE GANESH LOGISTICS' only, matching the
+# Despatch section so the two agree on the same page.
 #
-# Both used to require TRANSPORTER = 'SHREE GANESH LOGISTICS'. That exact-string
-# match silently dropped real tonnage to the same two plants: ODISHA LOGISTIC
-# (2,460.4 MT May-Sep), OMM GOODS CARRIER (210.0 MT), and one misspelled
-# 'ODISHA LOGOSTIC' row (20.0 MT) — 2.6% of August, 6.0% of May. Those loads run
-# a flat ~25 MT against Ganesh's 11.7 on their own PO series, so they are a
-# separate haulage arrangement, not bad data.
+# CONFIRMED BY THE MINE on 2026-09-03: Ganesh is the despatch haulier; the other
+# carriers on this table are not despatch at all. The data says the same thing,
+# and the real distinction is product form, not carrier. May-Sep:
 #
-# Widened on 2026-09-03 when plan was added. mines_despatch_plan.Grand_Total_Qty
-# covers ALL despatch, so dividing a filtered actual by a full plan understated
-# achievement by up to 3.4 points (May 53.1% -> 56.5%). Plan vs actual demands the
-# same scope on both sides.
+#   SHREE GANESH LOGISTICS  5,433 rows   0 bagged  avg 11.79 MT  batch on every row
+#   ODISHA LOGISTIC            99 rows  95 bagged  avg 24.85 MT  16 with no batch
+#   OMM GOODS CARRIER           8 rows   8 bagged  avg 26.25 MT
+#   ODISHA LOGOSTIC             1 row    1 bagged  avg 20.00 MT
 #
-# DO NOT reintroduce it. Filtering on carrier name means any new haulier, or any
-# typo in SAP entry, disappears with no error — which is precisely what
-# 'ODISHA LOGOSTIC' was.
+# The bag profile is exact — 25 bags to 25.002 MT, 1.000 MT a bag, so jumbo bags.
+# Of 104 bagged loads across 5 POs, NOT ONE has a row in pp_quality_inspection at
+# any plant. That material is never assayed and so could never carry a grade.
+#
+# This filter was briefly removed earlier the same day while plan was added, on
+# the theory that the plan covers all despatch and both sides needed matching
+# scope. That was wrong: the plan carries MG/LG/COB — bulk ore and concentrate,
+# exactly what Ganesh hauls — so plan and actual already agree in scope. The
+# widening also pushed August's assay coverage from 100% down to 97.4% by pulling
+# in tonnage that can never be assayed.
+DESPATCH_TRANSPORTER = "SHREE GANESH LOGISTICS"
 
 # Quality lives in TWO plants and both must be read.
 #
@@ -250,7 +256,7 @@ def _despatch_rows(db: Session, fd: date, td: date) -> list:
     in this table, hence the +0.
     """
     ph = ", ".join(f":c{i}" for i in range(len(MINES_CUSTOMERS)))
-    params = {"fd": fd, "td": td}
+    params = {"fd": fd, "td": td, "tr": DESPATCH_TRANSPORTER}
     for i, c in enumerate(MINES_CUSTOMERS):
         params[f"c{i}"] = c
     sql = text(f"""
@@ -263,8 +269,44 @@ def _despatch_rows(db: Session, fd: date, td: date) -> list:
         FROM zsd_outbound_despatch
         WHERE DATE(GATEINDATE) BETWEEN :fd AND :td
           AND CUSTOMERNO IN ({ph})
+          AND TRANSPORTER = :tr
     """)
     return db.execute(sql, params).fetchall()
+
+
+def _excluded_rows(db: Session, fd: date, td: date) -> dict:
+    """Non-despatch movements on this table in the window.
+
+    Bagged material hauled by the other carriers. Reported rather than hidden so
+    the number is never a surprise, but it is NOT a pending decision: the mine
+    confirmed on 2026-09-03 that only Ganesh is despatch, and none of this
+    material is assayed, so it could not be graded even if it were included.
+    """
+    ph = ", ".join(f":c{i}" for i in range(len(MINES_CUSTOMERS)))
+    params = {"fd": fd, "td": td, "tr": DESPATCH_TRANSPORTER}
+    for i, c in enumerate(MINES_CUSTOMERS):
+        params[f"c{i}"] = c
+    rows = db.execute(text(f"""
+        SELECT TRANSPORTER AS transporter, COUNT(*) AS trips,
+               COALESCE(SUM(NETWEIGHT + 0), 0) AS wt,
+               SUM(COALESCE(BAGCOUNT, 0) > 0)  AS bagged
+        FROM zsd_outbound_despatch
+        WHERE DATE(GATEINDATE) BETWEEN :fd AND :td
+          AND CUSTOMERNO IN ({ph})
+          AND (TRANSPORTER <> :tr OR TRANSPORTER IS NULL)
+        GROUP BY TRANSPORTER
+        ORDER BY wt DESC
+    """), params).fetchall()
+    return {
+        "trips":   sum(int(r.trips) for r in rows),
+        "tonnage": round(sum(_f(r.wt) for r in rows), 3),
+        "bagged_trips": sum(int(r.bagged or 0) for r in rows),
+        "transporters": [
+            {"transporter": r.transporter, "trips": int(r.trips),
+             "tonnage": round(_f(r.wt), 3), "bagged_trips": int(r.bagged or 0)}
+            for r in rows
+        ],
+    }
 
 
 def _quality(db: Session, pos: list[str]) -> tuple[dict, dict, dict, dict, dict]:
@@ -596,6 +638,8 @@ def get_grade_wise_despatch(db: Session, from_date: date, to_date: date) -> dict
             "assayed_pct": round((tier1 + tier2) / tot_wt * 100, 1) if tot_wt else None,
             "po_count": len(pos),
         },
+
+        "excluded": _excluded_rows(db, from_date, to_date),
 
         "plan": {
             # False for June 2026, which has no rows in mines_despatch_plan.

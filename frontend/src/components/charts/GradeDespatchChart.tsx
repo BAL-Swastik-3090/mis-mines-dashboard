@@ -377,6 +377,8 @@ export default function GradeDespatchChart() {
                 {hasPlan
                   ? " Days that carried a plan but despatched nothing are shown too, so a missed day is visible rather than absent. The plan has no Unassayed category, so that band has no plan counterpart."
                   : " Only days with despatch appear."}
+                {" "}Despatch is Shree Ganesh Logistics; bagged material on the same SAP table
+                is not despatch and is excluded, with the tonnage stated below.
               </p>
             </div>
           </>

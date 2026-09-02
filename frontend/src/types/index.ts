@@ -1090,6 +1090,16 @@ export interface GradeDespatchResponse {
                  HG: number; MG: number; LG: number; COB: number; UNASSAYED: number;
                  plan_HG: number; plan_MG: number; plan_LG: number; plan_COB: number }>;
 
+  /** Non-despatch movements on the same SAP table — bagged material hauled by
+   *  other carriers. Reported, never hidden; not a pending decision. */
+  excluded: {
+    trips:        number;
+    tonnage:      number;
+    bagged_trips: number;
+    transporters: Array<{ transporter: string | null; trips: number;
+                          tonnage: number; bagged_trips: number }>;
+  };
+
   plan: {
     /** false for June 2026 — no rows in mines_despatch_plan at all. */
     has_plan:       boolean;
