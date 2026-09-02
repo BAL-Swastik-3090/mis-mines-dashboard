@@ -47,7 +47,13 @@ async def generate_insights(
             use_cache=not force_refresh,
         )
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"LLM error: {str(e)}")
+        # Report WHAT failed, not a guess. See classify_llm_error.
+        from app.config import get_settings
+        cfg = get_settings()
+        raise HTTPException(
+            status_code=502,
+            detail=svc.classify_llm_error(e, cfg.litellm_model, cfg.litellm_base_url),
+        )
 
 
 @router.post("/cache/invalidate", tags=["Insights"])

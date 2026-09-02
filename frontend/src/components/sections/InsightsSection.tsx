@@ -73,7 +73,14 @@ function SkeletonCard({ title, accent, icon }: { title: string; accent: string; 
 export default function InsightsSection() {
   const { periodLabel } = useDateFilter();
   const [triggered, setTriggered] = useState(false);
-  const { data, isLoading, isError, refetch, isFetching } = useInsightsGenerate(triggered);
+  const { data, isLoading, isError, error, refetch, isFetching } = useInsightsGenerate(triggered);
+
+  // The backend classifies the failure — gateway down vs bad key vs a model the
+  // gateway does not serve. Show that instead of the old hardcoded "may be
+  // unreachable", which pointed at the network no matter what actually broke.
+  const llmDetail =
+    (error as { response?: { data?: { detail?: string } } } | null)
+      ?.response?.data?.detail;
 
   const busy = isLoading || isFetching;
 
@@ -155,7 +162,9 @@ export default function InsightsSection() {
       {triggered && isError && !busy && (
         <div className="bg-white border border-danger/30 rounded-lg p-6 text-center">
           <p className="text-danger text-[13px] font-semibold mb-2">Failed to generate insights</p>
-          <p className="text-txt-muted text-[11px] mb-3">LiteLLM API may be unreachable. Check backend logs.</p>
+          <p className="text-txt-muted text-[11px] mb-3 max-w-[560px] mx-auto leading-relaxed">
+            {llmDetail ?? "Could not reach the AI service. Check the backend logs."}
+          </p>
           <button
             onClick={() => refetch()}
             className="bg-danger text-white text-[11px] font-bold px-4 py-1.5 rounded hover:opacity-80 transition-opacity"

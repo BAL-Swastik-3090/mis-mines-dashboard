@@ -649,6 +649,45 @@ def set_cached_insights(cache_key: str, data: dict, ttl_seconds: int = 86400) ->
 
 # ── public: generate insights via LiteLLM ─────────────────────
 
+# ── LLM failure classification ───────────────────────────────────────────────
+# The section used to report every failure as "LiteLLM API may be unreachable",
+# which sends whoever reads it to check the network. On 2026-09-02 the real
+# cause was none of that: the gateway was alive, the key was valid, and
+# /v1/models listed two models for it — but /chat/completions rejected BOTH with
+# "Invalid model name". Models outside the key's allow-list return 401; the two
+# inside it return 400. That signature means the key is entitled to deployments
+# the proxy's model_list does not actually register, which only the gateway
+# admin can fix.
+#
+# So say which of those it is. A wrong diagnosis on screen costs more time than
+# no diagnosis.
+def classify_llm_error(e: Exception, model: str, base_url: str) -> str:
+    name = type(e).__name__
+    msg  = str(e)
+
+    if "Invalid model name" in msg or "model_not_found" in msg:
+        return (
+            f"The gateway at {base_url} does not serve a model named '{model}'. "
+            f"The API key is valid and the gateway is up — the model is not "
+            f"registered on it. Ask whoever administers the LiteLLM proxy to "
+            f"register that deployment, or to tell you the correct model name "
+            f"to put in LITELLM_MODEL."
+        )
+    if name in ("APIConnectionError", "APITimeoutError") or "Connection" in name:
+        return (
+            f"Could not reach the LiteLLM gateway at {base_url}. "
+            f"Check that the host is up and reachable from the backend."
+        )
+    if name == "AuthenticationError" or "Authentication Error" in msg:
+        return (
+            f"The LiteLLM gateway rejected the API key. "
+            f"Check LITELLM_API_KEY."
+        )
+    if name == "RateLimitError":
+        return "The LiteLLM gateway is rate-limiting this key. Try again shortly."
+    return f"{name}: {msg}"
+
+
 async def generate_insights(
     db: Session, from_date: date, to_date: date,
     use_cache: bool = True,
