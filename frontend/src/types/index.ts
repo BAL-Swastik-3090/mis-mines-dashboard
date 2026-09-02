@@ -1022,6 +1022,12 @@ export interface GradeBandRow {
   share_pct: number | null;
   cr2o3:     number | null;
   cr_fe:     number | null;
+  /** From mines_despatch_plan. null when the band has no plan concept
+   *  (Unassayed) or the range has no plan rows at all (June 2026). */
+  plan_tonnage:    number | null;
+  /** null when there is nothing to measure against. A zero plan is neither 0%
+   *  nor infinity — May planned 0 HG and shipped 762.7 MT. */
+  achievement_pct: number | null;
 }
 
 /** A 2% distribution bucket. share_pct is of ASSAYED tonnage, not of the total. */
@@ -1067,21 +1073,32 @@ export interface GradeDespatchResponse {
     cr_fe:       number | null;
     ore_tonnage: number;
     share_pct:   number | null;
+    /** Every plan category including CrFe/Lump, so it equals the figure the
+     *  Despatch section shows. null when the range carries no plan. */
+    plan_tonnage:    number | null;
+    achievement_pct: number | null;
   };
 
   fine_bands: GradeFineBand[];
   sold_as:    GradeSoldAsRow[];
   customers:  GradeCustomerRow[];
 
-  /** Per-day tonnage split by band, for the trend. */
-  daily: Array<{ date: string; HG: number; MG: number; LG: number;
-                 COB: number; UNASSAYED: number }>;
+  /** Per-day tonnage split by band, plus that day's plan per band. A day appears
+   *  if it had despatch OR carried a plan, so a planned day that shipped nothing
+   *  is visible rather than absent. */
+  daily: Array<{ date: string;
+                 HG: number; MG: number; LG: number; COB: number; UNASSAYED: number;
+                 plan_HG: number; plan_MG: number; plan_LG: number; plan_COB: number }>;
 
-  /** Mines despatch the transporter filter drops — reported, never hidden. */
-  excluded: {
-    trips:   number;
-    tonnage: number;
-    transporters: Array<{ transporter: string | null; trips: number; tonnage: number }>;
+  plan: {
+    /** false for June 2026 — no rows in mines_despatch_plan at all. */
+    has_plan:       boolean;
+    days_with_plan: number;
+    days_in_range:  number;
+    by_band:        Record<string, number>;
+    /** CrFe and Lump: no assay band to compare against. Zero in every row so
+     *  far, carried so the plan total cannot silently lose them. */
+    unmapped_tonnage: number;
   };
 
   coverage: {

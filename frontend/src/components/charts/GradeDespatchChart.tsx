@@ -46,6 +46,9 @@ const BAND_LABEL: Record<string, string> = {
 /** Stacked bottom-up: mine ore lowest-grade-first, then COB concentrate as its
  *  own product, then Unassayed on top where it reads as the residual it is. */
 const STACK_ORDER = ["LG", "MG", "HG", "COB", "UNASSAYED"] as const;
+/** Plan side. No Unassayed — the plan has no such category, and inventing a zero
+ *  for it would imply the mine planned for unassayed tonnage. */
+const PLAN_ORDER = ["LG", "MG", "HG", "COB"] as const;
 
 const TOOLTIP = {
   backgroundColor: "#0f1c35",
@@ -65,6 +68,12 @@ function n0(v: number | null | undefined) {
 }
 function g(v: number | null | undefined, dp = 2) {
   return v == null ? "—" : v.toFixed(dp);
+}
+
+/** Achievement colour. Deliberately three bands rather than a gradient — the
+ *  reader needs "on plan / near / short", not a hue to interpret. */
+function achColor(pct: number) {
+  return pct >= 100 ? "#2e7d32" : pct >= 90 ? "#c87820" : "#c62828";
 }
 
 function Card({ icon, title, right, children, foot }: {
@@ -100,6 +109,7 @@ export default function GradeDespatchChart() {
 
   const t = data.totals;
   const cov = data.coverage;
+  const hasPlan = data.plan.has_plan;
   const fine = data.fine_bands.filter((f) => f.tonnage > 0);
   const assayed = fine.reduce((s, f) => s + f.tonnage, 0);
 
@@ -114,18 +124,49 @@ export default function GradeDespatchChart() {
     },
     tooltip: {
       trigger: "axis", axisPointer: { type: "shadow" }, ...TOOLTIP,
-      formatter: (ps: { axisValue: string; seriesName: string; value: number; color: string }[]) => {
-        const total = ps.reduce((s, p) => s + (p.value || 0), 0);
-        const lines = ps
-          .filter((p) => p.value > 0)
-          .map((p) =>
-            `<div style="font-family:'IBM Plex Mono'">` +
-            `<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${p.color};margin-right:6px"></span>` +
-            `${p.seriesName} <span style="float:right;padding-left:14px">${formatIndian(Math.round(p.value))} MT</span></div>`)
-          .join("");
-        return `<div style="font-weight:700;margin-bottom:5px">${ps[0].axisValue}</div>${lines}` +
-          `<div style="font-family:'IBM Plex Mono';border-top:1px solid #2c4a7c;margin-top:5px;padding-top:4px">` +
-          `Total <span style="float:right;padding-left:14px;font-weight:700">${formatIndian(Math.round(total))} MT</span></div>`;
+      formatter: (ps: { axisValue: string; seriesName: string; value: number;
+                        color: string; seriesIndex: number }[]) => {
+        // Plan series are emitted first, so the first PLAN_ORDER.length entries
+        // are the plan side when a plan exists.
+        const nPlan  = hasPlan ? PLAN_ORDER.length : 0;
+        const isPlan = (i: number) => i < nPlan;
+
+        const row = (p: { seriesName: string; value: number; color: string }, dim: boolean) =>
+          `<div style="font-family:'IBM Plex Mono'">` +
+          `<span style="display:inline-block;width:8px;height:8px;border-radius:2px;` +
+          `background:${p.color};opacity:${dim ? 0.4 : 1};margin-right:6px"></span>` +
+          `${p.seriesName} <span style="float:right;padding-left:14px">` +
+          `${formatIndian(Math.round(p.value))} MT</span></div>`;
+
+        const planRows   = ps.filter((p) => isPlan(p.seriesIndex)  && p.value > 0);
+        const actualRows = ps.filter((p) => !isPlan(p.seriesIndex) && p.value > 0);
+        const planTot    = planRows.reduce((a, p) => a + p.value, 0);
+        const actualTot  = actualRows.reduce((a, p) => a + p.value, 0);
+
+        let html = `<div style="font-weight:700;margin-bottom:5px">${ps[0].axisValue}</div>`;
+        if (planRows.length) {
+          html += `<div style="font-size:10px;color:#8fa8d0;margin-bottom:2px">PLAN</div>` +
+                  planRows.map((p) => row(p, true)).join("");
+        }
+        if (actualRows.length) {
+          html += `<div style="font-size:10px;color:#8fa8d0;margin:4px 0 2px">ACTUAL</div>` +
+                  actualRows.map((p) => row(p, false)).join("");
+        }
+        html += `<div style="font-family:'IBM Plex Mono';border-top:1px solid #2c4a7c;` +
+                `margin-top:5px;padding-top:4px">`;
+        if (planTot > 0) {
+          const ach = (actualTot / planTot) * 100;
+          html += `Plan <span style="float:right;padding-left:14px">` +
+                  `${formatIndian(Math.round(planTot))} MT</span><br/>`;
+          html += `Actual <span style="float:right;padding-left:14px;font-weight:700">` +
+                  `${formatIndian(Math.round(actualTot))} MT</span><br/>` +
+                  `<span style="color:${ach >= 100 ? "#6ee7a8" : ach >= 90 ? "#f5c86b" : "#ff9b9b"}">` +
+                  `${ach.toFixed(0)}% of plan</span>`;
+        } else {
+          html += `Total <span style="float:right;padding-left:14px;font-weight:700">` +
+                  `${formatIndian(Math.round(actualTot))} MT</span>`;
+        }
+        return html + `</div>`;
       },
     },
     xAxis: {
@@ -144,14 +185,36 @@ export default function GradeDespatchChart() {
       axisLabel: { ...AXIS_LABEL, formatter: (v: number) => formatIndian(v) },
       splitLine: { lineStyle: { color: "#eef2f8" } },
     },
-    series: STACK_ORDER.map((k) => ({
-      name: BAND_LABEL[k],
-      type: "bar",
-      stack: "grade",
-      barMaxWidth: 26,
-      itemStyle: { color: BAND_COLOR[k] },
-      data: data.daily.map((d) => d[k]),
-    })),
+    // Two stacks per day. ECharts renders separate `stack` names side by side,
+    // so plan sits left of actual rather than on top of it.
+    //
+    // Plan uses the same band hues at reduced opacity with a solid border —
+    // eight solid series would need eight legend entries and the pairing would
+    // stop being readable. The legend therefore stays on the four bands and one
+    // marker explains the left/right convention.
+    series: [
+      ...(hasPlan ? PLAN_ORDER.map((k) => ({
+        name: BAND_LABEL[k],
+        type: "bar",
+        stack: "plan",
+        barMaxWidth: 18,
+        itemStyle: {
+          color: BAND_COLOR[k], opacity: 0.32,
+          borderColor: BAND_COLOR[k], borderWidth: 1,
+        },
+        data: data.daily.map((d) => d[`plan_${k}` as keyof typeof d] as number),
+      })) : []),
+      ...STACK_ORDER.map((k) => ({
+        name: BAND_LABEL[k],
+        type: "bar",
+        stack: "actual",
+        barMaxWidth: 18,
+        itemStyle: { color: BAND_COLOR[k] },
+        data: data.daily.map((d) => d[k]),
+      })),
+    ],
+    barGap: "8%",
+    barCategoryGap: "34%",
   };
 
   // ── 2% distribution ────────────────────────────────────────────────────
@@ -213,6 +276,16 @@ export default function GradeDespatchChart() {
             <span className="font-bold text-navy text-[13px]">{n0(t.tonnage)}</span> MT
             <span className="ml-1.5">· {n0(t.trips)} trips</span>
             {cov.assayed_pct != null && <span className="ml-1.5">· {cov.assayed_pct.toFixed(1)}% assayed</span>}
+            {t.plan_tonnage != null && (
+              <>
+                <span className="ml-1.5">· plan {n0(t.plan_tonnage)} MT</span>
+                {t.achievement_pct != null && (
+                  <span className="ml-1.5 font-bold" style={{ color: achColor(t.achievement_pct) }}>
+                    · {t.achievement_pct.toFixed(1)}% of plan
+                  </span>
+                )}
+              </>
+            )}
           </>
         }
         foot={
@@ -234,11 +307,34 @@ export default function GradeDespatchChart() {
                   </span>
                   <span className="font-mono text-[10px] text-txt-light">
                     · {b.share_pct?.toFixed(1)}%
+                    {b.plan_tonnage != null && b.plan_tonnage > 0 && (
+                      <> · plan {n1(b.plan_tonnage)}</>
+                    )}
                     {b.cr2o3 != null && <> · Cr₂O₃ {g(b.cr2o3)} · Cr/Fe {g(b.cr_fe, 3)}</>}
                   </span>
+                  {b.achievement_pct != null && (
+                    <span className="font-mono text-[10.5px] font-bold tabular-nums"
+                          style={{ color: achColor(b.achievement_pct) }}>
+                      {b.achievement_pct.toFixed(1)}%
+                    </span>
+                  )}
                 </div>
               ))}
             </div>
+
+            {/* No plan on record. June 2026 has zero rows in mines_despatch_plan,
+                and a silent absence would read as "we hit exactly nothing". */}
+            {!hasPlan && (
+              <div className="px-4 py-2 border-t border-border-light bg-[#fff8e1]/60
+                              flex items-baseline gap-2">
+                <span className="text-[9.5px] font-condensed font-bold tracking-widest
+                                 uppercase text-[#8a6d1a]">No plan on record</span>
+                <span className="font-mono text-[10px] text-txt-secondary">
+                  mines_despatch_plan holds no rows for this range, so actual is shown
+                  without a plan comparison rather than against zero.
+                </span>
+              </div>
+            )}
 
             {/* Customer split */}
             {data.customers.length > 0 && (
@@ -264,13 +360,23 @@ export default function GradeDespatchChart() {
                 <span className="font-semibold text-success/60">TONNAGE · </span>SAP outbound despatch
                 &nbsp;·&nbsp;<span className="font-semibold text-success/60">GRADE · </span>
                 SAP quality inspection, joined on PO + batch
+                {hasPlan && (
+                  <>&nbsp;·&nbsp;<span className="font-semibold text-success/60">PLAN · </span>
+                  mines_despatch_plan (IMOS)</>
+                )}
               </p>
               <p className="text-[9px] font-mono text-txt-muted leading-tight">
-                Bars are on the ASSAYED Cr₂O₃, not the billed material code. Grades are
+                {hasPlan
+                  ? "Each day shows PLAN on the left and ACTUAL on the right; plan bars are the same colours, faded. "
+                  : ""}
+                Actual bars are on the ASSAYED Cr₂O₃, not the billed material code. Grades are
                 tonnage-weighted, never an average of per-trip readings. COB concentrate is
                 assayed at the plant and kept as its own product rather than banded against a
                 run-of-mine schedule. Unassayed tonnage is stacked rather than dropped, so the
-                bars total the Despatch figures above. Only days with despatch appear.
+                bars total the Despatch figures above.
+                {hasPlan
+                  ? " Days that carried a plan but despatched nothing are shown too, so a missed day is visible rather than absent. The plan has no Unassayed category, so that band has no plan counterpart."
+                  : " Only days with despatch appear."}
               </p>
             </div>
           </>
