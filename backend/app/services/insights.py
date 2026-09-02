@@ -203,7 +203,7 @@ def _despatch_mtd_actual(db: Session, from_date: date, to_date: date) -> float |
     """MTD despatch actual from zsd_outbound_despatch via CUSTOMERNO.
 
     Filter must match despatch.py's get_actuals_summary() exactly (same
-    TRANSPORTER restriction) so Reality Check / AI Insights agree with the
+    customer scope, no transporter restriction) so Reality Check / AI Insights agree with the
     Despatch dashboard section's own numbers.
     """
     try:
@@ -214,7 +214,6 @@ def _despatch_mtd_actual(db: Session, from_date: date, to_date: date) -> float |
                 FROM   zsd_outbound_despatch
                 WHERE  DATE(GATEINDATE) BETWEEN :f AND :t
                   AND  CUSTOMERNO IN ('BAL', 'JABAMOYEE')
-                  AND  TRANSPORTER = 'SHREE GANESH LOGISTICS'
                 GROUP  BY DELIVERYNO
             ) z
         """), {"f": from_date, "t": to_date}).fetchone()
@@ -488,7 +487,7 @@ def _despatch_split_mtd(db: Session, from_date: date, to_date: date) -> dict:
     """MTD despatch BAL vs SUK split via CUSTOMERNO.
 
     Filter must match despatch.py's get_actuals_summary() exactly (same
-    TRANSPORTER restriction) so Reality Check / AI Insights agree with the
+    customer scope, no transporter restriction) so Reality Check / AI Insights agree with the
     Despatch dashboard section's own numbers.
     """
     try:
@@ -504,7 +503,6 @@ def _despatch_split_mtd(db: Session, from_date: date, to_date: date) -> dict:
                 FROM zsd_outbound_despatch
                 WHERE DATE(GATEINDATE) BETWEEN :f AND :t
                   AND CUSTOMERNO IN ('BAL', 'JABAMOYEE')
-                  AND TRANSPORTER = 'SHREE GANESH LOGISTICS'
                 GROUP BY DELIVERYNO
             ) z
         """), {"f": from_date, "t": to_date}).fetchone()

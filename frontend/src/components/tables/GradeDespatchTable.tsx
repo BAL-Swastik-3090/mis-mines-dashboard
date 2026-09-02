@@ -13,8 +13,10 @@
  * 41.22. A billed grade whose assay range crosses a band boundary is flagged red;
  * banding on MATERIAL_DESC would have shown two clean rows and hidden all of it.
  *
- * The two banners below it are deliberately not hidden: assay coverage, and the
- * tonnage the Despatch section's transporter filter drops.
+ * The assay-coverage banner below it is deliberately not hidden.
+ *
+ * The transporter-exclusion banner that used to sit here is gone: the filter it
+ * warned about was removed on 2026-09-03, so nothing is excluded any more.
  *
  * The coverage banner used to blame assay lag for the Unassayed row. That was
  * wrong — the whole row was COB concentrate, assayed at plant 1210, which the
@@ -75,24 +77,6 @@ export default function GradeDespatchTable() {
             (PO + batch) and {n1(cov.tier2_tonnage)} MT falls back to the PO average. This row
             is genuinely missing lab results — it is not COB concentrate, which is assayed at
             the plant and carries its own band.
-          </div>
-        </div>
-      )}
-
-      {/* ── Transporter exclusion ─────────────────────────────────────── */}
-      {data.excluded.tonnage > 0 && (
-        <div className="p-3 rounded-lg bg-bg-section border border-border
-                        border-l-[3px] border-l-[#8899bb] flex items-start gap-2.5">
-          <AlertTriangle size={15} className="text-txt-muted shrink-0 mt-[1px]" />
-          <div className="text-[11.5px] text-txt-secondary leading-relaxed">
-            <span className="font-bold text-navy">
-              A further {n1(data.excluded.tonnage)} MT across {n0(data.excluded.trips)} trips is
-              outside these figures.
-            </span>{" "}
-            The Despatch section scopes actuals to one transporter and this section matches it so
-            the two agree. That excludes{" "}
-            {data.excluded.transporters.map((x) => x.transporter || "(blank)").join(", ")}.
-            Worth a decision — widening it would move the headline Despatch numbers too.
           </div>
         </div>
       )}

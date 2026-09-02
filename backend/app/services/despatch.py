@@ -7,6 +7,22 @@ Actual source: zsd_outbound_despatch  (single table, refreshed every 15 min)
 BAL vs SUK classification via CUSTOMERNO:
   CUSTOMERNO = 'BAL'       → Balasore Alloys Plant
   CUSTOMERNO = 'JABAMOYEE' → Sukinda Plant
+
+Mines despatch is scoped by CUSTOMERNO alone — deliberately NOT by transporter.
+
+It used to also require TRANSPORTER = 'SHREE GANESH LOGISTICS'. That exact-string
+match silently dropped real tonnage to the same two plants: ODISHA LOGISTIC
+(2,460.4 MT May-Sep), OMM GOODS CARRIER (210.0 MT), and a misspelled
+'ODISHA LOGOSTIC' entry (20.0 MT) — 2.6% of August, 6.0% of May.
+
+Widened on 2026-09-03 because the plan side (mines_despatch_plan.Grand_Total_Qty)
+covers ALL despatch, so a filtered actual over a full plan understated achievement
+by up to 3.4 points (May 53.1% -> 56.5%). Comparing the two required the same
+scope on both sides.
+
+DO NOT reintroduce a transporter filter. Matching on carrier name means any new
+haulier, or any typo in SAP entry, vanishes with no error — which is exactly what
+'ODISHA LOGOSTIC' was.
 """
 from datetime import date, timedelta
 from sqlalchemy.orm import Session
@@ -77,7 +93,6 @@ _ACTUAL_SQL = """
         FROM zsd_outbound_despatch
         WHERE DATE(GATEINDATE) BETWEEN :f AND :t
           AND CUSTOMERNO IN ('BAL', 'JABAMOYEE')
-          AND TRANSPORTER = 'SHREE GANESH LOGISTICS'
         GROUP BY DELIVERYNO
     ) z
     GROUP BY DATE(z.GATEINDATE)
@@ -113,8 +128,7 @@ def get_actuals_summary(db: Session, from_date: date, to_date: date) -> dict:
             FROM zsd_outbound_despatch
             WHERE DATE(GATEINDATE) BETWEEN :f AND :t
               AND CUSTOMERNO IN ('BAL', 'JABAMOYEE')
-              AND TRANSPORTER = 'SHREE GANESH LOGISTICS'
-            GROUP BY DELIVERYNO
+                GROUP BY DELIVERYNO
         ) z
     """)
     row = db.execute(sql, {"f": from_date, "t": to_date}).fetchone()
