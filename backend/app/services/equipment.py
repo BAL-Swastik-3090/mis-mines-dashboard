@@ -37,7 +37,7 @@ MTTR / MTBF  (both date-filter dependent)
   Fleet MTTR = total fleet B/D hrs  ÷  total fleet closed breakdown count
   Fleet MTBF = (machines_with_bd × Calendar Hours − total B/D hrs) ÷ total breakdown count
 """
-from datetime import date
+from datetime import date, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
@@ -85,6 +85,18 @@ def _calc_metrics(
 
 # ── Core snapshot queries ──────────────────────────────────────
 
+# report_date on BOTH Technoton tables is a DATETIME, not a DATE — every row is
+# stamped at 23:45:59. `report_date BETWEEN :f AND :t` therefore compares against
+# midnight on the closing day and SILENTLY DROPS IT: an Aug 1-31 range returned 30
+# days and lost 29.7 excavator engine-hours sitting on the 31st.
+#
+# Half-open [f, t+1) is the fix, and it stays index-friendly — DATE(report_date)
+# would work too but would prevent any index on the column from ever being used.
+# fuel_management.py already filters this way; equipment and insights did not.
+def _day_after(d: date) -> date:
+    return d + timedelta(days=1)
+
+
 def _last_snap_excavator(db: Session, from_date: date, to_date: date) -> list:
     sql = text("""
         SELECT t.vehicle_desc,
@@ -94,7 +106,7 @@ def _last_snap_excavator(db: Session, from_date: date, to_date: date) -> list:
         JOIN (
             SELECT vehicle_desc, report_date, MAX(tripDate) AS mx
             FROM   mines_technoton_rest_equipment_utilization
-            WHERE  report_date BETWEEN :f AND :t
+            WHERE  report_date >= :f AND report_date < :t_next
               AND  vehicle_desc LIKE '%Z AXIS%'
             GROUP BY vehicle_desc, report_date
         ) sub ON t.vehicle_desc = sub.vehicle_desc
@@ -103,7 +115,7 @@ def _last_snap_excavator(db: Session, from_date: date, to_date: date) -> list:
         GROUP BY t.vehicle_desc
         ORDER BY eng_hr_mtd DESC
     """)
-    return db.execute(sql, {"f": from_date, "t": to_date}).fetchall()
+    return db.execute(sql, {"f": from_date, "t_next": _day_after(to_date)}).fetchall()
 
 
 def _last_snap_tipper(db: Session, from_date: date, to_date: date) -> list:
@@ -116,7 +128,7 @@ def _last_snap_tipper(db: Session, from_date: date, to_date: date) -> list:
         JOIN (
             SELECT vehicle_desc, report_date, MAX(tripDate) AS mx
             FROM   mines_technoton_man_utilization
-            WHERE  report_date BETWEEN :f AND :t
+            WHERE  report_date >= :f AND report_date < :t_next
               AND  vehicle_desc LIKE 'MAN%'
               AND  vehicle_desc != 'MAN_Diesel Tanker'
             GROUP BY vehicle_desc, report_date
@@ -126,7 +138,7 @@ def _last_snap_tipper(db: Session, from_date: date, to_date: date) -> list:
         GROUP BY t.vehicle_desc
         ORDER BY eng_hr_mtd DESC
     """)
-    return db.execute(sql, {"f": from_date, "t": to_date}).fetchall()
+    return db.execute(sql, {"f": from_date, "t_next": _day_after(to_date)}).fetchall()
 
 
 def _get_bd_hours(
@@ -352,7 +364,7 @@ def get_excavator_trend(db: Session, from_date: date, to_date: date) -> dict:
         JOIN (
             SELECT vehicle_desc, report_date, MAX(tripDate) AS mx
             FROM   mines_technoton_rest_equipment_utilization
-            WHERE  report_date BETWEEN :f AND :t
+            WHERE  report_date >= :f AND report_date < :t_next
               AND  vehicle_desc LIKE '%Z AXIS%'
             GROUP BY vehicle_desc, report_date
         ) sub ON t.vehicle_desc = sub.vehicle_desc
@@ -361,7 +373,7 @@ def get_excavator_trend(db: Session, from_date: date, to_date: date) -> dict:
         GROUP BY t.vehicle_desc, t.report_date
         ORDER BY t.report_date, t.vehicle_desc
     """)
-    rows = db.execute(sql, {"f": from_date, "t": to_date}).fetchall()
+    rows = db.execute(sql, {"f": from_date, "t_next": _day_after(to_date)}).fetchall()
 
     pivot: dict[str, dict[date, float]] = {}
     date_set: set[date] = set()
@@ -380,7 +392,12 @@ def get_excavator_trend(db: Session, from_date: date, to_date: date) -> dict:
         "from_date":     from_date,
         "to_date":       to_date,
         "machine_names": active_names,
-        "dates":         [str(d) for d in all_dates],
+        # str() on a datetime yields '2026-08-01 23:45:59', which the frontend
+        # cannot parse into a day number — it rendered every tick as "DNaN".
+        # Emit an ISO date regardless of whether the driver hands back a date or
+        # a datetime.
+        "dates":         [(d.date() if hasattr(d, "date") else d).isoformat()
+                          for d in all_dates],
         "series": {
             name: [pivot[name].get(d) for d in all_dates]
             for name in active_names
