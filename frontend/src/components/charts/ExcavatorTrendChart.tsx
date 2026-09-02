@@ -10,8 +10,17 @@ const EXC_COLORS = [
   "#7b1fa2", "#00695c", "#e65100",
 ];
 
+/** Day-of-month tick, e.g. "D14".
+ *
+ *  The API used to hand back `report_date` verbatim as "2026-08-01 23:45:59" —
+ *  that column is a DATETIME. Appending "T00:00:00" to it produced an Invalid
+ *  Date and every tick on the axis read "DNaN". The backend now sends a plain
+ *  ISO date, but this reads the leading YYYY-MM-DD rather than trusting the
+ *  whole string, so a datetime coming back can never blank the axis again.
+ */
 function dayLabel(dateStr: string): string {
-  return `D${new Date(dateStr + "T00:00:00").getDate()}`;
+  const day = /^\d{4}-\d{2}-(\d{2})/.exec(dateStr)?.[1];
+  return day ? `D${Number(day)}` : dateStr;
 }
 
 export default function ExcavatorTrendChart() {

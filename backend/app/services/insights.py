@@ -403,10 +403,10 @@ def _equipment_summary(db: Session, from_date: date, to_date: date) -> dict:
         sensor_row = db.execute(text("""
             SELECT COUNT(DISTINCT vehicle_desc) AS active
             FROM mines_technoton_rest_equipment_utilization
-            WHERE report_date BETWEEN :f AND :t
+            WHERE report_date >= :f AND report_date < :t_next
               AND vehicle_desc LIKE '%Z AXIS%'
               AND TIME_TO_SEC(engine_hours) / 3600.0 > 0
-        """), {"f": from_date, "t": to_date}).fetchone()
+        """), {"f": from_date, "t_next": to_date + timedelta(days=1)}).fetchone()
         active_count = int(sensor_row.active or 0) if sensor_row else 0
 
         return {
