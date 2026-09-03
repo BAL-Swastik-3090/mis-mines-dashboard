@@ -1,14 +1,40 @@
 "use client";
-import { LayoutDashboard, Gauge, Zap, Activity, ChevronLeft, ChevronRight, LogOut } from "lucide-react";
+import { LayoutDashboard, Gauge, Zap, Activity, ClipboardList,
+         ChevronLeft, ChevronRight, LogOut, ExternalLink } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { useSidebar }               from "@/contexts/useSidebar";
 
-const NAV_ITEMS: { id: AppPage; label: string; icon: React.ElementType }[] = [
-  { id: "mis",             label: "MIS Dashboard",             icon: LayoutDashboard },
-  { id: "oee",             label: "OEE / LCM",                 icon: Activity        },
-  { id: "fuel-management", label: "Fuel Management",           icon: Gauge           },
-  { id: "ev-tracking",    label: "Electric Vehicles Tracking", icon: Zap             },
+/** PR/PO Status is a separate application built by another IT team. It opens in
+ *  its own tab rather than being embedded, so this dashboard stays alive behind
+ *  it with its date filter and scroll position intact, and whatever login that
+ *  app has is handled there.
+ *
+ *  Overridable per environment. NEXT_PUBLIC_* is inlined at build time, so
+ *  changing it still needs a rebuild — the variable only keeps the host out of
+ *  the component. */
+const PRPO_URL =
+  process.env.NEXT_PUBLIC_PRPO_URL ?? "http://192.168.10.29:3000/requisition-status-kaliapani";
+
+/** A nav entry is EITHER an internal page or an external link — never both.
+ *
+ *  External links deliberately stay out of the AppPage union and out of
+ *  MainLayout's switch. `page` is persisted to localStorage, so if PR/PO were a
+ *  page value, a user whose last click was PR/PO would reload into a blank
+ *  screen with no section to render. */
+type NavItem =
+  | { kind: "page"; id: AppPage;  label: string; icon: React.ElementType }
+  | { kind: "link"; href: string; label: string; icon: React.ElementType };
+
+const NAV_ITEMS: NavItem[] = [
+  { kind: "page", id: "mis",             label: "MIS Dashboard",              icon: LayoutDashboard },
+  { kind: "page", id: "oee",             label: "OEE / LCM",                  icon: Activity        },
+  { kind: "page", id: "fuel-management", label: "Fuel Management",            icon: Gauge           },
+  { kind: "page", id: "ev-tracking",     label: "Electric Vehicles Tracking", icon: Zap             },
+  { kind: "link", href: PRPO_URL,        label: "PR/PO Status",               icon: ClipboardList   },
 ];
+
+const ITEM_BASE =
+  "w-full flex items-center gap-3 px-3 py-2.5 transition-colors duration-150 relative group";
 
 export default function AppSidebar() {
   const { page, setPage }      = useAppPage();
@@ -38,43 +64,30 @@ export default function AppSidebar() {
 
       {/* Nav items */}
       <nav className="flex-1 overflow-y-auto overflow-x-hidden py-1 scrollbar-thin">
-        {NAV_ITEMS.map(({ id, label, icon: Icon }) => {
-          const isActive = page === id;
-          return (
-            <button
-              key={id}
-              onClick={() => setPage(id)}
-              title={collapsed ? label : undefined}
-              className={`
-                w-full flex items-center gap-3
-                px-3 py-2.5
-                transition-colors duration-150
-                relative group
-                ${isActive
-                  ? "bg-white/10 text-white"
-                  : "text-white/55 hover:text-white/90 hover:bg-white/5"
-                }
-              `}
-            >
-              {/* Active indicator bar */}
+        {NAV_ITEMS.map((item) => {
+          const { label, icon: Icon } = item;
+          const isLink = item.kind === "link";
+
+          /* Label + collapsed tooltip are identical for both kinds. */
+          const inner = (isActive: boolean) => (
+            <>
               {isActive && (
                 <span className="absolute left-0 top-1 bottom-1 w-[3px] rounded-r bg-[#f5a623]" />
               )}
-
-              {/* Icon */}
               <Icon
                 size={17}
                 className={`shrink-0 transition-colors ${isActive ? "text-[#f5a623]" : "text-current"}`}
               />
-
-              {/* Label — hidden when collapsed */}
               {!collapsed && (
                 <span className="text-[12px] font-semibold tracking-wide leading-tight truncate font-condensed text-left">
                   {label}
                 </span>
               )}
-
-              {/* Tooltip — only when collapsed */}
+              {/* Leaving-the-app marker. Without it this reads as another
+                  section rather than a jump to someone else's application. */}
+              {isLink && !collapsed && (
+                <ExternalLink size={11} className="shrink-0 ml-auto opacity-45" />
+              )}
               {collapsed && (
                 <span className="
                   pointer-events-none select-none
@@ -85,9 +98,39 @@ export default function AppSidebar() {
                   transition-opacity duration-150
                   z-50 border border-white/10
                 ">
-                  {label}
+                  {label}{isLink ? " ↗" : ""}
                 </span>
               )}
+            </>
+          );
+
+          /* External: never active, never touches the persisted page. */
+          if (item.kind === "link") {
+            return (
+              <a
+                key={item.href}
+                href={item.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={collapsed ? label : undefined}
+                className={`${ITEM_BASE} text-white/55 hover:text-white/90 hover:bg-white/5`}
+              >
+                {inner(false)}
+              </a>
+            );
+          }
+
+          const isActive = page === item.id;
+          return (
+            <button
+              key={item.id}
+              onClick={() => setPage(item.id)}
+              title={collapsed ? label : undefined}
+              className={`${ITEM_BASE} ${isActive
+                ? "bg-white/10 text-white"
+                : "text-white/55 hover:text-white/90 hover:bg-white/5"}`}
+            >
+              {inner(isActive)}
             </button>
           );
         })}
