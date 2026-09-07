@@ -12,9 +12,12 @@
  * checking is the tree against the LCM total, and the backend reports that as
  * `reconciles` rather than leaving the reader to trust it.
  *
- * Measured in RUPEES, per the mine's choice. Amounts go null together when an
- * IBM rate is missing — rendered as a dash, never as 0, which would read as
- * "no loss" rather than "not costed".
+ * Measured in RUPEES and displayed in LAKH to two decimals, per the mine. The
+ * LCM table above leads in crore — the same rupees underneath, so the two still
+ * reconcile, but every label here states the unit so the scales cannot be
+ * confused by eye. Amounts go null together when an IBM rate is missing —
+ * rendered as a dash, never as 0, which would read as "no loss" rather than
+ * "not costed".
  *
  * Connectors are CSS borders rather than an image or a chart library: three
  * fixed nodes need no layout engine, and borders stay sharp at any zoom.
@@ -23,11 +26,13 @@ import { GitFork, AlertTriangle } from "lucide-react";
 import { useKamLossTree } from "@/hooks/useKamLossTree";
 import type { KamLossNode } from "@/types";
 
-/** Rupees to crore. The LCM table leads in crore and these are the same rupees,
- *  so the two read on one scale. */
-function cr(v: number | null | undefined) {
+/** Rupees to LAKH, two decimals, per the mine's reporting convention for this
+ *  tree. Note the LCM table above leads in crore — same rupees underneath, so
+ *  the two still reconcile, but the unit is stated on every label here so the
+ *  scales are never confused by eye. */
+function lac(v: number | null | undefined) {
   if (v == null) return "—";
-  return (v / 1e7).toLocaleString("en-IN", {
+  return (v / 1e5).toLocaleString("en-IN", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
@@ -55,6 +60,7 @@ function NodeCard({ node, root = false }: { node: KamLossNode; root?: boolean })
           {node.head_count > 0 && (
             <> · {node.head_count} loss head{node.head_count === 1 ? "" : "s"}</>
           )}
+          <span className="ml-1.5 text-txt-light">· ₹ Lac</span>
         </span>
       </div>
 
@@ -72,7 +78,7 @@ function NodeCard({ node, root = false }: { node: KamLossNode; root?: boolean })
               className="px-3 py-1.5 text-right tabular-nums font-semibold"
               style={{ color: CTRL_COLOR }}
             >
-              {cr(node.controllable)}
+              {lac(node.controllable)}
             </td>
           </tr>
           <tr>
@@ -87,7 +93,7 @@ function NodeCard({ node, root = false }: { node: KamLossNode; root?: boolean })
               className="px-3 py-1.5 text-right tabular-nums font-semibold"
               style={{ color: NONC_COLOR }}
             >
-              {cr(node.non_controllable)}
+              {lac(node.non_controllable)}
             </td>
           </tr>
           {/* Only when non-zero. A head nobody has classified must not be
@@ -96,7 +102,7 @@ function NodeCard({ node, root = false }: { node: KamLossNode; root?: boolean })
             <tr>
               <td className="px-3 py-1.5 text-txt-muted whitespace-nowrap">Unclassified</td>
               <td className="px-3 py-1.5 text-right tabular-nums text-txt-muted">
-                {cr(node.unclassified)}
+                {lac(node.unclassified)}
               </td>
             </tr>
           )}
@@ -105,7 +111,7 @@ function NodeCard({ node, root = false }: { node: KamLossNode; root?: boolean })
               Total
             </td>
             <td className="px-3 py-1.5 text-right tabular-nums font-bold text-navy">
-              {cr(node.total)}
+              {lac(node.total)}
             </td>
           </tr>
         </tbody>
@@ -147,8 +153,7 @@ export default function KamLossTreeSection() {
           KAM Wise Loss Tree
         </span>
         <span className="ml-auto text-[10px] font-mono text-txt-muted">
-          <span className="font-bold text-navy text-[13px]">{cr(root.total)}</span> Cr total loss
-          <span className="ml-1.5">· ₹ basis</span>
+          <span className="font-bold text-navy text-[13px]">{lac(root.total)}</span> Lac total loss
         </span>
       </div>
 
@@ -195,8 +200,8 @@ export default function KamLossTreeSection() {
         <div className="px-3 py-2 border-t border-border-light bg-[#fdecea] flex items-start gap-2">
           <AlertTriangle size={14} className="text-[#c62828] shrink-0 mt-[1px]" />
           <p className="text-[10.5px] font-mono text-[#c62828] leading-tight">
-            Tree total {cr(root.total)} Cr does not match the LCM total{" "}
-            {cr(data.lcm_total_loss_amount)} Cr. A loss head is unmapped or double-counted.
+            Tree total {lac(root.total)} Lac does not match the LCM total{" "}
+            {lac(data.lcm_total_loss_amount)} Lac. A loss head is unmapped or double-counted.
           </p>
         </div>
       )}
@@ -207,7 +212,8 @@ export default function KamLossTreeSection() {
           same LCM computation as the table above, re-cut by accountability head
         </p>
         <p className="text-[9px] font-mono text-txt-muted leading-tight">
-          Figures are ₹ crore of production loss over the selected period. Chief of Mines is the
+          Figures are ₹ LAKH of production loss over the selected period. The LCM table above
+          reports the same rupees in crore. Chief of Mines is the
           sum of the heads below it, and the tree is checked against the LCM total
           {data.reconciles ? " — it reconciles" : ""}. Controllability and ownership are business
           classifications with no home in the database; they are mapped per loss head in code.
