@@ -457,11 +457,12 @@ def _weighted_rate(grade_qty: dict[str, float]) -> dict:
 # So a person -> role map would misplace three loss heads. The head-level map is
 # also what the user actually specified, head by head.
 #
-# 'dump_jam' was NOT in the user's list — their Head Mines Operation names 13
-# heads and the code has 14 for Pramod Kumar. Assigned here to Head Mines
-# Operation because KAM_BY_COLUMN already gives it to Pramod Kumar, who is that
-# head. It carries ZERO loss in every month checked (Jun/Jul/Aug 2026), so the
-# choice changes no figure today. Worth confirming if data ever lands on it.
+# 'dump_jam' was not in the list the user first sent — their Head Mines Operation
+# named 13 heads while the code has 14 for Pramod Kumar. It was assigned here to
+# Head Mines Operation because KAM_BY_COLUMN already gives it to Pramod Kumar,
+# who is that head, and the mine CONFIRMED that placement on 2026-09-07. It
+# carries zero loss in every month checked (Jun/Jul/Aug 2026) so nothing moved
+# either way, but the placement is now settled rather than inferred.
 ROLE_MINES_OP = "MINES_OPERATION"
 ROLE_ENGG     = "ENGINEERING"
 ROLE_HR       = "HUMAN_RESOURCE"
@@ -491,7 +492,7 @@ ROLE_BY_COLUMN = {
     "idle_safety":          ROLE_MINES_OP,
     "other":                ROLE_MINES_OP,
     "mines_restriction":    ROLE_MINES_OP,
-    "dump_jam":             ROLE_MINES_OP,   # inferred — see note above
+    "dump_jam":             ROLE_MINES_OP,   # confirmed 2026-09-07 — see note above
     # Head Engineering — Amarendra Sarangi
     "breakdown":            ROLE_ENGG,
     "maintenance":          ROLE_ENGG,
