@@ -442,6 +442,169 @@ def _weighted_rate(grade_qty: dict[str, float]) -> dict:
     }
 
 
+# ── KAM Wise Loss Tree ───────────────────────────────────────────────────────
+# The mine's accountability hierarchy, supplied by the user on 2026-09-07.
+#
+# NOTE THIS IS KEYED BY LOSS HEAD, NOT BY PERSON, and that is deliberate — the
+# two do not roll up cleanly. KAM_BY_COLUMN above names six individual owners,
+# but the org structure has three heads, and the three smaller owners sit under
+# them:
+#
+#     Head Engineering       absorbs Bhimsen Barik (H.S.D shortage / filling)
+#                                and K L Das       (Illumination problem)
+#     Head Human Resource    absorbs Maheswar Mohanty (Trans. truck jam)
+#
+# So a person -> role map would misplace three loss heads. The head-level map is
+# also what the user actually specified, head by head.
+#
+# 'dump_jam' was NOT in the user's list — their Head Mines Operation names 13
+# heads and the code has 14 for Pramod Kumar. Assigned here to Head Mines
+# Operation because KAM_BY_COLUMN already gives it to Pramod Kumar, who is that
+# head. It carries ZERO loss in every month checked (Jun/Jul/Aug 2026), so the
+# choice changes no figure today. Worth confirming if data ever lands on it.
+ROLE_MINES_OP = "MINES_OPERATION"
+ROLE_ENGG     = "ENGINEERING"
+ROLE_HR       = "HUMAN_RESOURCE"
+ROLE_UNMAPPED = "UNMAPPED"
+
+CHIEF_OF_MINES = {"role": "CHIEF", "title": "Chief of Mines", "owner": "BK Padhi"}
+
+# Display order follows the user's diagram, left to right.
+ROLE_META = [
+    {"role": ROLE_MINES_OP, "title": "Head Mines Operation", "owner": "Pramod Kumar"},
+    {"role": ROLE_ENGG,     "title": "Head Engineering",     "owner": "Amarendra Sarangi"},
+    {"role": ROLE_HR,       "title": "Head Human Resource",  "owner": "Gurpreet Singh"},
+]
+
+ROLE_BY_COLUMN = {
+    # Head Mines Operation — Pramod Kumar
+    "late_start":           ROLE_MINES_OP,
+    "idle_requ_basic":      ROLE_MINES_OP,
+    "safety_talk":          ROLE_MINES_OP,
+    "idle":                 ROLE_MINES_OP,
+    "early_close":          ROLE_MINES_OP,
+    "not_operation":        ROLE_MINES_OP,
+    "rain_slippery":        ROLE_MINES_OP,
+    "imfa_blasting":        ROLE_MINES_OP,
+    "face_preparation":     ROLE_MINES_OP,
+    "job_allocation":       ROLE_MINES_OP,
+    "idle_safety":          ROLE_MINES_OP,
+    "other":                ROLE_MINES_OP,
+    "mines_restriction":    ROLE_MINES_OP,
+    "dump_jam":             ROLE_MINES_OP,   # inferred — see note above
+    # Head Engineering — Amarendra Sarangi
+    "breakdown":            ROLE_ENGG,
+    "maintenance":          ROLE_ENGG,
+    "hsd_shortage":         ROLE_ENGG,
+    "illumination_problem": ROLE_ENGG,
+    "tipper_shortage":      ROLE_ENGG,
+    "hsd_filling":          ROLE_ENGG,
+    # Head Human Resource — Gurpreet Singh
+    "tiffin":               ROLE_HR,
+    "strike":               ROLE_HR,
+    "lmv_availability":     ROLE_HR,
+    "absence_operator":     ROLE_HR,
+    "trains_truck":         ROLE_HR,
+}
+
+
+def get_kam_loss_tree(db: Session, from_date: date, to_date: date) -> dict:
+    """Loss by accountability head, as a tree under Chief of Mines.
+
+    Built ON TOP of get_lcm() rather than re-querying, so this section and the
+    LCM table underneath it can never disagree: same rows, same rupee rounding,
+    same period basis. The root is the sum of its children by construction.
+
+    Measured in RUPEES, per the user's choice. Loss Amount goes null in get_lcm
+    when an IBM rate is missing, so `rate_available` is reported and the page
+    shows dashes instead of inventing zeros.
+
+    Loss-head discovery is dynamic — a new column in the source table appears as
+    a row without anyone updating ROLE_BY_COLUMN — so anything unmapped is
+    collected into its own visible node rather than silently dropped. The root
+    would otherwise stop matching the LCM total, which is the one thing this
+    section must never do.
+    """
+    lcm = get_lcm(db, from_date, to_date)
+    rows = lcm["rows"]
+
+    def blank():
+        return {"controllable": 0.0, "non_controllable": 0.0, "unclassified": 0.0,
+                "total": 0.0, "heads": 0, "loss_heads": []}
+
+    buckets = {m["role"]: blank() for m in ROLE_META}
+    buckets[ROLE_UNMAPPED] = blank()
+
+    rate_available = lcm["totals"]["loss_amount"] is not None
+
+    for r in rows:
+        role = ROLE_BY_COLUMN.get(r["column"], ROLE_UNMAPPED)
+        b = buckets[role]
+        amt = r["loss_amount"] or 0.0
+        if r["loss_type"] == "Controllable":
+            b["controllable"] += amt
+        elif r["loss_type"] == "Non Controllable":
+            b["non_controllable"] += amt
+        else:
+            b["unclassified"] += amt
+        b["total"] += amt
+        b["heads"] += 1
+        if amt > 0:
+            b["loss_heads"].append({
+                "loss_description": r["loss_description"],
+                "loss_type":        r["loss_type"],
+                "loss_amount":      r["loss_amount"],
+            })
+
+    def node(role: str, title: str, owner: str) -> dict:
+        b = buckets[role]
+        b["loss_heads"].sort(key=lambda x: -(x["loss_amount"] or 0))
+        return {
+            "role": role, "title": title, "owner": owner,
+            "controllable":     round(b["controllable"], 2) if rate_available else None,
+            "non_controllable": round(b["non_controllable"], 2) if rate_available else None,
+            "unclassified":     round(b["unclassified"], 2) if rate_available else None,
+            "total":            round(b["total"], 2) if rate_available else None,
+            "head_count":       b["heads"],
+            "loss_heads":       b["loss_heads"],
+        }
+
+    children = [node(m["role"], m["title"], m["owner"]) for m in ROLE_META]
+    # Only shown when it has something in it — an empty node is noise.
+    if buckets[ROLE_UNMAPPED]["heads"]:
+        children.append(node(ROLE_UNMAPPED, "Unmapped loss heads", "—"))
+
+    def rollup(field: str):
+        if not rate_available:
+            return None
+        return round(sum(c[field] or 0.0 for c in children), 2)
+
+    root = {
+        **CHIEF_OF_MINES,
+        "controllable":     rollup("controllable"),
+        "non_controllable": rollup("non_controllable"),
+        "unclassified":     rollup("unclassified"),
+        "total":            rollup("total"),
+        "head_count":       sum(c["head_count"] for c in children),
+        "loss_heads":       [],
+    }
+
+    return {
+        "from_date": from_date.isoformat(),
+        "to_date":   to_date.isoformat(),
+        "measure":   "loss_amount_rs",
+        "rate_available": rate_available,
+        "root":      root,
+        "children":  children,
+        # The reconciliation the page states rather than assumes. Root is the sum
+        # of children by construction, so this checks the tree against the LCM
+        # table it sits under.
+        "lcm_total_loss_amount": lcm["totals"]["loss_amount"],
+        "reconciles": (root["total"] is None and lcm["totals"]["loss_amount"] is None)
+                      or abs((root["total"] or 0) - (lcm["totals"]["loss_amount"] or 0)) < 1.0,
+    }
+
+
 def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
     days = (to_date - from_date).days + 1
 
@@ -468,7 +631,10 @@ def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
         if source == "SAP_PM": return ore_pm, ob_pm
         return ore_shift.get(source, 0.0), ob_shift.get(source, 0.0)
 
-    raw = [(h["sl_no"], h["label"], *hours(h["source"]), h["loss_type"], h["kam"])
+    # `column` is carried through so KAM Wise Loss Tree can key on it. Keying the
+    # tree on the label would break the moment a label is reworded, which is the
+    # same reason LOSS_TYPE_BY_COLUMN and KAM_BY_COLUMN are column-keyed.
+    raw = [(h["sl_no"], h["label"], *hours(h["source"]), h["loss_type"], h["kam"], h["column"])
            for h in heads]
 
     tot_ore_hrs = sum(r[2] for r in raw)
@@ -492,7 +658,7 @@ def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
     # the column missed its own total by ~Rs 640. On a Rs 4.5 crore figure the
     # precision is worth nothing and the inconsistency costs trust.
     rows = []
-    for (sl, label, oh, bh, lt, kam) in raw:
+    for (sl, label, oh, bh, lt, kam, col) in raw:
         pol = round(oh * ore_factor, 1)
         rows.append({
             "sl_no":            sl,
@@ -505,6 +671,7 @@ def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
             "loss_share_pct":   None,   # filled below, once the total is known
             "loss_type":        lt,
             "kam":              kam,
+            "column":           col,
         })
 
     # Loss Share — each head's rupee loss as a percentage of the period total.

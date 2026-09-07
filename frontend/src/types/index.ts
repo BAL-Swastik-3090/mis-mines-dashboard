@@ -1120,3 +1120,33 @@ export interface GradeDespatchResponse {
     po_count:          number;
   };
 }
+
+/* ── KAM Wise Loss Tree ───────────────────────────────────────────────────── */
+
+/** One node of the accountability tree. Amounts are RUPEES and go null together
+ *  when an IBM rate is missing — never 0, which would read as "no loss". */
+export interface KamLossNode {
+  role:             string;
+  title:            string;
+  owner:            string;
+  controllable:     number | null;
+  non_controllable: number | null;
+  unclassified:     number | null;
+  total:            number | null;
+  head_count:       number;
+  loss_heads:       Array<{ loss_description: string; loss_type: string;
+                            loss_amount: number | null }>;
+}
+
+export interface KamLossTreeResponse {
+  from_date:      string;
+  to_date:        string;
+  measure:        "loss_amount_rs";
+  rate_available: boolean;
+  root:           KamLossNode;
+  children:       KamLossNode[];
+  lcm_total_loss_amount: number | null;
+  /** Whether the tree total equals the LCM table's own total. Stated on the
+   *  page rather than assumed. */
+  reconciles:     boolean;
+}

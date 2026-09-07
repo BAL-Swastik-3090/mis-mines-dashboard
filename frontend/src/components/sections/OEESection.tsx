@@ -4,6 +4,7 @@ import { Activity, Layers, Info, Factory } from "lucide-react";
 import FormulaModal from "@/components/sections/FormulaModal";
 import LCMSection from "@/components/sections/LCMSection";
 import LCMCobSection from "@/components/sections/LCMCobSection";
+import KamLossTreeSection from "@/components/sections/KamLossTreeSection";
 import { useDateFilter }  from "@/contexts/useDateFilter";
 import { useOEE }         from "@/hooks/useOEE";
 import type { OEEMachineRow, OEEFleet } from "@/types";
@@ -345,6 +346,10 @@ export default function OEESection() {
       </div>
 
       <LCMCobSection />
+
+      {/* Re-cut of the LCM figures by accountability head. Sits after both LCM
+          blocks because it is derived from them, not a new measurement. */}
+      <KamLossTreeSection />
 
     </div>
   );
