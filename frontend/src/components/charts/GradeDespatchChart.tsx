@@ -392,14 +392,22 @@ export default function GradeDespatchChart() {
       <Card
         icon={<BarChart3 size={14} className="text-[#6a1b9a] shrink-0" />}
         title="Despatch Grade Distribution"
-        right={`${formatIndian(Math.round(assayed))} MT ore assayed`}
+        right={
+          t.tonnage > assayed
+            ? `${formatIndian(Math.round(assayed))} MT assayed · ${formatIndian(
+                Math.round(t.tonnage - assayed),
+              )} MT unassayed excluded · of ${formatIndian(Math.round(t.tonnage))} MT despatched`
+            : `${formatIndian(Math.round(assayed))} MT assayed · all despatch`
+        }
         foot={
           <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
             <p className="text-[9px] font-mono text-txt-muted leading-tight">
-              MINE ORE only, in 2% Cr₂O₃ steps — COB concentrate is excluded because it would
-              pile into the middle and describe a mix that does not exist. The HG/MG/LG split
-              above holds most of the month in one band, so the shape only shows at finer
-              steps. Shares are of assayed ore tonnage, not of total despatch.
+              ALL despatch that carries an assay, in 2% Cr₂O₃ steps — mine ore and COB
+              concentrate together, each banded on its own assay. The only tonnage missing is
+              what has no assay at all, because it has no band to sit in; when everything is
+              assayed these bars total the full despatch figure. The HG/MG/LG split above holds
+              most of the month in one band, so the shape only shows at finer steps. Shares are
+              of assayed tonnage.
             </p>
           </div>
         }
