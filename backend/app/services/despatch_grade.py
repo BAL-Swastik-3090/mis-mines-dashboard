@@ -467,10 +467,12 @@ def get_grade_wise_despatch(db: Session, from_date: date, to_date: date) -> dict
         if not is_cob:
             ore.add(wt, cr, fe)
 
-        # The distribution chart is the ORE grade profile. Concentrate assays
-        # around 40% and would pile into the middle of it, describing a mix that
-        # does not exist.
-        fb = _fine_band_of(cr) if not is_cob else None
+        # The distribution chart covers ALL ASSAYED DESPATCH — mine ore and COB
+        # concentrate alike. Changed on 2026-09-09 at the mine's instruction:
+        # they want the grade classification of everything that left, so the
+        # only thing excluded is tonnage with no assay, because it has no band
+        # to sit in. Concentrate is banded on its own assay like any other load.
+        fb = _fine_band_of(cr)
         if fb:
             fine[fb].add(wt, cr, fe)
 
@@ -555,8 +557,10 @@ def get_grade_wise_despatch(db: Session, from_date: date, to_date: date) -> dict
         "cr2o3": None, "cr_fe": None,
     })
 
-    # Fine bands describe ore only, so their shares divide by ore assayed tonnage.
-    assayed = ore.tonnage - bands[UNASSAYED_KEY].tonnage
+    # Denominator for the distribution: ALL assayed despatch, ore and concentrate
+    # together, which is exactly total minus the unassayed band. Equals
+    # tier1 + tier2 by construction.
+    assayed = tot_wt - bands[UNASSAYED_KEY].tonnage
 
     return {
         "from_date": from_date,
