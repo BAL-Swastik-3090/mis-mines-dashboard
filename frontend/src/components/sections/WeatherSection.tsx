@@ -2,6 +2,7 @@
 import { Cloud, AlertTriangle } from "lucide-react";
 import { useWeather } from "@/hooks/useWeather";
 import { WEATHER_CONFIG } from "@/lib/weatherConfig";
+import HourlyForecastStrip from "@/components/sections/HourlyForecastStrip";
 
 // ── WMO helpers ───────────────────────────────────────────────
 function weatherEmoji(code: number, isDay = 1): string {
@@ -451,6 +452,16 @@ export default function WeatherSection() {
               })
             ) : null}
           </div>
+          {/* Hourly sits under the 7-day strip: same data, finer grain, and the
+              day view gives the context the 24-hour view is a zoom into. */}
+          <HourlyForecastStrip
+            hourly={data?.hourly}
+            loading={isLoading}
+            rainStyle={rainStyle}
+            tempColor={tempColor}
+            weatherEmoji={weatherEmoji}
+          />
+
           <div className="border-t border-border-light px-3 py-1 flex items-center justify-between">
             <span className="text-[10px] text-txt-light/50">
               Open-Meteo · Auto-refresh 30 min · {WEATHER_CONFIG.lat}°N {WEATHER_CONFIG.lon}°E
