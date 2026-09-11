@@ -463,6 +463,20 @@ def _weighted_rate(grade_qty: dict[str, float]) -> dict:
 # who is that head, and the mine CONFIRMED that placement on 2026-09-07. It
 # carries zero loss in every month checked (Jun/Jul/Aug 2026) so nothing moved
 # either way, but the placement is now settled rather than inferred.
+# COB is the fourth head and is SHAPED DIFFERENTLY from the other three.
+#
+# The mines heads own loss HEADS, each classified Controllable or Non
+# Controllable. The COB plant has no downtime log at all, so LCM for COB
+# attributes its deviation to CAUSES (feed volume, recovery) with no
+# controllability dimension anywhere in it. Inventing one here would be
+# fabrication, so the COB node carries a single "COB Loss" figure and its
+# controllable / non_controllable fields are null — not zero. Zero would state
+# that COB had no controllable loss, which is a claim nobody has made.
+#
+# Owner name pending from the mine as at 2026-09-11; one string to fill in.
+ROLE_COB      = "COB"
+COB_META      = {"role": ROLE_COB, "title": "Head COB", "owner": "—"}
+
 ROLE_MINES_OP = "MINES_OPERATION"
 ROLE_ENGG     = "ENGINEERING"
 ROLE_HR       = "HUMAN_RESOURCE"
@@ -529,6 +543,13 @@ def get_kam_loss_tree(db: Session, from_date: date, to_date: date) -> dict:
     lcm = get_lcm(db, from_date, to_date)
     rows = lcm["rows"]
 
+    # COB rides alongside rather than inside: a different plant, a different
+    # deviation model and a different IBM rate line (concentrates at 24,560 vs
+    # the mines plan-weighted fines rate). Both are rupees, so they add.
+    from app.services.lcm_cob import get_cob_lcm
+    cob       = get_cob_lcm(db, from_date, to_date)
+    cob_total = (cob.get("totals") or {}).get("loss_amount")
+
     def blank():
         return {"controllable": 0.0, "non_controllable": 0.0, "unclassified": 0.0,
                 "total": 0.0, "heads": 0, "loss_heads": []}
@@ -575,17 +596,46 @@ def get_kam_loss_tree(db: Session, from_date: date, to_date: date) -> dict:
     if buckets[ROLE_UNMAPPED]["heads"]:
         children.append(node(ROLE_UNMAPPED, "Unmapped loss heads", "—"))
 
+    # COB node. controllable / non_controllable stay null so the card renders a
+    # single line; cob_loss is null (dash) whenever LCM for COB has no plan for
+    # the window — mines_cobp_plan starts April 2026, and individual days can be
+    # missing too. Null must not become zero: "nobody planned it" and "the plant
+    # lost nothing" are different statements.
+    children.append({
+        **COB_META,
+        "controllable":     None,
+        "non_controllable": None,
+        "unclassified":     None,
+        "cob_loss":         round(cob_total, 2) if cob_total is not None else None,
+        "total":            round(cob_total, 2) if cob_total is not None else None,
+        "head_count":       0,
+        "loss_heads":       [],
+    })
+
     def rollup(field: str):
         if not rate_available:
             return None
-        return round(sum(c[field] or 0.0 for c in children), 2)
+        return round(sum(c.get(field) or 0.0 for c in children), 2)
+
+    # Chief of Mines carries the mines split PLUS COB as its own line, and the
+    # total spans all four heads. A negative COB is preserved and reduces the
+    # total, matching how the LCM for COB section above already renders a plant
+    # that beat plan — as a gain, not something to hide.
+    root_total = None
+    if rate_available:
+        root_total = round(
+            (rollup("controllable") or 0.0)
+            + (rollup("non_controllable") or 0.0)
+            + (rollup("unclassified") or 0.0)
+            + (cob_total or 0.0), 2)
 
     root = {
         **CHIEF_OF_MINES,
         "controllable":     rollup("controllable"),
         "non_controllable": rollup("non_controllable"),
         "unclassified":     rollup("unclassified"),
-        "total":            rollup("total"),
+        "cob_loss":         round(cob_total, 2) if cob_total is not None else None,
+        "total":            root_total,
         "head_count":       sum(c["head_count"] for c in children),
         "loss_heads":       [],
     }
@@ -598,11 +648,23 @@ def get_kam_loss_tree(db: Session, from_date: date, to_date: date) -> dict:
         "root":      root,
         "children":  children,
         # The reconciliation the page states rather than assumes. Root is the sum
-        # of children by construction, so this checks the tree against the LCM
-        # table it sits under.
+        # of its children by construction, so this checks the tree against the
+        # two sources it is built from.
+        #
+        # NOTE the expected total is now mines + COB. Leaving it at mines alone
+        # would fire the red "does not reconcile" banner on every single load
+        # the moment COB was added.
         "lcm_total_loss_amount": lcm["totals"]["loss_amount"],
-        "reconciles": (root["total"] is None and lcm["totals"]["loss_amount"] is None)
-                      or abs((root["total"] or 0) - (lcm["totals"]["loss_amount"] or 0)) < 1.0,
+        "cob_total_loss_amount": round(cob_total, 2) if cob_total is not None else None,
+        "expected_total": (
+            round((lcm["totals"]["loss_amount"] or 0.0) + (cob_total or 0.0), 2)
+            if lcm["totals"]["loss_amount"] is not None else None
+        ),
+        "reconciles": (
+            (root["total"] is None and lcm["totals"]["loss_amount"] is None)
+            or abs((root["total"] or 0)
+                   - ((lcm["totals"]["loss_amount"] or 0) + (cob_total or 0))) < 1.0
+        ),
     }
 
 
