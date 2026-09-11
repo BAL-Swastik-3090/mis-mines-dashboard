@@ -473,9 +473,8 @@ def _weighted_rate(grade_qty: dict[str, float]) -> dict:
 # controllable / non_controllable fields are null — not zero. Zero would state
 # that COB had no controllable loss, which is a claim nobody has made.
 #
-# Owner name pending from the mine as at 2026-09-11; one string to fill in.
 ROLE_COB      = "COB"
-COB_META      = {"role": ROLE_COB, "title": "Head COB", "owner": "—"}
+COB_META      = {"role": ROLE_COB, "title": "Head COB", "owner": "Bijan Kr Chand"}
 
 ROLE_MINES_OP = "MINES_OPERATION"
 ROLE_ENGG     = "ENGINEERING"
