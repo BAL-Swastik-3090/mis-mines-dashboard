@@ -4,6 +4,7 @@ import SectionTabBar           from "./SectionTabBar";
 import FuelManagementSection   from "@/components/sections/FuelManagementSection";
 import ElectricVehiclesSection from "@/components/sections/ElectricVehiclesSection";
 import OEESection              from "@/components/sections/OEESection";
+import IntelligenceSection     from "@/components/sections/IntelligenceSection";
 import { useAppPage }          from "@/contexts/useAppPage";
 import { useSidebar }          from "@/contexts/useSidebar";
 
@@ -31,6 +32,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
         <div className="max-w-[1920px] mx-auto">
           {page === "mis"              && children}
           {page === "oee"              && <OEESection />}
+          {page === "intelligence"     && <IntelligenceSection />}
           {page === "fuel-management"  && <FuelManagementSection />}
           {page === "ev-tracking"      && <ElectricVehiclesSection />}
         </div>

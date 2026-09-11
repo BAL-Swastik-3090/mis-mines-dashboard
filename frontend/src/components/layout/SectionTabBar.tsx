@@ -3,7 +3,7 @@ import { useState } from "react";
 import {
   Cloud, Package, Building2, BarChart3,
   Layers, FlaskConical, Wrench, Droplets,
-  Target, Sparkles, Download, Check,
+  Download, Check,
 } from "lucide-react";
 import { useSectionObserver } from "@/hooks/useSectionObserver";
 import { useDateFilter }      from "@/contexts/useDateFilter";
@@ -19,8 +19,6 @@ const TABS = [
   { id: "cob",            label: "COB Plant",       icon: FlaskConical },
   { id: "equipment",      label: "Equipment",       icon: Wrench       },
   { id: "dewatering",     label: "Dewatering",      icon: Droplets     },
-  { id: "reality-check",  label: "Reality Check",   icon: Target       },
-  { id: "insights",       label: "AI Insights",     icon: Sparkles     },
 ] as const;
 
 const SECTION_IDS = TABS.map((t) => t.id);
