@@ -2,14 +2,21 @@
 /**
  * KAM Wise Loss Tree — production loss by accountability head.
  *
- * Chief of Mines sits at the root holding the whole period of loss, split
- * Controllable / Non-Controllable, and that total is segregated under the three
- * heads beneath: Mines Operation, Engineering, Human Resource.
+ * Chief of Mines sits at the root holding the whole period of loss, segregated
+ * under four heads: Mines Operation, Engineering, Human Resource and COB.
  *
- * The numbers come from the SAME get_lcm() computation as the LCM table above,
- * re-cut by head on the server, so this section and that table can never
+ * COB IS SHAPED DIFFERENTLY and that is not an omission. The three mines heads
+ * own loss heads classified Controllable / Non-Controllable; LCM for COB has no
+ * controllability dimension anywhere in it, because the plant has no downtime
+ * log and its deviation is attributed to causes instead. So the COB card shows
+ * a single "COB Loss" line, and the root carries that as a third line beside
+ * the two mines buckets. A dash on COB means no COB plan for the window, not
+ * zero loss — mines_cobp_plan starts April 2026.
+ *
+ * Numbers come from the SAME get_lcm() and get_cob_lcm() computations as the two
+ * LCM sections above, re-cut by head on the server, so the three cannot
  * disagree. The root is the sum of its children by construction; what is worth
- * checking is the tree against the LCM total, and the backend reports that as
+ * checking is the tree against mines + COB, and the backend reports that as
  * `reconciles` rather than leaving the reader to trust it.
  *
  * Measured in RUPEES and displayed in LAKH to two decimals, per the mine. The
@@ -40,9 +47,17 @@ function lac(v: number | null | undefined) {
 
 const CTRL_COLOR = "#c62828"; // controllable — the mine can act on it
 const NONC_COLOR = "#6b7ea8"; // non-controllable — it cannot
+const COB_COLOR  = "#00838f"; // COB plant — teal, as COB is coloured elsewhere
 
 function NodeCard({ node, root = false }: { node: KamLossNode; root?: boolean }) {
   const unclassified = node.unclassified ?? 0;
+  // The COB node has no controllability dimension, so those rows are omitted
+  // entirely rather than rendered as dashes — a dash would imply the split
+  // exists and is merely unknown.
+  const isCob     = node.role === "COB";
+  const showSplit = !isCob;
+  // The root shows a COB line; the three mines heads never do.
+  const showCob   = isCob || (root && node.cob_loss !== null);
   return (
     <div
       className={`bg-white border rounded-lg overflow-hidden shadow-sm
@@ -66,6 +81,7 @@ function NodeCard({ node, root = false }: { node: KamLossNode; root?: boolean })
 
       <table className="w-full text-[11.5px] font-mono">
         <tbody className="divide-y divide-border-light/60">
+          {showSplit && (
           <tr>
             <td className="px-3 py-1.5 whitespace-nowrap">
               <span
@@ -81,6 +97,8 @@ function NodeCard({ node, root = false }: { node: KamLossNode; root?: boolean })
               {lac(node.controllable)}
             </td>
           </tr>
+          )}
+          {showSplit && (
           <tr>
             <td className="px-3 py-1.5 whitespace-nowrap">
               <span
@@ -96,6 +114,24 @@ function NodeCard({ node, root = false }: { node: KamLossNode; root?: boolean })
               {lac(node.non_controllable)}
             </td>
           </tr>
+          )}
+          {showCob && (
+            <tr>
+              <td className="px-3 py-1.5 whitespace-nowrap">
+                <span
+                  className="inline-block h-2 w-2 rounded-sm mr-1.5 translate-y-[-1px]"
+                  style={{ background: COB_COLOR }}
+                />
+                <span className="text-txt-secondary">COB Loss</span>
+              </td>
+              <td
+                className="px-3 py-1.5 text-right tabular-nums font-semibold"
+                style={{ color: COB_COLOR }}
+              >
+                {lac(node.cob_loss)}
+              </td>
+            </tr>
+          )}
           {/* Only when non-zero. A head nobody has classified must not be
               quietly folded into either bucket — same rule the LCM table uses. */}
           {unclassified > 0 && (
@@ -200,8 +236,9 @@ export default function KamLossTreeSection() {
         <div className="px-3 py-2 border-t border-border-light bg-[#fdecea] flex items-start gap-2">
           <AlertTriangle size={14} className="text-[#c62828] shrink-0 mt-[1px]" />
           <p className="text-[10.5px] font-mono text-[#c62828] leading-tight">
-            Tree total {lac(root.total)} Lac does not match the LCM total{" "}
-            {lac(data.lcm_total_loss_amount)} Lac. A loss head is unmapped or double-counted.
+            Tree total {lac(root.total)} Lac does not match mines{" "}
+            {lac(data.lcm_total_loss_amount)} + COB {lac(data.cob_total_loss_amount)} ={" "}
+            {lac(data.expected_total)} Lac. A loss head is unmapped or double-counted.
           </p>
         </div>
       )}
@@ -209,14 +246,17 @@ export default function KamLossTreeSection() {
       <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40 space-y-0.5">
         <p className="text-[9px] font-mono text-success/70 leading-tight">
           <span className="font-semibold text-success/60">DERIVED · </span>
-          same LCM computation as the table above, re-cut by accountability head
+          same LCM and LCM-for-COB computations as the sections above, re-cut by accountability head
         </p>
         <p className="text-[9px] font-mono text-txt-muted leading-tight">
           Figures are ₹ LAKH of production loss over the selected period. The LCM table above
-          reports the same rupees in crore. Chief of Mines is the
-          sum of the heads below it, and the tree is checked against the LCM total
-          {data.reconciles ? " — it reconciles" : ""}. Controllability and ownership are business
-          classifications with no home in the database; they are mapped per loss head in code.
+          reports the same rupees in crore. Chief of Mines is the sum of all four heads, and the
+          tree is checked against mines LCM + LCM for COB
+          {data.reconciles ? " — it reconciles" : ""}. COB carries a single loss figure because
+          LCM for COB attributes deviation to causes and has no controllable split; a dash there
+          means no COB plan for the period, not zero loss. Controllability and ownership are
+          business classifications with no home in the database; they are mapped per loss head
+          in code.
         </p>
       </div>
     </div>

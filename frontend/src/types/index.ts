@@ -1129,9 +1129,14 @@ export interface KamLossNode {
   role:             string;
   title:            string;
   owner:            string;
+  /** null on the COB node — the COB model has no controllability dimension at
+   *  all, so these are "not a concept here", not "zero". */
   controllable:     number | null;
   non_controllable: number | null;
   unclassified:     number | null;
+  /** Only the COB node and the root carry this. null elsewhere, and null on
+   *  COB itself when LCM for COB has no plan for the window. */
+  cob_loss:         number | null;
   total:            number | null;
   head_count:       number;
   loss_heads:       Array<{ loss_description: string; loss_type: string;
@@ -1146,6 +1151,9 @@ export interface KamLossTreeResponse {
   root:           KamLossNode;
   children:       KamLossNode[];
   lcm_total_loss_amount: number | null;
+  cob_total_loss_amount: number | null;
+  /** mines + COB. What root.total is checked against. */
+  expected_total:        number | null;
   /** Whether the tree total equals the LCM table's own total. Stated on the
    *  page rather than assumed. */
   reconciles:     boolean;
