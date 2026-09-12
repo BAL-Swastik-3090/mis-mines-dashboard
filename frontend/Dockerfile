@@ -18,6 +18,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3333
+# Next standalone binds to $HOSTNAME, which Docker sets to the container id —
+# that resolves to an address the published port cannot reach. Force 0.0.0.0.
+ENV HOSTNAME=0.0.0.0
 
 RUN addgroup --system --gid 1001 nodejs && \
     adduser  --system --uid 1001 nextjs
