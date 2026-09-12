@@ -23,11 +23,9 @@ CREATE TABLE IF NOT EXISTS mines_user_role (
 -- ---------------------------------------------------------------------------
 -- Seed the first admin. Without this nobody can open the Roles screen, because
 -- granting admin requires already being admin.
---
--- >>> REPLACE 'YOUR_EMPID' BELOW WITH THE REAL EMPLOYEE ID BEFORE RUNNING <<<
 -- ---------------------------------------------------------------------------
 INSERT INTO mines_user_role (emp_id, role, updated_by)
-VALUES ('YOUR_EMPID', 'admin', 'SEED')
+VALUES ('3101', 'admin', 'SEED')
 ON DUPLICATE KEY UPDATE role = 'admin';
 
 SELECT emp_id, role, updated_at FROM mines_user_role;
