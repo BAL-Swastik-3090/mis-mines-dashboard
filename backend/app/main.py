@@ -112,15 +112,11 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 # router — a new router is protected the moment it is added.
 _AUTH_EXEMPT = ("/api/auth/", "/api/health", "/api/docs", "/api/redoc", "/api/openapi.json")
 
-# Minimum role per API path prefix, checked on every request. Everything is open
-# to any signed-in employee today; tightening a page is a one-line change here,
-# and it applies to the data, not just the sidebar item that links to it.
-#
-#   /api/insights  -> Intelligence      /api/oee            -> OEE / LCM
-#   /api/ev-...    -> EV Tracking       /api/fuel-management -> Fuel Management
-#   MIS Dashboard  -> production, stock, cob, plant, ob, despatch, equipment, dewatering
+# Minimum role per API path prefix. This is for routes that are not part of a
+# page — page access itself is data-driven from the Access Control screen (see
+# PREFIX_PAGE in services/auth.py), not listed here.
 _ROLE_RULES: tuple[tuple[str, str], ...] = (
-    ("/api/roles", "admin"),
+    ("/api/roles", "admin"),          # the Access Control screen's own endpoints
 )
 # Skip the session-touch write if it happened recently. One dashboard page load
 # fires ~15 API calls at once, and each touch is a round trip to a MySQL server

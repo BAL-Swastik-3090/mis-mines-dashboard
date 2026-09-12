@@ -60,6 +60,41 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ## 🟡 Pending Deployment
 
+### Session: 2026-09-12 — Access Control screen (super admin)
+
+| # | Local File | Type |
+|---|-----------|------|
+| 1 | `scripts/sql/002_mines_role_page_access.sql` | **New** — run once |
+| 2 | `backend/app/services/auth.py` | Modified — page-access map + cache |
+| 3 | `backend/app/routers/roles.py` | Modified — `/roles/pages` GET+PUT |
+| 4 | `backend/app/main.py` | Modified — page gate in middleware |
+| 5 | `frontend/src/components/sections/AccessControlSection.tsx` | **New** |
+| 6 | `frontend/src/components/layout/AppSidebar.tsx` | Modified — admin entry, filtered nav |
+| 7 | `frontend/src/components/layout/MainLayout.tsx` | Modified |
+| 8 | `frontend/src/components/layout/AuthWrapper.tsx` | Modified — revoked-page guard |
+| 9 | `frontend/src/contexts/useAppPage.ts`, `useAuth.ts` | Modified |
+
+**What it does:** an in-app screen, visible only to `admin`, managing (a) who has
+which role and (b) a role x page matrix. Enforced on the API prefixes behind each
+page — `PREFIX_PAGE` in `services/auth.py` — so unticking a box blocks the data,
+not just the sidebar entry.
+
+**Lockout guards:** Access Control is not in the matrix (gated on the admin role
+itself); a save that leaves admin with no pages is rejected; you cannot strip
+your own role; and a missing/empty table falls back to allow-everything.
+
+**Caching:** the matrix is held in-process for 60s (a page load fires ~15 API
+calls and the MySQL server refuses connections daily). Saving invalidates it, so
+changes apply immediately.
+
+**Gotcha for anyone extending this:** `sap_employee_details.STATUS` is
+`'Active'`/`'Withdrawn'`. It is NOT the `'A'` flag used by `intranet_user_login`.
+Filtering it on `'A'` matches zero of 1300 rows.
+
+Deploy: run `002_mines_role_page_access.sql`, then rebuild both images.
+
+---
+
 ### Session: 2026-09-12 — Intranet SSO login + access control
 
 | # | Local File | Type |
