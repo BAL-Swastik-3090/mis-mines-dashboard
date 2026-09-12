@@ -35,11 +35,17 @@ def search_employees(q: str = Query("", min_length=0), db: Session = Depends(get
     term = (q or "").strip()
     if len(term) < 2:
         return []
+    # STATUS here is 'Active' / 'Withdrawn' — NOT the 'A' flag used by
+    # intranet_user_login. Filtering on 'A' matched nothing and the search
+    # silently returned no one. Excluding 'Withdrawn' rather than requiring
+    # 'Active' keeps the handful of rows with a NULL status visible instead of
+    # making those people unassignable for a reason nobody could see.
     rows = db.execute(text(
         f"""SELECT EMPID AS emp_id, EMPNAME AS name, EMPDEPT AS department,
-                   EMPDESG AS designation
+                   EMPDESG AS designation, STATUS AS status
             FROM {EMP_TBL}
-            WHERE (EMPID LIKE :like OR EMPNAME LIKE :like) AND STATUS = 'A'
+            WHERE (EMPID LIKE :like OR EMPNAME LIKE :like)
+              AND (STATUS IS NULL OR STATUS <> 'Withdrawn')
             ORDER BY EMPNAME LIMIT 25"""), {"like": f"%{term}%"}).mappings().all()
     return [dict(r) for r in rows]
 
