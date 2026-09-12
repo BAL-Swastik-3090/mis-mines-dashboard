@@ -1,7 +1,7 @@
 -- Mines dashboard access roles.
 --
--- Run once against balcorpdb on 80.9.2.78:
---     mysql -h 80.9.2.78 -u <user> -p balcorpdb < 001_mines_user_role.sql
+-- Run once against the balcorpdb database:
+--     mysql -h <host> -u <user> -p balcorpdb < 001_mines_user_role.sql
 --
 -- This is the ONLY schema change the login work needs. Sessions and page views
 -- go into the existing shared digital_apps_* tables with app_source='MINES'; no

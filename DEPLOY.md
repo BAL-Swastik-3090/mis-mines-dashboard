@@ -9,7 +9,7 @@ Copy the files listed under the **Pending** section to the server, then move the
 
 ```bash
 # From your local machine, SCP each file to the server:
-scp <local_path> user@80.9.2.78:<server_path>
+scp <local_path> <user>@<server>:<server_path>
 
 # Then restart the backend:
 sudo systemctl restart mines-backend
@@ -19,13 +19,15 @@ docker compose -f docker-compose.prod.yml restart backend
 
 ---
 
-## Production on bal-gpu (192.168.10.29) — mines.balasorealloys.in
+## Production — mines.balasorealloys.in
 
-Since 2026-09-12 the dashboard runs on **bal-gpu** as a docker compose project.
+Since 2026-09-12 the dashboard runs as a docker compose project on the shared
+application server. Host, user and credentials are held by IT and deliberately
+kept out of this repo.
 
 | Item | Value |
 |---|---|
-| Project dir | `/home/baladmin/mines_dashboard` |
+| Project dir | `<app-root>/mines_dashboard` on the application server |
 | Frontend | `mines_frontend` — Next.js standalone, `127.0.0.1:4012` |
 | Backend | `mines_backend` — FastAPI/gunicorn, `127.0.0.1:8006` |
 | Cache | `mines_redis` (internal only) |
@@ -39,12 +41,12 @@ Since 2026-09-12 the dashboard runs on **bal-gpu** as a docker compose project.
    with the host nginx. `docker-compose.override.yml` puts it in the `disabled`
    profile — never run the stack without that override.
 2. The compose network subnet is pinned. The default-assigned `192.168.16.0/20`
-   could **not** reach the MySQL host `80.9.2.78:3306` (errno 110) even though the
+   could **not** reach the shared MySQL host on port 3306 (errno 110) even though the
    host itself could. `10.230.1.0/24` works.
 
 ```bash
 # deploy an update
-cd /home/baladmin/mines_dashboard
+cd <app-root>/mines_dashboard
 git archive --remote=... | tar -x      # or scp the changed files
 docker compose build && docker compose up -d
 
@@ -54,7 +56,7 @@ sudo ln -sfn /etc/nginx/sites-available/mines.balasorealloys.in   /etc/nginx/sit
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-`.env` lives at `/home/baladmin/mines_dashboard/.env` (mode 600) and is not in git.
+`.env` lives in the project directory on the server (mode 600) and is never in git.
 
 ---
 

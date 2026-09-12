@@ -1,6 +1,6 @@
 -- Page access per role for the Mines dashboard.
 --
--- Run once against balcorpdb on 80.9.2.78, after 001_mines_user_role.sql.
+-- Run once against the balcorpdb database, after 001_mines_user_role.sql.
 --
 -- Which pages a role may open. Managed from the in-app Access Control screen,
 -- which only 'admin' (the super admin) can see. Enforced on the API prefixes
