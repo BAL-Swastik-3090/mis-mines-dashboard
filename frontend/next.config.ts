@@ -9,6 +9,8 @@ process.env.NEXT_TELEMETRY_DISABLED = "1";
 const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8989";
 
 const nextConfig: NextConfig = {
+  // Emit .next/standalone — the Dockerfile's runner stage copies it.
+  output: "standalone",
   devIndicators: false,
   async rewrites() {
     return [
