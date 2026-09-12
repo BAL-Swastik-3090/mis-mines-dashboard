@@ -13,6 +13,8 @@ export interface AuthUser {
   location: string | null;
   plant: string | null;
   mines_role: MinesRole;
+  /** Pages this user may open, from the role x page matrix. */
+  allowed_pages: string[];
 }
 
 interface AuthStore {

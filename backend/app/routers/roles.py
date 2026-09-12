@@ -11,7 +11,8 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.services.auth import EMP_TBL, ROLE_RANK, ROLE_TBL
+from app.services import auth as auth_svc
+from app.services.auth import EMP_TBL, PAGE_TBL, PAGES, ROLE_RANK, ROLE_TBL
 
 router = APIRouter(prefix="/api/roles", tags=["Roles"])
 
@@ -75,3 +76,60 @@ def delete_role(emp_id: str, request: Request, db: Session = Depends(get_db)) ->
     db.execute(text(f"DELETE FROM {ROLE_TBL} WHERE emp_id = :e"), {"e": emp_id})
     db.commit()
     return {"ok": True, "emp_id": emp_id}
+
+
+# ------------------------------------------------------------------ page access
+@router.get("/pages")
+def get_page_access(db: Session = Depends(get_db)) -> dict:
+    """The role x page matrix, plus the labels the UI renders.
+
+    Any (role, page) with no row is reported as allowed, matching the fallback in
+    the service — the absence of configuration must not read as "denied".
+    """
+    rows = db.execute(text(
+        f"SELECT role, page, allowed FROM {PAGE_TBL}")).mappings().all()
+    stored = {(r["role"], r["page"]): bool(r["allowed"]) for r in rows}
+    return {
+        "roles": sorted(ROLE_RANK, key=lambda r: ROLE_RANK[r]),
+        "pages": [{"id": p, "label": auth_svc.PAGE_LABELS.get(p, p)} for p in PAGES],
+        "matrix": {role: {p: stored.get((role, p), True) for p in PAGES}
+                   for role in ROLE_RANK},
+    }
+
+
+@router.put("/pages")
+def set_page_access(request: Request, body: dict = Body(...),
+                    db: Session = Depends(get_db)) -> dict:
+    """Replace the matrix. Body: {"matrix": {role: {page: bool}}}."""
+    matrix = body.get("matrix")
+    if not isinstance(matrix, dict):
+        raise HTTPException(400, "matrix is required.")
+
+    by = getattr(request.state, "emp_id", None)
+    updates = []
+    for role, pages in matrix.items():
+        if role not in ROLE_RANK:
+            raise HTTPException(400, f"Unknown role '{role}'.")
+        if not isinstance(pages, dict):
+            raise HTTPException(400, f"matrix['{role}'] must be an object.")
+        for page, allowed in pages.items():
+            if page not in PAGES:
+                raise HTTPException(400, f"Unknown page '{page}'.")
+            updates.append({"r": role, "p": page, "a": 1 if allowed else 0, "by": by})
+
+    # An admin who removes their own access to every page would be left unable to
+    # reach the screen that undoes it.
+    admin_pages = [u for u in updates if u["r"] == "admin" and u["a"]]
+    if not admin_pages and any(u["r"] == "admin" for u in updates):
+        raise HTTPException(400, "Admin must keep access to at least one page.")
+
+    for u in updates:
+        db.execute(text(
+            f"""INSERT INTO {PAGE_TBL} (role, page, allowed, updated_by, updated_at)
+                VALUES (:r, :p, :a, :by, NOW())
+                ON DUPLICATE KEY UPDATE allowed = :a, updated_by = :by, updated_at = NOW()"""), u)
+    db.commit()
+
+    # Takes effect immediately rather than after the 60s cache TTL.
+    auth_svc.invalidate_page_access()
+    return {"ok": True, "updated": len(updates)}

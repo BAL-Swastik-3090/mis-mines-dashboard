@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+import time
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -33,6 +34,7 @@ EMP_TBL = "sap_employee_details"
 SESS_TBL = "digital_apps_user_sessions"
 VIEW_TBL = "digital_apps_page_views"
 ROLE_TBL = "mines_user_role"
+PAGE_TBL = "mines_role_page_access"
 
 # Identifies our rows in the tables shared across the intranet apps. Every read of
 # those tables filters on it, so Mines never sees another app's sessions.
@@ -70,6 +72,89 @@ def has_role(db: Session, emp_id: str, minimum: str) -> bool:
     return ROLE_RANK.get(mines_role(db, emp_id), 0) >= ROLE_RANK.get(minimum, 99)
 
 
+# ------------------------------------------------------------------ page access
+# The pages in the sidebar, and the API prefixes that feed each one. Access is
+# enforced on these prefixes rather than by hiding the sidebar entry — hiding a
+# menu item leaves the data reachable to anyone who knows the URL.
+PAGES: tuple[str, ...] = ("mis", "oee", "intelligence", "fuel-management", "ev-tracking")
+
+PAGE_LABELS = {
+    "mis": "MIS Dashboard",
+    "oee": "OEE / LCM",
+    "intelligence": "Intelligence",
+    "fuel-management": "Fuel Management",
+    "ev-tracking": "Electric Vehicles Tracking",
+}
+
+# Longest prefixes first — /api/live-tracking must not be shadowed by a shorter
+# entry, and the lookup takes the first match.
+PREFIX_PAGE: tuple[tuple[str, str], ...] = (
+    ("/api/fuel-management", "fuel-management"),
+    ("/api/ev-tracking", "ev-tracking"),
+    ("/api/live-tracking", "mis"),
+    ("/api/insights", "intelligence"),
+    ("/api/oee", "oee"),
+    ("/api/production", "mis"),
+    ("/api/despatch", "mis"),
+    ("/api/equipment", "mis"),
+    ("/api/dewatering", "mis"),
+    ("/api/plant", "mis"),
+    ("/api/stock", "mis"),
+    ("/api/cob", "mis"),
+    ("/api/ob", "mis"),
+)
+
+
+def page_for_path(path: str) -> str | None:
+    """The page a request belongs to, or None if it is not page-specific."""
+    return next((pg for pre, pg in PREFIX_PAGE if path.startswith(pre)), None)
+
+
+# role -> set of allowed pages, cached in-process. Without this every API call
+# would add a lookup to a MySQL server that is already refusing connections; one
+# dashboard page load fires ~15 calls. Writes from the Access Control screen call
+# invalidate_page_access(), so a change takes effect immediately rather than
+# after the TTL.
+_PAGE_CACHE: dict[str, set[str]] = {}
+_PAGE_CACHE_AT: float = 0.0
+_PAGE_CACHE_TTL = 60.0
+
+
+def invalidate_page_access() -> None:
+    global _PAGE_CACHE_AT
+    _PAGE_CACHE_AT = 0.0
+
+
+def _page_access_map(db: Session) -> dict[str, set[str]]:
+    global _PAGE_CACHE, _PAGE_CACHE_AT
+    now = time.monotonic()
+    if _PAGE_CACHE and (now - _PAGE_CACHE_AT) < _PAGE_CACHE_TTL:
+        return _PAGE_CACHE
+    try:
+        rows = db.execute(text(
+            f"SELECT role, page, allowed FROM {PAGE_TBL}")).mappings().all()
+    except Exception:
+        # The table not existing must not lock everyone out — fall back to the
+        # pre-table behaviour, which is that every role sees every page.
+        return {r: set(PAGES) for r in ROLE_RANK}
+    if not rows:
+        return {r: set(PAGES) for r in ROLE_RANK}
+    out: dict[str, set[str]] = {r: set() for r in ROLE_RANK}
+    for row in rows:
+        if row["allowed"]:
+            out.setdefault(row["role"], set()).add(row["page"])
+    _PAGE_CACHE, _PAGE_CACHE_AT = out, now
+    return out
+
+
+def allowed_pages(db: Session, role: str) -> set[str]:
+    return _page_access_map(db).get(role, set())
+
+
+def can_open_page(db: Session, role: str, page: str) -> bool:
+    return page in allowed_pages(db, role)
+
+
 # --------------------------------------------------------------- authentication
 def authenticate(db: Session, empid: str, password: str) -> dict | None:
     """Validate EMPID + password against the intranet login table.
@@ -96,10 +181,12 @@ def employee(db: Session, empid: str) -> dict:
             FROM {EMP_TBL} WHERE EMPID = :e"""), {"e": empid}).mappings().first()
     if not e:
         # A valid login with no HR record still gets in — as a viewer.
+        role = mines_role(db, empid)
         return {"emp_id": empid, "name": empid, "designation": None, "department": None,
                 "email": None, "title": None, "location": None, "plant": None,
-                "mines_role": mines_role(db, empid)}
+                "mines_role": role, "allowed_pages": sorted(allowed_pages(db, role))}
     s = lambda v: (v or "").strip() or None  # noqa: E731
+    _role = mines_role(db, e["EMPID"])
     return {
         "emp_id": e["EMPID"],
         "name": s(e["EMPNAME"]) or empid,
@@ -109,7 +196,10 @@ def employee(db: Session, empid: str) -> dict:
         "email": s(e["EMAILID"]),
         "location": s(e["LOCATION"]),
         "plant": s(e["PLANT_CD"]),
-        "mines_role": mines_role(db, e["EMPID"]),
+        "mines_role": _role,
+        # The pages this user may open, so the sidebar shows only those. The
+        # same rule is enforced on the API, so this is convenience, not security.
+        "allowed_pages": sorted(allowed_pages(db, _role)),
     }
 
 

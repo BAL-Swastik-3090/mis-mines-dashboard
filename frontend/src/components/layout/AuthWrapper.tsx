@@ -22,6 +22,21 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
     void refresh();
   }, [refresh]);
 
+  // `page` is persisted to localStorage, so a user whose access was revoked
+  // since their last visit would reload straight onto a page MainLayout no
+  // longer renders — a blank screen with no way back. Send them to the first
+  // page they can still open instead.
+  useEffect(() => {
+    if (!user) return;
+    const allowed = user.allowed_pages ?? [];
+    if (allowed.length === 0) return;                       // nothing to enforce
+    if (page === "access-control") {
+      if (user.mines_role !== "admin") setPage(allowed[0] as typeof page);
+      return;
+    }
+    if (!allowed.includes(page)) setPage(allowed[0] as typeof page);
+  }, [user, page, setPage]);
+
   // One row in digital_apps_page_views per page the user opens, which is what
   // makes Mines visible in the shared intranet activity reporting. Fire-and-
   // forget: a failed tracking call must never interrupt the dashboard.

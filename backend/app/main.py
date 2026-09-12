@@ -143,6 +143,15 @@ def _check_auth(sid: str | None, path: str) -> tuple[dict | None, str | None]:
         need = next((r for pre, r in _ROLE_RULES if path.startswith(pre)), None)
         if need and not auth_svc.has_role(db, s["emp_id"], need):
             return s, need
+
+        # Page access, configured from the Access Control screen. Enforced on the
+        # API prefix behind each page — hiding the sidebar entry alone would
+        # leave the data reachable to anyone who knows the URL.
+        page = auth_svc.page_for_path(path)
+        if page:
+            role = auth_svc.mines_role(db, s["emp_id"])
+            if not auth_svc.can_open_page(db, role, page):
+                return s, f"page:{page}"
         return s, None
 
 
@@ -157,8 +166,10 @@ async def require_auth(request: Request, call_next):
         if not session:
             return JSONResponse({"detail": "Not authenticated."}, status_code=401)
         if role_error:
-            return JSONResponse(
-                {"detail": f"Requires '{role_error}' access or higher."}, status_code=403)
+            detail = (f"You do not have access to the {role_error[5:]} page."
+                      if role_error.startswith("page:")
+                      else f"Requires '{role_error}' access or higher.")
+            return JSONResponse({"detail": detail}, status_code=403)
         request.state.emp_id = session["emp_id"]
     return await call_next(request)
 

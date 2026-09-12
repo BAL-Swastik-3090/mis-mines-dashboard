@@ -1,5 +1,5 @@
 "use client";
-import { LayoutDashboard, Gauge, Zap, Activity, ClipboardList, Sparkles,
+import { LayoutDashboard, Gauge, Zap, Activity, ClipboardList, Sparkles, Shield,
          ChevronLeft, ChevronRight, LogOut, ExternalLink } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { useSidebar }               from "@/contexts/useSidebar";
@@ -35,12 +35,31 @@ const NAV_ITEMS: NavItem[] = [
   { kind: "link", href: PRPO_URL,        label: "PR/PO Status",               icon: ClipboardList   },
 ];
 
+/* Super-admin only, and deliberately not part of the role x page matrix — the
+   screen that grants access must not be something you can accidentally revoke
+   from yourself. Appended after the external link so it sits at the bottom. */
+const ADMIN_ITEM: NavItem =
+  { kind: "page", id: "access-control", label: "Access Control", icon: Shield };
+
 const ITEM_BASE =
   "w-full flex items-center gap-3 px-3 py-2.5 transition-colors duration-150 relative group";
 
 export default function AppSidebar() {
   const { page, setPage }      = useAppPage();
   const { collapsed, toggle }  = useSidebar();
+  const user                   = useAuth((s) => s.user);
+
+  /* Only the pages this user may open. The same rule is enforced on the API, so
+     this hides entries that would 403 anyway rather than being the gate itself.
+     An empty allowed_pages (older session payload) shows everything rather than
+     presenting an empty sidebar. */
+  const allowed = user?.allowed_pages ?? [];
+  const items: NavItem[] = [
+    ...NAV_ITEMS.filter(
+      (i) => i.kind === "link" || allowed.length === 0 || allowed.includes(i.id),
+    ),
+    ...(user?.mines_role === "admin" ? [ADMIN_ITEM] : []),
+  ];
 
   return (
     <aside
@@ -66,7 +85,7 @@ export default function AppSidebar() {
 
       {/* Nav items */}
       <nav className="flex-1 overflow-y-auto overflow-x-hidden py-1 scrollbar-thin">
-        {NAV_ITEMS.map((item) => {
+        {items.map((item) => {
           const { label, icon: Icon } = item;
           const isLink = item.kind === "link";
 
