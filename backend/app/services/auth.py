@@ -40,7 +40,10 @@ PAGE_TBL = "mines_role_page_access"
 # those tables filters on it, so Mines never sees another app's sessions.
 APP_SOURCE = "MINES"
 
-IDLE_HOURS = 8          # a session expires after this many idle hours
+# A session expires after this many idle minutes. Kept short deliberately: the
+# dashboard is opened on shared and control-room machines, where an unattended
+# browser would otherwise stay signed in for the rest of the shift.
+IDLE_MINUTES = 30
 
 
 def _sha1(pw: str) -> str:
@@ -249,7 +252,7 @@ def get_session(db: Session, sid: str | None) -> dict | None:
         f"""SELECT session_id, emp_id, emp_name, role, department, last_active_at
             FROM {SESS_TBL}
             WHERE session_id = :sid AND is_active = 1 AND app_source = :app
-              AND last_active_at > (NOW() - INTERVAL {IDLE_HOURS} HOUR)"""),
+              AND last_active_at > (NOW() - INTERVAL {IDLE_MINUTES} MINUTE)"""),
         {"sid": sid, "app": APP_SOURCE}).mappings().first()
     return dict(row) if row else None
 

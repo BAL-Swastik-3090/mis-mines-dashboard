@@ -19,7 +19,7 @@ router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 settings = get_settings()
 
 COOKIE = "mines_session"
-MAX_AGE = auth.IDLE_HOURS * 3600
+MAX_AGE = auth.IDLE_MINUTES * 60
 # The production site is HTTPS-only (nginx 301s port 80), so the cookie is marked
 # Secure there. Local development runs on plain http, where Secure would stop the
 # browser storing it at all.
