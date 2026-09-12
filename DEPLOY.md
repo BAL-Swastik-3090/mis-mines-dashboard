@@ -19,6 +19,45 @@ docker compose -f docker-compose.prod.yml restart backend
 
 ---
 
+## Production on bal-gpu (192.168.10.29) — mines.balasorealloys.in
+
+Since 2026-09-12 the dashboard runs on **bal-gpu** as a docker compose project.
+
+| Item | Value |
+|---|---|
+| Project dir | `/home/baladmin/mines_dashboard` |
+| Frontend | `mines_frontend` — Next.js standalone, `127.0.0.1:4012` |
+| Backend | `mines_backend` — FastAPI/gunicorn, `127.0.0.1:8006` |
+| Cache | `mines_redis` (internal only) |
+| Compose network | `mines_network`, subnet pinned to `10.230.1.0/24` |
+| Domain | `mines.balasorealloys.in` → host nginx → 4012 (`/api/` → 8006) |
+| TLS | shared wildcard `*.balasorealloys.in` (`/etc/ssl/certs/fullchain.crt`) |
+
+**Two rules for this box — it hosts ~20 other BAL apps behind one host nginx:**
+
+1. The repo's bundled `nginx` service publishes host **80/443** and would collide
+   with the host nginx. `docker-compose.override.yml` puts it in the `disabled`
+   profile — never run the stack without that override.
+2. The compose network subnet is pinned. The default-assigned `192.168.16.0/20`
+   could **not** reach the MySQL host `80.9.2.78:3306` (errno 110) even though the
+   host itself could. `10.230.1.0/24` works.
+
+```bash
+# deploy an update
+cd /home/baladmin/mines_dashboard
+git archive --remote=... | tar -x      # or scp the changed files
+docker compose build && docker compose up -d
+
+# nginx vhost (needs sudo; file is staged in deploy/)
+sudo install -m 644 -o root -g root deploy/mines.balasorealloys.in   /etc/nginx/sites-available/mines.balasorealloys.in
+sudo ln -sfn /etc/nginx/sites-available/mines.balasorealloys.in   /etc/nginx/sites-enabled/mines.balasorealloys.in
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+`.env` lives at `/home/baladmin/mines_dashboard/.env` (mode 600) and is not in git.
+
+---
+
 ## 🟡 Pending Deployment
 
 ### Session: 2026-09-12 — Intelligence Page (Reality Check + AI Insights)
