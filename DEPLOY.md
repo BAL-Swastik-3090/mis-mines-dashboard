@@ -21,6 +21,27 @@ docker compose -f docker-compose.prod.yml restart backend
 
 ## 🟡 Pending Deployment
 
+### Session: 2026-09-12 — Intelligence Page (Reality Check + AI Insights)
+
+| # | Local File | Server Path | Type |
+|---|-----------|-------------|------|
+| 1 | `frontend/src/contexts/useAppPage.ts` | `/opt/mines_dashboard/frontend/src/contexts/useAppPage.ts` | Modified |
+| 2 | `frontend/src/components/layout/AppSidebar.tsx` | `/opt/mines_dashboard/frontend/src/components/layout/AppSidebar.tsx` | Modified |
+| 3 | `frontend/src/components/layout/MainLayout.tsx` | `/opt/mines_dashboard/frontend/src/components/layout/MainLayout.tsx` | Modified |
+| 4 | `frontend/src/components/layout/SectionTabBar.tsx` | `/opt/mines_dashboard/frontend/src/components/layout/SectionTabBar.tsx` | Modified |
+| 5 | `frontend/src/app/page.tsx` | `/opt/mines_dashboard/frontend/src/app/page.tsx` | Modified |
+| 6 | `frontend/src/components/sections/IntelligenceSection.tsx` | `/opt/mines_dashboard/frontend/src/components/sections/IntelligenceSection.tsx` | **New** |
+
+**What changed:**
+- New **"Intelligence"** sidebar page (Sparkles icon, placed after OEE / LCM) that hosts **Reality Check** + **AI Insights**
+- Reality Check & AI Insights **removed from the MIS dashboard** (page.tsx scroll sections + SectionTabBar top-tabs) — MIS now ends at Dewatering
+- New `IntelligenceSection` page: navy+gold banner + `RealityCheckSection` + `InsightsSection` (both keep their own titled cards)
+- **Frontend-only** change — **frontend rebuild required** (`npm run build`)
+- No backend changes; no new npm packages; no DB migrations
+- Verified: local `next build` passes; `tsc --noEmit` clean
+
+---
+
 ### Session: 2026-06-29 — Fuel Management System
 
 | # | Local File | Server Path | Type |
