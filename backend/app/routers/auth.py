@@ -26,6 +26,22 @@ MAX_AGE = auth.IDLE_HOURS * 3600
 COOKIE_SECURE = settings.app_env.lower() == "production"
 
 
+def _client_ip(request: Request) -> str | None:
+    """The user's real address, not the reverse proxy's.
+
+    Behind nginx, request.client.host is the docker bridge gateway (10.230.1.1)
+    for every user, which makes the recorded ip_address useless. The host nginx
+    vhost sets X-Forwarded-For, and it is the only way in — the container ports
+    are bound to loopback — so the left-most entry is the client.
+    """
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        first = xff.split(",")[0].strip()
+        if first:
+            return first[:45]          # fits IPv6
+    return request.client.host if request.client else None
+
+
 def _set_cookie(response: Response, sid: str) -> None:
     response.set_cookie(
         COOKIE, sid,
@@ -53,7 +69,7 @@ def login(response: Response, request: Request, body: dict = Body(...),
 
     sid = auth.create_session(
         db, emp,
-        request.client.host if request.client else None,
+        _client_ip(request),
         request.headers.get("user-agent"),
     )
     _set_cookie(response, sid)
