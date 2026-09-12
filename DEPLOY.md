@@ -60,6 +60,47 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ## 🟡 Pending Deployment
 
+### Session: 2026-09-12 — Intranet SSO login + access control
+
+| # | Local File | Type |
+|---|-----------|------|
+| 1 | `backend/app/services/auth.py` | **New** |
+| 2 | `backend/app/routers/auth.py` | Rewritten |
+| 3 | `backend/app/routers/roles.py` | **New** |
+| 4 | `backend/app/main.py` | Modified — auth middleware |
+| 5 | `frontend/src/contexts/useAuth.ts` | **New** |
+| 6 | `frontend/src/components/layout/AuthWrapper.tsx` | Modified |
+| 7 | `frontend/src/components/layout/LoginScreen.tsx` | Modified |
+| 8 | `frontend/src/components/layout/AppSidebar.tsx` | Modified |
+| 9 | `scripts/sql/001_mines_user_role.sql` | **New** — run once before deploying |
+
+**Why:** the previous login was cosmetic. `/auth/login` returned
+`mock-session-token-<EMPID>` and the UI gated on that string being present in
+localStorage, so anyone could grant themselves access from the browser console —
+and every `/api/*` route was unauthenticated regardless, serving production and
+despatch data to any unauthenticated caller.
+
+**What changed:**
+- Real server-side sessions in `digital_apps_user_sessions` (`app_source='MINES'`),
+  keyed by a 64-hex `secrets.token_hex` id in an **httpOnly** cookie. Nothing is
+  stored client-side; the UI asks `/api/auth/me` who it is talking to.
+- Middleware in `main.py` gates every `/api/*` route except `/api/auth/*`,
+  `/api/health` and the docs. New routers are protected by default.
+- Page views recorded to `digital_apps_page_views` on every page switch.
+- Access roles (`viewer`/`manager`/`admin`) in the new `mines_user_role` table.
+  Everyone signing in is a viewer; only `/api/roles` requires admin today. Page
+  restrictions are a one-line addition to `_ROLE_RULES` in `main.py`.
+- Session-touch throttled to 30s — one page load fires ~15 API calls and the
+  MySQL server is already refusing connections daily.
+
+**Deploy order matters:**
+1. Run `scripts/sql/001_mines_user_role.sql` (edit the seed EMPID first).
+2. Backend restart + frontend rebuild — both required.
+
+No new pip or npm packages.
+
+---
+
 ### Session: 2026-09-12 — Intelligence Page (Reality Check + AI Insights)
 
 | # | Local File | Server Path | Type |

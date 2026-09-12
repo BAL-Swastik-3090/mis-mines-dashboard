@@ -77,8 +77,8 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       });
 
       if (res.data && res.data.status === "success") {
-        localStorage.setItem("auth_token", res.data.token);
-        localStorage.setItem("auth_empid", res.data.empid);
+        // Nothing is stored client-side. The server set an httpOnly session
+        // cookie, which the browser sends automatically and scripts cannot read.
         onLoginSuccess();
       } else {
         setError("Invalid response format from server.");

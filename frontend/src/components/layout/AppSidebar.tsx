@@ -3,6 +3,7 @@ import { LayoutDashboard, Gauge, Zap, Activity, ClipboardList, Sparkles,
          ChevronLeft, ChevronRight, LogOut, ExternalLink } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { useSidebar }               from "@/contexts/useSidebar";
+import { useAuth }                  from "@/contexts/useAuth";
 
 /** PR/PO Status is a separate application built by another IT team. It opens in
  *  its own tab rather than being embedded, so this dashboard stays alive behind
@@ -140,9 +141,11 @@ export default function AppSidebar() {
       {/* Logout button */}
       <div className="border-t border-white/10 shrink-0">
         <button
-          onClick={() => {
-            localStorage.removeItem("auth_token");
-            localStorage.removeItem("auth_empid");
+          onClick={async () => {
+            // Ends the session row server-side (is_active=0, logout_at, end_reason)
+            // so it stops counting as a live session in the intranet activity
+            // tables. Clearing the browser alone would leave it open for 8 hours.
+            await useAuth.getState().logout();
             localStorage.removeItem("kaliapani-app-page");
             window.location.reload();
           }}
