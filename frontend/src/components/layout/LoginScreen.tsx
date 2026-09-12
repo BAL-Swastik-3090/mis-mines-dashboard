@@ -35,6 +35,9 @@ import api from "@/lib/api";
 
 interface LoginScreenProps {
   onLoginSuccess: () => void;
+  /** True when we landed here because the session timed out, rather than by a
+   *  deliberate logout — worth saying so, or it looks like a random ejection. */
+  expired?: boolean;
 }
 
 /** Field label: "01 / EMPLOYEE ID". The index is instrument-panel language and
@@ -53,12 +56,14 @@ function FieldLabel({ index, children, htmlFor }: {
   );
 }
 
-export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
+export default function LoginScreen({ onLoginSuccess, expired = false }: LoginScreenProps) {
   const [empid, setEmpid] = useState("");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(
+    expired ? "Your session timed out after 30 minutes of inactivity. Please sign in again." : null,
+  );
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

@@ -1,13 +1,14 @@
 "use client";
-import React, { useEffect } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import LoginScreen from "./LoginScreen";
 import Header from "./Header";
 import MainLayout from "./MainLayout";
 import { useAppPage } from "@/contexts/useAppPage";
 import { useAuth } from "@/contexts/useAuth";
-import api from "@/lib/api";
+import api, { AUTH_EXPIRED_EVENT } from "@/lib/api";
 
 export default function AuthWrapper({ children }: { children: React.ReactNode }) {
+  const [expired, setExpired] = useState(false);
   const { setPage } = useAppPage();
   const page = useAppPage((s) => s.page);
   const user = useAuth((s) => s.user);
@@ -21,6 +22,36 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // The session can expire while the tab sits open. Without this the dashboard
+  // stayed on screen with every panel showing a raw 401, which reads as the site
+  // being broken rather than as having been signed out.
+  useEffect(() => {
+    const onExpired = () => {
+      useAuth.setState({ user: null, checked: true });
+      setExpired(true);
+    };
+    window.addEventListener(AUTH_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired);
+  }, []);
+
+  // Keep a session alive while someone is actually using the dashboard. The
+  // timeout is meant to catch unattended machines, not to sign out a person who
+  // is reading a chart and has not triggered a fetch for half an hour. Driven by
+  // real interaction and throttled, so an idle tab still expires on schedule.
+  const lastBeat = useRef(0);
+  useEffect(() => {
+    if (!user) return;
+    const beat = () => {
+      const now = Date.now();
+      if (now - lastBeat.current < 5 * 60 * 1000) return;   // at most every 5 min
+      lastBeat.current = now;
+      void api.post("/auth/heartbeat").catch(() => {});
+    };
+    const events: (keyof WindowEventMap)[] = ["click", "keydown", "scroll"];
+    events.forEach((e) => window.addEventListener(e, beat, { passive: true }));
+    return () => events.forEach((e) => window.removeEventListener(e, beat));
+  }, [user]);
 
   // `page` is persisted to localStorage, so a user whose access was revoked
   // since their last visit would reload straight onto a page MainLayout no
@@ -49,6 +80,7 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
   }, [page, user]);
 
   const handleLoginSuccess = () => {
+    setExpired(false);
     setPage("mis");
     void refresh();
   };
@@ -62,7 +94,7 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
   }
 
   if (!user) {
-    return <LoginScreen onLoginSuccess={handleLoginSuccess} />;
+    return <LoginScreen onLoginSuccess={handleLoginSuccess} expired={expired} />;
   }
 
   return (
