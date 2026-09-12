@@ -10,6 +10,10 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
+# next.config.ts rewrites() is evaluated at BUILD time and baked into the
+# standalone output, so BACKEND_URL must be set here, not at runtime.
+ARG BACKEND_URL=http://backend:8989
+ENV BACKEND_URL=$BACKEND_URL
 RUN npm run build
 
 # ── Stage 3: Run ─────────────────────────────────────────────
