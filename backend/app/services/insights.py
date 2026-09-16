@@ -26,6 +26,7 @@ from openai import AsyncOpenAI
 
 from ..config import get_settings
 from ..schemas.insights import RealityCheckRow, RealityCheckResponse, InsightsResponse
+from app.services.despatch import MINES_HAULIER_PARAMS
 
 
 # ── Configurable constants ──────────────────────────────────────
@@ -202,9 +203,11 @@ def _production_mtd(db: Session, from_date: date, to_date: date) -> dict:
 def _despatch_mtd_actual(db: Session, from_date: date, to_date: date) -> float | None:
     """MTD despatch actual from zsd_outbound_despatch via CUSTOMERNO.
 
-    Filter must match despatch.py's get_actuals_summary() exactly (same
-    TRANSPORTER restriction) so Reality Check / AI Insights agree with the
-    Despatch dashboard section's own numbers.
+    Filter must match despatch.py's get_actuals_summary() exactly so Reality Check
+    / AI Insights agree with the Despatch dashboard section's own numbers. The
+    haulier predicate is imported from there rather than retyped - see
+    MINES_HAULIER_SQL for why it tests the weighbridge as well as the
+    transporter.
     """
     try:
         row = db.execute(text("""
@@ -214,10 +217,10 @@ def _despatch_mtd_actual(db: Session, from_date: date, to_date: date) -> float |
                 FROM   zsd_outbound_despatch
                 WHERE  DATE(GATEINDATE) BETWEEN :f AND :t
                   AND  CUSTOMERNO IN ('BAL', 'JABAMOYEE')
-                  AND  TRANSPORTER = 'SHREE GANESH LOGISTICS'
+                  AND  (COALESCE(WEIGHBRIDGE, '') = :wb OR COALESCE(TRANSPORTER, '') LIKE :hauler)
                 GROUP  BY DELIVERYNO
             ) z
-        """), {"f": from_date, "t": to_date}).fetchone()
+        """), {"f": from_date, "t": to_date, **MINES_HAULIER_PARAMS}).fetchone()
         val = _f(row.actual) if row else None
         return val if val and val > 0 else None
     except Exception:
@@ -504,10 +507,10 @@ def _despatch_split_mtd(db: Session, from_date: date, to_date: date) -> dict:
                 FROM zsd_outbound_despatch
                 WHERE DATE(GATEINDATE) BETWEEN :f AND :t
                   AND CUSTOMERNO IN ('BAL', 'JABAMOYEE')
-                  AND TRANSPORTER = 'SHREE GANESH LOGISTICS'
+                  AND (COALESCE(WEIGHBRIDGE, '') = :wb OR COALESCE(TRANSPORTER, '') LIKE :hauler)
                 GROUP BY DELIVERYNO
             ) z
-        """), {"f": from_date, "t": to_date}).fetchone()
+        """), {"f": from_date, "t": to_date, **MINES_HAULIER_PARAMS}).fetchone()
         return {
             "bal":   round(float(row.bal   or 0), 1),
             "suk":   round(float(row.suk   or 0), 1),

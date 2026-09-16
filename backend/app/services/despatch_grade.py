@@ -80,7 +80,15 @@ CUSTOMER_LABELS = {"BAL": "Balasore Plant", "JABAMOYEE": "Sukinda Plant"}
 # exactly what Ganesh hauls — so plan and actual already agree in scope. The
 # widening also pushed August's assay coverage from 100% down to 97.4% by pulling
 # in tonnage that can never be assayed.
-DESPATCH_TRANSPORTER = "SHREE GANESH LOGISTICS"
+# Identified by WEIGHBRIDGE *or* TRANSPORTER. TRANSPORTER is typed at the gate and
+# on 2026-09-14 eight genuine trips were entered as "SHREE GANESH TRPT" / "SHREE
+# GANESH", which an exact match dropped - 94.09 MT, and all eight were assayed
+# (PO 6100000227 / batch I263004319, 8 lots, 94.09 MT, Cr2O3 41.36%), so the page
+# lost graded tonnage it could otherwise band. The weighbridge is picked from a
+# list, and WB-4 belongs to BAL/JABAMOYEE alone, but it is blank on 17 genuine
+# trips and mines despatch used WB-8 through 1-12 March, so neither test is
+# sufficient by itself. See despatch.MINES_HAULIER_SQL for the full measurement.
+from app.services.despatch import MINES_HAULIER_PARAMS, MINES_HAULIER_SQL
 
 # Quality lives in TWO plants and both must be read.
 #
@@ -256,7 +264,7 @@ def _despatch_rows(db: Session, fd: date, td: date) -> list:
     in this table, hence the +0.
     """
     ph = ", ".join(f":c{i}" for i in range(len(MINES_CUSTOMERS)))
-    params = {"fd": fd, "td": td, "tr": DESPATCH_TRANSPORTER}
+    params = {"fd": fd, "td": td, **MINES_HAULIER_PARAMS}
     for i, c in enumerate(MINES_CUSTOMERS):
         params[f"c{i}"] = c
     sql = text(f"""
@@ -269,7 +277,7 @@ def _despatch_rows(db: Session, fd: date, td: date) -> list:
         FROM zsd_outbound_despatch
         WHERE DATE(GATEINDATE) BETWEEN :fd AND :td
           AND CUSTOMERNO IN ({ph})
-          AND TRANSPORTER = :tr
+          AND {MINES_HAULIER_SQL}
     """)
     return db.execute(sql, params).fetchall()
 
@@ -283,7 +291,7 @@ def _excluded_rows(db: Session, fd: date, td: date) -> dict:
     material is assayed, so it could not be graded even if it were included.
     """
     ph = ", ".join(f":c{i}" for i in range(len(MINES_CUSTOMERS)))
-    params = {"fd": fd, "td": td, "tr": DESPATCH_TRANSPORTER}
+    params = {"fd": fd, "td": td, **MINES_HAULIER_PARAMS}
     for i, c in enumerate(MINES_CUSTOMERS):
         params[f"c{i}"] = c
     rows = db.execute(text(f"""
@@ -293,7 +301,7 @@ def _excluded_rows(db: Session, fd: date, td: date) -> dict:
         FROM zsd_outbound_despatch
         WHERE DATE(GATEINDATE) BETWEEN :fd AND :td
           AND CUSTOMERNO IN ({ph})
-          AND (TRANSPORTER <> :tr OR TRANSPORTER IS NULL)
+          AND NOT {MINES_HAULIER_SQL}
         GROUP BY TRANSPORTER
         ORDER BY wt DESC
     """), params).fetchall()
