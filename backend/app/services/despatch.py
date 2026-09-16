@@ -29,7 +29,49 @@ that mines_despatch_plan covers all despatch and both sides needed the same
 scope. That was wrong. The plan carries MG/LG/COB — bulk ore and concentrate —
 which is exactly what Ganesh hauls, so plan and actual already agree in scope.
 Restored the same day.
+
+IDENTIFIED BY WEIGHBRIDGE *OR* TRANSPORTER, not by transporter alone.
+
+TRANSPORTER is free text and is typed at the gate. On 2026-09-14 eight genuine
+mines trips were entered as "SHREE GANESH TRPT" (7) and "SHREE GANESH" (1), and
+an exact-match filter dropped all of them: 94.09 MT, 13.5% of that day. The lab
+had assayed the same eight loads to the kilogram - PO 6100000227 / batch
+I263004319, 8 lots, 94.09 MT, Cr2O3 41.36% - so the tonnage was real and graded
+and the dashboard simply could not see it.
+
+WEIGHBRIDGE is picked from a list rather than typed, and WEIGH BRIDGE - 4 is used
+by BAL and JABAMOYEE alone: across 2026 no other customer and no other carrier
+appears on it, so it can never admit a foreign row. It is NOT sufficient on its
+own though. It is BLANK on 17 genuine Ganesh trips (212.16 MT, one per day from
+March to September), and mines despatch ran over WEIGH BRIDGE - 8 for the whole
+of 1-12 March (33 trips, 339 MT) before moving to WB-4.
+
+Each clause covers the other's failure mode - the weighbridge catches a mistyped
+transporter, the transporter catches a blank or changed weighbridge. Measured
+over 2026, mines customers:
+
+    TRANSPORTER = 'SHREE GANESH LOGISTICS'   8,845 trips   104,330.91 MT
+    WEIGHBRIDGE = 'WEIGH BRIDGE - 4'         8,803 trips   103,884.49 MT  (-446)
+    either of the two                        8,854 trips   104,435.72 MT
+
+The OR adds exactly 9 trips / 104.81 MT over the old filter - the 8 typos on
+14 Sep plus one "SHREE GANESH LOGISTIC" on 8 Mar. Nothing else changes.
+
+A bag-count test was considered instead and rejected: 4 non-bagged ODISHA
+LOGISTIC trips (100.1 MT, 25 Jun, no batch) would be wrongly admitted by it. The
+OR excludes them correctly - they crossed WEIGH BRIDGE - 6.
 """
+
+# COALESCE, not a bare comparison: WEIGHBRIDGE is NULL on 18 rows. On the include
+# side that is harmless, but despatch_grade uses NOT of this predicate to build
+# its excluded-movements report, and NOT (NULL OR FALSE) is NULL - a row with no
+# weighbridge and a non-Ganesh carrier would vanish from both sides. Coalescing
+# keeps the predicate two-valued so the two stay exact complements.
+# The predicate every mines-despatch query must use, here and in despatch_grade
+# and insights, so the four can never drift apart. Bound rather than inlined so
+# the LIKE wildcard is never at the mercy of the driver's paramstyle escaping.
+MINES_HAULIER_SQL = "(COALESCE(WEIGHBRIDGE, '') = :wb OR COALESCE(TRANSPORTER, '') LIKE :hauler)"
+MINES_HAULIER_PARAMS = {"wb": "WEIGH BRIDGE - 4", "hauler": "SHREE GANESH%"}
 from datetime import date, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -99,7 +141,7 @@ _ACTUAL_SQL = """
         FROM zsd_outbound_despatch
         WHERE DATE(GATEINDATE) BETWEEN :f AND :t
           AND CUSTOMERNO IN ('BAL', 'JABAMOYEE')
-          AND TRANSPORTER = 'SHREE GANESH LOGISTICS'
+          AND (COALESCE(WEIGHBRIDGE, '') = :wb OR COALESCE(TRANSPORTER, '') LIKE :hauler)
         GROUP BY DELIVERYNO
     ) z
     GROUP BY DATE(z.GATEINDATE)
@@ -109,7 +151,10 @@ _ACTUAL_SQL = """
 
 def get_actuals_daywise(db: Session, from_date: date, to_date: date) -> dict:
     """Returns dict keyed by date with per-day actual breakdown."""
-    rows = db.execute(text(_ACTUAL_SQL), {"f": from_date, "t": to_date}).fetchall()
+    rows = db.execute(
+        text(_ACTUAL_SQL),
+        {"f": from_date, "t": to_date, **MINES_HAULIER_PARAMS},
+    ).fetchall()
     return {
         r.dt: {
             "total_actual":   float(r.total_actual),
@@ -135,11 +180,13 @@ def get_actuals_summary(db: Session, from_date: date, to_date: date) -> dict:
             FROM zsd_outbound_despatch
             WHERE DATE(GATEINDATE) BETWEEN :f AND :t
               AND CUSTOMERNO IN ('BAL', 'JABAMOYEE')
-              AND TRANSPORTER = 'SHREE GANESH LOGISTICS'
+              AND (COALESCE(WEIGHBRIDGE, '') = :wb OR COALESCE(TRANSPORTER, '') LIKE :hauler)
             GROUP BY DELIVERYNO
         ) z
     """)
-    row = db.execute(sql, {"f": from_date, "t": to_date}).fetchone()
+    row = db.execute(
+        sql, {"f": from_date, "t": to_date, **MINES_HAULIER_PARAMS}
+    ).fetchone()
     if not row or float(row.total_actual or 0) == 0:
         return {
             "total_actual": None, "bal_actual": None,
