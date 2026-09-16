@@ -107,6 +107,26 @@ def track(request: Request, body: dict = Body(...), db: Session = Depends(get_db
     return {"ok": True}
 
 
+@router.post("/track-time")
+def track_time(request: Request, body: dict = Body(...), db: Session = Depends(get_db)) -> dict:
+    """Record how long the user stayed on a page they have just left.
+
+    Called on navigation and on the tab being hidden or closed, so it must be
+    cheap and must never block the page — the browser sends it with keepalive and
+    does not wait for the answer.
+    """
+    sid = request.cookies.get(COOKIE)
+    s = auth.get_session(db, sid)
+    if not s:
+        raise HTTPException(401, "Not authenticated.")
+    try:
+        seconds = int(body.get("time_spent") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "time_spent must be a number of seconds.")
+    auth.record_time_spent(db, sid, body.get("path", "/"), seconds)
+    return {"ok": True}
+
+
 @router.post("/heartbeat")
 def heartbeat(request: Request, db: Session = Depends(get_db)) -> dict:
     """Keep a session alive while a dashboard is left open on a wall display."""

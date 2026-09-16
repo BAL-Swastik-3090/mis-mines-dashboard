@@ -69,14 +69,67 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
   }, [user, page, setPage]);
 
   // One row in digital_apps_page_views per page the user opens, which is what
-  // makes Mines visible in the shared intranet activity reporting. Fire-and-
-  // forget: a failed tracking call must never interrupt the dashboard.
+  // makes Mines visible in the shared intranet activity reporting.
+  //
+  // Two calls per visit, because the duration is not known on arrival:
+  //   /auth/track       inserts the row when the page opens
+  //   /auth/track-time  fills in time_spent_seconds when the page is left
+  // Inserting once and completing it later keeps one row per visit — posting
+  // again on exit would double every visit in the shared reporting.
+  //
+  // Fire-and-forget throughout: a failed tracking call must never interrupt the
+  // dashboard.
   const prevPage = React.useRef<string | null>(null);
+  const enteredAt = React.useRef<number>(Date.now());
+
   useEffect(() => {
     if (!user) return;
     const referrer = prevPage.current;
+    const leaving = referrer;
+    const seconds = Math.round((Date.now() - enteredAt.current) / 1000);
+
+    // Close off the page being left before opening the next one.
+    if (leaving && seconds > 0) {
+      void api.post("/auth/track-time", { path: `/${leaving}`, time_spent: seconds })
+        .catch(() => {});
+    }
+
     prevPage.current = page;
-    void api.post("/auth/track", { path: `/${page}`, referrer }).catch(() => {});
+    enteredAt.current = Date.now();
+    void api.post("/auth/track", {
+      path: `/${page}`,
+      referrer: referrer ? `/${referrer}` : null,
+    }).catch(() => {});
+  }, [page, user]);
+
+  // The last page of a visit is never "left" by navigation — the user closes the
+  // tab or switches away. Without this, every session would lose the duration of
+  // whatever page it ended on. keepalive lets the request outlive the page;
+  // axios cannot do that, so this uses fetch directly.
+  useEffect(() => {
+    if (!user) return;
+    const flush = () => {
+      if (document.visibilityState !== "hidden") return;
+      const seconds = Math.round((Date.now() - enteredAt.current) / 1000);
+      if (seconds <= 0) return;
+      enteredAt.current = Date.now();       // don't count the same span twice
+      try {
+        fetch("/api/auth/track-time", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: `/${page}`, time_spent: seconds }),
+          keepalive: true,
+        }).catch(() => {});
+      } catch { /* the page is going away; nothing useful to do */ }
+    };
+    // visibilitychange is the reliable one — pagehide/unload are not fired at all
+    // in some mobile and bfcache paths, and Chrome ignores unload for keepalive.
+    document.addEventListener("visibilitychange", flush);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      document.removeEventListener("visibilitychange", flush);
+      window.removeEventListener("pagehide", flush);
+    };
   }, [page, user]);
 
   const handleLoginSuccess = () => {

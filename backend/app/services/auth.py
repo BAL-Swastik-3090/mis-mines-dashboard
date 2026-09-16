@@ -274,6 +274,33 @@ def end_session(db: Session, sid: str, reason: str = "LOGOUT") -> None:
     db.commit()
 
 
+def record_time_spent(db: Session, sid: str, path: str, seconds: int) -> None:
+    """Fill in how long the user stayed on a page they have just left.
+
+    The view row is inserted on arrival, when the duration is not yet known, so
+    this completes it rather than inserting a second row — otherwise every visit
+    would be counted twice in the shared utilisation reporting.
+
+    Targets the most recent still-unfilled row for this session and path, so a
+    late-arriving update cannot overwrite the duration of an earlier visit to the
+    same page in the same session.
+    """
+    if seconds is None or seconds < 0:
+        return
+    seconds = min(int(seconds), 86_400)     # a tab left open for days is not "time spent"
+    db.execute(text(
+        f"""UPDATE {VIEW_TBL}
+            SET time_spent_seconds = :ts
+            WHERE session_id = :sid AND page_path = :p AND app_source = :app
+              AND time_spent_seconds IS NULL
+            ORDER BY viewed_at DESC LIMIT 1"""),
+        {"ts": seconds, "sid": sid, "p": (path or "/")[:255], "app": APP_SOURCE})
+    db.execute(text(
+        f"UPDATE {SESS_TBL} SET last_active_at = NOW() WHERE session_id = :sid AND is_active = 1"),
+        {"sid": sid})
+    db.commit()
+
+
 def record_page_view(db: Session, sid: str, emp_id: str, path: str,
                      time_spent: int | None = None, referrer: str | None = None) -> None:
     db.execute(text(
