@@ -31,8 +31,16 @@ api.interceptors.response.use(
     // /auth/me is exempt: its 401 is the normal "not signed in" answer that
     // AuthWrapper asks for on load, and reacting to it would loop.
     const url = err?.config?.url ?? "";
-    if (status === 401 && typeof window !== "undefined" && !url.includes("/auth/me")) {
-      window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
+    const revoked = err?.response?.data?.code === "access_revoked";
+    const signedOut = (status === 401 && !url.includes("/auth/me")) || revoked;
+    if (signedOut && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT, {
+        detail: {
+          message: revoked
+            ? String(msg)
+            : "Your session timed out after 30 minutes of inactivity. Please sign in again.",
+        },
+      }));
     }
     return Promise.reject(err);
   }

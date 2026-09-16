@@ -70,6 +70,25 @@ def mines_role(db: Session, emp_id: str) -> str:
     return r if r in ROLE_RANK else DEFAULT_ROLE
 
 
+def explicit_role(db: Session, emp_id: str) -> str | None:
+    """The role explicitly granted to an employee, or None if they have none.
+
+    This is what makes the dashboard invite-only. mines_role() cannot answer it:
+    it reports 'viewer' for everybody, which is what previously let any employee
+    with intranet credentials open the dashboard without being granted anything.
+
+    Returns DEFAULT_ROLE rather than None if the table cannot be read. A database
+    problem must not lock the whole company out of a dashboard used for daily
+    operations — that failure mode is worse than the one this gate prevents.
+    """
+    try:
+        r = db.execute(text(f"SELECT role FROM {ROLE_TBL} WHERE emp_id = :e"),
+                       {"e": emp_id}).scalar()
+    except Exception:
+        return DEFAULT_ROLE
+    return r if r in ROLE_RANK else None
+
+
 def has_role(db: Session, emp_id: str, minimum: str) -> bool:
     """True if the employee's role is at least `minimum`."""
     return ROLE_RANK.get(mines_role(db, emp_id), 0) >= ROLE_RANK.get(minimum, 99)

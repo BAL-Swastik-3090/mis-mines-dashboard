@@ -8,7 +8,7 @@ import { useAuth } from "@/contexts/useAuth";
 import api, { AUTH_EXPIRED_EVENT } from "@/lib/api";
 
 export default function AuthWrapper({ children }: { children: React.ReactNode }) {
-  const [expired, setExpired] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const { setPage } = useAppPage();
   const page = useAppPage((s) => s.page);
   const user = useAuth((s) => s.user);
@@ -27,9 +27,10 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
   // stayed on screen with every panel showing a raw 401, which reads as the site
   // being broken rather than as having been signed out.
   useEffect(() => {
-    const onExpired = () => {
+    const onExpired = (e: Event) => {
       useAuth.setState({ user: null, checked: true });
-      setExpired(true);
+      setNotice((e as CustomEvent<{ message?: string }>).detail?.message
+                ?? "You have been signed out. Please sign in again.");
     };
     window.addEventListener(AUTH_EXPIRED_EVENT, onExpired);
     return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired);
@@ -133,7 +134,7 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
   }, [page, user]);
 
   const handleLoginSuccess = () => {
-    setExpired(false);
+    setNotice(null);
     setPage("mis");
     void refresh();
   };
@@ -147,7 +148,7 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
   }
 
   if (!user) {
-    return <LoginScreen onLoginSuccess={handleLoginSuccess} expired={expired} />;
+    return <LoginScreen onLoginSuccess={handleLoginSuccess} notice={notice} />;
   }
 
   return (

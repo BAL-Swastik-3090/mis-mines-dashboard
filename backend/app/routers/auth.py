@@ -67,6 +67,17 @@ def login(response: Response, request: Request, body: dict = Body(...),
         # inactive account — otherwise this endpoint enumerates employee IDs.
         raise HTTPException(401, "Invalid Employee ID or Password")
 
+    # Invite-only: valid intranet credentials are not enough. Without this any of
+    # the ~730 active employees could open the dashboard, which is exactly what
+    # was happening — people from Medical, Secretarial and an unauthorised
+    # external auditor account had all signed in without being granted anything.
+    if auth.explicit_role(db, emp["emp_id"]) is None:
+        raise HTTPException(
+            403,
+            "You do not have access to the Mines Dashboard. "
+            "Please contact Mr. Sudip Hajra (PPIC) to request access.",
+        )
+
     sid = auth.create_session(
         db, emp,
         _client_ip(request),

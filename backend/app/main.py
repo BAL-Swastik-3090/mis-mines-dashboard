@@ -140,14 +140,19 @@ def _check_auth(sid: str | None, path: str) -> tuple[dict | None, str | None]:
         if need and not auth_svc.has_role(db, s["emp_id"], need):
             return s, need
 
+        # Invite-only, checked on every request rather than only at login, so
+        # revoking someone takes effect at once instead of when their session
+        # eventually expires.
+        role = auth_svc.explicit_role(db, s["emp_id"])
+        if role is None:
+            return s, "revoked"
+
         # Page access, configured from the Access Control screen. Enforced on the
         # API prefix behind each page — hiding the sidebar entry alone would
         # leave the data reachable to anyone who knows the URL.
         page = auth_svc.page_for_path(path)
-        if page:
-            role = auth_svc.mines_role(db, s["emp_id"])
-            if not auth_svc.can_open_page(db, role, page):
-                return s, f"page:{page}"
+        if page and not auth_svc.can_open_page(db, role, page):
+            return s, f"page:{page}"
         return s, None
 
 
@@ -162,10 +167,19 @@ async def require_auth(request: Request, call_next):
         if not session:
             return JSONResponse({"detail": "Not authenticated."}, status_code=401)
         if role_error:
-            detail = (f"You do not have access to the {role_error[5:]} page."
-                      if role_error.startswith("page:")
-                      else f"Requires '{role_error}' access or higher.")
-            return JSONResponse({"detail": detail}, status_code=403)
+            if role_error == "revoked":
+                detail = ("Your access to the Mines Dashboard has been removed. "
+                          "Please contact Mr. Sudip Hajra (PPIC) if this is unexpected.")
+            elif role_error.startswith("page:"):
+                detail = f"You do not have access to the {role_error[5:]} page."
+            else:
+                detail = f"Requires '{role_error}' access or higher."
+            # code lets the frontend distinguish "you have been removed" (sign
+            # out) from "you cannot open that page" (stay signed in).
+            body = {"detail": detail}
+            if role_error == "revoked":
+                body["code"] = "access_revoked"
+            return JSONResponse(body, status_code=403)
         request.state.emp_id = session["emp_id"]
     return await call_next(request)
 
