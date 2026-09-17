@@ -291,6 +291,19 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
 
   useEffect(() => { void loadProfile(); void loadRevisions(); }, [loadProfile, loadRevisions]);
 
+  /** Ten digits, optionally with +91 or a leading 0, and nothing else. Checked
+   *  as it is typed rather than only at submission, because a number is wrong
+   *  the moment it is wrong and the person is still looking at it. */
+  const phoneProblem = (v?: string): string | null => {
+    const raw = (v ?? "").trim();
+    if (!raw) return null;
+    const digits = raw.replace(/[\s-]/g, "").replace(/^(\+91|0)/, "");
+    if (!/^\d+$/.test(digits)) return "Digits only";
+    if (digits.length !== 10) return `${digits.length} digits — an Indian mobile has 10`;
+    if (!/^[6-9]/.test(digits)) return "An Indian mobile starts 6, 7, 8 or 9";
+    return null;
+  };
+
   const set = (k: string, v: string) => {
     setF((prev) => ({ ...prev, [k]: v }));
     setInvalid((prev) => {
@@ -308,6 +321,17 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
 
   const submit = async (then: "stay" | "submit" = "stay"): Promise<boolean> => {
     if (then === "submit") {
+      const badPhone = (["phone", "alternate_phone", "emergency_contact_phone"] as const)
+        .map((k) => [k, phoneProblem(f[k])] as const)
+        .find(([, problem]) => problem);
+      if (badPhone) {
+        setInvalid(new Set([badPhone[0]]));
+        goTo("personal");
+        raise(`That phone number is not right — ${badPhone[1]}. `
+            + "A contact nobody can ring is worse than a blank one.");
+        return false;
+      }
+
       const short = REQUIRED.filter(([k]) => !(f[k] ?? "").toString().trim());
       if (short.length) {
         setInvalid(new Set(short.map(([k]) => k)));
@@ -685,9 +709,9 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
                 <select id="op-gender" className={cellInput} value={f.gender ?? ""}
                   onChange={(e) => set("gender", e.target.value)}>
                   <option value="">Select…</option>
-                  <option value="MALE">Male</option>
-                  <option value="FEMALE">Female</option>
-                  <option value="OTHER">Other</option>
+                  <option value="M">Male</option>
+                  <option value="F">Female</option>
+                  <option value="O">Other</option>
                 </select>
               </Row>
               <Row label="Blood group">
@@ -696,26 +720,32 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
                     onChange={(v) => set("blood_group", v)} placeholder="B+, O−…" />
                 </div>
               </Row>
-              <Row label="Mobile">
-                <input id="op-phone" className={cellInput} value={f.phone ?? ""}
+              <Row label="Mobile" invalid={Boolean(phoneProblem(f.phone))}
+                   note={phoneProblem(f.phone) ?? undefined}>
+                <input id="op-phone" inputMode="numeric" className={cellInput} value={f.phone ?? ""}
                   onChange={(e) => set("phone", e.target.value)} placeholder="10 digits" />
               </Row>
-              <Row label="Alternate contact">
-                <input id="op-phone2" className={cellInput} value={f.alternate_phone ?? ""}
+              <Row label="Alternate contact" invalid={Boolean(phoneProblem(f.alternate_phone))}
+                   note={phoneProblem(f.alternate_phone) ?? undefined}>
+                <input id="op-phone2" inputMode="numeric" className={cellInput} value={f.alternate_phone ?? ""}
                   onChange={(e) => set("alternate_phone", e.target.value)} />
               </Row>
               <Row label="Emergency contact">
                 <input id="op-ec" className={cellInput} value={f.emergency_contact_name ?? ""}
                   onChange={(e) => set("emergency_contact_name", e.target.value)} placeholder="Name" />
               </Row>
-              <Row label="Emergency number">
-                <input id="op-ecp" className={cellInput} value={f.emergency_contact_phone ?? ""}
+              <Row label="Emergency number" invalid={Boolean(phoneProblem(f.emergency_contact_phone))}
+                   note={phoneProblem(f.emergency_contact_phone) ?? undefined}>
+                <input id="op-ecp" inputMode="numeric" className={cellInput} value={f.emergency_contact_phone ?? ""}
                   onChange={(e) => set("emergency_contact_phone", e.target.value)} />
               </Row>
               <Row label="Relationship">
-                <input id="op-ecr" className={cellInput} value={f.emergency_contact_relation ?? ""}
-                  onChange={(e) => set("emergency_contact_relation", e.target.value)}
-                  placeholder="Wife, brother…" />
+                <div className="px-1.5 py-1">
+                  <Combobox id="op-ecr" category="RELATIONSHIP"
+                    value={f.emergency_contact_relation ?? ""}
+                    onChange={(v) => set("emergency_contact_relation", v)}
+                    placeholder="Wife, brother…" />
+                </div>
               </Row>
               <Row label="Profile status">
                 <select id="op-status" className={cellInput} value={f.profile_status ?? "ACTIVE"}
@@ -769,14 +799,28 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
                   <option value="OTHER">Other</option>
                 </select>
               </Row>
-              <Row label="Employer / agency">
-                <select id="op-employer" className={cellInput} value={f.employer_party_id ?? ""}
-                  onChange={(e) => set("employer_party_id", e.target.value)}>
-                  <option value="">Select…</option>
-                  {parties.map((p) => (
-                    <option key={p.party_id} value={p.party_id}>{p.display_name}</option>
-                  ))}
-                </select>
+              <Row label="Employer / agency"
+                   hint="BAL for own staff, the agency for contract staff. Not listed? Type it">
+                <div className="px-1.5 py-1">
+                  <Combobox id="op-employer"
+                    options={parties.map((p) => ({ value: p.display_name }))}
+                    value={parties.find((p) => String(p.party_id) === f.employer_party_id)?.display_name ?? ""}
+                    placeholder="BAL, DASHMESH, SANY…"
+                    onChange={(n) => {
+                      const hit = parties.find((p) => p.display_name === n);
+                      set("employer_party_id", hit ? String(hit.party_id) : "");
+                    }}
+                    onAddNew={async (n) => {
+                      const r = await api.post("/minehub/parties", {
+                        legal_name: n, display_name: n,
+                        party_type: "ORGANISATION", org_category: "CONTRACTOR",
+                      });
+                      const made = { party_id: r.data.party_id, display_name: r.data.display_name ?? n };
+                      setParties((prev) => [...prev, made]);
+                      set("employer_party_id", String(made.party_id));
+                      return made.display_name;
+                    }} />
+                </div>
               </Row>
               <Row label="Plant" required invalid={invalid.has("plant_id")}>
                 <select id="op-plant" className={cellInput} value={f.plant_id ?? ""}

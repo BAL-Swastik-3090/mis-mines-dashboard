@@ -47,7 +47,12 @@ html, body {
   color: #0f1c35;
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
-  overflow-x: hidden;   /* no horizontal scroll on any viewport */
+  /* clip, not hidden. overflow-x: hidden on the body makes it a scroll
+     container, and a scroll container stops position: sticky working for
+     everything inside it — which is why the form's save bar and section strip
+     scrolled away instead of freezing. clip suppresses the sideways scroll the
+     same way without creating one. */
+  overflow-x: clip;
 }
 
 /* ── Scrollbar ────────────────────────────────────────────── */

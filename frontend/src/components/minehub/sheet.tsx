@@ -39,7 +39,7 @@ export function Band({ title, hint, right }: {
   );
 }
 
-export function Row({ label, required, hint, children, wide, invalid }: {
+export function Row({ label, required, hint, children, wide, invalid, note }: {
   label: string;
   required?: boolean;
   hint?: string;
@@ -48,6 +48,8 @@ export function Row({ label, required, hint, children, wide, invalid }: {
   /** Submission refused on this one. Said on the label as well as the field,
    *  since a colour alone is invisible to anyone who cannot see it. */
   invalid?: boolean;
+  /** Why, when the reason is more specific than "this is blank". */
+  note?: string;
 }) {
   return (
     <>
@@ -67,7 +69,9 @@ export function Row({ label, required, hint, children, wide, invalid }: {
                        ${invalid ? "bg-rose-bg/40 ring-1 ring-inset ring-rose-ring" : ""}`}>
         {children}
         {invalid && (
-          <p className="px-3 pb-1.5 -mt-0.5 text-[11px] font-semibold text-rose">Needed to submit</p>
+          <p className="px-3 pb-1.5 -mt-0.5 text-[11px] font-semibold text-rose">
+            {note ?? "Needed to submit"}
+          </p>
         )}
       </div>
     </>
