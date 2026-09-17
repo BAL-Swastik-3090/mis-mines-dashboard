@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import HTTPException
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
@@ -34,14 +34,18 @@ if settings.minehub_enabled:
         pool_pre_ping=True,      # revalidate on checkout; survives a network blip
         pool_recycle=1800,
         echo=False,              # never echo: it would log every statement in full
+        # Every session works inside the platform schema, so no query has to
+        # qualify a table name and moving the schema is a config change rather
+        # than a rewrite.
+        #
+        # Set as a libpq connection option rather than by issuing SET on connect.
+        # A SET issued in the "connect" event runs inside the first, uncommitted
+        # transaction, so the first rollback — including the implicit one when a
+        # session returns to the pool — silently reverts it, and every later
+        # query fails with "relation does not exist". As a connection option it
+        # is part of the session itself and no rollback can undo it.
+        connect_args={"options": f"-csearch_path={settings.pg_schema},public"},
     )
-
-    # Every session works inside the platform schema, so no query has to qualify
-    # a table name and moving the schema is a config change rather than a rewrite.
-    @event.listens_for(engine, "connect")
-    def _set_search_path(dbapi_conn, _record):
-        with dbapi_conn.cursor() as cur:
-            cur.execute(f"SET search_path TO {settings.pg_schema}, public")
 
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 else:
