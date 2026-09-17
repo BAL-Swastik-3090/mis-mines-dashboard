@@ -57,3 +57,4 @@ secrets/
 # -- Local working files (not project code) --
 Claude Context backup/
 *.tsbuildinfo
+storage/

@@ -1,86 +1,88 @@
 "use client";
 /**
- * Operator 360 — one person, on one screen.
+ * Operator 360 — one person, one scroll.
  *
- * The profile has twenty-odd sections and nobody fills them in one sitting, so
- * they are tabs rather than a single scroll: someone entering licences works in
- * Documents, a training officer works in Competency, and neither has to walk
- * past the other's fields. What they share is the header — name, reference,
- * status, what is outstanding — which stays put whichever tab is open.
+ * This was tabs. Tabs hide how much is left to fill in, and someone entering a
+ * new operator does not think in tabs — they work down the person: who they
+ * are, what they know, what they hold, what they can run. So the sections run
+ * one after another and a rail on the left follows the scroll, which also gives
+ * a way to jump straight to Documents when that is all you came for.
  *
- * The rules are the equipment form's rules, because they were right there too:
- * save a draft with almost nothing, check completeness only at submission, mark
- * the fields that blocked it, keep the trail beside the sheet, and never let
- * one person both submit and approve.
+ * Saving sits at the top, where it stays visible however far down the page has
+ * gone.
+ *
+ * The rules are the equipment form's rules: save a draft with almost nothing,
+ * check completeness only at submission, mark the fields that blocked it, keep
+ * the trail beside the sheet, and never let one person both submit and approve.
  */
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check, Loader2, ArrowLeft, Send, CheckCircle2, Undo2, Trash2, Plus, Copy,
-  User, Briefcase, FileText, ShieldCheck, Cpu, Link2,
+  User, Briefcase, FileText, ShieldCheck, Cpu, Link2, Upload, Paperclip,
+  GraduationCap, Languages as LanguagesIcon, Award, History,
 } from "lucide-react";
 import api from "@/lib/api";
-import { Alert, Button, Chip, Tabs, type Tone } from "./ui";
+import { Alert, Button, Chip, type Tone } from "./ui";
 import { Band, Row, Sheet, cellInput } from "./sheet";
 import Combobox from "./Combobox";
 import Toast from "./Toast";
 import Dialog from "./Dialog";
 import RevisionPanel, { type Revision } from "./RevisionPanel";
 
-type TabId = "personal" | "employment" | "documents" | "competency" | "machines" | "identity";
+/* ── the sections, in the order a person is described ───────────────────── */
+const SECTIONS = [
+  { id: "personal",   label: "Personal",     icon: User },
+  { id: "employment", label: "Employment",   icon: Briefcase },
+  { id: "background", label: "Background",   icon: GraduationCap },
+  { id: "languages",  label: "Languages",    icon: LanguagesIcon },
+  { id: "documents",  label: "Documents",    icon: FileText },
+  { id: "skills",     label: "Skills",       icon: Award },
+  { id: "competency", label: "Competency",   icon: ShieldCheck },
+  { id: "machines",   label: "Machines",     icon: Cpu },
+  { id: "identity",   label: "Identity",     icon: Link2 },
+  { id: "files",      label: "Files",        icon: Paperclip },
+] as const;
 
-const TABS: { id: TabId; label: string; icon: React.ElementType; tone: Tone }[] = [
-  { id: "personal",   label: "Personal",   icon: User,        tone: "sky" },
-  { id: "employment", label: "Employment", icon: Briefcase,   tone: "violet" },
-  { id: "documents",  label: "Documents",  icon: FileText,    tone: "amber" },
-  { id: "competency", label: "Competency", icon: ShieldCheck, tone: "emerald" },
-  { id: "machines",   label: "Machines",   icon: Cpu,         tone: "teal" },
-  { id: "identity",   label: "Identity",   icon: Link2,       tone: "rose" },
-];
+type SectionId = (typeof SECTIONS)[number]["id"];
 
 interface Rec {
   operator_record_id?: number;
   record_type: string; title?: string | null; category?: string | null;
-  document_no?: string | null; issuer?: string | null; issued_on?: string | null;
-  valid_from?: string | null; valid_upto?: string | null; refresher_due?: string | null;
-  result?: string | null; score?: number | null; restrictions?: string | null;
-  verification_status?: string; verified_by?: string | null; document_ref?: string | null;
-  details?: Record<string, unknown>;
+  asset_type_id?: number | null; document_no?: string | null; issuer?: string | null;
+  issued_on?: string | null; valid_from?: string | null; valid_upto?: string | null;
+  refresher_due?: string | null; result?: string | null; score?: number | null;
+  restrictions?: string | null; verification_status?: string; verified_by?: string | null;
+  document_ref?: string | null; details?: Record<string, unknown>;
 }
 
 interface Comp {
   operator_competency_id?: number; asset_type_id: number | null; asset_type?: string | null;
-  dimension: string; level: number | null; assessment_type?: string | null;
-  assessor?: string | null; assessed_on?: string | null; result?: string | null;
-  valid_upto?: string | null;
+  dimension: string; level: number | null; previous_level?: number | null;
+  assessment_count?: number; assessed_on?: string | null; valid_upto?: string | null;
 }
 
 interface Assignment {
   operator_assignment_id: number; asset_id: number; fleet_code: string;
-  nickname?: string | null; asset_type?: string | null; shift?: string | null;
-  role: string; valid_from: string; valid_to?: string | null; status: string;
+  nickname?: string | null; shift?: string | null; role: string;
+  valid_from: string; valid_to?: string | null; status: string;
+}
+
+interface Doc {
+  operator_document_id: number; operator_record_id?: number | null; kind: string;
+  file_name: string; content_type?: string | null; size_bytes?: number | null;
+  uploaded_by?: string | null; uploaded_at: string;
 }
 
 interface Ident { party_identity_id: number; system: string; external_code: string }
 interface AssetType { asset_type_id: number; name: string }
-interface Asset { asset_id: number; fleet_code: string; nickname?: string | null; asset_type?: string | null }
+interface Asset { asset_id: number; fleet_code: string; nickname?: string | null }
 interface Plant { plant_id: number; code: string; name: string; is_default: boolean }
 interface OrgUnit { org_unit_id: number; code: string; name: string }
 interface Party { party_id: number; display_name: string }
-
-/** The record kinds the form offers, grouped as people think of them. */
-const RECORD_KINDS: { value: string; label: string; group: string }[] = [
-  { value: "LICENCE",              label: "Driving licence",      group: "Statutory" },
-  { value: "MEDICAL",              label: "Medical fitness",      group: "Statutory" },
-  { value: "AUTHORISATION",        label: "Internal authorisation", group: "Statutory" },
-  { value: "CERTIFICATE",          label: "Certificate",          group: "Statutory" },
-  { value: "TRAINING",             label: "Training",             group: "Training" },
-  { value: "SPECIALIZED_TRAINING", label: "Specialised training", group: "Training" },
-  { value: "EDUCATION",            label: "Education",            group: "Background" },
-  { value: "LANGUAGE",             label: "Language",             group: "Background" },
-  { value: "EXPERIENCE",           label: "Previous experience",  group: "Background" },
-  { value: "SAFETY_OBSERVATION",   label: "Safety observation",   group: "Safety" },
-  { value: "SAFETY_INCIDENT",      label: "Safety incident",      group: "Safety" },
-];
+interface Skill {
+  skill_id: number; code: string; name: string; nsqf_level: number | null;
+  category: string | null; asset_type_id?: number | null; asset_type?: string | null;
+}
 
 /** The fourteen understanding questions, beside the competency level itself. */
 const DIMENSIONS: { id: string; label: string }[] = [
@@ -104,6 +106,20 @@ const DIMENSIONS: { id: string; label: string }[] = [
 const LEVELS = ["Not assessed", "Basic / assisted", "Operational", "Competent / independent", "Advanced / trainer"];
 const LEVEL_TONE: Tone[] = ["slate", "rose", "amber", "emerald", "violet"];
 const CAPABILITY = ["Cannot", "Basic", "Functional", "Good", "Advanced"];
+const LANGUAGE_LEVELS = ["", "Basic", "Functional", "Good", "Fluent"];
+const CORE_LANGUAGES = ["Hindi", "Odia", "English"];
+
+const DOC_KINDS = [
+  { kind: "LICENCE",              label: "Driving licence",
+    hint: "Every row here has an expiry, and every expiry reaches the Alerts screen before it passes" },
+  { kind: "MEDICAL",              label: "Medical fitness",
+    hint: "Periodical examination, and any restriction it carries" },
+  { kind: "CERTIFICATE",          label: "Certificates" },
+  { kind: "AUTHORISATION",        label: "Internal authorisation",
+    hint: "The mine's own permission to operate, which is not the same as a licence" },
+  { kind: "TRAINING",             label: "Training" },
+  { kind: "SPECIALIZED_TRAINING", label: "Specialised training" },
+];
 
 const emptyRecord = (kind: string): Rec => ({
   record_type: kind, title: "", document_no: "", issuer: "",
@@ -121,7 +137,6 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
   const id = operatorId ?? createdId;
   const editing = Boolean(id);
 
-  const [tab, setTab] = useState<TabId>("personal");
   const [f, setF] = useState<Record<string, string>>({
     display_name: prefill?.display_name ?? "", employment_type: "OWN", profile_status: "ACTIVE",
   });
@@ -130,13 +145,16 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
   const [comps, setComps] = useState<Comp[]>([]);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [idents, setIdents] = useState<Ident[]>([]);
+  const [documents, setDocuments] = useState<Doc[]>([]);
   const [revisions, setRevisions] = useState<Revision[]>([]);
+  const [history, setHistory] = useState<Rec[]>([]);
 
   const [types, setTypes] = useState<AssetType[]>([]);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [plants, setPlants] = useState<Plant[]>([]);
   const [orgUnits, setOrgUnits] = useState<OrgUnit[]>([]);
   const [parties, setParties] = useState<Party[]>([]);
+  const [skills, setSkills] = useState<Skill[]>([]);
   const [rights, setRights] = useState({ may_manage: false, may_assess: false, may_approve: false });
 
   const [saving, setSaving] = useState(false);
@@ -147,37 +165,61 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
   const [saved, setSaved] = useState("");
   const [ask, setAsk] = useState<null | "discard" | "leave" | "send-back">(null);
   const [sendBackWhy, setSendBackWhy] = useState("");
-
-  // Which equipment class the competency tab is showing.
   const [compType, setCompType] = useState<string>("");
+  const [here, setHere] = useState<SectionId>("personal");
 
   const raise = (msg: string) => { setNotice(null); setError(msg); };
-
   const snapshot = useMemo(() => JSON.stringify(f), [f]);
   const dirty = snapshot !== saved;
 
+  /* ── the rail follows the scroll ──────────────────────────────────────── */
+  const sectionRefs = useRef<Record<string, HTMLElement | null>>({});
+  const register = useCallback(
+    (key: SectionId) => (el: HTMLElement | null) => { sectionRefs.current[key] = el; }, []);
+
   useEffect(() => {
-    if (dirty) {
-      const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); };
-      window.addEventListener("beforeunload", warn);
-      return () => window.removeEventListener("beforeunload", warn);
-    }
+    const seen = new Map<string, number>();
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach((e) => seen.set(e.target.id, e.intersectionRatio));
+      // The section showing most of itself wins, so passing through a short one
+      // does not make the rail flicker.
+      let best = "";
+      let bestRatio = 0;
+      seen.forEach((ratio, key) => { if (ratio > bestRatio) { bestRatio = ratio; best = key; } });
+      if (best && bestRatio > 0) setHere(best.replace("sec-", "") as SectionId);
+    }, { rootMargin: "-140px 0px -55% 0px", threshold: [0, 0.2, 0.5, 1] });
+
+    Object.values(sectionRefs.current).forEach((el) => el && io.observe(el));
+    return () => io.disconnect();
+  }, [editing, records.length]);
+
+  const goTo = (key: SectionId) => {
+    sectionRefs.current[key]?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setHere(key);
+  };
+
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
   }, [dirty]);
 
-  // ── reference data ─────────────────────────────────────────────────────────
+  /* ── reference data ───────────────────────────────────────────────────── */
   useEffect(() => {
     (async () => {
       try {
-        const [t, a, pl, ou, pa, me] = await Promise.all([
+        const [t, a, pl, ou, pa, sk, me] = await Promise.all([
           api.get("/minehub/asset-types"),
           api.get("/minehub/assets"),
           api.get("/minehub/plants"),
           api.get("/minehub/org-units"),
           api.get("/minehub/parties", { params: { party_type: "ORGANISATION" } }),
+          api.get("/operators/meta/skills"),
           api.get("/operators/meta/me"),
         ]);
         setTypes(t.data ?? []); setAssets(a.data ?? []); setPlants(pl.data ?? []);
-        setOrgUnits(ou.data ?? []); setParties(pa.data ?? []);
+        setOrgUnits(ou.data ?? []); setParties(pa.data ?? []); setSkills(sk.data ?? []);
         setRights({ may_manage: Boolean(me.data?.may_manage),
                     may_assess: Boolean(me.data?.may_assess),
                     may_approve: Boolean(me.data?.may_approve) });
@@ -191,7 +233,6 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // A blank new form is not unsaved work; a prefilled one is.
   useEffect(() => {
     if (!operatorId && !prefill?.display_name) {
       setSaved(JSON.stringify({ display_name: "", employment_type: "OWN", profile_status: "ACTIVE" }));
@@ -202,7 +243,11 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
   const loadProfile = useCallback(async () => {
     if (!id) return;
     try {
-      const r = await api.get(`/operators/${id}`);
+      const [r, d, h] = await Promise.all([
+        api.get(`/operators/${id}`),
+        api.get(`/operators/${id}/documents`).catch(() => ({ data: [] })),
+        api.get(`/operators/${id}/assessments`).catch(() => ({ data: [] })),
+      ]);
       const p = r.data ?? {};
       setLoaded(p);
       const asForm: Record<string, string> = {};
@@ -210,12 +255,10 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
         if (v === null || v === undefined || typeof v === "object") return;
         asForm[k] = String(v);
       });
-      setF(asForm);
-      setSaved(JSON.stringify(asForm));
-      setRecords(p.records ?? []);
-      setComps(p.competencies ?? []);
-      setAssignments(p.assignments ?? []);
-      setIdents(p.identities ?? []);
+      setF(asForm); setSaved(JSON.stringify(asForm));
+      setRecords(p.records ?? []); setComps(p.competencies ?? []);
+      setAssignments(p.assignments ?? []); setIdents(p.identities ?? []);
+      setDocuments(d.data ?? []); setHistory(h.data ?? []);
     } catch {
       raise("Could not load this profile.");
     }
@@ -239,20 +282,21 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
     });
   };
 
-  // ── saving ─────────────────────────────────────────────────────────────────
+  /* ── saving ───────────────────────────────────────────────────────────── */
+  const REQUIRED: [string, string, SectionId][] = [
+    ["display_name",    "a name",             "personal"],
+    ["employment_type", "an employment type", "employment"],
+    ["plant_id",        "a plant",            "employment"],
+  ];
+
   const submit = async (then: "stay" | "submit" = "stay"): Promise<boolean> => {
     if (then === "submit") {
-      const needed: [string, string, boolean][] = [
-        ["display_name",    "a name",              Boolean(f.display_name?.trim())],
-        ["employment_type", "an employment type",  Boolean(f.employment_type)],
-        ["plant_id",        "a plant",             Boolean(f.plant_id)],
-      ];
-      const short = needed.filter(([, , ok]) => !ok);
+      const short = REQUIRED.filter(([k]) => !(f[k] ?? "").toString().trim());
       if (short.length) {
         setInvalid(new Set(short.map(([k]) => k)));
-        setTab("personal");
+        goTo(short[0][2]);
         raise(`Before this can go for approval it needs ${short.map(([, t]) => t).join(", ")}. `
-            + "They are marked below. Save it as a draft meanwhile — nothing typed is lost.");
+            + "They are marked in red. Save it as a draft meanwhile — nothing typed is lost.");
         return false;
       }
       setInvalid(new Set());
@@ -281,15 +325,13 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
       });
       const newId = created.data?.operator_id as number | undefined;
       if (!newId) { onDone(); return true; }
-      setCreatedId(newId);
-      setSaved(snapshot);
-      onSaved?.();
+      setCreatedId(newId); setSaved(snapshot); onSaved?.();
       if (then === "submit") {
         await api.post(`/operators/${newId}/submit`, {});
         setNotice("Saved and submitted for approval.");
       } else {
         setNotice(`Saved as draft — ${created.data.operator_ref}. `
-                + "Documents, competency and assignment can be added from the tabs above.");
+                + "Documents, skills, competency and assignment can be filled in now.");
       }
       return true;
     } catch (e: unknown) {
@@ -304,8 +346,7 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
   const saveAndLeave = async () => {
     setBusy("save-leave");
     const stored = await submit("stay");
-    setBusy(null);
-    setAsk(null);
+    setBusy(null); setAsk(null);
     if (stored) { onSaved?.(); onDone(); }
   };
 
@@ -314,8 +355,7 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
     try {
       await api.post(`/operators/${id}/${what}`, { remarks });
       setNotice(what === "approve" ? "Approved onto the register."
-        : what === "submit" ? "Submitted for approval."
-        : "Sent back for correction.");
+        : what === "submit" ? "Submitted for approval." : "Sent back for correction.");
       await loadProfile(); await loadRevisions(); onSaved?.();
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
@@ -334,7 +374,7 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
     } finally { setBusy(null); }
   };
 
-  // ── the repeating pieces ───────────────────────────────────────────────────
+  /* ── the repeating pieces ─────────────────────────────────────────────── */
   const saveRecord = async (rec: Rec) => {
     if (!id) { raise("Save the profile first — records hang off a person."); return; }
     try {
@@ -352,7 +392,7 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
   };
 
   const removeRecord = async (recordId?: number) => {
-    if (!id || !recordId) { setRecords((prev) => prev.filter((r) => r.operator_record_id)); return; }
+    if (!id || !recordId) return;
     try {
       await api.delete(`/operators/${id}/records/${recordId}`);
       await loadProfile();
@@ -380,9 +420,8 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
       const r = await api.post(`/operators/${id}/assignments`, { asset_id: assetId, shift, role });
       const el = r.data?.eligibility;
       await loadProfile();
-      setNotice(el?.status === "ELIGIBLE"
-        ? "Assigned."
-        : `Assigned, but noted: ${[...(el?.blockers ?? []), ...(el?.warnings ?? [])].join("; ")}`);
+      setNotice(el?.status === "ELIGIBLE" ? "Assigned."
+        : `Assigned, and noted: ${[...(el?.blockers ?? []), ...(el?.warnings ?? [])].join("; ")}`);
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       raise(d ?? "Could not assign.");
@@ -400,7 +439,36 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
     }
   };
 
-  // ── derived ────────────────────────────────────────────────────────────────
+  const uploadFor = async (file: File, kind: string, recordId?: number) => {
+    if (!id) { raise("Save the profile first — a file has to belong to somebody."); return; }
+    const form = new FormData();
+    form.append("file", file);
+    form.append("kind", kind);
+    if (recordId) form.append("record_id", String(recordId));
+    try {
+      await api.post(`/operators/${id}/documents`, form,
+        { headers: { "Content-Type": "multipart/form-data" } });
+      await loadProfile();
+      setNotice(`${file.name} attached.`);
+    } catch (e: unknown) {
+      const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      raise(d ?? "Could not attach that file.");
+    }
+  };
+
+  const openDocument = (documentId: number) => {
+    window.open(`/api/operators/${id}/documents/${documentId}`, "_blank", "noopener");
+  };
+
+  const removeDocument = async (documentId: number) => {
+    if (!id) return;
+    try {
+      await api.delete(`/operators/${id}/documents/${documentId}`);
+      await loadProfile();
+    } catch { raise("Could not withdraw that document."); }
+  };
+
+  /* ── derived ──────────────────────────────────────────────────────────── */
   const status = String(loaded?.approval_status ?? "DRAFT");
   const statusTone: Tone =
     status === "APPROVED" ? "emerald" : status === "SUBMITTED" ? "amber"
@@ -419,21 +487,22 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
       { label: "Phone", done: has("phone") },
       { label: "Emergency contact", done: has("emergency_contact_phone") },
       { label: "HEMM experience", done: has("exp_hemm_months") },
+      { label: "Language", done: records.some((r) => r.record_type === "LANGUAGE") },
       { label: "Licence", done: records.some((r) => r.record_type === "LICENCE") },
       { label: "Medical", done: records.some((r) => r.record_type === "MEDICAL") },
+      { label: "Skill", done: records.some((r) => r.record_type === "SKILL") },
       { label: "Competency", done: comps.some((c) => c.dimension === "OVERALL" && (c.level ?? 0) >= 2) },
+      { label: "Document uploaded", done: documents.length > 0 },
     ];
-  }, [f, records, comps]);
+  }, [f, records, comps, documents]);
 
   const done = checklist.filter((c) => c.done).length;
   const outstanding = checklist.filter((c) => !c.done).map((c) => c.label);
-
   const levelFor = (assetTypeId: number, dimension: string): number =>
     comps.find((c) => c.asset_type_id === assetTypeId && c.dimension === dimension)?.level ?? 0;
-
   const name = String(f.display_name || "this profile");
 
-  // ── the messages and the questions ────────────────────────────────────────
+  /* ── messages and questions ───────────────────────────────────────────── */
   const messages = (
     <>
       <Toast tone="error" message={error} onClose={() => setError(null)} />
@@ -478,504 +547,544 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
     </>
   );
 
-  // ── the sheet ──────────────────────────────────────────────────────────────
-  const sheet = (
-    <div className="space-y-4">
-      {/* Header */}
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <button onClick={leave}
-            className="inline-flex items-center gap-1.5 mb-2.5 rounded-lg border border-border
-                       bg-bg-base px-3 py-1.5 text-[12px] font-bold text-navy shadow-sm
-                       hover:border-gold hover:bg-gold/[0.06] transition-all">
-            <ArrowLeft className="w-4 h-4 text-gold-dark" /> Back to register
-          </button>
-          {editing && loaded?.operator_ref ? (
-            <button type="button" title="Our own reference for this person — copy it"
-              onClick={() => { void navigator.clipboard?.writeText(String(loaded.operator_ref));
-                               setNotice(`${loaded.operator_ref} copied.`); }}
-              className="inline-flex items-center gap-1.5 mb-2 ml-2 rounded-md bg-violet-bg
-                         border border-violet-ring px-2 py-1 font-mono text-[11.5px] font-bold
-                         text-violet hover:bg-violet/10 transition-colors">
-              {String(loaded.operator_ref)} <Copy className="w-3 h-3" />
-            </button>
-          ) : null}
-          <h2 className="font-condensed font-extrabold text-[24px] leading-none text-navy">
-            {editing ? name : <>Register an <span className="text-gold-dark">operator</span></>}
-          </h2>
-          <p className="text-[12px] text-txt-muted mt-1.5">
-            {editing
-              ? "Every change is recorded with its old and new value. Editing an approved profile returns it to draft."
-              : "A name is enough to start. Documents, competency and assignment follow once the profile exists."}
-          </p>
-        </div>
+  /* ── the page ─────────────────────────────────────────────────────────── */
+  return (
+    <>
+      {messages}
+      {dialogs}
 
-        <div className="flex flex-wrap items-center gap-2">
-          {editing && <Chip tone={statusTone}>{status.replace("_", " ").toLowerCase()}</Chip>}
-          <Chip tone={done > 9 ? "emerald" : done > 4 ? "amber" : "slate"}
-                title={outstanding.length ? `Still blank: ${outstanding.join(", ")}` : "Nothing outstanding"}>
-            {done} of {checklist.length} filled
-          </Chip>
-          <Button size="sm" variant="primary" onClick={() => submit("stay")}
-            disabled={saving || !dirty}
-            title={dirty ? undefined : "Nothing has changed since the last save"}>
-            {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
-                    : dirty ? <><Check className="w-3.5 h-3.5" /> {editing ? "Save changes" : "Save as draft"}</>
-                    : <><Check className="w-3.5 h-3.5" /> Saved</>}
-          </Button>
+      {/* Everything that must stay reachable however far the page has scrolled */}
+      <div className="sticky top-[68px] z-30 -mx-5 px-5 pt-1 pb-3 bg-bg-base/95 backdrop-blur
+                      border-b border-border-light">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0 flex items-center gap-3">
+            <button onClick={leave}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-bg-base
+                         px-3 py-1.5 text-[12px] font-bold text-navy shadow-sm hover:border-gold
+                         hover:bg-gold/[0.06] transition-all shrink-0">
+              <ArrowLeft className="w-4 h-4 text-gold-dark" /> Back
+            </button>
+            <div className="min-w-0">
+              <h2 className="font-condensed font-extrabold text-[20px] leading-tight text-navy truncate">
+                {editing ? name : <>Register an <span className="text-gold-dark">operator</span></>}
+              </h2>
+              <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                {editing && loaded?.operator_ref ? (
+                  <button type="button" title="Our own reference — copy it"
+                    onClick={() => { void navigator.clipboard?.writeText(String(loaded.operator_ref));
+                                     setNotice(`${loaded.operator_ref} copied.`); }}
+                    className="inline-flex items-center gap-1 rounded bg-violet-bg border border-violet-ring
+                               px-1.5 py-0.5 font-mono text-[11px] font-bold text-violet">
+                    {String(loaded.operator_ref)} <Copy className="w-3 h-3" />
+                  </button>
+                ) : null}
+                {editing && <Chip tone={statusTone}>{status.replace("_", " ").toLowerCase()}</Chip>}
+                <Chip tone={done > 11 ? "emerald" : done > 5 ? "amber" : "slate"}
+                      title={outstanding.length ? `Still blank: ${outstanding.join(", ")}` : "Nothing outstanding"}>
+                  {done} of {checklist.length}
+                </Chip>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="primary" onClick={() => submit("stay")}
+              disabled={saving || !dirty}
+              title={dirty ? undefined : "Nothing has changed since the last save"}>
+              {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
+                      : dirty ? <><Check className="w-3.5 h-3.5" /> {editing ? "Save changes" : "Save as draft"}</>
+                      : <><Check className="w-3.5 h-3.5" /> Saved</>}
+            </Button>
+            {(!editing || status === "DRAFT" || status === "SENT_BACK") && (
+              <Button size="sm" variant="accent" onClick={() => submit("submit")} disabled={saving}>
+                <Send className="w-3.5 h-3.5" /> Submit for approval
+              </Button>
+            )}
+            {editing && status === "SUBMITTED" && rights.may_approve && (
+              <>
+                <Button size="sm" variant="success" disabled={busy !== null}
+                  onClick={() => void act("approve")}>
+                  <CheckCircle2 className="w-3.5 h-3.5" /> Approve
+                </Button>
+                <Button size="sm" variant="danger" disabled={busy !== null}
+                  onClick={() => setAsk("send-back")}>
+                  <Undo2 className="w-3.5 h-3.5" /> Send back
+                </Button>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
-      <Tabs tabs={TABS} value={tab} onChange={(t) => setTab(t as TabId)} />
-
-      {!editing && tab !== "personal" && (
-        <Alert tone="info">
-          Save the profile first — documents, competency and assignments hang off
-          a person, so there has to be one to hang them on.
-        </Alert>
-      )}
-
-      {/* ── Personal ─────────────────────────────────────────────────── */}
-      {tab === "personal" && (
-        <div>
-          <Band title="Who they are"
-                hint="Blood group and date of birth are asked for at the first aid post, not for decoration" />
-          <Sheet>
-            <Row label="Full name" required invalid={invalid.has("display_name")}>
-              <input id="op-name" className={cellInput} value={f.display_name ?? ""}
-                onChange={(e) => set("display_name", e.target.value)} placeholder="As written on the licence" />
-            </Row>
-            <Row label="Date of birth">
-              <input id="op-dob" type="date" className={cellInput} value={f.date_of_birth ?? ""}
-                onChange={(e) => set("date_of_birth", e.target.value)} />
-            </Row>
-            <Row label="Gender">
-              <select id="op-gender" className={cellInput} value={f.gender ?? ""}
-                onChange={(e) => set("gender", e.target.value)}>
-                <option value="">Select…</option>
-                <option value="MALE">Male</option>
-                <option value="FEMALE">Female</option>
-                <option value="OTHER">Other</option>
-              </select>
-            </Row>
-            <Row label="Blood group" hint="Asked for first, in the event nobody wants">
-              <div className="px-1.5 py-1">
-                <Combobox id="op-blood" category="BLOOD_GROUP" value={f.blood_group ?? ""}
-                  onChange={(v) => set("blood_group", v)} placeholder="B+, O−…" />
-              </div>
-            </Row>
-            <Row label="Mobile">
-              <input id="op-phone" className={cellInput} value={f.phone ?? ""}
-                onChange={(e) => set("phone", e.target.value)} placeholder="10 digits" />
-            </Row>
-            <Row label="Alternate contact">
-              <input id="op-phone2" className={cellInput} value={f.alternate_phone ?? ""}
-                onChange={(e) => set("alternate_phone", e.target.value)} />
-            </Row>
-            <Row label="Emergency contact">
-              <input id="op-ec" className={cellInput} value={f.emergency_contact_name ?? ""}
-                onChange={(e) => set("emergency_contact_name", e.target.value)} placeholder="Name" />
-            </Row>
-            <Row label="Emergency number">
-              <input id="op-ecp" className={cellInput} value={f.emergency_contact_phone ?? ""}
-                onChange={(e) => set("emergency_contact_phone", e.target.value)} />
-            </Row>
-            <Row label="Relationship">
-              <input id="op-ecr" className={cellInput} value={f.emergency_contact_relation ?? ""}
-                onChange={(e) => set("emergency_contact_relation", e.target.value)} placeholder="Wife, brother…" />
-            </Row>
-            <Row label="Profile status">
-              <select id="op-status" className={cellInput} value={f.profile_status ?? "ACTIVE"}
-                onChange={(e) => set("profile_status", e.target.value)}>
-                {["ACTIVE", "INACTIVE", "SUSPENDED", "RETIRED"].map((s) => (
-                  <option key={s} value={s}>{s[0] + s.slice(1).toLowerCase()}</option>
-                ))}
-              </select>
-            </Row>
-            <Row label="Current address" wide>
-              <input id="op-addr" className={cellInput} value={f.current_address ?? ""}
-                onChange={(e) => set("current_address", e.target.value)} />
-            </Row>
-            <Row label="Permanent address" wide>
-              <input id="op-addr2" className={cellInput} value={f.permanent_address ?? ""}
-                onChange={(e) => set("permanent_address", e.target.value)} />
-            </Row>
-          </Sheet>
-
-          <div className="mt-4">
-            <Band title="Literacy"
-                  hint="Kept apart from education on purpose: a diploma says nothing about whether someone can read a safety sign" />
-            <Sheet>
-              {[
-                ["reading_level", "Reading"], ["writing_level", "Writing"],
-                ["numeracy_level", "Numbers"], ["digital_level", "Digital"],
-                ["safety_sign_level", "Safety signs"], ["record_keeping_level", "Forms and records"],
-              ].map(([key, label]) => (
-                <Row key={key} label={label}>
-                  <select id={`op-${key}`} className={cellInput} value={f[key] ?? ""}
-                    onChange={(e) => set(key, e.target.value)}>
-                    <option value="">Not recorded</option>
-                    {CAPABILITY.map((c) => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </Row>
-              ))}
-            </Sheet>
-          </div>
+      {/* The section strip: where in the profile you are, and a way to jump.
+          It follows the scroll rather than replacing it — every section is on
+          the page, one under the other. */}
+      <nav className="sticky top-[132px] z-20 -mx-5 px-5 py-2 bg-bg-base/95 backdrop-blur
+                      border-b border-border-light overflow-x-auto">
+        <div className="flex gap-1.5 w-max">
+          {SECTIONS.map((sec) => {
+            const Icon = sec.icon;
+            const on = here === sec.id;
+            return (
+              <button key={sec.id} onClick={() => goTo(sec.id)}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[12.5px] whitespace-nowrap
+                            transition-colors
+                            ${on ? "bg-navy text-white font-bold shadow-sm"
+                                 : "text-txt-muted hover:bg-bg-section hover:text-navy"}`}>
+                <Icon className={`w-4 h-4 ${on ? "text-gold" : "text-txt-light"}`} />
+                {sec.label}
+              </button>
+            );
+          })}
         </div>
-      )}
+      </nav>
 
-      {/* ── Employment and experience ───────────────────────────────── */}
-      {tab === "employment" && (
-        <div>
-          <Band title="Employment" hint="An attribute of the person, not the shape of the record" />
-          <Sheet>
-            <Row label="Employment type" required invalid={invalid.has("employment_type")}>
-              <select id="op-emptype" className={cellInput} value={f.employment_type ?? "OWN"}
-                onChange={(e) => set("employment_type", e.target.value)}>
-                <option value="OWN">Own (BAL)</option>
-                <option value="CONTRACT">Contractor</option>
-                <option value="TRAINEE">Trainee</option>
-                <option value="OTHER">Other</option>
-              </select>
-            </Row>
-            <Row label="Employer / agency">
-              <select id="op-employer" className={cellInput} value={f.employer_party_id ?? ""}
-                onChange={(e) => set("employer_party_id", e.target.value)}>
-                <option value="">Select…</option>
-                {parties.map((p) => (
-                  <option key={p.party_id} value={p.party_id}>{p.display_name}</option>
-                ))}
-              </select>
-            </Row>
-            <Row label="Plant" required invalid={invalid.has("plant_id")}>
-              <select id="op-plant" className={cellInput} value={f.plant_id ?? ""}
-                onChange={(e) => set("plant_id", e.target.value)}>
-                <option value="">Select…</option>
-                {plants.map((p) => (
-                  <option key={p.plant_id} value={p.plant_id}>{p.code} · {p.name}</option>
-                ))}
-              </select>
-            </Row>
-            <Row label="Department" hint="Not on the list? Type it and it is added">
-              <div className="px-1.5 py-1">
-                <Combobox id="op-dept"
-                  options={orgUnits.map((o) => ({ value: o.name }))}
-                  value={orgUnits.find((o) => String(o.org_unit_id) === f.org_unit_id)?.name ?? ""}
-                  placeholder="Mining Operations…"
-                  onChange={(n) => {
-                    const hit = orgUnits.find((o) => o.name === n);
-                    set("org_unit_id", hit ? String(hit.org_unit_id) : "");
-                  }}
-                  onAddNew={async (n) => {
-                    const r = await api.post("/minehub/org-units", { name: n });
-                    setOrgUnits((prev) => [...prev, r.data]);
-                    set("org_unit_id", String(r.data.org_unit_id));
-                    return r.data.name;
-                  }} />
-              </div>
-            </Row>
-            <Row label="Designation">
-              <div className="px-1.5 py-1">
-                <Combobox id="op-desig" category="DESIGNATION" value={f.designation ?? ""}
-                  onChange={(v) => set("designation", v)} placeholder="Excavator Operator, Tipper Driver…" />
-              </div>
-            </Row>
-            <Row label="Shift pattern">
-              <div className="px-1.5 py-1">
-                <Combobox id="op-shift" category="SHIFT_PATTERN" value={f.shift_pattern ?? ""}
-                  onChange={(v) => set("shift_pattern", v)} placeholder="Rotating A/B/C, General…" />
-              </div>
-            </Row>
-            <Row label="Joined on">
-              <input id="op-joined" type="date" className={cellInput} value={f.joined_on ?? ""}
-                onChange={(e) => set("joined_on", e.target.value)} />
-            </Row>
-            <Row label="Employment end" hint="Leave blank while they are still working here">
-              <input id="op-end" type="date" className={cellInput} value={f.employment_end ?? ""}
-                onChange={(e) => set("employment_end", e.target.value)} />
-            </Row>
-          </Sheet>
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px] gap-5 items-start mt-4">
+        {/* The sheet */}
+        <div className="space-y-5 min-w-0">
+          {!editing && (
+            <Alert tone="info">
+              Save the profile first — documents, skills, competency and assignments
+              hang off a person, so there has to be one to hang them on. Everything
+              below becomes editable the moment it is saved.
+            </Alert>
+          )}
 
-          <div className="mt-4">
-            <Band title="Experience"
-                  hint="In months, so it can be added up. Declared is what they say; verified is what someone checked" />
+          {/* Personal */}
+          <section id="sec-personal" ref={register("personal")} className="scroll-mt-[200px]">
+            <Band title="Personal details"
+                  hint="Blood group and date of birth are what the first aid post asks for" />
             <Sheet>
-              {[
-                ["exp_total_months", "Total work"], ["exp_mining_months", "Mining"],
-                ["exp_hemm_months", "HEMM"], ["exp_operator_months", "As operator"],
-                ["exp_kaliapani_months", "At Kaliapani"], ["exp_current_role_months", "Current role"],
-                ["exp_verified_months", "Verified"],
-              ].map(([key, label]) => (
-                <Row key={key} label={`${label} (months)`}>
-                  <input id={`op-${key}`} type="number" className={cellInput} value={f[key] ?? ""}
-                    onChange={(e) => set(key, e.target.value)} placeholder="0" />
-                </Row>
-              ))}
-              <Row label="Verified by">
-                <input id="op-expby" className={cellInput} value={f.exp_verified_by ?? ""}
-                  onChange={(e) => set("exp_verified_by", e.target.value)} />
+              <Row label="Full name" required invalid={invalid.has("display_name")}>
+                <input id="op-name" className={cellInput} value={f.display_name ?? ""}
+                  onChange={(e) => set("display_name", e.target.value)}
+                  placeholder="As written on the licence" />
+              </Row>
+              <Row label="Date of birth">
+                <input id="op-dob" type="date" className={cellInput} value={f.date_of_birth ?? ""}
+                  onChange={(e) => set("date_of_birth", e.target.value)} />
+              </Row>
+              <Row label="Gender">
+                <select id="op-gender" className={cellInput} value={f.gender ?? ""}
+                  onChange={(e) => set("gender", e.target.value)}>
+                  <option value="">Select…</option>
+                  <option value="MALE">Male</option>
+                  <option value="FEMALE">Female</option>
+                  <option value="OTHER">Other</option>
+                </select>
+              </Row>
+              <Row label="Blood group">
+                <div className="px-1.5 py-1">
+                  <Combobox id="op-blood" category="BLOOD_GROUP" value={f.blood_group ?? ""}
+                    onChange={(v) => set("blood_group", v)} placeholder="B+, O−…" />
+                </div>
+              </Row>
+              <Row label="Mobile">
+                <input id="op-phone" className={cellInput} value={f.phone ?? ""}
+                  onChange={(e) => set("phone", e.target.value)} placeholder="10 digits" />
+              </Row>
+              <Row label="Alternate contact">
+                <input id="op-phone2" className={cellInput} value={f.alternate_phone ?? ""}
+                  onChange={(e) => set("alternate_phone", e.target.value)} />
+              </Row>
+              <Row label="Emergency contact">
+                <input id="op-ec" className={cellInput} value={f.emergency_contact_name ?? ""}
+                  onChange={(e) => set("emergency_contact_name", e.target.value)} placeholder="Name" />
+              </Row>
+              <Row label="Emergency number">
+                <input id="op-ecp" className={cellInput} value={f.emergency_contact_phone ?? ""}
+                  onChange={(e) => set("emergency_contact_phone", e.target.value)} />
+              </Row>
+              <Row label="Relationship">
+                <input id="op-ecr" className={cellInput} value={f.emergency_contact_relation ?? ""}
+                  onChange={(e) => set("emergency_contact_relation", e.target.value)}
+                  placeholder="Wife, brother…" />
+              </Row>
+              <Row label="Profile status">
+                <select id="op-status" className={cellInput} value={f.profile_status ?? "ACTIVE"}
+                  onChange={(e) => set("profile_status", e.target.value)}>
+                  {["ACTIVE", "INACTIVE", "SUSPENDED", "RETIRED"].map((x) => (
+                    <option key={x} value={x}>{x[0] + x.slice(1).toLowerCase()}</option>
+                  ))}
+                </select>
+              </Row>
+              <Row label="Current address" wide>
+                <input id="op-addr" className={cellInput} value={f.current_address ?? ""}
+                  onChange={(e) => set("current_address", e.target.value)} />
+              </Row>
+              <Row label="Permanent address" wide>
+                <input id="op-addr2" className={cellInput} value={f.permanent_address ?? ""}
+                  onChange={(e) => set("permanent_address", e.target.value)} />
               </Row>
             </Sheet>
-          </div>
 
-          <div className="mt-4">
+            <div className="mt-4">
+              <Band title="Literacy"
+                    hint="Apart from education on purpose: a diploma says nothing about whether someone can read a safety sign" />
+              <Sheet>
+                {[
+                  ["reading_level", "Reading"], ["writing_level", "Writing"],
+                  ["numeracy_level", "Numbers"], ["digital_level", "Digital"],
+                  ["safety_sign_level", "Safety signs"], ["record_keeping_level", "Forms and records"],
+                ].map(([key, label]) => (
+                  <Row key={key} label={label}>
+                    <select id={`op-${key}`} className={cellInput} value={f[key] ?? ""}
+                      onChange={(e) => set(key, e.target.value)}>
+                      <option value="">Not recorded</option>
+                      {CAPABILITY.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </Row>
+                ))}
+              </Sheet>
+            </div>
+          </section>
+
+          {/* Employment */}
+          <section id="sec-employment" ref={register("employment")} className="scroll-mt-[200px]">
+            <Band title="Employment" hint="An attribute of the person, not the shape of the record" />
+            <Sheet>
+              <Row label="Employment type" required invalid={invalid.has("employment_type")}>
+                <select id="op-emptype" className={cellInput} value={f.employment_type ?? "OWN"}
+                  onChange={(e) => set("employment_type", e.target.value)}>
+                  <option value="OWN">Own (BAL)</option>
+                  <option value="CONTRACT">Contractor</option>
+                  <option value="TRAINEE">Trainee</option>
+                  <option value="OTHER">Other</option>
+                </select>
+              </Row>
+              <Row label="Employer / agency">
+                <select id="op-employer" className={cellInput} value={f.employer_party_id ?? ""}
+                  onChange={(e) => set("employer_party_id", e.target.value)}>
+                  <option value="">Select…</option>
+                  {parties.map((p) => (
+                    <option key={p.party_id} value={p.party_id}>{p.display_name}</option>
+                  ))}
+                </select>
+              </Row>
+              <Row label="Plant" required invalid={invalid.has("plant_id")}>
+                <select id="op-plant" className={cellInput} value={f.plant_id ?? ""}
+                  onChange={(e) => set("plant_id", e.target.value)}>
+                  <option value="">Select…</option>
+                  {plants.map((p) => (
+                    <option key={p.plant_id} value={p.plant_id}>{p.code} · {p.name}</option>
+                  ))}
+                </select>
+              </Row>
+              <Row label="Department" hint="Not on the list? Type it and it is added">
+                <div className="px-1.5 py-1">
+                  <Combobox id="op-dept"
+                    options={orgUnits.map((o) => ({ value: o.name }))}
+                    value={orgUnits.find((o) => String(o.org_unit_id) === f.org_unit_id)?.name ?? ""}
+                    placeholder="Mining Operations…"
+                    onChange={(n) => {
+                      const hit = orgUnits.find((o) => o.name === n);
+                      set("org_unit_id", hit ? String(hit.org_unit_id) : "");
+                    }}
+                    onAddNew={async (n) => {
+                      const r = await api.post("/minehub/org-units", { name: n });
+                      setOrgUnits((prev) => [...prev, r.data]);
+                      set("org_unit_id", String(r.data.org_unit_id));
+                      return r.data.name;
+                    }} />
+                </div>
+              </Row>
+              <Row label="Designation">
+                <div className="px-1.5 py-1">
+                  <Combobox id="op-desig" category="DESIGNATION" value={f.designation ?? ""}
+                    onChange={(v) => set("designation", v)}
+                    placeholder="Excavator Operator, Tipper Driver…" />
+                </div>
+              </Row>
+              <Row label="Shift pattern">
+                <div className="px-1.5 py-1">
+                  <Combobox id="op-shift" category="SHIFT_PATTERN" value={f.shift_pattern ?? ""}
+                    onChange={(v) => set("shift_pattern", v)} placeholder="Rotating A/B/C, General…" />
+                </div>
+              </Row>
+              <Row label="Joined on">
+                <input id="op-joined" type="date" className={cellInput} value={f.joined_on ?? ""}
+                  onChange={(e) => set("joined_on", e.target.value)} />
+              </Row>
+              <Row label="Employment end" hint="Blank while they are still working here">
+                <input id="op-end" type="date" className={cellInput} value={f.employment_end ?? ""}
+                  onChange={(e) => set("employment_end", e.target.value)} />
+              </Row>
+            </Sheet>
+
+            <div className="mt-4">
+              <Band title="Experience"
+                    hint="In months so it can be added up. Declared is what they say; verified is what someone checked" />
+              <Sheet>
+                {[
+                  ["exp_total_months", "Total work"], ["exp_mining_months", "Mining"],
+                  ["exp_hemm_months", "HEMM"], ["exp_operator_months", "As operator"],
+                  ["exp_kaliapani_months", "At Kaliapani"], ["exp_current_role_months", "Current role"],
+                  ["exp_verified_months", "Verified"],
+                ].map(([key, label]) => (
+                  <Row key={key} label={`${label} (months)`}>
+                    <input id={`op-${key}`} type="number" className={cellInput} value={f[key] ?? ""}
+                      onChange={(e) => set(key, e.target.value)} placeholder="0" />
+                  </Row>
+                ))}
+                <Row label="Verified by">
+                  <input id="op-expby" className={cellInput} value={f.exp_verified_by ?? ""}
+                    onChange={(e) => set("exp_verified_by", e.target.value)} />
+                </Row>
+              </Sheet>
+            </div>
+          </section>
+
+          {/* Background */}
+          <section id="sec-background" ref={register("background")} className="scroll-mt-[200px] space-y-4">
             <RecordSection kind="EXPERIENCE" title="Previous employers"
               hint="Where they worked before, and on what"
               records={records} onSave={saveRecord} onRemove={removeRecord}
-              disabled={!editing || !rights.may_manage} types={types} />
-          </div>
-
-          <div className="mt-4">
+              disabled={!editing || !rights.may_manage}
+              documents={documents} onUpload={uploadFor} onOpenDoc={openDocument} />
             <RecordSection kind="EDUCATION" title="Education"
               hint="Schooling and technical qualifications — separate from literacy"
               records={records} onSave={saveRecord} onRemove={removeRecord}
-              disabled={!editing || !rights.may_manage} types={types} />
-          </div>
+              disabled={!editing || !rights.may_manage}
+              documents={documents} onUpload={uploadFor} onOpenDoc={openDocument} />
+          </section>
 
-          <div className="mt-4">
-            <RecordSection kind="LANGUAGE" title="Languages"
-              hint="Which languages a toolbox talk or an emergency instruction can be given in"
-              records={records} onSave={saveRecord} onRemove={removeRecord}
-              disabled={!editing || !rights.may_manage} types={types} />
-          </div>
-        </div>
-      )}
+          {/* Languages */}
+          <section id="sec-languages" ref={register("languages")} className="scroll-mt-[200px]">
+            <LanguageSection records={records} onSave={saveRecord} onRemove={removeRecord}
+              disabled={!editing || !rights.may_manage} />
+          </section>
 
-      {/* ── Documents ────────────────────────────────────────────────── */}
-      {tab === "documents" && (
-        <div className="space-y-4">
-          {["LICENCE", "MEDICAL", "CERTIFICATE", "AUTHORISATION", "TRAINING", "SPECIALIZED_TRAINING"].map((kind) => (
-            <RecordSection key={kind} kind={kind}
-              title={RECORD_KINDS.find((k) => k.value === kind)?.label ?? kind}
-              hint={kind === "LICENCE" ? "Every row here has an expiry, and every expiry reaches the Alerts screen before it passes"
-                  : kind === "MEDICAL" ? "Periodical medical examination and any restriction it carries"
-                  : undefined}
-              records={records} onSave={saveRecord} onRemove={removeRecord}
-              disabled={!editing || !rights.may_manage} types={types} />
-          ))}
-        </div>
-      )}
+          {/* Documents */}
+          <section id="sec-documents" ref={register("documents")} className="scroll-mt-[200px] space-y-4">
+            {DOC_KINDS.map((d) => (
+              <RecordSection key={d.kind} kind={d.kind} title={d.label} hint={d.hint}
+                records={records} onSave={saveRecord} onRemove={removeRecord}
+                disabled={!editing || !rights.may_manage}
+                documents={documents} onUpload={uploadFor} onOpenDoc={openDocument} />
+            ))}
+          </section>
 
-      {/* ── Competency ───────────────────────────────────────────────── */}
-      {tab === "competency" && (
-        <div>
-          <Band title="What they can run, and how well they understand it"
-                hint="Training is not competency. A level here means someone assessed them, and the evidence is kept"
-                right={
-                  <select value={compType} onChange={(e) => setCompType(e.target.value)}
-                    className="bg-white/10 border border-white/20 rounded-lg px-2.5 py-1 text-[12px] text-white">
-                    <option value="" className="text-navy">Choose equipment class…</option>
-                    {types.map((t) => (
-                      <option key={t.asset_type_id} value={t.asset_type_id} className="text-navy">{t.name}</option>
-                    ))}
-                  </select>
-                } />
-          <div className="border border-t-0 border-border-light rounded-b-xl bg-bg-base p-4">
-            {!compType ? (
-              <p className="text-[12.5px] text-txt-muted py-6 text-center">
-                Choose an equipment class above. Overall competency is the level that
-                decides eligibility; the rest are what the person actually understands
-                about the machine.
-              </p>
-            ) : !rights.may_assess ? (
-              <Alert tone="info">
-                Assessing competency is a separate permission, held by training rather
-                than by whoever keeps the register. You can see the levels but not set them.
-              </Alert>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1">
-                {DIMENSIONS.map((d) => {
-                  const lvl = levelFor(Number(compType), d.id);
-                  return (
-                    <div key={d.id}
-                      className={`flex items-center justify-between gap-3 py-1.5 border-b border-border-light
-                                  ${d.id === "OVERALL" ? "md:col-span-2 bg-gold/[0.05] px-2 rounded" : ""}`}>
-                      <span className={`text-[12.5px] ${d.id === "OVERALL" ? "font-bold text-navy" : "text-txt-secondary"}`}>
-                        {d.label}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        {[0, 1, 2, 3, 4].map((n) => (
-                          <button key={n} type="button" disabled={!editing}
-                            onClick={() => void setLevel(Number(compType), d.id, n)}
-                            title={LEVELS[n]}
-                            className={`w-7 h-7 rounded-md text-[11px] font-bold border transition-colors
-                              ${lvl === n
-                                ? "bg-navy text-white border-navy"
-                                : "bg-bg-base text-txt-light border-border hover:border-gold hover:text-navy"}`}>
-                            {n}
-                          </button>
-                        ))}
-                        <Chip tone={LEVEL_TONE[lvl]} dot={false} className="ml-2 hidden lg:inline-flex">
-                          {LEVELS[lvl]}
-                        </Chip>
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+          {/* Skills */}
+          <section id="sec-skills" ref={register("skills")} className="scroll-mt-[200px]">
+            <SkillSection skills={skills} records={records}
+              disabled={!editing || !rights.may_manage}
+              onSave={saveRecord} onRemove={removeRecord} />
+          </section>
 
-          {comps.filter((c) => c.dimension === "OVERALL").length > 0 && (
-            <div className="mt-4 rounded-xl border border-border-light bg-bg-base overflow-hidden">
-              <div className="px-4 py-2.5 border-b border-border-light text-[12px] font-bold
-                              uppercase tracking-[.1em] text-navy">
-                Assessed classes
-              </div>
-              <div className="p-3 flex flex-wrap gap-2">
+          {/* Competency */}
+          <section id="sec-competency" ref={register("competency")} className="scroll-mt-[200px]">
+            <Band title="What they can run, and how well they understand it"
+                  hint="Training is not competency. A level here means someone assessed them, and every assessment is kept"
+                  right={
+                    <select value={compType} onChange={(e) => setCompType(e.target.value)}
+                      className="bg-white/10 border border-white/20 rounded-lg px-2.5 py-1 text-[12px] text-white">
+                      <option value="" className="text-navy">Choose equipment class…</option>
+                      {types.map((t) => (
+                        <option key={t.asset_type_id} value={t.asset_type_id} className="text-navy">
+                          {t.name}
+                        </option>
+                      ))}
+                    </select>
+                  } />
+            <div className="border border-t-0 border-border-light rounded-b-xl bg-bg-base p-4">
+              {!compType ? (
+                <p className="text-[12.5px] text-txt-muted py-6 text-center">
+                  Choose an equipment class above. Overall competency decides eligibility;
+                  the rest are what the person actually understands about the machine.
+                </p>
+              ) : !rights.may_assess ? (
+                <Alert tone="info">
+                  Assessing is a separate permission, held by training rather than by
+                  whoever keeps the register. You can see the levels but not set them.
+                </Alert>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1">
+                  {DIMENSIONS.map((d) => {
+                    const lvl = levelFor(Number(compType), d.id);
+                    return (
+                      <div key={d.id}
+                        className={`flex items-center justify-between gap-3 py-1.5 border-b border-border-light
+                                    ${d.id === "OVERALL" ? "md:col-span-2 bg-gold/[0.06] px-2 rounded" : ""}`}>
+                        <span className={`text-[12.5px] ${d.id === "OVERALL" ? "font-bold text-navy" : "text-txt-secondary"}`}>
+                          {d.label}
+                        </span>
+                        <span className="flex items-center gap-1">
+                          {[0, 1, 2, 3, 4].map((n) => (
+                            <button key={n} type="button" disabled={!editing}
+                              onClick={() => void setLevel(Number(compType), d.id, n)}
+                              title={LEVELS[n]}
+                              className={`w-7 h-7 rounded-md text-[11px] font-bold border transition-colors
+                                ${lvl === n ? "bg-navy text-white border-navy"
+                                            : "bg-bg-base text-txt-light border-border hover:border-gold hover:text-navy"}`}>
+                              {n}
+                            </button>
+                          ))}
+                          <Chip tone={LEVEL_TONE[lvl]} dot={false} className="ml-2 hidden xl:inline-flex">
+                            {LEVELS[lvl]}
+                          </Chip>
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {comps.filter((c) => c.dimension === "OVERALL").length > 0 && (
+              <div className="mt-3 rounded-xl border border-border-light bg-bg-base p-3 flex flex-wrap gap-2">
                 {comps.filter((c) => c.dimension === "OVERALL").map((c) => (
                   <Chip key={c.operator_competency_id} tone={LEVEL_TONE[c.level ?? 0]}>
                     {c.asset_type} · L{c.level ?? 0}
-                    {c.valid_upto ? ` · to ${c.valid_upto}` : ""}
+                    {c.assessment_count && c.assessment_count > 1 ? ` · ${c.assessment_count} assessments` : ""}
                   </Chip>
                 ))}
               </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── Machines ─────────────────────────────────────────────────── */}
-      {tab === "machines" && (
-        <AssignmentSection assets={assets} assignments={assignments}
-          disabled={!editing || !rights.may_manage} onAssign={assign} />
-      )}
-
-      {/* ── Identity ─────────────────────────────────────────────────── */}
-      {tab === "identity" && (
-        <IdentitySection idents={idents} disabled={!editing || !rights.may_manage}
-          onAdd={addIdentity}
-          onRemove={async (identityId) => {
-            if (!id) return;
-            await api.delete(`/operators/${id}/identities/${identityId}`);
-            await loadProfile();
-          }} />
-      )}
-
-      {/* Footer */}
-      <div className="flex flex-wrap gap-2 pt-1 sticky bottom-0 bg-bg-base/95 backdrop-blur py-3
-                      -mx-1 px-1 border-t border-border-light">
-        <Button variant="primary" size="lg" onClick={() => submit("stay")}
-          disabled={saving || !dirty}>
-          {saving ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
-                  : dirty ? <><Check className="w-4 h-4" /> {editing ? "Save changes" : "Save as draft"}</>
-                  : <><Check className="w-4 h-4" /> Saved</>}
-        </Button>
-        {!editing && (
-          <Button variant="accent" size="lg" onClick={() => submit("submit")} disabled={saving}>
-            <Send className="w-4 h-4" /> Save and submit for approval
-          </Button>
-        )}
-        <Button variant="ghost" size="lg" onClick={leave}>
-          {editing ? "Back to register" : "Cancel"}
-        </Button>
-        {editing && (status === "DRAFT" || status === "SENT_BACK") && rights.may_manage && (
-          <span className="ml-auto">
-            <Button variant="danger" size="lg" disabled={busy !== null} onClick={() => setAsk("discard")}>
-              <Trash2 className="w-4 h-4" /> Discard profile
-            </Button>
-          </span>
-        )}
-      </div>
-    </div>
-  );
-
-  if (!editing) return <>{messages}{dialogs}{sheet}</>;
-
-  return (
-    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_340px] gap-5 items-start">
-      {messages}
-      {dialogs}
-      {sheet}
-      <div className="xl:sticky xl:top-[86px] space-y-4">
-        <div className="bg-bg-base border border-border-light rounded-xl shadow-sm overflow-hidden">
-          <header className="px-4 py-3 border-b border-border-light flex items-center justify-between gap-2">
-            <h3 className="font-condensed font-bold text-[12.5px] uppercase tracking-[.1em] text-navy
-                           flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-gold" /> Approval
-            </h3>
-            <Chip tone={statusTone}>{status.replace("_", " ").toLowerCase()}</Chip>
-          </header>
-          <div className="p-4 space-y-2.5">
-            <p className="text-[12px] text-txt-muted leading-relaxed">
-              {status === "APPROVED"
-                ? "On the register. Editing returns it to draft, since what was approved would no longer be what is on file."
-                : status === "SUBMITTED"
-                ? "Waiting for someone other than whoever submitted it."
-                : status === "SENT_BACK"
-                ? "Sent back for correction — the reason is in the trail below."
-                : "A draft. It stays off the register until it is approved."}
-            </p>
-
-            {(status === "DRAFT" || status === "SENT_BACK") && rights.may_manage && (
-              <Button variant="accent" size="md" disabled={busy !== null}
-                className="w-full justify-center" onClick={() => void act("submit")}>
-                <Send className="w-4 h-4" /> Submit for approval
-              </Button>
             )}
 
-            {status === "SUBMITTED" && !rights.may_approve && (
-              <p className="text-[12px] text-txt-light border-t border-border-light pt-2.5">
-                Approving is a separate permission, which you do not hold. An Access
-                Manager grants it under Access Control.
-              </p>
-            )}
-
-            {status === "SUBMITTED" && rights.may_approve && (
-              <div className="grid grid-cols-2 gap-2">
-                <Button variant="success" size="md" disabled={busy !== null}
-                  className="justify-center" onClick={() => void act("approve")}>
-                  <CheckCircle2 className="w-4 h-4" /> Approve
-                </Button>
-                <Button variant="danger" size="md" disabled={busy !== null}
-                  className="justify-center" onClick={() => setAsk("send-back")}>
-                  <Undo2 className="w-4 h-4" /> Send back
-                </Button>
+            {history.length > 0 && (
+              <div className="mt-3 rounded-xl border border-border-light bg-bg-base overflow-hidden">
+                <div className="px-4 py-2.5 border-b border-border-light text-[12px] font-bold
+                                uppercase tracking-[.1em] text-navy flex items-center gap-2">
+                  <History className="w-3.5 h-3.5 text-gold" /> Assessment history · {history.length}
+                </div>
+                <ul className="max-h-[260px] overflow-y-auto divide-y divide-border-light">
+                  {history.map((h) => {
+                    const from = (h.details as { previous_level?: number })?.previous_level;
+                    const to = (h.details as { level?: number })?.level ?? 0;
+                    return (
+                      <li key={h.operator_record_id} className="px-4 py-2 flex items-center justify-between gap-3">
+                        <span className="text-[12.5px] text-txt-secondary min-w-0 truncate">{h.title}</span>
+                        <span className="flex items-center gap-2 shrink-0">
+                          <span className="text-[11.5px] text-txt-light">{h.issued_on}</span>
+                          {from !== null && from !== undefined && from !== to && (
+                            <span className="text-[11.5px] text-txt-light">L{from} →</span>
+                          )}
+                          <Chip tone={LEVEL_TONE[to]} dot={false}>L{to}</Chip>
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
               </div>
             )}
+          </section>
+
+          {/* Machines */}
+          <section id="sec-machines" ref={register("machines")} className="scroll-mt-[200px]">
+            <AssignmentSection assets={assets} assignments={assignments}
+              disabled={!editing || !rights.may_manage} onAssign={assign} />
+          </section>
+
+          {/* Identity */}
+          <section id="sec-identity" ref={register("identity")} className="scroll-mt-[200px]">
+            <IdentitySection idents={idents} disabled={!editing || !rights.may_manage}
+              onAdd={addIdentity}
+              onRemove={async (identityId) => {
+                if (!id) return;
+                await api.delete(`/operators/${id}/identities/${identityId}`);
+                await loadProfile();
+              }} />
+          </section>
+
+          {/* Files */}
+          <section id="sec-files" ref={register("files")} className="scroll-mt-[200px]">
+            <FileSection documents={documents} disabled={!editing || !rights.may_manage}
+              onUpload={(file, kind) => uploadFor(file, kind)}
+              onOpen={openDocument} onRemove={removeDocument} />
+          </section>
+
+          {/* Foot */}
+          <div className="flex flex-wrap gap-2 py-3 border-t border-border-light">
+            <Button variant="primary" size="lg" onClick={() => submit("stay")} disabled={saving || !dirty}>
+              {saving ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
+                      : dirty ? <><Check className="w-4 h-4" /> {editing ? "Save changes" : "Save as draft"}</>
+                      : <><Check className="w-4 h-4" /> Saved</>}
+            </Button>
+            <Button variant="ghost" size="lg" onClick={leave}>
+              {editing ? "Back to register" : "Cancel"}
+            </Button>
+            {editing && (status === "DRAFT" || status === "SENT_BACK") && rights.may_manage && (
+              <span className="ml-auto">
+                <Button variant="danger" size="lg" disabled={busy !== null} onClick={() => setAsk("discard")}>
+                  <Trash2 className="w-4 h-4" /> Discard profile
+                </Button>
+              </span>
+            )}
           </div>
         </div>
 
-        {Array.isArray(loaded?.alerts) && (loaded.alerts as unknown[]).length > 0 && (
-          <div className="bg-bg-base border border-rose-ring rounded-xl shadow-sm overflow-hidden">
-            <header className="px-4 py-3 border-b border-border-light bg-rose-bg">
-              <h3 className="font-condensed font-bold text-[12.5px] uppercase tracking-[.1em] text-rose">
-                Expiring
-              </h3>
-            </header>
-            <ul className="divide-y divide-border-light">
-              {(loaded.alerts as { alert_type: string; due_on: string; days_left: number; severity: string }[])
-                .map((a, i) => (
-                <li key={i} className="px-4 py-2.5 flex items-center justify-between gap-2">
-                  <span className="text-[12.5px] text-txt-secondary">{a.alert_type}</span>
-                  <Chip tone={a.severity === "EXPIRED" ? "rose" : "amber"}>
-                    {a.days_left < 0 ? `${-a.days_left}d ago` : `${a.days_left}d`}
-                  </Chip>
-                </li>
-              ))}
-            </ul>
+        {/* Approval, alerts, trail */}
+        {editing && (
+          <div className="hidden xl:block sticky top-[190px] space-y-4">
+            <div className="bg-bg-base border border-border-light rounded-xl shadow-sm overflow-hidden">
+              <header className="px-4 py-3 border-b border-border-light flex items-center justify-between gap-2">
+                <h3 className="font-condensed font-bold text-[12.5px] uppercase tracking-[.1em] text-navy
+                               flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-gold" /> Approval
+                </h3>
+                <Chip tone={statusTone}>{status.replace("_", " ").toLowerCase()}</Chip>
+              </header>
+              <div className="p-4">
+                <p className="text-[12px] text-txt-muted leading-relaxed">
+                  {status === "APPROVED"
+                    ? "On the register. Editing returns it to draft, since what was approved would no longer be what is on file."
+                    : status === "SUBMITTED"
+                    ? rights.may_approve
+                      ? "Waiting for someone other than whoever submitted it. Approve or send back from the top of the page."
+                      : "Waiting for approval. That is a separate permission, which you do not hold."
+                    : status === "SENT_BACK"
+                    ? "Sent back for correction — the reason is in the trail below."
+                    : "A draft. It stays off the register until it is approved."}
+                </p>
+              </div>
+            </div>
+
+            {Array.isArray(loaded?.alerts) && (loaded.alerts as unknown[]).length > 0 && (
+              <div className="bg-bg-base border border-rose-ring rounded-xl shadow-sm overflow-hidden">
+                <header className="px-4 py-3 border-b border-border-light bg-rose-bg">
+                  <h3 className="font-condensed font-bold text-[12.5px] uppercase tracking-[.1em] text-rose">
+                    Expiring
+                  </h3>
+                </header>
+                <ul className="divide-y divide-border-light">
+                  {(loaded.alerts as { alert_type: string; days_left: number; severity: string }[])
+                    .map((a, i) => (
+                    <li key={i} className="px-4 py-2.5 flex items-center justify-between gap-2">
+                      <span className="text-[12.5px] text-txt-secondary min-w-0 truncate">{a.alert_type}</span>
+                      <Chip tone={a.severity === "EXPIRED" ? "rose" : "amber"}>
+                        {a.days_left < 0 ? `${-a.days_left}d ago` : `${a.days_left}d`}
+                      </Chip>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <RevisionPanel revisions={revisions} />
           </div>
         )}
-
-        <RevisionPanel revisions={revisions} />
       </div>
-    </div>
+    </>
   );
 }
 
 /* ── a repeating group of records of one kind ───────────────────────────── */
-function RecordSection({ kind, title, hint, records, onSave, onRemove, disabled, types }: {
+function RecordSection({ kind, title, hint, records, onSave, onRemove, disabled,
+                         documents, onUpload, onOpenDoc }: {
   kind: string; title: string; hint?: string;
   records: Rec[];
   onSave: (r: Rec) => Promise<void>;
   onRemove: (id?: number) => Promise<void>;
   disabled: boolean;
-  types: AssetType[];
+  documents: Doc[];
+  onUpload: (file: File, kind: string, recordId?: number) => Promise<void>;
+  onOpenDoc: (documentId: number) => void;
 }) {
   const mine = records.filter((r) => r.record_type === kind);
   const [draft, setDraft] = useState<Rec | null>(null);
 
-  const dated = kind !== "LANGUAGE" && kind !== "EDUCATION" && kind !== "EXPERIENCE";
+  const fileFor = (recordId?: number) =>
+    documents.find((d) => d.operator_record_id === recordId);
 
   return (
     <div>
@@ -986,55 +1095,85 @@ function RecordSection({ kind, title, hint, records, onSave, onRemove, disabled,
           </Button>
         )} />
       <div className="border border-t-0 border-border-light rounded-b-xl bg-bg-base overflow-x-auto">
-        <table className="w-full min-w-[640px]">
+        <table className="w-full min-w-[720px]">
           <thead>
             <tr className="text-left">
-              {["Title", kind === "EXPERIENCE" ? "Employer" : "Number", "Issuer / provider",
-                dated ? "Valid from" : "From", dated ? "Valid upto" : "To", "Verified", ""].map((h) => (
-                <th key={h} className="px-3 py-2 text-[10.5px] font-bold uppercase tracking-[.1em]
+              {["Title", kind === "EXPERIENCE" ? "Employer" : "Number", "Issuer",
+                "From", "Upto", "Verified", "File", ""].map((h, i) => (
+                <th key={i} className="px-3 py-2 text-[10.5px] font-bold uppercase tracking-[.1em]
                                        text-txt-light border-b border-border-light">{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {mine.length === 0 && !draft && (
-              <tr><td colSpan={7} className="px-3 py-5 text-center text-[12.5px] text-txt-light">
-                Nothing recorded. {disabled ? "" : "Add takes one row at a time."}
+              <tr><td colSpan={8} className="px-3 py-5 text-center text-[12.5px] text-txt-light">
+                Nothing recorded.
               </td></tr>
             )}
-            {mine.map((r) => (
-              <tr key={r.operator_record_id} className="border-b border-border-light last:border-0">
-                <td className="px-3 py-2 text-[12.5px] font-semibold text-navy">{r.title || "—"}</td>
-                <td className="px-3 py-2 text-[12.5px] font-mono">{r.document_no || "—"}</td>
-                <td className="px-3 py-2 text-[12.5px] text-txt-secondary">{r.issuer || "—"}</td>
-                <td className="px-3 py-2 text-[12.5px] tabular-nums">{r.valid_from || "—"}</td>
-                <td className="px-3 py-2 text-[12.5px] tabular-nums">{r.valid_upto || "—"}</td>
-                <td className="px-3 py-2">
-                  <Chip tone={r.verification_status === "VERIFIED" ? "emerald"
-                            : r.verification_status === "REJECTED" ? "rose" : "amber"} dot={false}>
-                    {(r.verification_status ?? "PENDING").toLowerCase()}
-                  </Chip>
-                </td>
-                <td className="px-3 py-2 text-right">
-                  {!disabled && (
-                    <button onClick={() => void onRemove(r.operator_record_id)}
-                      aria-label="Remove" className="text-txt-light hover:text-rose transition-colors">
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
+            {mine.map((r) => {
+              const doc = fileFor(r.operator_record_id);
+              const lapsed = r.valid_upto && r.valid_upto < new Date().toISOString().slice(0, 10);
+              return (
+                <tr key={r.operator_record_id} className="border-b border-border-light last:border-0">
+                  <td className="px-3 py-2 text-[12.5px] font-semibold text-navy">{r.title || "—"}</td>
+                  <td className="px-3 py-2 text-[12.5px] font-mono">{r.document_no || "—"}</td>
+                  <td className="px-3 py-2 text-[12.5px] text-txt-secondary">{r.issuer || "—"}</td>
+                  <td className="px-3 py-2 text-[12.5px] tabular-nums">{r.valid_from || "—"}</td>
+                  <td className={`px-3 py-2 text-[12.5px] tabular-nums ${lapsed ? "text-rose font-semibold" : ""}`}>
+                    {r.valid_upto || "—"}
+                  </td>
+                  <td className="px-3 py-2">
+                    <Chip tone={r.verification_status === "VERIFIED" ? "emerald"
+                              : r.verification_status === "REJECTED" ? "rose" : "amber"} dot={false}>
+                      {(r.verification_status ?? "PENDING").toLowerCase()}
+                    </Chip>
+                  </td>
+                  <td className="px-3 py-2">
+                    {doc ? (
+                      <button onClick={() => onOpenDoc(doc.operator_document_id)}
+                        className="inline-flex items-center gap-1 text-[12px] font-semibold
+                                   text-sky hover:underline">
+                        <Paperclip className="w-3.5 h-3.5" /> open
+                      </button>
+                    ) : disabled ? (
+                      <span className="text-[12px] text-txt-light">—</span>
+                    ) : (
+                      <label className="inline-flex items-center gap-1 text-[12px] text-txt-muted
+                                        hover:text-gold-dark cursor-pointer">
+                        <Upload className="w-3.5 h-3.5" /> attach
+                        <input type="file" className="hidden"
+                          accept=".pdf,image/*"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) void onUpload(file, kind, r.operator_record_id);
+                            e.target.value = "";
+                          }} />
+                      </label>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    {!disabled && (
+                      <button onClick={() => void onRemove(r.operator_record_id)} aria-label="Remove"
+                        className="text-txt-light hover:text-rose transition-colors">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
 
             {draft && (
               <tr className="bg-gold/[0.04]">
                 <td className="px-2 py-1.5">
-                  <input autoFocus className={cellInput} placeholder={kind === "LANGUAGE" ? "Odia" : "Title"}
+                  <input autoFocus className={cellInput} placeholder="Title"
                     value={draft.title ?? ""} onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
                 </td>
                 <td className="px-2 py-1.5">
                   <input className={cellInput} placeholder="Number"
-                    value={draft.document_no ?? ""} onChange={(e) => setDraft({ ...draft, document_no: e.target.value })} />
+                    value={draft.document_no ?? ""}
+                    onChange={(e) => setDraft({ ...draft, document_no: e.target.value })} />
                 </td>
                 <td className="px-2 py-1.5">
                   <input className={cellInput} placeholder="Issuer"
@@ -1056,6 +1195,7 @@ function RecordSection({ kind, title, hint, records, onSave, onRemove, disabled,
                     <option value="REJECTED">Rejected</option>
                   </select>
                 </td>
+                <td className="px-2 py-1.5 text-[11.5px] text-txt-light">after saving</td>
                 <td className="px-2 py-1.5 text-right whitespace-nowrap">
                   <Button size="sm" variant="primary"
                     onClick={async () => { await onSave(draft); setDraft(null); }}>
@@ -1068,6 +1208,191 @@ function RecordSection({ kind, title, hint, records, onSave, onRemove, disabled,
             )}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+/* ── languages: the three the mine works in, plus whatever else ─────────── */
+function LanguageSection({ records, onSave, onRemove, disabled }: {
+  records: Rec[];
+  onSave: (r: Rec) => Promise<void>;
+  onRemove: (id?: number) => Promise<void>;
+  disabled: boolean;
+}) {
+  const mine = records.filter((r) => r.record_type === "LANGUAGE");
+  const [extra, setExtra] = useState("");
+
+  const rowFor = (language: string) =>
+    mine.find((r) => (r.title ?? "").toLowerCase() === language.toLowerCase());
+
+  const listed = [
+    ...CORE_LANGUAGES,
+    ...mine.map((r) => r.title ?? "").filter((t) => t && !CORE_LANGUAGES
+      .some((c) => c.toLowerCase() === t.toLowerCase())),
+  ];
+
+  const setSkillLevel = async (language: string, which: "speak" | "read" | "write", level: string) => {
+    const existing = rowFor(language);
+    const details = { ...(existing?.details ?? {}), [which]: level };
+    await onSave({ ...(existing ?? { record_type: "LANGUAGE", title: language }), details });
+  };
+
+  return (
+    <div>
+      <Band title="Languages"
+            hint="Which languages a toolbox talk, an SOP or an emergency instruction can actually be given in" />
+      <div className="border border-t-0 border-border-light rounded-b-xl bg-bg-base overflow-x-auto">
+        <table className="w-full min-w-[560px]">
+          <thead>
+            <tr className="text-left">
+              {["Language", "Speak", "Read", "Write", ""].map((h) => (
+                <th key={h} className="px-3 py-2 text-[10.5px] font-bold uppercase tracking-[.1em]
+                                       text-txt-light border-b border-border-light">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {listed.map((language) => {
+              const row = rowFor(language);
+              const details = (row?.details ?? {}) as Record<string, string>;
+              const core = CORE_LANGUAGES.some((c) => c.toLowerCase() === language.toLowerCase());
+              return (
+                <tr key={language} className="border-b border-border-light last:border-0">
+                  <td className="px-3 py-2 text-[12.5px] font-semibold text-navy">{language}</td>
+                  {(["speak", "read", "write"] as const).map((which) => (
+                    <td key={which} className="px-2 py-1.5">
+                      <select className={cellInput} disabled={disabled}
+                        value={details[which] ?? ""}
+                        onChange={(e) => void setSkillLevel(language, which, e.target.value)}>
+                        {LANGUAGE_LEVELS.map((l) => (
+                          <option key={l || "none"} value={l}>{l || "—"}</option>
+                        ))}
+                      </select>
+                    </td>
+                  ))}
+                  <td className="px-3 py-2 text-right">
+                    {!disabled && !core && row && (
+                      <button onClick={() => void onRemove(row.operator_record_id)} aria-label="Remove"
+                        className="text-txt-light hover:text-rose transition-colors">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        {!disabled && (
+          <div className="flex items-center gap-2 px-3 py-2.5 border-t border-border-light">
+            <input value={extra} onChange={(e) => setExtra(e.target.value)}
+              placeholder="Another language — Santali, Bengali, Telugu…"
+              className="bg-bg-base border border-border rounded-lg px-3 py-1.5 text-[12.5px] w-[280px]" />
+            <Button size="sm" variant="secondary" disabled={!extra.trim()}
+              onClick={async () => {
+                await onSave({ record_type: "LANGUAGE", title: extra.trim(), details: {} });
+                setExtra("");
+              }}>
+              <Plus className="w-3.5 h-3.5" /> Add language
+            </Button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── skills: the country's names for what a person can do ───────────────── */
+function SkillSection({ skills, records, disabled, onSave, onRemove }: {
+  skills: Skill[]; records: Rec[]; disabled: boolean;
+  onSave: (r: Rec) => Promise<void>;
+  onRemove: (id?: number) => Promise<void>;
+}) {
+  const held = records.filter((r) => r.record_type === "SKILL");
+  const [picked, setPicked] = useState("");
+  const [validUpto, setValidUpto] = useState("");
+
+  const has = (code: string) => held.some((h) => h.document_no === code);
+  const byCategory = useMemo(() => {
+    const out: Record<string, Skill[]> = {};
+    skills.forEach((s) => { (out[s.category ?? "OTHER"] ??= []).push(s); });
+    return out;
+  }, [skills]);
+
+  return (
+    <div>
+      <Band title="Skills held"
+            hint="Qualification packs from the Skill Council for Mining Sector — the country's names, so this register can be read against training records and NCVET certificates" />
+      <div className="border border-t-0 border-border-light rounded-b-xl bg-bg-base p-4 space-y-3">
+        {!disabled && (
+          <div className="flex flex-wrap items-center gap-2">
+            <select value={picked} onChange={(e) => setPicked(e.target.value)}
+              className="bg-bg-base border border-border rounded-lg px-3 py-2 text-[13px] min-w-[320px]">
+              <option value="">Choose a qualification…</option>
+              {Object.entries(byCategory).map(([cat, list]) => (
+                <optgroup key={cat} label={cat[0] + cat.slice(1).toLowerCase()}>
+                  {list.map((s) => (
+                    <option key={s.skill_id} value={s.code} disabled={has(s.code)}>
+                      {s.name} · {s.code}{s.nsqf_level ? ` · NSQF ${s.nsqf_level}` : ""}
+                      {has(s.code) ? " — already held" : ""}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+            <input type="date" value={validUpto} onChange={(e) => setValidUpto(e.target.value)}
+              title="Valid until, if the certificate has an expiry"
+              className="bg-bg-base border border-border rounded-lg px-3 py-2 text-[13px]" />
+            <Button variant="primary" disabled={!picked}
+              onClick={async () => {
+                const s = skills.find((x) => x.code === picked);
+                if (!s) return;
+                await onSave({
+                  record_type: "SKILL", title: s.name, document_no: s.code,
+                  category: s.category, asset_type_id: s.asset_type_id ?? null,
+                  valid_upto: validUpto || null, verification_status: "PENDING",
+                  details: { nsqf_level: s.nsqf_level, source: "SCMS" },
+                });
+                setPicked(""); setValidUpto("");
+              }}>
+              <Plus className="w-4 h-4" /> Add skill
+            </Button>
+          </div>
+        )}
+
+        {held.length === 0 ? (
+          <p className="text-[12.5px] text-txt-light">
+            No qualifications recorded. Until they are, nothing can answer how many
+            people at this mine hold a given skill.
+          </p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {held.map((h) => {
+              const lapsed = h.valid_upto && h.valid_upto < new Date().toISOString().slice(0, 10);
+              return (
+                <span key={h.operator_record_id}
+                  className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-[12.5px]
+                              ${lapsed ? "border-rose-ring bg-rose-bg" : "border-emerald-ring bg-emerald-bg"}`}>
+                  <Award className={`w-3.5 h-3.5 ${lapsed ? "text-rose" : "text-emerald"}`} />
+                  <span className="font-semibold text-navy">{h.title}</span>
+                  <span className="font-mono text-[11px] text-txt-muted">{h.document_no}</span>
+                  {h.valid_upto && (
+                    <span className={`text-[11px] ${lapsed ? "text-rose font-semibold" : "text-txt-light"}`}>
+                      {lapsed ? "lapsed" : "to"} {h.valid_upto}
+                    </span>
+                  )}
+                  {!disabled && (
+                    <button onClick={() => void onRemove(h.operator_record_id)} aria-label="Remove"
+                      className="text-txt-light hover:text-rose transition-colors">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </span>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1088,7 +1413,7 @@ function AssignmentSection({ assets, assignments, disabled, onAssign }: {
   return (
     <div>
       <Band title="Machines they are assigned to"
-            hint="Being assigned is not the same as being competent — eligibility is checked and recorded, not enforced" />
+            hint="Being assigned is not being competent — eligibility is checked and recorded, not enforced" />
       <div className="border border-t-0 border-border-light rounded-b-xl bg-bg-base p-4 space-y-3">
         {!disabled && (
           <div className="flex flex-wrap items-end gap-2">
@@ -1119,7 +1444,7 @@ function AssignmentSection({ assets, assignments, disabled, onAssign }: {
         )}
 
         {active.length === 0 ? (
-          <p className="text-[12.5px] text-txt-light py-3">Not assigned to any machine.</p>
+          <p className="text-[12.5px] text-txt-light">Not assigned to any machine.</p>
         ) : (
           <div className="flex flex-wrap gap-2">
             {active.map((a) => (
@@ -1177,7 +1502,9 @@ function IdentitySection({ idents, disabled, onAdd, onRemove }: {
                 .map((s) => <option key={s} value={s}>{s.replace("_", " ")}</option>)}
             </select>
             <input value={code} onChange={(e) => setCode(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && code.trim()) { void onAdd(system, code.trim()); setCode(""); } }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && code.trim()) { void onAdd(system, code.trim()); setCode(""); }
+              }}
               placeholder="The code that system uses"
               className="bg-bg-base border border-border rounded-lg px-3 py-2 text-[13px] font-mono w-[240px]" />
             <Button variant="secondary" disabled={!code.trim()}
@@ -1208,6 +1535,90 @@ function IdentitySection({ idents, disabled, onAdd, onRemove }: {
               </span>
             ))}
           </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── everything that was scanned or photographed ────────────────────────── */
+function FileSection({ documents, disabled, onUpload, onOpen, onRemove }: {
+  documents: Doc[]; disabled: boolean;
+  onUpload: (file: File, kind: string) => Promise<void>;
+  onOpen: (documentId: number) => void;
+  onRemove: (documentId: number) => Promise<void>;
+}) {
+  const [kind, setKind] = useState("PHOTO");
+  const [dragging, setDragging] = useState(false);
+
+  const size = (bytes?: number | null) =>
+    !bytes ? "" : bytes > 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`;
+
+  return (
+    <div>
+      <Band title="Files"
+            hint="PDFs and photographs up to 10 MB. A licence that can be looked at is worth more than a number somebody typed" />
+      <div className="border border-t-0 border-border-light rounded-b-xl bg-bg-base p-4 space-y-3">
+        {!disabled && (
+          <div
+            onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(e) => {
+              e.preventDefault(); setDragging(false);
+              const file = e.dataTransfer.files?.[0];
+              if (file) void onUpload(file, kind);
+            }}
+            className={`rounded-xl border-2 border-dashed px-4 py-6 text-center transition-colors
+                        ${dragging ? "border-gold bg-gold/[0.06]" : "border-border"}`}>
+            <Upload className="w-5 h-5 mx-auto text-txt-light mb-2" />
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <select value={kind} onChange={(e) => setKind(e.target.value)}
+                className="bg-bg-base border border-border rounded-lg px-2.5 py-1.5 text-[12.5px]">
+                {["PHOTO", "LICENCE", "MEDICAL", "CERTIFICATE", "TRAINING", "OTHER"].map((k) => (
+                  <option key={k} value={k}>{k[0] + k.slice(1).toLowerCase()}</option>
+                ))}
+              </select>
+              <label className="inline-flex items-center gap-1.5 rounded-lg bg-grad-gold text-white
+                                px-3 py-1.5 text-[12.5px] font-semibold cursor-pointer shadow-sm">
+                <Upload className="w-3.5 h-3.5" /> Choose a file
+                <input type="file" className="hidden" accept=".pdf,image/*"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void onUpload(file, kind);
+                    e.target.value = "";
+                  }} />
+              </label>
+            </div>
+            <p className="text-[11.5px] text-txt-light mt-2">or drop one here</p>
+          </div>
+        )}
+
+        {documents.length === 0 ? (
+          <p className="text-[12.5px] text-txt-light">Nothing attached yet.</p>
+        ) : (
+          <ul className="divide-y divide-border-light">
+            {documents.map((d) => (
+              <li key={d.operator_document_id} className="py-2 flex items-center justify-between gap-3">
+                <button onClick={() => onOpen(d.operator_document_id)}
+                  className="flex items-center gap-2 min-w-0 text-left group">
+                  <Paperclip className="w-3.5 h-3.5 text-txt-light shrink-0" />
+                  <span className="text-[12.5px] text-navy font-medium truncate group-hover:underline">
+                    {d.file_name}
+                  </span>
+                  <Chip tone="slate" dot={false}>{d.kind.toLowerCase()}</Chip>
+                </button>
+                <span className="flex items-center gap-3 shrink-0">
+                  <span className="text-[11.5px] text-txt-light">{size(d.size_bytes)}</span>
+                  {!disabled && (
+                    <button onClick={() => void onRemove(d.operator_document_id)} aria-label="Withdraw"
+                      className="text-txt-light hover:text-rose transition-colors">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
         )}
       </div>
     </div>

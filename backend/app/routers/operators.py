@@ -20,11 +20,16 @@ this router writes.
 from __future__ import annotations
 
 import json
+import os
 import re
+import uuid
 from datetime import date, datetime
+from pathlib import Path
 from decimal import Decimal, InvalidOperation
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from fastapi import (APIRouter, Body, Depends, File, Form, HTTPException, Query,
+                     Request, UploadFile)
+from fastapi.responses import FileResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -71,6 +76,20 @@ INT_FIELDS = {
     "exp_kaliapani_months", "exp_current_role_months", "exp_verified_months", "level",
 }
 
+# Files live outside the codebase and outside the database: a licence scan is
+# not something to keep in a column, and not something to lose on a redeploy.
+# The path is configurable so the server can point it at a backed-up volume.
+DOCUMENT_ROOT = Path(os.environ.get("OPERATOR_DOCUMENT_ROOT",
+                                    Path(__file__).resolve().parents[2] / "storage" / "operators"))
+
+# What a browser may send. Anything else is refused rather than stored and
+# served back later, which is how an upload field becomes a way to host files.
+ALLOWED_TYPES = {
+    "application/pdf": ".pdf", "image/jpeg": ".jpg", "image/png": ".png",
+    "image/webp": ".webp", "image/heic": ".heic",
+}
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
 MANAGE = "platform.operators.manage"
 ASSESS = "platform.operators.assess"
 APPROVE = "platform.operators.approve"
@@ -111,7 +130,10 @@ def _clean(body: dict, allowed: tuple[str, ...]) -> dict:
             except (TypeError, ValueError):
                 raise HTTPException(400, f"{key} must be a number.")
         if key == "details" and v is not None and not isinstance(v, str):
-            v = json.dumps(v)
+            # default= matters: a level read back from the database arrives as a
+            # Decimal, which json refuses, and the whole record would be lost
+            # over a number that is only being carried along.
+            v = json.dumps(v, default=_jsonable)
         out[key] = v
     return out
 
@@ -170,6 +192,7 @@ def _activity(db, request: Request, event_type: str, operator_id: int | None = N
 @router.get("")
 def list_operators(q: str = Query(""), status: str = Query(""),
                    asset_type_id: int | None = Query(None),
+                   plant_id: int | None = Query(None),
                    db: Session = Depends(get_minehub_db)) -> list[dict]:
     """The register. One row per person, with enough to judge them at a glance."""
     where, params = ["1=1"], {}
@@ -181,6 +204,9 @@ def list_operators(q: str = Query(""), status: str = Query(""),
     if status:
         where.append("o.approval_status = :st")
         params["st"] = status
+    if plant_id:
+        where.append("o.plant_id = :plant")
+        params["plant"] = plant_id
     if asset_type_id:
         where.append("EXISTS (SELECT 1 FROM operator_competency c WHERE c.operator_id = o.operator_id "
                      "AND c.asset_type_id = :atid AND c.dimension = 'OVERALL' AND c.level >= 2)")
@@ -276,7 +302,8 @@ def alerts(db: Session = Depends(get_minehub_db)) -> list[dict]:
 
 
 @router.get("/matrix")
-def capability_matrix(db: Session = Depends(get_minehub_db)) -> dict:
+def capability_matrix(plant_id: int | None = Query(None),
+                      db: Session = Depends(get_minehub_db)) -> dict:
     """Operators down the side, equipment classes across the top.
 
     One screen that answers whether three excavators can be crewed on B shift.
@@ -294,8 +321,15 @@ def capability_matrix(db: Session = Depends(get_minehub_db)) -> dict:
         LEFT JOIN operator_competency c
                ON c.operator_id = o.operator_id AND c.dimension = 'OVERALL' AND c.status = 'ACTIVE'
         WHERE o.profile_status = 'ACTIVE'
+          -- Cast, because PostgreSQL cannot infer the type of a parameter that
+          -- only ever appears beside NULL, and refuses the whole statement.
+          AND (CAST(:plant AS bigint) IS NULL OR o.plant_id = CAST(:plant AS bigint))
         ORDER BY p.display_name
-    """)).mappings().all()
+    """), {"plant": plant_id}).mappings().all()
+
+    # How many people can run each class, which is the question the matrix is
+    # usually opened to answer.
+    per_type: dict[str, int] = {}
 
     people_rows: dict[int, dict] = {}
     for r in rows:
@@ -306,7 +340,11 @@ def capability_matrix(db: Session = Depends(get_minehub_db)) -> dict:
         if r["asset_type_id"]:
             person["levels"][str(r["asset_type_id"])] = {
                 "level": r["level"], "lapsed": r["assessment_lapsed"]}
-    return {"asset_types": types, "operators": list(people_rows.values())}
+            if (r["level"] or 0) >= 2 and not r["assessment_lapsed"]:
+                key = str(r["asset_type_id"])
+                per_type[key] = per_type.get(key, 0) + 1
+    return {"asset_types": types, "operators": list(people_rows.values()),
+            "competent_per_type": per_type}
 
 
 # ── one profile ──────────────────────────────────────────────────────────────
@@ -642,19 +680,33 @@ def delete_record(operator_id: int, record_id: int, request: Request,
 @router.post("/{operator_id}/competency")
 def set_competency(operator_id: int, request: Request, body: dict = Body(...),
                    db: Session = Depends(get_minehub_db)) -> dict:
-    """Record a level for one equipment class and one dimension.
+    """Record an assessment, and update where the person now stands.
 
-    Assessing is its own permission. Saying that someone may run an excavator is
+    Assessing is its own permission: saying that someone may run an excavator is
     a different act from typing their phone number, and is usually done by
     training rather than by whoever keeps the register.
+
+    Two things are written. The assessment itself is appended to
+    operator_record, where nothing is ever overwritten, because assessments are
+    periodic and the point of doing them again is to see the trend — a level
+    that rose after training, or quietly fell. operator_competency then holds
+    the current standing only, so "what can this person run today" stays one
+    cheap read.
     """
     _require(request, ASSESS, "assess competency")
     data = _clean(body, ("asset_type_id", "asset_id", "dimension", "level", "assessment_type",
-                         "assessor", "assessed_on", "score", "result", "valid_upto", "remarks"))
+                         "assessor", "assessed_on", "score", "result", "valid_upto", "remarks",
+                         "next_assessment_due"))
     if not data.get("asset_type_id"):
         raise HTTPException(400, "Choose the equipment class being assessed.")
     data["dimension"] = (data.get("dimension") or "OVERALL").upper()
     data.setdefault("assessor", _actor(request))
+    data.setdefault("assessed_on", date.today().isoformat())
+
+    previous = db.execute(text(
+        "SELECT level, assessment_count FROM operator_competency "
+        "WHERE operator_id = :o AND asset_type_id = :t AND dimension = :d"
+    ), {"o": operator_id, "t": data["asset_type_id"], "d": data["dimension"]}).mappings().first()
 
     evidence = json.dumps(body.get("evidence") or {}, default=str)
     cols = list(data.keys())
@@ -663,13 +715,50 @@ def set_competency(operator_id: int, request: Request, body: dict = Body(...),
         f"VALUES (:oid, {', '.join(':' + c for c in cols)}, CAST(:ev AS jsonb), :by) "
         "ON CONFLICT (operator_id, asset_type_id, dimension) DO UPDATE SET "
         + ", ".join(f"{c} = EXCLUDED.{c}" for c in cols)
-        + ", evidence = EXCLUDED.evidence, updated_at = now() RETURNING *"
+        + ", evidence = EXCLUDED.evidence, updated_at = now()"
+        + ", previous_level = operator_competency.level"
+        + ", assessment_count = operator_competency.assessment_count + 1"
+        + " RETURNING *"
     ), {**data, "oid": operator_id, "ev": evidence, "by": _actor(request)}).mappings().first()
 
+    # The assessment as an event in its own right, which nothing later overwrites.
+    type_name = db.execute(text("SELECT name FROM asset_type WHERE asset_type_id = :t"),
+                           {"t": data["asset_type_id"]}).scalar()
+    db.execute(text("""
+        INSERT INTO operator_record (operator_id, record_type, title, category, asset_type_id,
+                                     issuer, issued_on, valid_upto, result, score,
+                                     verification_status, remarks, details, created_by)
+        VALUES (:o, 'ASSESSMENT', :title, :dim, :t, :assessor, :on, :upto, :result, :score,
+                'VERIFIED', :remarks, CAST(:details AS jsonb), :by)
+    """), {"o": operator_id,
+           "title": f"{type_name or 'Equipment'} · {data['dimension'].replace('_', ' ').title()}",
+           "dim": data["dimension"], "t": data["asset_type_id"],
+           "assessor": data.get("assessor"), "on": data.get("assessed_on"),
+           "upto": data.get("valid_upto"), "result": data.get("result"),
+           "score": data.get("score"), "remarks": data.get("remarks"),
+           "details": json.dumps({"level": data.get("level"),
+                                  "previous_level": previous["level"] if previous else None,
+                                  "assessment_type": data.get("assessment_type"),
+                                  "evidence": body.get("evidence") or {}}, default=str),
+           "by": _actor(request)})
+
     _activity(db, request, "OPERATOR_ASSESSED", operator_id,
-              {"dimension": data["dimension"], "level": data.get("level")})
+              {"dimension": data["dimension"], "level": data.get("level"),
+               "previous_level": previous["level"] if previous else None})
     db.commit()
     return dict(row)
+
+
+@router.get("/{operator_id}/assessments")
+def assessment_history(operator_id: int, db: Session = Depends(get_minehub_db)) -> list[dict]:
+    """Every assessment ever recorded for this person, newest first."""
+    rows = db.execute(text(
+        "SELECT r.*, t.name AS asset_type FROM operator_record r "
+        "LEFT JOIN asset_type t ON t.asset_type_id = r.asset_type_id "
+        "WHERE r.operator_id = :id AND r.record_type = 'ASSESSMENT' "
+        "ORDER BY r.issued_on DESC NULLS LAST, r.operator_record_id DESC"
+    ), {"id": operator_id}).mappings().all()
+    return [dict(r) for r in rows]
 
 
 # ── assignment ───────────────────────────────────────────────────────────────
@@ -814,6 +903,153 @@ def remove_identity(operator_id: int, identity_id: int, request: Request,
     _activity(db, request, "OPERATOR_IDENTITY_REMOVED", operator_id, {"identity_id": identity_id})
     db.commit()
     return {"ok": True}
+
+
+# -- documents ---------------------------------------------------------------
+@router.post("/{operator_id}/documents")
+async def upload_document(operator_id: int, request: Request,
+                          file: UploadFile = File(...),
+                          kind: str = Form("OTHER"),
+                          record_id: int | None = Form(None),
+                          db: Session = Depends(get_minehub_db)) -> dict:
+    """Attach a file - a licence scan, a medical certificate, a photograph.
+
+    The stored name is generated, never the name the browser sent: a file called
+    ../../etc/passwd is a perfectly ordinary thing for a browser to send, and the
+    only safe answer is not to use it.
+    """
+    _require(request, MANAGE, "edit operator profiles")
+
+    if not db.execute(text("SELECT 1 FROM operator WHERE operator_id = :id"),
+                      {"id": operator_id}).first():
+        raise HTTPException(404, "Operator not found.")
+
+    suffix = ALLOWED_TYPES.get(file.content_type or "")
+    if not suffix:
+        raise HTTPException(400, "Only PDF and image files can be attached "
+                                 f"(this was {file.content_type or 'unrecognised'}).")
+
+    body = await file.read()
+    if len(body) > MAX_UPLOAD_BYTES:
+        raise HTTPException(400, "That file is over 10 MB. Scan it at a lower resolution - "
+                                 "a licence does not need to be a photograph of a wall.")
+
+    folder = DOCUMENT_ROOT / str(operator_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    stored = f"{uuid.uuid4().hex}{suffix}"
+    (folder / stored).write_bytes(body)
+
+    row = db.execute(text("""
+        INSERT INTO operator_document (operator_id, operator_record_id, kind, file_name,
+                                       stored_name, content_type, size_bytes, uploaded_by)
+        VALUES (:o, :r, :k, :fn, :sn, :ct, :sz, :by)
+        RETURNING operator_document_id, kind, file_name, content_type, size_bytes, uploaded_at
+    """), {"o": operator_id, "r": record_id, "k": (kind or "OTHER").upper(),
+           "fn": file.filename or stored, "sn": stored, "ct": file.content_type,
+           "sz": len(body), "by": _actor(request)}).mappings().first()
+
+    if record_id:
+        db.execute(text("UPDATE operator_record SET document_ref = :ref "
+                        "WHERE operator_record_id = :r AND operator_id = :o"),
+                   {"ref": str(row["operator_document_id"]), "r": record_id, "o": operator_id})
+
+    _activity(db, request, "OPERATOR_DOCUMENT_ADDED", operator_id,
+              {"kind": row["kind"], "file_name": row["file_name"]})
+    db.commit()
+    return dict(row)
+
+
+@router.get("/{operator_id}/documents")
+def list_documents(operator_id: int, db: Session = Depends(get_minehub_db)) -> list[dict]:
+    rows = db.execute(text(
+        "SELECT operator_document_id, operator_record_id, kind, file_name, content_type, "
+        "       size_bytes, uploaded_by, uploaded_at FROM operator_document "
+        "WHERE operator_id = :id AND status = 'ACTIVE' ORDER BY uploaded_at DESC"
+    ), {"id": operator_id}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+@router.get("/{operator_id}/documents/{document_id}")
+def fetch_document(operator_id: int, document_id: int,
+                   db: Session = Depends(get_minehub_db)):
+    """Serve one file back, under the name the person gave it."""
+    row = db.execute(text(
+        "SELECT stored_name, file_name, content_type FROM operator_document "
+        "WHERE operator_document_id = :d AND operator_id = :o AND status = 'ACTIVE'"
+    ), {"d": document_id, "o": operator_id}).mappings().first()
+    if not row:
+        raise HTTPException(404, "That document is not on this profile.")
+
+    path = DOCUMENT_ROOT / str(operator_id) / row["stored_name"]
+    if not path.exists():
+        raise HTTPException(404, "The file is recorded but missing from the store.")
+    return FileResponse(path, media_type=row["content_type"] or "application/octet-stream",
+                        filename=row["file_name"])
+
+
+@router.delete("/{operator_id}/documents/{document_id}")
+def remove_document(operator_id: int, document_id: int, request: Request,
+                    db: Session = Depends(get_minehub_db)) -> dict:
+    """Withdraw a document.
+
+    The row is marked rather than deleted, and the file stays: a document that
+    was relied on when someone was approved should still be findable afterwards.
+    """
+    _require(request, MANAGE, "edit operator profiles")
+    db.execute(text("UPDATE operator_document SET status = 'WITHDRAWN' "
+                    "WHERE operator_document_id = :d AND operator_id = :o"),
+               {"d": document_id, "o": operator_id})
+    _activity(db, request, "OPERATOR_DOCUMENT_WITHDRAWN", operator_id, {"document_id": document_id})
+    db.commit()
+    return {"ok": True}
+
+
+# -- the national skills list ------------------------------------------------
+@router.get("/meta/skills")
+def list_skills(q: str = Query(""), db: Session = Depends(get_minehub_db)) -> list[dict]:
+    """Qualification packs from the Skill Council for Mining Sector.
+
+    The country's names for what a person can do. Using them means the register
+    can be read against training records and NCVET certificates instead of
+    against a vocabulary we invented.
+    """
+    where, params = ["s.status = 'ACTIVE'"], {}
+    if q.strip():
+        where.append("(s.name ILIKE :q OR s.code ILIKE :q)")
+        params["q"] = f"%{q.strip()}%"
+    rows = db.execute(text(
+        "SELECT s.skill_id, s.code, s.name, s.nsqf_level, s.category, s.asset_type_id, "
+        "       t.name AS asset_type FROM skill s "
+        "LEFT JOIN asset_type t ON t.asset_type_id = s.asset_type_id "
+        f"WHERE {' AND '.join(where)} ORDER BY s.category, s.nsqf_level DESC, s.name"
+    ), params).mappings().all()
+    return [dict(r) for r in rows]
+
+
+@router.get("/meta/skill-coverage")
+def skill_coverage(db: Session = Depends(get_minehub_db)) -> list[dict]:
+    """How many people hold each qualification - where the mine is thin.
+
+    The question behind it is not "who is trained" but "can tomorrow's B shift
+    be crewed", and that is answered by counting holders per skill rather than
+    by reading profiles one at a time.
+    """
+    rows = db.execute(text("""
+        SELECT s.skill_id, s.code, s.name, s.nsqf_level, s.category,
+               t.name AS asset_type,
+               count(r.operator_record_id) FILTER (
+                   WHERE r.status = 'ACTIVE'
+                     AND (r.valid_upto IS NULL OR r.valid_upto >= CURRENT_DATE)) AS holders,
+               count(r.operator_record_id) FILTER (
+                   WHERE r.status = 'ACTIVE' AND r.valid_upto < CURRENT_DATE) AS lapsed
+        FROM skill s
+        LEFT JOIN operator_record r
+               ON r.record_type = 'SKILL' AND r.document_no = s.code
+        LEFT JOIN asset_type t ON t.asset_type_id = s.asset_type_id
+        GROUP BY s.skill_id, s.code, s.name, s.nsqf_level, s.category, t.name
+        ORDER BY holders DESC, s.name
+    """)).mappings().all()
+    return [dict(r) for r in rows]
 
 
 @router.get("/meta/me")

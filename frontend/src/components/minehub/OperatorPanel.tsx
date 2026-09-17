@@ -9,8 +9,8 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Users, Search, Plus, Loader2, ChevronRight, HardHat, ShieldCheck,
-  AlertTriangle, ClipboardList, Pencil,
+  Users, Search, Plus, Loader2, HardHat, ShieldCheck, AlertTriangle,
+  ClipboardList, Pencil, Grid3x3, Award,
 } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
@@ -26,6 +26,20 @@ interface Operator {
   employer: string | null; department: string | null; plant: string | null;
   exp_total_months: number | null; exp_hemm_months: number | null;
   machines_competent: number; expired_documents: number; assigned_to: string | null;
+}
+
+interface Plant { plant_id: number; code: string; name: string; is_default: boolean }
+
+interface Matrix {
+  asset_types: { asset_type_id: number; name: string }[];
+  operators: { operator_id: number; operator_ref: string | null; name: string;
+               levels: Record<string, { level: number | null; lapsed: boolean }> }[];
+  competent_per_type: Record<string, number>;
+}
+
+interface Coverage {
+  skill_id: number; code: string; name: string; nsqf_level: number | null;
+  category: string | null; asset_type: string | null; holders: number; lapsed: number;
 }
 
 interface Waiting {
@@ -67,26 +81,49 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
   const [editingId, setEditingId] = useState<number | null>(null);
   const [prefill, setPrefill] = useState<{ display_name?: string; code?: string }>({});
   const [allWaiting, setAllWaiting] = useState(false);
+  const [plants, setPlants] = useState<Plant[]>([]);
+  const [plantId, setPlantId] = useState<string>("");
+  const [view, setView] = useState<"register" | "capability">("register");
+  const [matrix, setMatrix] = useState<Matrix | null>(null);
+  const [coverage, setCoverage] = useState<Coverage[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [list, queue, sum] = await Promise.all([
-        api.get("/operators"),
+      const [list, queue, sum, pl] = await Promise.all([
+        api.get("/operators", { params: plantId ? { plant_id: plantId } : {} }),
         api.get("/operators/unregistered"),
         api.get("/operators/summary"),
+        api.get("/minehub/plants").catch(() => ({ data: [] })),
       ]);
       setOperators(list.data ?? []);
       setWaiting(queue.data ?? []);
       setSummary(sum.data ?? null);
+      setPlants(pl.data ?? []);
       setError(null);
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(d ?? "Could not load the operator register.");
     } finally { setLoading(false); }
-  }, []);
+  }, [plantId]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // The capability view is a different question — how many people can run each
+  // class — so it is fetched only when someone asks it.
+  useEffect(() => {
+    if (view !== "capability") return;
+    (async () => {
+      try {
+        const [m, c] = await Promise.all([
+          api.get("/operators/matrix", { params: plantId ? { plant_id: plantId } : {} }),
+          api.get("/operators/meta/skill-coverage"),
+        ]);
+        setMatrix(m.data ?? null);
+        setCoverage(c.data ?? []);
+      } catch { setMatrix(null); setCoverage([]); }
+    })();
+  }, [view, plantId]);
 
   const formOpen = Boolean(addOpen || editingId);
   useEffect(() => { onFormOpenChange?.(formOpen); }, [formOpen, onFormOpenChange]);
@@ -130,7 +167,36 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
     <div className="space-y-4">
       {error && <Alert tone="error">{error}</Alert>}
 
-      {summary && (
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex gap-1.5 p-1 bg-bg-section rounded-xl w-fit">
+          {([["register", "Register", Users], ["capability", "Capability", Grid3x3]] as const)
+            .map(([key, label, Icon]) => (
+            <button key={key} onClick={() => setView(key)}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-[12.5px] font-semibold
+                          transition-colors
+                          ${view === key ? "bg-bg-base text-navy shadow-sm" : "text-txt-muted hover:text-navy"}`}>
+              <Icon className="w-4 h-4" /> {label}
+            </button>
+          ))}
+        </div>
+
+        <label className="flex items-center gap-2 text-[12px] text-txt-muted">
+          Plant
+          <select value={plantId} onChange={(e) => setPlantId(e.target.value)}
+            className="bg-bg-base border border-border rounded-lg px-3 py-1.5 text-[12.5px] text-txt-primary">
+            <option value="">All plants</option>
+            {plants.map((p) => (
+              <option key={p.plant_id} value={p.plant_id}>{p.code} · {p.name}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      {view === "capability" && (
+        <CapabilityView matrix={matrix} coverage={coverage} />
+      )}
+
+      {view === "register" && summary && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Tile label="Operators" value={summary.operators ?? 0} tone="sky" icon={Users}
                 hint={`${summary.approved ?? 0} approved`} />
@@ -146,7 +212,7 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
         </div>
       )}
 
-      {/* The register */}
+      {view === "register" && (<>
       <Card tone="sky">
         <CardHeader title={`Operator register · ${filtered.length}`} icon={Users} tone="sky"
           subtitle="Everyone cleared to work on the mine's machines, and what they are cleared for."
@@ -288,6 +354,119 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
           )}
         </Card>
       )}
+      </>)}
+    </div>
+  );
+}
+
+/* ── how many people can run what ───────────────────────────────────────── */
+const LEVEL_COLOUR = [
+  "bg-bg-light text-txt-light",          // 0 not assessed
+  "bg-rose-bg text-rose",                // 1 assisted
+  "bg-amber-bg text-amber",              // 2 operational
+  "bg-emerald-bg text-emerald",          // 3 independent
+  "bg-violet-bg text-violet",            // 4 trainer
+];
+
+function CapabilityView({ matrix, coverage }: { matrix: Matrix | null; coverage: Coverage[] }) {
+  if (!matrix) {
+    return <div className="flex justify-center py-16"><Loader2 className="w-5 h-5 animate-spin text-gold" /></div>;
+  }
+
+  const held = coverage.filter((c) => c.holders > 0 || c.lapsed > 0);
+
+  return (
+    <div className="space-y-4">
+      <Card tone="violet">
+        <CardHeader title="Who can run what" icon={Grid3x3} tone="violet"
+          subtitle="Assessed levels, nought to four. The count under each class is how many people are at level 2 or better with a current assessment — the number that decides whether a shift can be crewed." />
+        {matrix.operators.length === 0 ? (
+          <div className="px-5 py-10 text-center text-[13px] text-txt-muted">
+            Nobody assessed yet. Levels set on an operator profile appear here.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[680px]">
+              <thead>
+                <tr>
+                  <Th>Operator</Th>
+                  {matrix.asset_types.map((t) => (
+                    <Th key={t.asset_type_id} className="text-center">
+                      <span className="block">{t.name}</span>
+                      <span className="block text-[10px] font-normal text-violet">
+                        {matrix.competent_per_type?.[String(t.asset_type_id)] ?? 0} can run
+                      </span>
+                    </Th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {matrix.operators.map((o) => (
+                  <tr key={o.operator_id} className="hover:bg-bg-light transition-colors">
+                    <Td>
+                      <span className="font-semibold text-navy text-[13px]">{o.name}</span>
+                      {o.operator_ref && (
+                        <span className="block font-mono text-[11px] text-violet">{o.operator_ref}</span>
+                      )}
+                    </Td>
+                    {matrix.asset_types.map((t) => {
+                      const cell = o.levels[String(t.asset_type_id)];
+                      const lvl = cell?.level ?? 0;
+                      return (
+                        <td key={t.asset_type_id} className="px-2 py-2 text-center">
+                          <span title={cell?.lapsed ? "Assessment has lapsed" : undefined}
+                            className={`inline-flex items-center justify-center w-8 h-8 rounded-lg
+                                        text-[12px] font-bold ${LEVEL_COLOUR[lvl]}
+                                        ${cell?.lapsed ? "ring-2 ring-rose-ring" : ""}`}>
+                            {lvl || "—"}
+                          </span>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      <Card tone="emerald">
+        <CardHeader title="Qualifications held across the mine" icon={Award} tone="emerald"
+          subtitle="Skill Council for Mining Sector qualification packs. Only those somebody holds are listed — the rest of the sixty are available on a profile." />
+        {held.length === 0 ? (
+          <div className="px-5 py-10 text-center text-[13px] text-txt-muted">
+            No qualifications recorded yet. Until they are, nothing can say how thin
+            the mine is on any given skill.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[620px]">
+              <thead>
+                <tr><Th>Qualification</Th><Th>Code</Th><Th>NSQF</Th><Th>Equipment</Th>
+                    <Th className="text-right">Holders</Th><Th className="text-right">Lapsed</Th></tr>
+              </thead>
+              <tbody>
+                {held.map((c) => (
+                  <tr key={c.skill_id} className="hover:bg-bg-light transition-colors">
+                    <Td className="font-semibold text-navy">{c.name}</Td>
+                    <Td className="font-mono text-[12px]">{c.code}</Td>
+                    <Td>{c.nsqf_level ?? "—"}</Td>
+                    <Td className="text-txt-muted">{c.asset_type ?? "—"}</Td>
+                    <Td className="text-right">
+                      <Chip tone={c.holders > 0 ? "emerald" : "slate"} dot={false}>{c.holders}</Chip>
+                    </Td>
+                    <Td className="text-right">
+                      {c.lapsed > 0 ? <Chip tone="rose" dot={false}>{c.lapsed}</Chip>
+                                    : <span className="text-txt-light">—</span>}
+                    </Td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
     </div>
   );
 }
