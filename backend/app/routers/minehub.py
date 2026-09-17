@@ -24,6 +24,30 @@ from app.minehub_db import get_minehub_db, test_connection
 router = APIRouter(prefix="/api/minehub", tags=["MineHub"])
 
 IDENTITY_SYSTEMS = ("TELEMATICS", "HOTO", "WEIGHBRIDGE", "RFID", "SAP", "SECURITY", "LEGACY")
+DOCUMENT_TYPES = ("INSURANCE", "FITNESS", "PUC", "ROAD_TAX", "PERMIT", "NATIONAL_PERMIT",
+                  "STATUTORY_INSPECTION", "EXPLOSIVE_LICENCE", "POLLUTION_NOC", "OTHER")
+SCHEDULE_TYPES = ("PREVENTIVE", "SERVICE", "OIL_CHANGE", "INSPECTION", "OVERHAUL",
+                  "TYRE_ROTATION", "OTHER")
+
+# Fields written straight from the registration form. Listed once so create and
+# update cannot drift apart — the commonest way a form quietly stops saving a
+# field someone added to only one of them.
+ASSET_FIELDS = (
+    "fleet_code", "nickname", "registration_no", "asset_type_id", "make", "model",
+    "year_of_make", "chassis_no", "engine_no", "capacity", "capacity_uom",
+    "ownership", "owner_party_id", "sap_asset_no", "supplier_party_id",
+    "purchase_date", "purchase_cost", "hire_rate", "hire_rate_uom",
+    "rated_output_per_hr", "rated_fuel_lph", "fuel_type", "tank_capacity_l",
+    "battery_kwh", "range_km", "charging_type", "charge_time_hrs",
+    "reading_uom", "current_reading", "reading_as_on",
+    "home_location_id", "org_unit_id", "commissioned_on", "status",
+    "tyre_count", "seating_capacity", "remarks",
+)
+NUMERIC_FIELDS = {"year_of_make", "capacity", "purchase_cost", "hire_rate",
+                  "rated_output_per_hr", "rated_fuel_lph", "tank_capacity_l",
+                  "battery_kwh", "range_km", "charge_time_hrs", "current_reading",
+                  "tyre_count", "seating_capacity", "asset_type_id",
+                  "owner_party_id", "supplier_party_id", "home_location_id", "org_unit_id"}
 ASSET_STATUS = ("ACTIVE", "MAINTENANCE", "STANDBY", "IDLE", "DISPOSED")
 OWNERSHIP = ("OWN", "HIRED")
 
@@ -48,6 +72,56 @@ def _activity(db, request: Request, event_type: str, *, asset_id: int | None = N
         VALUES (:t, now(), now(), 'WEB', :asset, CAST(:payload AS jsonb), :by)
     """), {"t": event_type, "asset": asset_id,
            "payload": json.dumps(payload or {}), "by": _actor(request)})
+
+
+def _clean(body: dict) -> dict:
+    """Form values into database values.
+
+    A browser form sends "" for an untouched field, and "" is not a number, a
+    date or a foreign key — it is the absence of one. Writing it straight
+    through is how a registration form ends up failing on a field nobody filled.
+    """
+    out: dict = {}
+    for key in ASSET_FIELDS:
+        if key not in body:
+            continue
+        v = body[key]
+        if isinstance(v, str):
+            v = v.strip()
+        if v == "" or v is None:
+            out[key] = None
+            continue
+        if key in NUMERIC_FIELDS:
+            try:
+                out[key] = float(v) if not str(v).isdigit() else int(v)
+            except (TypeError, ValueError):
+                raise HTTPException(400, f"'{key}' must be a number.")
+        else:
+            out[key] = v
+    return out
+
+
+def _next_due(sched: dict, current_reading: float | None) -> tuple:
+    """When a schedule next falls due, on usage and on the calendar.
+
+    Computed on save so 'what is due' stays a plain query instead of arithmetic
+    repeated in every screen that asks.
+    """
+    from datetime import date, timedelta
+    uom = sched.get("interval_uom")
+    val = sched.get("interval_value")
+    next_reading = next_date = None
+    if val:
+        val = float(val)
+        if uom in ("HOURS", "KM"):
+            base = sched.get("last_done_reading")
+            base = float(base) if base not in (None, "") else (current_reading or 0)
+            next_reading = base + val
+        elif uom in ("DAYS", "MONTHS"):
+            last = sched.get("last_done_on")
+            base = date.fromisoformat(last) if last else date.today()
+            next_date = base + timedelta(days=val if uom == "DAYS" else val * 30)
+    return next_reading, next_date
 
 
 # ---------------------------------------------------------------- platform
@@ -153,57 +227,163 @@ def list_assets(q: str = Query(""), status: str = Query(""),
 @router.post("/assets")
 def create_asset(request: Request, body: dict = Body(...),
                  db: Session = Depends(get_minehub_db)) -> dict:
-    fleet_code = (body.get("fleet_code") or "").strip()
+    """Register a machine, with its documents, schedules and system names.
+
+    Everything arrives in one call and is written in one transaction. A machine
+    saved without its insurance expiry, because a second request failed, is a
+    machine nobody knows is uninsured.
+    """
+    data = _clean(body)
+
+    fleet_code = (data.get("fleet_code") or "").strip()
     if not fleet_code:
         raise HTTPException(400, "Fleet code is required.")
-    if not body.get("asset_type_id"):
+    if not data.get("asset_type_id"):
         raise HTTPException(400, "Equipment type is required.")
 
-    ownership = (body.get("ownership") or "OWN").upper()
+    ownership = (data.get("ownership") or "OWN").upper()
     if ownership not in OWNERSHIP:
         raise HTTPException(400, f"Ownership must be one of {OWNERSHIP}.")
-    if ownership == "HIRED" and not body.get("owner_party_id"):
+    if ownership == "HIRED" and not data.get("owner_party_id"):
         raise HTTPException(400, "A hired machine must record which contractor owns it.")
+    data["ownership"] = ownership
+    data.setdefault("status", "ACTIVE")
 
-    exists = db.execute(text("SELECT 1 FROM asset WHERE fleet_code = :c"),
-                        {"c": fleet_code}).first()
-    if exists:
+    if db.execute(text("SELECT 1 FROM asset WHERE fleet_code = :c"), {"c": fleet_code}).first():
         raise HTTPException(409, f"Fleet code '{fleet_code}' is already registered.")
 
-    row = db.execute(text("""
-        INSERT INTO asset (fleet_code, registration_no, asset_type_id, make, model,
-                           year_of_make, capacity, capacity_uom, ownership, owner_party_id,
-                           sap_asset_no, rated_output_per_hr, rated_fuel_lph,
-                           commissioned_on, status, remarks, created_by)
-        VALUES (:fleet_code, :registration_no, :asset_type_id, :make, :model,
-                :year_of_make, :capacity, :capacity_uom, :ownership, :owner_party_id,
-                :sap_asset_no, :rated_output_per_hr, :rated_fuel_lph,
-                :commissioned_on, :status, :remarks, :by)
-        RETURNING asset_id
-    """), {
-        "fleet_code": fleet_code,
-        "registration_no": body.get("registration_no") or None,
-        "asset_type_id": body["asset_type_id"],
-        "make": body.get("make") or None,
-        "model": body.get("model") or None,
-        "year_of_make": body.get("year_of_make") or None,
-        "capacity": body.get("capacity") or None,
-        "capacity_uom": body.get("capacity_uom") or None,
-        "ownership": ownership,
-        "owner_party_id": body.get("owner_party_id") or None,
-        "sap_asset_no": body.get("sap_asset_no") or None,
-        "rated_output_per_hr": body.get("rated_output_per_hr") or None,
-        "rated_fuel_lph": body.get("rated_fuel_lph") or None,
-        "commissioned_on": body.get("commissioned_on") or None,
-        "status": (body.get("status") or "ACTIVE").upper(),
-        "remarks": body.get("remarks") or None,
-        "by": _actor(request),
-    }).first()
-    _activity(db, request, "ASSET_REGISTERED", asset_id=row[0],
-              payload={"fleet_code": fleet_code, "ownership": ownership,
-                       "asset_type_id": body["asset_type_id"]})
+    cols = list(data.keys())
+    placeholders = ", ".join(":" + c for c in cols)
+    asset_id = db.execute(text(
+        f"INSERT INTO asset ({', '.join(cols)}, created_by) "
+        f"VALUES ({placeholders}, :by) RETURNING asset_id"
+    ), {**data, "by": _actor(request)}).scalar()
+
+    _save_children(db, request, asset_id, body, data.get("current_reading"))
+
+    _activity(db, request, "ASSET_REGISTERED", asset_id=asset_id,
+              payload={"fleet_code": fleet_code, "nickname": data.get("nickname"),
+                       "ownership": ownership,
+                       "documents": len(body.get("documents") or []),
+                       "schedules": len(body.get("schedules") or [])})
     db.commit()
-    return {"ok": True, "asset_id": row[0], "fleet_code": fleet_code}
+    return {"ok": True, "asset_id": asset_id, "fleet_code": fleet_code}
+
+
+def _save_children(db, request: Request, asset_id: int, body: dict,
+                   current_reading) -> None:
+    """Documents, maintenance schedules and system identities for one machine."""
+    actor = _actor(request)
+
+    for doc in body.get("documents") or []:
+        dtype = (doc.get("document_type") or "").upper()
+        if dtype not in DOCUMENT_TYPES:
+            raise HTTPException(400, f"Unknown document type '{dtype}'.")
+        # A row with nothing in it is the form's empty slot, not a document.
+        if not any(doc.get(k) for k in ("document_no", "valid_upto", "provider", "amount")):
+            continue
+        db.execute(text(
+            "INSERT INTO asset_compliance (asset_id, document_type, document_no, provider, "
+            "issuing_authority, amount, valid_from, valid_upto, reminder_days, remarks, created_by) "
+            "VALUES (:a, :t, :no, :prov, :auth, :amt, :vf, :vu, :rem, :note, :by)"
+        ), {"a": asset_id, "t": dtype, "no": doc.get("document_no") or None,
+            "prov": doc.get("provider") or None,
+            "auth": doc.get("issuing_authority") or None,
+            "amt": doc.get("amount") or None,
+            "vf": doc.get("valid_from") or None, "vu": doc.get("valid_upto") or None,
+            "rem": doc.get("reminder_days") or 30,
+            "note": doc.get("remarks") or None, "by": actor})
+
+    for sch in body.get("schedules") or []:
+        stype = (sch.get("schedule_type") or "").upper()
+        if stype not in SCHEDULE_TYPES:
+            raise HTTPException(400, f"Unknown schedule type '{stype}'.")
+        if not sch.get("name") and not sch.get("interval_value"):
+            continue
+        next_reading, next_date = _next_due(sch, current_reading)
+        db.execute(text(
+            "INSERT INTO asset_maintenance_schedule "
+            "(asset_id, schedule_type, name, interval_value, interval_uom, "
+            " last_done_on, last_done_reading, next_due_on, next_due_reading, remarks, created_by) "
+            "VALUES (:a, :t, :n, :iv, :iu, :ld, :lr, :nd, :nr, :rm, :by)"
+        ), {"a": asset_id, "t": stype,
+            "n": sch.get("name") or stype.replace("_", " ").title(),
+            "iv": sch.get("interval_value") or None,
+            "iu": sch.get("interval_uom") or None,
+            "ld": sch.get("last_done_on") or None,
+            "lr": sch.get("last_done_reading") or None,
+            "nd": next_date, "nr": next_reading,
+            "rm": sch.get("remarks") or None, "by": actor})
+
+    for ident in body.get("identities") or []:
+        system = (ident.get("system") or "").upper()
+        code = (ident.get("external_code") or "").strip()
+        if not code:
+            continue
+        if system not in IDENTITY_SYSTEMS:
+            raise HTTPException(400, f"Unknown system '{system}'.")
+        clash = db.execute(text(
+            "SELECT a.fleet_code FROM asset_identity i JOIN asset a ON a.asset_id = i.asset_id "
+            "WHERE i.system = :s AND i.external_code = :c"
+        ), {"s": system, "c": code}).first()
+        if clash:
+            raise HTTPException(409, f"'{code}' in {system} is already mapped to {clash[0]}.")
+        db.execute(text(
+            "INSERT INTO asset_identity (asset_id, system, external_code, created_by) "
+            "VALUES (:a, :s, :c, :by)"
+        ), {"a": asset_id, "s": system, "c": code, "by": actor})
+
+
+@router.get("/assets/{asset_id}")
+def get_asset(asset_id: int, db: Session = Depends(get_minehub_db)) -> dict:
+    """One machine in full - everything the registration form captured."""
+    row = db.execute(text(
+        "SELECT a.*, t.name AS asset_type, t.category, "
+        "       o.display_name AS owner, s.display_name AS supplier, "
+        "       l.name AS home_location "
+        "FROM asset a "
+        "JOIN asset_type t ON t.asset_type_id = a.asset_type_id "
+        "LEFT JOIN party o    ON o.party_id = a.owner_party_id "
+        "LEFT JOIN party s    ON s.party_id = a.supplier_party_id "
+        "LEFT JOIN location l ON l.location_id = a.home_location_id "
+        "WHERE a.asset_id = :id"
+    ), {"id": asset_id}).mappings().first()
+    if not row:
+        raise HTTPException(404, "Machine not found.")
+
+    out = dict(row)
+    out["documents"] = [dict(r) for r in db.execute(text(
+        "SELECT asset_compliance_id, document_type, document_no, provider, issuing_authority, "
+        "       amount, valid_from, valid_upto, reminder_days, status, remarks, "
+        "       (valid_upto - CURRENT_DATE) AS days_left "
+        "FROM asset_compliance WHERE asset_id = :id ORDER BY valid_upto NULLS LAST"
+    ), {"id": asset_id}).mappings().all()]
+    out["schedules"] = [dict(r) for r in db.execute(text(
+        "SELECT schedule_id, schedule_type, name, interval_value, interval_uom, "
+        "       last_done_on, last_done_reading, next_due_on, next_due_reading, status, remarks, "
+        "       (next_due_on - CURRENT_DATE) AS days_left "
+        "FROM asset_maintenance_schedule WHERE asset_id = :id ORDER BY next_due_on NULLS LAST"
+    ), {"id": asset_id}).mappings().all()]
+    out["identities"] = [dict(r) for r in db.execute(text(
+        "SELECT asset_identity_id, system, external_code "
+        "FROM asset_identity WHERE asset_id = :id ORDER BY system"
+    ), {"id": asset_id}).mappings().all()]
+    return out
+
+
+@router.get("/alerts")
+def alerts(db: Session = Depends(get_minehub_db)) -> list[dict]:
+    """Documents expiring and services falling due, worst first.
+
+    An expired fitness certificate on a running machine is a statutory exposure,
+    so this is a first-class endpoint rather than something you find by opening
+    each machine in turn.
+    """
+    rows = db.execute(text(
+        "SELECT * FROM asset_alert WHERE severity <> 'OK' "
+        "ORDER BY (severity = 'EXPIRED') DESC, days_left"
+    )).mappings().all()
+    return [dict(r) for r in rows]
 
 
 @router.put("/assets/{asset_id}")
@@ -372,4 +552,14 @@ def activity(limit: int = Query(100, le=500),
         ORDER BY e.occurred_at DESC
         LIMIT :lim
     """), {"lim": limit}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+@router.get("/locations")
+def list_locations(db: Session = Depends(get_minehub_db)) -> list[dict]:
+    """Places a machine can belong to — site, pit, plant, workshop, stockyard."""
+    rows = db.execute(text(
+        "SELECT location_id, code, name, location_type, parent_id "
+        "FROM location WHERE status = 'ACTIVE' ORDER BY location_type, name"
+    )).mappings().all()
     return [dict(r) for r in rows]

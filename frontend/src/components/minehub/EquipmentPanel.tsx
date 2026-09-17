@@ -19,6 +19,7 @@ import {
   Radio, X, ChevronDown, ChevronRight,
 } from "lucide-react";
 import api from "@/lib/api";
+import AssetForm from "./AssetForm";
 
 interface Summary {
   assets: number; assets_active: number; aliases: number; asset_types: number;
@@ -290,116 +291,14 @@ export default function EquipmentPanel() {
         </div>
       </section>
 
-      {/* ── Register form ────────────────────────────────────── */}
+      {/* ── Registration ─────────────────────────────────────── */}
       {showForm && (
-        <section className="rounded-lg border border-[#c8960c]/30 bg-bg-base">
-          <header className="px-4 py-3 border-b border-border-light flex items-center justify-between">
-            <h2 className="text-txt-primary text-[13px] font-semibold tracking-wide">Register a machine</h2>
-            <button onClick={() => { setShowForm(false); setForm({}); }}
-                    className="text-txt-light hover:text-txt-secondary" aria-label="Close">
-              <X className="w-4 h-4" />
-            </button>
-          </header>
-          <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {[
-              { k: "fleet_code", label: "Fleet code *", ph: "MAN-18" },
-              { k: "registration_no", label: "Registration no.", ph: "OD04L0327" },
-              { k: "make", label: "Make", ph: "Tata / CAT / Volvo" },
-              { k: "model", label: "Model", ph: "" },
-              { k: "capacity", label: "Capacity", ph: "e.g. 25" },
-              { k: "capacity_uom", label: "Capacity unit", ph: "MT / m³" },
-            ].map((f) => (
-              <label key={f.k} className="block">
-                <span className="block text-[10.5px] font-bold uppercase tracking-[0.12em] text-txt-light mb-1 font-condensed">
-                  {f.label}
-                </span>
-                <input
-                  id={`mh-${f.k}`}
-                  value={form[f.k] ?? ""}
-                  placeholder={f.ph}
-                  onChange={(e) => setForm({ ...form, [f.k]: e.target.value })}
-                  className="w-full bg-bg-base border border-border rounded-md px-3 py-2 text-[13px] text-txt-primary placeholder:text-txt-light focus:outline-none focus:border-gold"
-                />
-              </label>
-            ))}
-
-            <label className="block">
-              <span className="block text-[10.5px] font-bold uppercase tracking-[0.12em] text-txt-light mb-1 font-condensed">
-                Equipment type *
-              </span>
-              <select
-                id="mh-asset_type_id"
-                value={form.asset_type_id ?? ""}
-                onChange={(e) => setForm({ ...form, asset_type_id: e.target.value })}
-                className="w-full bg-bg-base border border-border rounded-md px-3 py-2 text-[13px] text-txt-primary focus:outline-none focus:border-gold"
-              >
-                <option value="">Select…</option>
-                {types.map((t) => (
-                  <option key={t.asset_type_id} value={t.asset_type_id}>{t.name}</option>
-                ))}
-              </select>
-            </label>
-
-            <label className="block">
-              <span className="block text-[10.5px] font-bold uppercase tracking-[0.12em] text-txt-light mb-1 font-condensed">
-                Ownership
-              </span>
-              <select
-                id="mh-ownership"
-                value={form.ownership ?? "OWN"}
-                onChange={(e) => setForm({ ...form, ownership: e.target.value })}
-                className="w-full bg-bg-base border border-border rounded-md px-3 py-2 text-[13px] text-txt-primary focus:outline-none focus:border-gold"
-              >
-                <option value="OWN">Own (BAL)</option>
-                <option value="HIRED">Hired (contractor)</option>
-              </select>
-            </label>
-
-            {form.ownership === "HIRED" && (
-              <label className="block">
-                <span className="block text-[10.5px] font-bold uppercase tracking-[0.12em] text-txt-light mb-1 font-condensed">
-                  Contractor *
-                </span>
-                <select
-                  id="mh-owner_party_id"
-                  value={form.owner_party_id ?? ""}
-                  onChange={(e) => setForm({ ...form, owner_party_id: e.target.value })}
-                  className="w-full bg-bg-base border border-border rounded-md px-3 py-2 text-[13px] text-txt-primary focus:outline-none focus:border-gold"
-                >
-                  <option value="">Select…</option>
-                  {parties.map((p) => (
-                    <option key={p.party_id} value={p.party_id}>
-                      {p.display_name || p.legal_name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-
-            {form.telematics_code && (
-              <div className="sm:col-span-2 lg:col-span-3 text-[12px] text-txt-muted bg-bg-section rounded-md px-3 py-2 flex items-center gap-2">
-                <Link2 className="w-3.5 h-3.5 text-gold-dark shrink-0" />
-                Telematics name <span className="font-mono text-txt-secondary">{form.telematics_code}</span>
-                {" "}will be linked to this machine automatically.
-              </div>
-            )}
-
-            <div className="sm:col-span-2 lg:col-span-3 flex gap-2 pt-1">
-              <button
-                onClick={saveAsset}
-                disabled={saving}
-                className="px-4 py-2 rounded-md text-[12.5px] font-semibold bg-gold text-white hover:brightness-110 disabled:opacity-40"
-              >
-                {saving ? "Saving…" : "Register machine"}
-              </button>
-              <button
-                onClick={() => { setShowForm(false); setForm({}); }}
-                className="px-4 py-2 rounded-md text-[12.5px] font-medium text-txt-muted hover:text-txt-primary border border-border"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
+        <section className="bg-bg-base border border-gold/40 rounded-lg shadow-sm p-4">
+          <AssetForm
+            prefill={{ fleet_code: form.fleet_code, telematics_code: form.telematics_code }}
+            onDone={() => { setShowForm(false); setForm({}); setNotice("Machine registered."); void load(); }}
+            onCancel={() => { setShowForm(false); setForm({}); }}
+          />
         </section>
       )}
 
