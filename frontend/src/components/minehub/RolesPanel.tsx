@@ -1,15 +1,10 @@
 "use client";
-/** Create roles and decide what each one carries.
- *
- *  Roles are data, so a new one is a row rather than a deployment. The
- *  permission grid is grouped by module because that is how people reason about
- *  access — "can they see the dashboards" and "can they change who gets in" are
- *  different questions.
- */
+/** Create roles and decide what each one carries. */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Plus, Trash2, Loader2, Check, Lock, ShieldAlert, X } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
+import { Alert, Badge, Button, Card, CardHeader, Field, inputClass } from "./ui";
 
 interface Permission {
   permission_id: number; code: string; module: string; name: string;
@@ -20,7 +15,7 @@ interface Role {
   is_system: boolean; status: string; user_count: number; permissions: string[];
 }
 
-export default function RolesPanel({ onChanged }: { onChanged?: () => void }) {
+export default function RolesPanel() {
   const can = useAuth((s) => s.can);
   const myPerms = useAuth((s) => s.user?.permissions ?? []);
   const mayManage = can("access.roles.manage");
@@ -65,9 +60,9 @@ export default function RolesPanel({ onChanged }: { onChanged?: () => void }) {
     setSaving(true); setError(null);
     try {
       await api.put(`/access/roles/${roleId}`, { permissions: draft });
-      setNotice("Role updated. It applies immediately.");
+      setNotice("Role updated — it applies immediately.");
       setEditing(null);
-      await load(); await useAuth.getState().refresh(); onChanged?.();
+      await load(); await useAuth.getState().refresh();
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(d ?? "Could not update the role.");
@@ -81,7 +76,7 @@ export default function RolesPanel({ onChanged }: { onChanged?: () => void }) {
       await api.post("/access/roles", { ...newRole, permissions: draft });
       setNotice(`Role “${newRole.name}” created.`);
       setCreating(false); setNewRole({ name: "", description: "" }); setDraft([]);
-      await load(); onChanged?.();
+      await load();
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(d ?? "Could not create the role.");
@@ -93,7 +88,7 @@ export default function RolesPanel({ onChanged }: { onChanged?: () => void }) {
     try {
       await api.delete(`/access/roles/${r.role_id}`);
       setNotice(`Role “${r.name}” deleted.`);
-      await load(); onChanged?.();
+      await load();
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(d ?? "Could not delete the role.");
@@ -101,41 +96,43 @@ export default function RolesPanel({ onChanged }: { onChanged?: () => void }) {
   };
 
   const PermissionGrid = () => (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {Object.entries(byModule).map(([module, list]) => (
         <div key={module}>
-          <div className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-white/40 mb-1.5 font-condensed">
+          <div className="font-condensed text-[10px] font-bold uppercase tracking-[.14em] text-txt-light mb-2">
             {module}
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             {list.map((p) => {
               const on = draft.includes(p.code);
-              // You cannot put a permission into a role that you do not hold —
-              // the server refuses it, so the control says why rather than
-              // letting someone build a role that will not save.
+              // The server refuses a permission you do not hold, so the control
+              // says why rather than letting someone build a role that cannot save.
               const blocked = !myPerms.includes(p.code);
               return (
-                <button key={p.permission_id}
-                  disabled={blocked}
+                <button key={p.permission_id} disabled={blocked}
                   onClick={() => setDraft(on ? draft.filter((c) => c !== p.code) : [...draft, p.code])}
                   title={blocked ? "You cannot grant a permission you do not hold yourself"
                                  : (p.description ?? undefined)}
-                  className={`text-left px-3 py-2 rounded-md border transition
-                    ${blocked ? "border-white/8 opacity-40 cursor-not-allowed"
-                      : on ? "border-[#c8960c]/50 bg-[#c8960c]/10"
-                           : "border-white/12 hover:border-white/25"}`}>
-                  <div className="flex items-start gap-2">
-                    <span className={`mt-0.5 w-3.5 h-3.5 rounded-sm border flex items-center justify-center shrink-0
-                      ${on ? "bg-[#c8960c] border-[#c8960c]" : "border-white/25"}`}>
-                      {on && <Check className="w-2.5 h-2.5 text-[#0b1b33]" strokeWidth={3} />}
+                  className={`text-left px-3 py-2.5 rounded border transition
+                    ${blocked ? "border-border-light bg-bg-section/50 opacity-60 cursor-not-allowed"
+                      : on ? "border-gold bg-gold/[0.07]"
+                           : "border-border bg-bg-base hover:border-border-strong"}`}>
+                  <div className="flex items-start gap-2.5">
+                    <span className={`mt-0.5 w-4 h-4 rounded-sm border flex items-center justify-center shrink-0
+                      ${on ? "bg-gold border-gold" : "border-border-strong bg-bg-base"}`}>
+                      {on && <Check className="w-3 h-3 text-white" strokeWidth={3} />}
                     </span>
                     <span className="min-w-0">
-                      <span className="text-[12.5px] text-white/85 flex items-center gap-1.5">
+                      <span className="text-[12.5px] font-medium text-txt-primary flex items-center gap-1.5">
                         {p.name}
-                        {p.is_sensitive && <ShieldAlert className="w-3 h-3 text-amber-400/80" />}
+                        {p.is_sensitive && (
+                          <ShieldAlert className="w-3.5 h-3.5 text-warning" aria-label="Sensitive" />
+                        )}
                       </span>
                       {p.description && (
-                        <span className="block text-[11px] text-white/35 leading-snug">{p.description}</span>
+                        <span className="block text-[11px] text-txt-muted leading-snug mt-0.5">
+                          {p.description}
+                        </span>
                       )}
                     </span>
                   </div>
@@ -149,148 +146,123 @@ export default function RolesPanel({ onChanged }: { onChanged?: () => void }) {
   );
 
   if (loading) {
-    return <div className="flex justify-center py-16"><Loader2 className="w-5 h-5 animate-spin text-[#c8960c]" /></div>;
+    return <div className="flex justify-center py-16"><Loader2 className="w-5 h-5 animate-spin text-gold" /></div>;
   }
 
   return (
     <div className="space-y-4">
-      {error && (
-        <div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2.5 text-[12.5px] text-red-300">{error}</div>
-      )}
+      {error && <Alert tone="error">{error}</Alert>}
       {notice && (
-        <div className="flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2.5 text-[12.5px] text-emerald-300">
-          <Check className="w-4 h-4" />{notice}
-        </div>
+        <Alert tone="success"><span className="inline-flex items-center gap-2"><Check className="w-4 h-4" />{notice}</span></Alert>
       )}
 
       {mayManage && !creating && (
-        <button onClick={() => { setCreating(true); setDraft([]); }}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-semibold bg-[#c8960c] text-[#0b1b33] hover:brightness-110">
-          <Plus className="w-3.5 h-3.5" /> New role
-        </button>
+        <Button variant="primary" onClick={() => { setCreating(true); setDraft([]); }}>
+          <Plus className="w-4 h-4" /> New role
+        </Button>
       )}
 
       {creating && (
-        <section className="rounded-lg border border-[#c8960c]/30 bg-[#0e1c33]/80 p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-white/90 text-[13px] font-semibold">Create a role</h3>
-            <button onClick={() => { setCreating(false); setDraft([]); }} className="text-white/40 hover:text-white/80">
+        <Card className="border-gold/40">
+          <CardHeader title="Create a role"
+            subtitle="Name it for what it lets someone do, not for seniority — job titles already carry that."
+            actions={<Button variant="ghost" size="sm" onClick={() => { setCreating(false); setDraft([]); }}>
               <X className="w-4 h-4" />
-            </button>
+            </Button>} />
+          <div className="p-4 space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Field label="Name *">
+                <input id="mh-role-name" value={newRole.name} className={inputClass}
+                  placeholder="e.g. Shift In-charge, Mine Planner"
+                  onChange={(e) => setNewRole({ ...newRole, name: e.target.value })} />
+              </Field>
+              <Field label="What it is for">
+                <input id="mh-role-desc" value={newRole.description} className={inputClass}
+                  placeholder="Short description"
+                  onChange={(e) => setNewRole({ ...newRole, description: e.target.value })} />
+              </Field>
+            </div>
+            <PermissionGrid />
+            <div className="flex gap-2">
+              <Button variant="primary" onClick={createRole} disabled={saving}>
+                {saving ? "Creating…" : "Create role"}
+              </Button>
+              <Button variant="ghost" onClick={() => { setCreating(false); setDraft([]); }}>Cancel</Button>
+            </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <label className="block">
-              <span className="block text-[10.5px] font-bold uppercase tracking-[0.12em] text-white/45 mb-1 font-condensed">
-                Name *
-              </span>
-              <input id="mh-role-name" value={newRole.name}
-                onChange={(e) => setNewRole({ ...newRole, name: e.target.value })}
-                placeholder="e.g. Shift In-charge, Mine Planner"
-                className="w-full bg-[#0a1526] border border-white/12 rounded-md px-3 py-2 text-[13px] text-white/90 placeholder:text-white/25 focus:outline-none focus:border-[#c8960c]/50" />
-            </label>
-            <label className="block">
-              <span className="block text-[10.5px] font-bold uppercase tracking-[0.12em] text-white/45 mb-1 font-condensed">
-                What it is for
-              </span>
-              <input id="mh-role-desc" value={newRole.description}
-                onChange={(e) => setNewRole({ ...newRole, description: e.target.value })}
-                placeholder="Short description"
-                className="w-full bg-[#0a1526] border border-white/12 rounded-md px-3 py-2 text-[13px] text-white/90 placeholder:text-white/25 focus:outline-none focus:border-[#c8960c]/50" />
-            </label>
-          </div>
-          <PermissionGrid />
-          <div className="flex gap-2">
-            <button onClick={createRole} disabled={saving}
-              className="px-4 py-2 rounded-md text-[12.5px] font-semibold bg-[#c8960c] text-[#0b1b33] disabled:opacity-40">
-              {saving ? "Creating…" : "Create role"}
-            </button>
-            <button onClick={() => { setCreating(false); setDraft([]); }}
-              className="px-4 py-2 rounded-md text-[12.5px] text-white/60 border border-white/12">Cancel</button>
-          </div>
-        </section>
+        </Card>
       )}
 
-      <div className="space-y-3">
-        {roles.map((r) => {
-          const isEditing = editing === r.role_id;
-          const isOwner = r.code === "PLATFORM_OWNER";
-          return (
-            <section key={r.role_id} className="rounded-lg border border-white/10 bg-[#0e1c33]/60">
-              <header className="px-4 py-3 flex flex-wrap items-start justify-between gap-3 border-b border-white/10">
-                <div className="min-w-0">
-                  <h3 className="text-white/90 text-[13.5px] font-semibold flex items-center gap-2">
-                    {r.name}
-                    {r.is_system && (
-                      <span title="A system role — it cannot be renamed or deleted"
-                            className="inline-flex items-center gap-1 text-[10.5px] text-white/40 border border-white/15 rounded px-1.5 py-0.5">
-                        <Lock className="w-2.5 h-2.5" /> system
-                      </span>
-                    )}
-                  </h3>
-                  {r.description && <p className="text-white/45 text-[11.5px] mt-0.5">{r.description}</p>}
-                  <p className="text-white/35 text-[11px] mt-1">
-                    {r.user_count} {r.user_count === 1 ? "person holds" : "people hold"} this ·{" "}
-                    {isOwner ? "every permission" : `${r.permissions.length} permissions`}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
+      {roles.map((r) => {
+        const isEditing = editing === r.role_id;
+        const isOwner = r.code === "PLATFORM_OWNER";
+        return (
+          <Card key={r.role_id}>
+            <CardHeader
+              title={r.name}
+              subtitle={r.description ?? undefined}
+              actions={
+                <>
+                  {r.is_system && (
+                    <Badge tone="neutral" title="A system role — it cannot be renamed or deleted">
+                      <Lock className="w-3 h-3" /> system
+                    </Badge>
+                  )}
+                  <Badge tone="info">
+                    {r.user_count} {r.user_count === 1 ? "person" : "people"}
+                  </Badge>
                   {mayManage && !isOwner && (
-                    <button
-                      onClick={() => { setEditing(isEditing ? null : r.role_id); setDraft(r.permissions); }}
-                      className="px-3 py-1.5 rounded-md text-[11.5px] font-medium border border-white/15 text-white/70 hover:text-white hover:border-white/30">
+                    <Button size="sm" variant="secondary"
+                      onClick={() => { setEditing(isEditing ? null : r.role_id); setDraft(r.permissions); }}>
                       {isEditing ? "Close" : "Edit permissions"}
-                    </button>
+                    </Button>
                   )}
                   {mayManage && !r.is_system && (
-                    <button onClick={() => removeRole(r)}
-                      title={r.user_count ? "Move its holders to another role first" : "Delete this role"}
-                      className="text-white/35 hover:text-red-400">
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    <Button size="sm" variant="danger" onClick={() => removeRole(r)}
+                      title={r.user_count ? "Move its holders to another role first" : "Delete this role"}>
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </Button>
                   )}
+                </>
+              }
+            />
+            <div className="p-4">
+              {isOwner ? (
+                <p className="text-[12.5px] text-txt-muted">
+                  The Platform Owner holds every permission, including ones added later.
+                  That is what makes it the role that can always restore access.
+                </p>
+              ) : isEditing ? (
+                <div className="space-y-4">
+                  <PermissionGrid />
+                  <div className="flex gap-2">
+                    <Button variant="primary" onClick={() => savePermissions(r.role_id)} disabled={saving}>
+                      {saving ? "Saving…" : "Save permissions"}
+                    </Button>
+                    <Button variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
+                  </div>
                 </div>
-              </header>
-
-              <div className="p-4">
-                {isOwner ? (
-                  <p className="text-white/45 text-[12px]">
-                    The Platform Owner holds every permission, including ones added later.
-                    That is what makes it the role that can always restore access.
-                  </p>
-                ) : isEditing ? (
-                  <div className="space-y-3">
-                    <PermissionGrid />
-                    <div className="flex gap-2">
-                      <button onClick={() => savePermissions(r.role_id)} disabled={saving}
-                        className="px-4 py-2 rounded-md text-[12.5px] font-semibold bg-[#c8960c] text-[#0b1b33] disabled:opacity-40">
-                        {saving ? "Saving…" : "Save permissions"}
-                      </button>
-                      <button onClick={() => setEditing(null)}
-                        className="px-4 py-2 rounded-md text-[12.5px] text-white/60 border border-white/12">Cancel</button>
-                    </div>
-                  </div>
-                ) : r.permissions.length === 0 ? (
-                  <p className="text-amber-300/70 text-[12px]">
-                    This role carries nothing — anyone holding only this role can sign in but see no page.
-                  </p>
-                ) : (
-                  <div className="flex flex-wrap gap-1.5">
-                    {r.permissions.map((code) => {
-                      const p = perms.find((x) => x.code === code);
-                      return (
-                        <span key={code} title={p?.description ?? code}
-                          className="px-2 py-0.5 rounded border border-white/12 bg-white/[0.03] text-[11px] text-white/65">
-                          {p?.name ?? code}
-                        </span>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </section>
-          );
-        })}
-      </div>
+              ) : r.permissions.length === 0 ? (
+                <p className="text-[12.5px] text-warning">
+                  This role carries nothing — anyone holding only this role can sign in but see no page.
+                </p>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {r.permissions.map((code) => {
+                    const p = perms.find((x) => x.code === code);
+                    return (
+                      <Badge key={code} tone={p?.is_sensitive ? "warning" : "neutral"}
+                             title={p?.description ?? code}>
+                        {p?.name ?? code}
+                      </Badge>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </Card>
+        );
+      })}
     </div>
   );
 }

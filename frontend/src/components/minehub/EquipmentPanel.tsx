@@ -47,22 +47,22 @@ interface Party { party_id: number; display_name: string; legal_name: string }
 
 const STATUS_STYLE: Record<string, string> = {
   ACTIVE:      "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
-  MAINTENANCE: "bg-amber-500/15 text-amber-300 border-amber-500/30",
+  MAINTENANCE: "bg-amber-500/15 text-warning border-amber-500/30",
   STANDBY:     "bg-sky-500/15 text-sky-300 border-sky-500/30",
-  IDLE:        "bg-white/10 text-white/55 border-white/15",
+  IDLE:        "bg-white/10 text-txt-muted border-border",
   DISPOSED:    "bg-red-500/15 text-red-300 border-red-500/30",
 };
 
 function Tile({ label, value, hint }: { label: string; value: number | string; hint?: string }) {
   return (
-    <div className="rounded-lg border border-white/10 bg-[#0e1c33]/60 px-4 py-3">
-      <div className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-white/40 font-condensed">
+    <div className="rounded-lg border border-border-light bg-bg-base px-4 py-3">
+      <div className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-txt-light font-condensed">
         {label}
       </div>
-      <div className="text-[22px] font-semibold text-white leading-tight mt-1 tabular-nums">
+      <div className="text-[22px] font-semibold text-txt-primary leading-tight mt-1 tabular-nums">
         {value}
       </div>
-      {hint && <div className="text-[11px] text-white/35 mt-0.5">{hint}</div>}
+      {hint && <div className="text-[11px] text-txt-light mt-0.5">{hint}</div>}
     </div>
   );
 }
@@ -196,7 +196,7 @@ export default function EquipmentPanel() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-24">
-        <Loader2 className="w-6 h-6 animate-spin text-[#c8960c]" />
+        <Loader2 className="w-6 h-6 animate-spin text-gold-dark" />
       </div>
     );
   }
@@ -227,17 +227,17 @@ export default function EquipmentPanel() {
       )}
 
       {/* ── The working list ─────────────────────────────────── */}
-      <section className="rounded-lg border border-white/10 bg-[#0e1c33]/60">
-        <header className="px-4 py-3 border-b border-white/10 flex items-center gap-2.5">
-          <Radio className="w-4 h-4 text-amber-300 shrink-0" />
+      <section className="rounded-lg border border-border-light bg-bg-base">
+        <header className="px-4 py-3 border-b border-border-light flex items-center gap-2.5">
+          <Radio className="w-4 h-4 text-warning shrink-0" />
           <div className="min-w-0">
-            <h2 className="text-white/90 text-[13px] font-semibold tracking-wide">
+            <h2 className="text-txt-primary text-[13px] font-semibold tracking-wide">
               Transmitting but unregistered
               {unmapped.length > 0 && (
-                <span className="ml-2 text-amber-300">{unmapped.length}</span>
+                <span className="ml-2 text-warning">{unmapped.length}</span>
               )}
             </h2>
-            <p className="text-white/45 text-[11.5px] mt-0.5">
+            <p className="text-txt-light text-[11.5px] mt-0.5">
               These machines are sending telematics that the platform cannot attribute
               to anything. Registering one links its history in the same action.
             </p>
@@ -253,7 +253,7 @@ export default function EquipmentPanel() {
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[520px] text-[12.5px]">
-                <thead className="text-white/45">
+                <thead className="text-txt-light">
                   <tr>
                     <th className="text-left font-medium px-3 py-2">Telematics name</th>
                     <th className="text-left font-medium px-3 py-2">Feed</th>
@@ -264,19 +264,19 @@ export default function EquipmentPanel() {
                 </thead>
                 <tbody className="divide-y divide-white/5">
                   {unmapped.map((u) => (
-                    <tr key={`${u.feed}-${u.vehicle_desc}`} className="text-white/80">
+                    <tr key={`${u.feed}-${u.vehicle_desc}`} className="text-txt-secondary">
                       <td className="px-3 py-2.5 font-mono text-[12px]">{u.vehicle_desc}</td>
-                      <td className="px-3 py-2.5 text-white/50">{u.feed}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums text-white/60">
+                      <td className="px-3 py-2.5 text-txt-muted">{u.feed}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-txt-muted">
                         {u.rows_.toLocaleString()}
                       </td>
-                      <td className="px-3 py-2.5 text-white/50">
+                      <td className="px-3 py-2.5 text-txt-muted">
                         {u.last_seen ? String(u.last_seen).slice(0, 16).replace("T", " ") : "—"}
                       </td>
                       <td className="px-3 py-2.5 text-right">
                         <button
                           onClick={() => startRegister(u)}
-                          className="px-2.5 py-1 rounded border border-[#c8960c]/40 bg-[#c8960c]/15 text-[#c8960c] text-[11px] font-medium hover:brightness-125"
+                          className="px-2.5 py-1 rounded border border-gold/40 bg-gold/10 text-gold-dark text-[11px] font-medium hover:brightness-125"
                         >
                           Register
                         </button>
@@ -292,11 +292,11 @@ export default function EquipmentPanel() {
 
       {/* ── Register form ────────────────────────────────────── */}
       {showForm && (
-        <section className="rounded-lg border border-[#c8960c]/30 bg-[#0e1c33]/80">
-          <header className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
-            <h2 className="text-white/90 text-[13px] font-semibold tracking-wide">Register a machine</h2>
+        <section className="rounded-lg border border-[#c8960c]/30 bg-bg-base">
+          <header className="px-4 py-3 border-b border-border-light flex items-center justify-between">
+            <h2 className="text-txt-primary text-[13px] font-semibold tracking-wide">Register a machine</h2>
             <button onClick={() => { setShowForm(false); setForm({}); }}
-                    className="text-white/40 hover:text-white/80" aria-label="Close">
+                    className="text-txt-light hover:text-txt-secondary" aria-label="Close">
               <X className="w-4 h-4" />
             </button>
           </header>
@@ -310,7 +310,7 @@ export default function EquipmentPanel() {
               { k: "capacity_uom", label: "Capacity unit", ph: "MT / m³" },
             ].map((f) => (
               <label key={f.k} className="block">
-                <span className="block text-[10.5px] font-bold uppercase tracking-[0.12em] text-white/45 mb-1 font-condensed">
+                <span className="block text-[10.5px] font-bold uppercase tracking-[0.12em] text-txt-light mb-1 font-condensed">
                   {f.label}
                 </span>
                 <input
@@ -318,20 +318,20 @@ export default function EquipmentPanel() {
                   value={form[f.k] ?? ""}
                   placeholder={f.ph}
                   onChange={(e) => setForm({ ...form, [f.k]: e.target.value })}
-                  className="w-full bg-[#0a1526] border border-white/12 rounded-md px-3 py-2 text-[13px] text-white/90 placeholder:text-white/25 focus:outline-none focus:border-[#c8960c]/50"
+                  className="w-full bg-bg-base border border-border rounded-md px-3 py-2 text-[13px] text-txt-primary placeholder:text-txt-light focus:outline-none focus:border-gold"
                 />
               </label>
             ))}
 
             <label className="block">
-              <span className="block text-[10.5px] font-bold uppercase tracking-[0.12em] text-white/45 mb-1 font-condensed">
+              <span className="block text-[10.5px] font-bold uppercase tracking-[0.12em] text-txt-light mb-1 font-condensed">
                 Equipment type *
               </span>
               <select
                 id="mh-asset_type_id"
                 value={form.asset_type_id ?? ""}
                 onChange={(e) => setForm({ ...form, asset_type_id: e.target.value })}
-                className="w-full bg-[#0a1526] border border-white/12 rounded-md px-3 py-2 text-[13px] text-white/90 focus:outline-none focus:border-[#c8960c]/50"
+                className="w-full bg-bg-base border border-border rounded-md px-3 py-2 text-[13px] text-txt-primary focus:outline-none focus:border-gold"
               >
                 <option value="">Select…</option>
                 {types.map((t) => (
@@ -341,14 +341,14 @@ export default function EquipmentPanel() {
             </label>
 
             <label className="block">
-              <span className="block text-[10.5px] font-bold uppercase tracking-[0.12em] text-white/45 mb-1 font-condensed">
+              <span className="block text-[10.5px] font-bold uppercase tracking-[0.12em] text-txt-light mb-1 font-condensed">
                 Ownership
               </span>
               <select
                 id="mh-ownership"
                 value={form.ownership ?? "OWN"}
                 onChange={(e) => setForm({ ...form, ownership: e.target.value })}
-                className="w-full bg-[#0a1526] border border-white/12 rounded-md px-3 py-2 text-[13px] text-white/90 focus:outline-none focus:border-[#c8960c]/50"
+                className="w-full bg-bg-base border border-border rounded-md px-3 py-2 text-[13px] text-txt-primary focus:outline-none focus:border-gold"
               >
                 <option value="OWN">Own (BAL)</option>
                 <option value="HIRED">Hired (contractor)</option>
@@ -357,14 +357,14 @@ export default function EquipmentPanel() {
 
             {form.ownership === "HIRED" && (
               <label className="block">
-                <span className="block text-[10.5px] font-bold uppercase tracking-[0.12em] text-white/45 mb-1 font-condensed">
+                <span className="block text-[10.5px] font-bold uppercase tracking-[0.12em] text-txt-light mb-1 font-condensed">
                   Contractor *
                 </span>
                 <select
                   id="mh-owner_party_id"
                   value={form.owner_party_id ?? ""}
                   onChange={(e) => setForm({ ...form, owner_party_id: e.target.value })}
-                  className="w-full bg-[#0a1526] border border-white/12 rounded-md px-3 py-2 text-[13px] text-white/90 focus:outline-none focus:border-[#c8960c]/50"
+                  className="w-full bg-bg-base border border-border rounded-md px-3 py-2 text-[13px] text-txt-primary focus:outline-none focus:border-gold"
                 >
                   <option value="">Select…</option>
                   {parties.map((p) => (
@@ -377,9 +377,9 @@ export default function EquipmentPanel() {
             )}
 
             {form.telematics_code && (
-              <div className="sm:col-span-2 lg:col-span-3 text-[12px] text-white/55 bg-white/[0.04] rounded-md px-3 py-2 flex items-center gap-2">
-                <Link2 className="w-3.5 h-3.5 text-[#c8960c] shrink-0" />
-                Telematics name <span className="font-mono text-white/80">{form.telematics_code}</span>
+              <div className="sm:col-span-2 lg:col-span-3 text-[12px] text-txt-muted bg-bg-section rounded-md px-3 py-2 flex items-center gap-2">
+                <Link2 className="w-3.5 h-3.5 text-gold-dark shrink-0" />
+                Telematics name <span className="font-mono text-txt-secondary">{form.telematics_code}</span>
                 {" "}will be linked to this machine automatically.
               </div>
             )}
@@ -388,13 +388,13 @@ export default function EquipmentPanel() {
               <button
                 onClick={saveAsset}
                 disabled={saving}
-                className="px-4 py-2 rounded-md text-[12.5px] font-semibold bg-[#c8960c] text-[#0b1b33] hover:brightness-110 disabled:opacity-40"
+                className="px-4 py-2 rounded-md text-[12.5px] font-semibold bg-gold text-white hover:brightness-110 disabled:opacity-40"
               >
                 {saving ? "Saving…" : "Register machine"}
               </button>
               <button
                 onClick={() => { setShowForm(false); setForm({}); }}
-                className="px-4 py-2 rounded-md text-[12.5px] font-medium text-white/60 hover:text-white/90 border border-white/12"
+                className="px-4 py-2 rounded-md text-[12.5px] font-medium text-txt-muted hover:text-txt-primary border border-border"
               >
                 Cancel
               </button>
@@ -404,28 +404,28 @@ export default function EquipmentPanel() {
       )}
 
       {/* ── The registry ─────────────────────────────────────── */}
-      <section className="rounded-lg border border-white/10 bg-[#0e1c33]/60">
-        <header className="px-4 py-3 border-b border-white/10 flex flex-wrap items-center justify-between gap-3">
+      <section className="rounded-lg border border-border-light bg-bg-base">
+        <header className="px-4 py-3 border-b border-border-light flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-white/90 text-[13px] font-semibold tracking-wide">Fleet register</h2>
-            <p className="text-white/45 text-[11.5px] mt-0.5">
+            <h2 className="text-txt-primary text-[13px] font-semibold tracking-wide">Fleet register</h2>
+            <p className="text-txt-light text-[11.5px] mt-0.5">
               Own and hired machines. Expand a row to link the names other systems use.
             </p>
           </div>
           <div className="flex items-center gap-2">
             <div className="relative">
-              <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-white/35" />
+              <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-txt-light" />
               <input
                 id="mh-search"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Search fleet…"
-                className="bg-[#0a1526] border border-white/12 rounded-md pl-8 pr-3 py-1.5 text-[12.5px] text-white/90 placeholder:text-white/30 focus:outline-none focus:border-[#c8960c]/50 w-[170px]"
+                className="bg-bg-base border border-border rounded-md pl-8 pr-3 py-1.5 text-[12.5px] text-txt-primary placeholder:text-txt-light focus:outline-none focus:border-gold w-[170px]"
               />
             </div>
             <button
               onClick={() => startRegister()}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-semibold bg-[#c8960c] text-[#0b1b33] hover:brightness-110"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-semibold bg-gold text-white hover:brightness-110"
             >
               <Plus className="w-3.5 h-3.5" /> Add
             </button>
@@ -434,7 +434,7 @@ export default function EquipmentPanel() {
 
         <div className="p-4 overflow-x-auto">
           <table className="w-full min-w-[640px] text-[12.5px]">
-            <thead className="text-white/45">
+            <thead className="text-txt-light">
               <tr>
                 <th className="w-6" />
                 <th className="text-left font-medium px-3 py-2">Fleet code</th>
@@ -448,7 +448,7 @@ export default function EquipmentPanel() {
             <tbody className="divide-y divide-white/5">
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-3 py-8 text-center text-white/35">
+                  <td colSpan={7} className="px-3 py-8 text-center text-txt-light">
                     {assets.length === 0
                       ? "No machine registered yet. Start from the list above — those are transmitting already."
                       : "No machine matches that search."}
@@ -457,34 +457,34 @@ export default function EquipmentPanel() {
               )}
               {filtered.map((a) => (
                 <React.Fragment key={a.asset_id}>
-                  <tr className="text-white/80 hover:bg-white/[0.03]">
+                  <tr className="text-txt-secondary hover:bg-bg-section">
                     <td className="px-1 py-2.5">
                       <button onClick={() => openIdentities(a.asset_id)}
-                              className="text-white/40 hover:text-white/80"
+                              className="text-txt-light hover:text-txt-secondary"
                               aria-label="Show identities">
                         {expanded === a.asset_id
                           ? <ChevronDown className="w-4 h-4" />
                           : <ChevronRight className="w-4 h-4" />}
                       </button>
                     </td>
-                    <td className="px-3 py-2.5 font-medium text-white/90">
+                    <td className="px-3 py-2.5 font-medium text-txt-primary">
                       {a.fleet_code}
                       {a.registration_no && (
-                        <span className="text-white/35 font-mono text-[11px] ml-2">{a.registration_no}</span>
+                        <span className="text-txt-light font-mono text-[11px] ml-2">{a.registration_no}</span>
                       )}
                     </td>
-                    <td className="px-3 py-2.5 text-white/60">{a.asset_type}</td>
-                    <td className="px-3 py-2.5 text-white/50 hidden md:table-cell">
+                    <td className="px-3 py-2.5 text-txt-muted">{a.asset_type}</td>
+                    <td className="px-3 py-2.5 text-txt-muted hidden md:table-cell">
                       {[a.make, a.model].filter(Boolean).join(" ") || "—"}
                     </td>
-                    <td className="px-3 py-2.5 text-white/60">
+                    <td className="px-3 py-2.5 text-txt-muted">
                       {a.ownership === "HIRED" ? (a.owner ?? "Hired") : "BAL"}
                     </td>
                     <td className="px-3 py-2.5">
                       {a.alias_count === 0 ? (
-                        <span className="text-amber-300/80 text-[11.5px]">none</span>
+                        <span className="text-warning text-[11.5px]">none</span>
                       ) : (
-                        <span className="text-white/55 text-[11px] font-mono">{a.alias_systems}</span>
+                        <span className="text-txt-muted text-[11px] font-mono">{a.alias_systems}</span>
                       )}
                     </td>
                     <td className="px-3 py-2.5">
@@ -495,14 +495,14 @@ export default function EquipmentPanel() {
                   </tr>
 
                   {expanded === a.asset_id && (
-                    <tr className="bg-[#0a1526]/60">
+                    <tr className="bg-bg-base/60">
                       <td />
                       <td colSpan={6} className="px-3 py-3">
-                        <div className="text-[11px] font-bold uppercase tracking-[0.12em] text-white/40 mb-2 font-condensed">
+                        <div className="text-[11px] font-bold uppercase tracking-[0.12em] text-txt-light mb-2 font-condensed">
                           What other systems call this machine
                         </div>
                         {identities.length === 0 ? (
-                          <p className="text-white/40 text-[12px] mb-2">
+                          <p className="text-txt-light text-[12px] mb-2">
                             Nothing linked yet — this machine&apos;s telematics, handover and
                             weighbridge records cannot be joined to it.
                           </p>
@@ -510,11 +510,11 @@ export default function EquipmentPanel() {
                           <div className="flex flex-wrap gap-2 mb-3">
                             {identities.map((i) => (
                               <span key={i.asset_identity_id}
-                                    className="inline-flex items-center gap-2 rounded border border-white/12 bg-white/[0.04] px-2.5 py-1 text-[11.5px]">
-                                <span className="text-white/45">{i.system}</span>
-                                <span className="font-mono text-white/85">{i.external_code}</span>
+                                    className="inline-flex items-center gap-2 rounded border border-border bg-bg-section px-2.5 py-1 text-[11.5px]">
+                                <span className="text-txt-light">{i.system}</span>
+                                <span className="font-mono text-txt-primary">{i.external_code}</span>
                                 <button onClick={() => removeAlias(i.asset_identity_id, a.asset_id)}
-                                        className="text-white/30 hover:text-red-400" aria-label="Remove">
+                                        className="text-txt-light hover:text-red-400" aria-label="Remove">
                                   <Trash2 className="w-3 h-3" />
                                 </button>
                               </span>
@@ -533,17 +533,17 @@ export default function EquipmentPanel() {
       </section>
 
       {/* ── Ideal operating model ────────────────────────────── */}
-      <section className="rounded-lg border border-white/10 bg-[#0e1c33]/60">
-        <header className="px-4 py-3 border-b border-white/10">
-          <h2 className="text-white/90 text-[13px] font-semibold tracking-wide">Rated capacity by type</h2>
-          <p className="text-white/45 text-[11.5px] mt-0.5">
+      <section className="rounded-lg border border-border-light bg-bg-base">
+        <header className="px-4 py-3 border-b border-border-light">
+          <h2 className="text-txt-primary text-[13px] font-semibold tracking-wide">Rated capacity by type</h2>
+          <p className="text-txt-light text-[11.5px] mt-0.5">
             These set every capacity-gap figure the platform reports. Left blank until
             someone signs them off — a guess here quietly becomes fact everywhere.
           </p>
         </header>
         <div className="p-4 overflow-x-auto">
           <table className="w-full min-w-[520px] text-[12.5px]">
-            <thead className="text-white/45">
+            <thead className="text-txt-light">
               <tr>
                 <th className="text-left font-medium px-3 py-2">Type</th>
                 <th className="text-left font-medium px-3 py-2">Category</th>
@@ -555,18 +555,18 @@ export default function EquipmentPanel() {
             </thead>
             <tbody className="divide-y divide-white/5">
               {types.map((t) => (
-                <tr key={t.asset_type_id} className="text-white/80">
+                <tr key={t.asset_type_id} className="text-txt-secondary">
                   <td className="px-3 py-2.5">{t.name}</td>
-                  <td className="px-3 py-2.5 text-white/45 text-[11.5px]">{t.category}</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums text-white/60">{t.asset_count}</td>
+                  <td className="px-3 py-2.5 text-txt-light text-[11.5px]">{t.category}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums text-txt-muted">{t.asset_count}</td>
                   <td className="px-3 py-2.5 text-right tabular-nums">
-                    {t.rated_output_per_hr ?? <span className="text-amber-300/70">not set</span>}
+                    {t.rated_output_per_hr ?? <span className="text-warning">not set</span>}
                   </td>
                   <td className="px-3 py-2.5 text-right tabular-nums">
-                    {t.rated_fuel_lph ?? <span className="text-amber-300/70">not set</span>}
+                    {t.rated_fuel_lph ?? <span className="text-warning">not set</span>}
                   </td>
                   <td className="px-3 py-2.5 text-right tabular-nums">
-                    {t.standard_crew ?? <span className="text-amber-300/70">—</span>}
+                    {t.standard_crew ?? <span className="text-warning">—</span>}
                   </td>
                 </tr>
               ))}
@@ -587,7 +587,7 @@ function AliasAdder({ onAdd }: { onAdd: (system: string, code: string) => void }
       <select
         value={system}
         onChange={(e) => setSystem(e.target.value)}
-        className="bg-[#0a1526] border border-white/12 rounded-md px-2.5 py-1.5 text-[12px] text-white/85 focus:outline-none focus:border-[#c8960c]/50"
+        className="bg-bg-base border border-border rounded-md px-2.5 py-1.5 text-[12px] text-txt-primary focus:outline-none focus:border-gold"
       >
         {["TELEMATICS", "HOTO", "WEIGHBRIDGE", "RFID", "SAP", "SECURITY", "LEGACY"].map((s) => (
           <option key={s} value={s}>{s}</option>
@@ -598,12 +598,12 @@ function AliasAdder({ onAdd }: { onAdd: (system: string, code: string) => void }
         onChange={(e) => setCode(e.target.value)}
         onKeyDown={(e) => { if (e.key === "Enter" && code.trim()) { onAdd(system, code); setCode(""); } }}
         placeholder="The name that system uses, e.g. MAN18"
-        className="bg-[#0a1526] border border-white/12 rounded-md px-3 py-1.5 text-[12px] text-white/90 placeholder:text-white/25 focus:outline-none focus:border-[#c8960c]/50 w-[260px] max-w-full font-mono"
+        className="bg-bg-base border border-border rounded-md px-3 py-1.5 text-[12px] text-txt-primary placeholder:text-txt-light focus:outline-none focus:border-gold w-[260px] max-w-full font-mono"
       />
       <button
         onClick={() => { if (code.trim()) { onAdd(system, code); setCode(""); } }}
         disabled={!code.trim()}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-medium border border-white/12 text-white/70 hover:text-white hover:border-white/25 disabled:opacity-30"
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-medium border border-border text-white/70 hover:text-txt-primary hover:border-white/25 disabled:opacity-30"
       >
         <Link2 className="w-3.5 h-3.5" /> Link
       </button>

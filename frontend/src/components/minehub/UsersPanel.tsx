@@ -1,9 +1,10 @@
 "use client";
 /** Who can sign in, and what each person may do. */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Search, Trash2, Loader2, Users, X, Check } from "lucide-react";
+import { Search, Trash2, Loader2, UserPlus, Check, X } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
+import { Alert, Badge, Button, Card, CardHeader, EmptyRow, Td, Th, Tile, inputClass } from "./ui";
 
 interface Role { role_id: number; code: string; name: string; permissions: string[] }
 interface AccessUser {
@@ -15,9 +16,10 @@ interface EmployeeHit {
   emp_id: string; name: string | null; department: string | null; designation: string | null;
 }
 
-export default function UsersPanel({ onChanged }: { onChanged?: () => void }) {
+export default function UsersPanel() {
   const me = useAuth((s) => s.user);
   const can = useAuth((s) => s.can);
+  const mayManage = can("access.users.manage");
 
   const [users, setUsers] = useState<AccessUser[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
@@ -30,10 +32,8 @@ export default function UsersPanel({ onChanged }: { onChanged?: () => void }) {
   const [hits, setHits] = useState<EmployeeHit[]>([]);
   const [searching, setSearching] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
-  const [draftRoles, setDraftRoles] = useState<number[]>([]);
+  const [draft, setDraft] = useState<number[]>([]);
   const [roleFilter, setRoleFilter] = useState<string>("");
-
-  const mayManage = can("access.users.manage");
 
   const load = useCallback(async () => {
     setError(null);
@@ -91,19 +91,18 @@ export default function UsersPanel({ onChanged }: { onChanged?: () => void }) {
       setEditing(null); setAddQuery(""); setHits([]);
       await load();
       if (emp_id === me?.emp_id) await useAuth.getState().refresh();
-      onChanged?.();
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(d ?? "Could not update access.");
     }
   };
 
-  const revoke = async (emp_id: string) => {
+  const revoke = async (u: AccessUser) => {
     setError(null);
     try {
-      await api.delete(`/access/users/${emp_id}`);
-      setNotice(`${emp_id} can no longer sign in.`);
-      await load(); onChanged?.();
+      await api.delete(`/access/users/${u.emp_id}`);
+      setNotice(`${u.name ?? u.emp_id} can no longer sign in.`);
+      await load();
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(d ?? "Could not remove access.");
@@ -111,196 +110,182 @@ export default function UsersPanel({ onChanged }: { onChanged?: () => void }) {
   };
 
   if (loading) {
-    return <div className="flex justify-center py-16"><Loader2 className="w-5 h-5 animate-spin text-[#c8960c]" /></div>;
+    return <div className="flex justify-center py-16"><Loader2 className="w-5 h-5 animate-spin text-gold" /></div>;
   }
 
   return (
     <div className="space-y-4">
-      {error && (
-        <div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2.5 text-[12.5px] text-red-300">{error}</div>
-      )}
+      {error && <Alert tone="error">{error}</Alert>}
       {notice && (
-        <div className="flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2.5 text-[12.5px] text-emerald-300">
-          <Check className="w-4 h-4" />{notice}
-        </div>
+        <Alert tone="success"><span className="inline-flex items-center gap-2"><Check className="w-4 h-4" />{notice}</span></Alert>
       )}
 
-      {/* Role distribution, doubling as a filter */}
-      <div className="flex flex-wrap gap-2">
+      {/* Distribution — also the filter */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {roles.map((r) => {
           const active = roleFilter === r.code;
           return (
-            <button key={r.role_id}
-              onClick={() => setRoleFilter(active ? "" : r.code)}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-md border text-[11.5px] font-medium transition
-                          ${active ? "border-[#c8960c]/60 bg-[#c8960c]/15 text-[#c8960c]"
-                                   : "border-white/12 text-white/60 hover:text-white/90"}`}>
-              <Users className="w-3 h-3" />{r.name}
-              <span className="tabular-nums opacity-70">{counts[r.code] ?? 0}</span>
+            <button key={r.role_id} onClick={() => setRoleFilter(active ? "" : r.code)}
+              className={`text-left bg-bg-base border rounded-lg shadow-sm px-4 py-3 transition
+                ${active ? "border-gold ring-1 ring-gold/30" : "border-border-light hover:border-border-strong"}`}>
+              <div className="font-condensed text-[10px] font-bold uppercase tracking-[.14em] text-txt-light truncate">
+                {r.name}
+              </div>
+              <div className="font-condensed font-extrabold text-[26px] leading-none mt-1.5 text-navy tabular-nums">
+                {counts[r.code] ?? 0}
+              </div>
+              <div className="text-[11px] text-txt-muted mt-1">
+                {active ? "filtering — click to clear" : "click to filter"}
+              </div>
             </button>
           );
         })}
-        {roleFilter && (
-          <button onClick={() => setRoleFilter("")} className="self-center text-[11.5px] text-white/40 hover:text-white/70">
-            clear
-          </button>
-        )}
       </div>
 
-      {/* Add someone */}
+      {/* Grant access */}
       {mayManage && (
-        <div>
-          <div className="relative">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-white/35" />
-            <input
-              id="mh-add-user"
-              value={addQuery}
-              onChange={(e) => setAddQuery(e.target.value)}
-              placeholder="Give someone access — search by name or employee ID…"
-              className="w-full bg-[#0a1526] border border-white/12 rounded-md pl-9 pr-3 py-2 text-[13px] text-white/90 placeholder:text-white/30 focus:outline-none focus:border-[#c8960c]/50"
-            />
-            {searching && <Loader2 className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-white/35" />}
+        <Card>
+          <CardHeader title="Give someone access"
+            subtitle="The dashboard is invite-only — a person who is not listed below cannot sign in at all." />
+          <div className="p-4">
+            <div className="relative">
+              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-txt-light" />
+              <input id="mh-add-user" value={addQuery} onChange={(e) => setAddQuery(e.target.value)}
+                placeholder="Search by name or employee ID…"
+                className={`${inputClass} pl-9`} />
+              {searching && <Loader2 className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-txt-light" />}
+            </div>
+
+            {hits.length > 0 && (
+              <ul className="mt-3 border border-border-light rounded divide-y divide-border-light overflow-hidden">
+                {hits.map((h) => (
+                  <li key={h.emp_id} className="flex flex-wrap items-center gap-3 px-3 py-2.5 bg-bg-light">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[13px] text-txt-primary font-medium truncate">
+                        {h.name ?? h.emp_id}
+                        <span className="text-txt-light font-normal"> · {h.emp_id}</span>
+                      </div>
+                      <div className="text-[11.5px] text-txt-muted truncate">
+                        {[h.designation, h.department].filter(Boolean).join(" · ") || "—"}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {roles.map((r) => (
+                        <Button key={r.role_id} size="sm" variant="secondary"
+                          onClick={() => saveRoles(h.emp_id, [r.role_id])}
+                          title={`Give ${h.name ?? h.emp_id} the ${r.name} role`}>
+                          <UserPlus className="w-3 h-3" />{r.name}
+                        </Button>
+                      ))}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {addQuery.trim().length >= 2 && !searching && hits.length === 0 && (
+              <p className="text-[12px] text-txt-muted mt-3">
+                Nobody new matches “{addQuery.trim()}” — they may already have access.
+              </p>
+            )}
           </div>
-          {hits.length > 0 && (
-            <ul className="mt-2 rounded-md border border-white/10 divide-y divide-white/5 overflow-hidden">
-              {hits.map((h) => (
-                <li key={h.emp_id} className="flex flex-wrap items-center gap-3 px-3 py-2.5 bg-[#0a1526]">
-                  <div className="min-w-0 flex-1">
-                    <div className="text-white/90 text-[13px] truncate">
-                      {h.name ?? h.emp_id} <span className="text-white/35">· {h.emp_id}</span>
-                    </div>
-                    <div className="text-white/40 text-[11.5px] truncate">
-                      {[h.designation, h.department].filter(Boolean).join(" · ") || "—"}
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {roles.map((r) => (
-                      <button key={r.role_id}
-                        onClick={() => saveRoles(h.emp_id, [r.role_id])}
-                        title={`Give ${h.name ?? h.emp_id} the ${r.name} role`}
-                        className="px-2.5 py-1 rounded border border-white/15 text-white/70 text-[11px] font-medium hover:border-[#c8960c]/50 hover:text-[#c8960c]">
-                        {r.name}
-                      </button>
-                    ))}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+        </Card>
       )}
 
-      {/* The list */}
-      <div className="rounded-md border border-white/10 overflow-hidden">
-        <div className="px-3 py-2 border-b border-white/10 bg-white/[0.03] flex items-center justify-between gap-3">
-          <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-white/40 font-condensed">
-            {visible.length} of {users.length} with access
-          </span>
-          <div className="relative">
-            <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-white/35" />
-            <input
-              id="mh-filter-user"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Filter…"
-              className="bg-[#0a1526] border border-white/12 rounded-md pl-8 pr-3 py-1 text-[12px] text-white/90 placeholder:text-white/30 focus:outline-none focus:border-[#c8960c]/50 w-[150px]"
-            />
-          </div>
+      {/* The register */}
+      <Card>
+        <CardHeader
+          title={`People with access · ${visible.length}${visible.length !== users.length ? ` of ${users.length}` : ""}`}
+          subtitle="Roles decide what each person may open. Everything is enforced on the data, not just the menu."
+          actions={
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-txt-light" />
+              <input id="mh-filter-user" value={query} onChange={(e) => setQuery(e.target.value)}
+                placeholder="Filter…"
+                className="bg-bg-base border border-border rounded pl-8 pr-3 py-1.5 text-[12px] text-txt-primary placeholder:text-txt-light focus:outline-none focus:border-gold w-[160px]" />
+            </div>
+          }
+        />
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[620px]">
+            <thead>
+              <tr>
+                <Th>Person</Th>
+                <Th className="hidden md:table-cell">Department</Th>
+                <Th>Roles</Th>
+                {mayManage && <Th className="text-right">Revoke</Th>}
+              </tr>
+            </thead>
+            <tbody>
+              {visible.length === 0 && (
+                <EmptyRow colSpan={mayManage ? 4 : 3}>
+                  {users.length === 0 ? "Nobody has access yet." : "Nobody matches that filter."}
+                </EmptyRow>
+              )}
+              {visible.map((u) => {
+                const isMe = u.emp_id === me?.emp_id;
+                const isEditing = editing === u.emp_id;
+                return (
+                  <tr key={u.emp_id} className="hover:bg-bg-light">
+                    <Td>
+                      <div className="text-txt-primary font-medium">
+                        {u.name ?? u.emp_id}
+                        <span className="text-txt-light font-normal"> · {u.emp_id}</span>
+                        {isMe && <span className="ml-2 text-[10.5px] text-gold-dark font-semibold">YOU</span>}
+                      </div>
+                      {u.designation && <div className="text-[11px] text-txt-light">{u.designation}</div>}
+                    </Td>
+                    <Td className="hidden md:table-cell">{u.department ?? "—"}</Td>
+                    <Td>
+                      {isEditing ? (
+                        <div className="space-y-2">
+                          <div className="flex flex-wrap gap-1.5">
+                            {roles.map((r) => {
+                              const on = draft.includes(r.role_id);
+                              return (
+                                <button key={r.role_id}
+                                  onClick={() => setDraft(on ? draft.filter((x) => x !== r.role_id) : [...draft, r.role_id])}
+                                  className={`px-2.5 py-1 rounded border text-[11.5px] font-semibold transition
+                                    ${on ? "bg-gold/10 border-gold text-gold-dark"
+                                         : "bg-bg-base border-border text-txt-muted hover:border-border-strong"}`}>
+                                  {on && <Check className="w-3 h-3 inline mr-1" />}{r.name}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <div className="flex gap-2">
+                            <Button size="sm" variant="primary" onClick={() => saveRoles(u.emp_id, draft)}>Save</Button>
+                            <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {u.roles.map((r) => <Badge key={r.role_id} tone="gold">{r.name}</Badge>)}
+                          {mayManage && (
+                            <button onClick={() => { setEditing(u.emp_id); setDraft(u.roles.map((r) => r.role_id)); }}
+                              className="text-[11.5px] text-accent hover:text-accent-dark underline underline-offset-2">
+                              change
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </Td>
+                    {mayManage && (
+                      <Td className="text-right">
+                        <button onClick={() => revoke(u)} disabled={isMe}
+                          title={isMe ? "You cannot remove your own access"
+                                      : "Remove access — this person will no longer be able to sign in"}
+                          className="text-txt-light hover:text-danger disabled:opacity-25 disabled:cursor-not-allowed">
+                          <Trash2 className="w-4 h-4 inline" />
+                        </button>
+                      </Td>
+                    )}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
-
-        <table className="w-full text-[12.5px]">
-          <thead className="text-white/45">
-            <tr>
-              <th className="text-left font-medium px-3 py-2">Person</th>
-              <th className="text-left font-medium px-3 py-2 hidden md:table-cell">Department</th>
-              <th className="text-left font-medium px-3 py-2">Roles</th>
-              {mayManage && <th className="text-right font-medium px-3 py-2">Revoke</th>}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-white/5">
-            {visible.length === 0 && (
-              <tr><td colSpan={4} className="px-3 py-8 text-center text-white/35">
-                {users.length === 0 ? "Nobody has access yet." : "Nobody matches that filter."}
-              </td></tr>
-            )}
-            {visible.map((u) => {
-              const isMe = u.emp_id === me?.emp_id;
-              const isEditing = editing === u.emp_id;
-              return (
-                <tr key={u.emp_id} className="text-white/80 align-top">
-                  <td className="px-3 py-2.5">
-                    {u.name ?? u.emp_id}
-                    <span className="text-white/35"> · {u.emp_id}</span>
-                    {isMe && <span className="ml-2 text-[10.5px] text-[#c8960c]">(you)</span>}
-                    {u.designation && (
-                      <div className="text-white/35 text-[11px]">{u.designation}</div>
-                    )}
-                  </td>
-                  <td className="px-3 py-2.5 text-white/50 hidden md:table-cell">{u.department ?? "—"}</td>
-                  <td className="px-3 py-2.5">
-                    {isEditing ? (
-                      <div className="space-y-2">
-                        <div className="flex flex-wrap gap-1.5">
-                          {roles.map((r) => {
-                            const on = draftRoles.includes(r.role_id);
-                            return (
-                              <button key={r.role_id}
-                                onClick={() => setDraftRoles(on
-                                  ? draftRoles.filter((x) => x !== r.role_id)
-                                  : [...draftRoles, r.role_id])}
-                                className={`px-2.5 py-1 rounded border text-[11px] font-medium transition
-                                  ${on ? "border-[#c8960c]/60 bg-[#c8960c]/15 text-[#c8960c]"
-                                       : "border-white/15 text-white/50 hover:text-white/80"}`}>
-                                {on ? "✓ " : ""}{r.name}
-                              </button>
-                            );
-                          })}
-                        </div>
-                        <div className="flex gap-2">
-                          <button onClick={() => saveRoles(u.emp_id, draftRoles)}
-                            className="px-3 py-1 rounded text-[11.5px] font-semibold bg-[#c8960c] text-[#0b1b33]">
-                            Save
-                          </button>
-                          <button onClick={() => setEditing(null)}
-                            className="px-3 py-1 rounded text-[11.5px] text-white/60 border border-white/12">
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        {u.roles.map((r) => (
-                          <span key={r.role_id}
-                            className="px-2 py-0.5 rounded border border-white/15 bg-white/[0.04] text-[11px] text-white/75">
-                            {r.name}
-                          </span>
-                        ))}
-                        {mayManage && (
-                          <button
-                            onClick={() => { setEditing(u.emp_id); setDraftRoles(u.roles.map((r) => r.role_id)); }}
-                            className="text-[11px] text-white/35 hover:text-[#c8960c] underline underline-offset-2">
-                            change
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </td>
-                  {mayManage && (
-                    <td className="px-3 py-2.5 text-right">
-                      <button onClick={() => revoke(u.emp_id)} disabled={isMe}
-                        title={isMe ? "You cannot remove your own access"
-                                    : "Remove access — this person will no longer be able to sign in"}
-                        className="text-white/40 hover:text-red-400 disabled:opacity-25 disabled:cursor-not-allowed">
-                        <Trash2 className="w-4 h-4 inline" />
-                      </button>
-                    </td>
-                  )}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      </Card>
     </div>
   );
 }

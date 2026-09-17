@@ -4,6 +4,8 @@ import { LayoutDashboard, Gauge, Zap, Activity, ClipboardList, Sparkles, Boxes,
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { useSidebar }               from "@/contexts/useSidebar";
 import { useAuth }                  from "@/contexts/useAuth";
+import { useMineHubTab }            from "@/contexts/useMineHubTab";
+import { MINEHUB_TABS }             from "@/components/sections/MineHubSection";
 
 /** PR/PO Status is a separate application built by another IT team. It opens in
  *  its own tab rather than being embedded, so this dashboard stays alive behind
@@ -51,6 +53,8 @@ export default function AppSidebar() {
   const { collapsed, toggle }  = useSidebar();
   const user                   = useAuth((s) => s.user);
   const canAny                 = useAuth((s) => s.canAny);
+  const can                    = useAuth((s) => s.can);
+  const { tab, setTab }        = useMineHubTab();
 
   /* Initials for the avatar. Names here arrive as "AKASH ." and
      "SWASTIK ROY CHOUDHURY", so take the first letter of the first two parts
@@ -157,6 +161,49 @@ export default function AppSidebar() {
           }
 
           const isActive = page === item.id;
+
+          /* The platform entry lists its sections beneath it. Merging Access
+             Control into this screen put it one click deeper and it stopped
+             being findable — this restores the visibility without going back to
+             several top-level pages. */
+          if (item.id === "minehub") {
+            const sections = MINEHUB_TABS.filter((t) => can(t.permission));
+            return (
+              <div key={item.id}>
+                <button
+                  onClick={() => setPage(item.id)}
+                  title={collapsed ? label : undefined}
+                  className={`${ITEM_BASE} ${isActive
+                    ? "bg-white/10 text-white"
+                    : "text-white/55 hover:text-white/90 hover:bg-white/5"}`}
+                >
+                  {inner(isActive)}
+                </button>
+                {!collapsed && isActive && sections.length > 1 && (
+                  <div className="pb-1">
+                    {sections.map((sec) => {
+                      const on = tab === sec.id;
+                      return (
+                        <button
+                          key={sec.id}
+                          onClick={() => { setPage("minehub"); setTab(sec.id); }}
+                          className={`w-full text-left pl-[42px] pr-3 py-1.5 text-[11.5px] leading-tight
+                                      font-medium transition-colors relative
+                                      ${on ? "text-[#f5a623]" : "text-white/40 hover:text-white/75"}`}
+                        >
+                          {on && (
+                            <span className="absolute left-[30px] top-1/2 -translate-y-1/2 w-1 h-1 rounded-full bg-[#f5a623]" />
+                          )}
+                          {sec.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          }
+
           return (
             <button
               key={item.id}

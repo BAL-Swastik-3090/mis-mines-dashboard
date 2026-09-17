@@ -14,6 +14,8 @@ to the UI:
 """
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
@@ -28,6 +30,40 @@ router = APIRouter(prefix="/api/access", tags=["Access"])
 
 def _actor(request: Request) -> str:
     return getattr(request.state, "emp_id", None) or "unknown"
+
+
+def _describe_permission_change(before: list[str], after: list[str]) -> str:
+    """A readable summary, so the trail can be understood without reading JSON."""
+    added = [c for c in after if c not in before]
+    removed = [c for c in before if c not in after]
+    parts = []
+    if added:
+        parts.append(f"added {', '.join(added)}")
+    if removed:
+        parts.append(f"removed {', '.join(removed)}")
+    return "; ".join(parts) or "no change"
+
+
+def _audit(pg, request: Request, action: str, *, subject_emp_id: str | None = None,
+           role_id: int | None = None, role_name: str | None = None,
+           before: dict | None = None, after: dict | None = None,
+           detail: str | None = None) -> None:
+    """Record an access change. Called inside the caller's transaction, so the
+    trail and the change commit together — an audited action that did not happen,
+    or a change with no trail, would both be worse than either alone."""
+    pg.execute(text("""
+        INSERT INTO access_audit (actor_emp_id, action, subject_emp_id, role_id, role_name,
+                                  before_state, after_state, detail, ip_address)
+        VALUES (:actor, :action, :subj, :rid, :rname,
+                CAST(:before AS jsonb), CAST(:after AS jsonb), :detail, :ip)
+    """), {
+        "actor": _actor(request), "action": action, "subj": subject_emp_id,
+        "rid": role_id, "rname": role_name,
+        "before": json.dumps(before) if before is not None else None,
+        "after": json.dumps(after) if after is not None else None,
+        "detail": detail,
+        "ip": (request.headers.get("x-forwarded-for") or "").split(",")[0].strip() or None,
+    })
 
 
 def _require(db, request: Request, code: str) -> None:
@@ -99,6 +135,9 @@ def create_role(request: Request, body: dict = Body(...),
             INSERT INTO role_permission (role_id, permission_id, granted_by)
             SELECT :r, permission_id, :by FROM permission WHERE code = ANY(:codes)
         """), {"r": role_id, "by": _actor(request), "codes": wanted})
+    _audit(pg, request, "ROLE_CREATED", role_id=role_id, role_name=name,
+           after={"code": code, "name": name, "permissions": wanted},
+           detail=f"Created role '{name}' with {len(wanted)} permission(s)")
     pg.commit()
     access_svc.invalidate()
     return {"ok": True, "role_id": role_id, "code": code}
@@ -110,11 +149,16 @@ def update_role(role_id: int, request: Request, body: dict = Body(...),
                 pg: Session = Depends(get_minehub_db)) -> dict:
     _require(db, request, "access.roles.manage")
 
-    row = pg.execute(text("SELECT code, is_system FROM role WHERE role_id = :r"),
-                     {"r": role_id}).first()
+    row = pg.execute(text("""
+        SELECT r.code, r.is_system, r.name,
+               COALESCE((SELECT array_agg(p.code) FROM role_permission rp
+                           JOIN permission p ON p.permission_id = rp.permission_id
+                          WHERE rp.role_id = r.role_id), ARRAY[]::text[])
+        FROM role r WHERE r.role_id = :r
+    """), {"r": role_id}).first()
     if not row:
         raise HTTPException(404, "Role not found.")
-    code, is_system = row
+    code, is_system, role_name, before_perms = row
 
     if "name" in body or "description" in body:
         if is_system and "name" in body:
@@ -142,6 +186,11 @@ def update_role(role_id: int, request: Request, body: dict = Body(...),
                 INSERT INTO role_permission (role_id, permission_id, granted_by)
                 SELECT :r, permission_id, :by FROM permission WHERE code = ANY(:codes)
             """), {"r": role_id, "by": _actor(request), "codes": wanted})
+
+        _audit(pg, request, "ROLE_PERMISSIONS_SET", role_id=role_id, role_name=role_name,
+               before={"permissions": sorted(before_perms)},
+               after={"permissions": sorted(wanted)},
+               detail=_describe_permission_change(sorted(before_perms), sorted(wanted)))
 
     pg.commit()
     access_svc.invalidate()
@@ -171,7 +220,11 @@ def delete_role(role_id: int, request: Request,
             400, f"{holders} {'person holds' if holders == 1 else 'people hold'} this role. "
                  "Move them to another role first.")
 
+    name = pg.execute(text("SELECT name FROM role WHERE role_id = :r"),
+                      {"r": role_id}).scalar()
     pg.execute(text("DELETE FROM role WHERE role_id = :r"), {"r": role_id})
+    _audit(pg, request, "ROLE_DELETED", role_id=role_id, role_name=name,
+           before={"name": name}, detail=f"Deleted role '{name}'")
     pg.commit()
     access_svc.invalidate()
     return {"ok": True}
@@ -249,12 +302,27 @@ def set_user_roles(emp_id: str, request: Request, body: dict = Body(...),
     if emp_id == actor and not role_ids:
         raise HTTPException(400, "You cannot remove your own access.")
 
+    before = [r[0] for r in pg.execute(text("""
+        SELECT r.name FROM user_access ua JOIN role r ON r.role_id = ua.role_id
+        WHERE ua.emp_id = :e ORDER BY r.name
+    """), {"e": emp_id}).all()]
+
     pg.execute(text("DELETE FROM user_access WHERE emp_id = :e"), {"e": emp_id})
     for rid in role_ids:
         pg.execute(text("""
             INSERT INTO user_access (emp_id, role_id, granted_by)
             VALUES (:e, :r, :by) ON CONFLICT (emp_id, role_id) DO NOTHING
         """), {"e": emp_id, "r": rid, "by": actor})
+
+    after = [r[0] for r in pg.execute(text("""
+        SELECT r.name FROM user_access ua JOIN role r ON r.role_id = ua.role_id
+        WHERE ua.emp_id = :e ORDER BY r.name
+    """), {"e": emp_id}).all()]
+
+    _audit(pg, request, "USER_ROLES_SET", subject_emp_id=emp_id,
+           before={"roles": before}, after={"roles": after},
+           detail=(f"{', '.join(before) or 'no access'} → {', '.join(after) or 'no access'}"))
+
     pg.commit()
     access_svc.invalidate()
     return {"ok": True, "emp_id": emp_id, "roles": len(role_ids)}
@@ -268,7 +336,16 @@ def revoke_user(emp_id: str, request: Request,
     _require(db, request, "access.users.manage")
     if emp_id == _actor(request):
         raise HTTPException(400, "You cannot remove your own access.")
+
+    before = [r[0] for r in pg.execute(text("""
+        SELECT r.name FROM user_access ua JOIN role r ON r.role_id = ua.role_id
+        WHERE ua.emp_id = :e ORDER BY r.name
+    """), {"e": emp_id}).all()]
+
     pg.execute(text("DELETE FROM user_access WHERE emp_id = :e"), {"e": emp_id})
+    _audit(pg, request, "USER_REVOKED", subject_emp_id=emp_id,
+           before={"roles": before}, after={"roles": []},
+           detail=f"Access removed — held {', '.join(before) or 'nothing'}")
     pg.commit()
     access_svc.invalidate()
     return {"ok": True}
@@ -288,3 +365,39 @@ def search_employees(q: str = Query(""), db: Session = Depends(get_db)) -> list[
               AND (STATUS IS NULL OR STATUS <> 'Withdrawn')
             ORDER BY EMPNAME LIMIT 25"""), {"like": f"%{term}%"}).mappings().all()
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------- audit
+@router.get("/audit")
+def access_audit(limit: int = Query(100, le=500),
+                 emp_id: str = Query(""),
+                 db: Session = Depends(get_db),
+                 pg: Session = Depends(get_minehub_db)) -> list[dict]:
+    """Every access change, newest first. Optionally for one person."""
+    where, params = ["1=1"], {"lim": limit}
+    if emp_id.strip():
+        where.append("(subject_emp_id = :e OR actor_emp_id = :e)")
+        params["e"] = emp_id.strip()
+
+    rows = pg.execute(text(f"""
+        SELECT access_audit_id, occurred_at, actor_emp_id, action,
+               subject_emp_id, role_name, before_state, after_state, detail, ip_address
+        FROM access_audit
+        WHERE {' AND '.join(where)}
+        ORDER BY occurred_at DESC
+        LIMIT :lim
+    """), params).mappings().all()
+    out = [dict(r) for r in rows]
+
+    # Names come from the HR master; the trail stores identifiers only.
+    ids = {r["actor_emp_id"] for r in out if r["actor_emp_id"]} |           {r["subject_emp_id"] for r in out if r["subject_emp_id"]}
+    ids.discard("SYSTEM")
+    names: dict[str, str] = {}
+    if ids:
+        stmt = text(f"SELECT EMPID, EMPNAME FROM {EMP_TBL} WHERE EMPID IN :ids")             .bindparams(bindparam("ids", expanding=True))
+        names = {r[0]: r[1] for r in db.execute(stmt, {"ids": list(ids)}).all()}
+
+    for r in out:
+        r["actor_name"] = names.get(r["actor_emp_id"], r["actor_emp_id"])
+        r["subject_name"] = names.get(r["subject_emp_id"], r["subject_emp_id"])
+    return out
