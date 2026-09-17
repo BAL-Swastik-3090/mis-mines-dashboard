@@ -226,7 +226,11 @@ def list_assets(q: str = Query(""), status: str = Query(""),
                (SELECT string_agg(i.system, ',' ORDER BY i.system)
                   FROM asset_identity i WHERE i.asset_id = a.asset_id) AS alias_systems
         FROM asset a
-        JOIN asset_type t ON t.asset_type_id = a.asset_type_id
+        -- LEFT, because a draft is allowed to have no equipment type yet. An
+        -- inner join dropped exactly the rows someone still has to finish, so
+        -- they could not be reopened or discarded — invisible but occupying
+        -- their fleet code.
+        LEFT JOIN asset_type t ON t.asset_type_id = a.asset_type_id
         LEFT JOIN party o ON o.party_id = a.owner_party_id
         WHERE {' AND '.join(where)}
         ORDER BY a.fleet_code

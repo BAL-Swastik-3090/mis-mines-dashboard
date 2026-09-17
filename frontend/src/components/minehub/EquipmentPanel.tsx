@@ -73,6 +73,9 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
   const [identities, setIdentities] = useState<Identity[]>([]);
   const [prefill, setPrefill] = useState<{ fleet_code?: string; telematics_code?: string }>({});
   const [editingId, setEditingId] = useState<number | null>(null);
+  // Forty-two rows of telematics names is a queue, not a reading list. It opens
+  // showing enough to judge the size of the job.
+  const [allUnmapped, setAllUnmapped] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -187,40 +190,6 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
           <Tile label="Contractors" value={summary.organisations} tone="teal" icon={Building2}
                 hint="owning hired machines" />
         </div>
-      )}
-
-      {/* The working list */}
-      {unmapped.length > 0 && (
-        <Card tone="amber">
-          <CardHeader title={`${unmapped.length} machines transmitting but unregistered`}
-            icon={Radio} tone="amber"
-            subtitle="These send telematics the platform cannot attribute to anything. Registering one links its history in the same action." />
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[560px]">
-              <thead>
-                <tr><Th>Telematics name</Th><Th>Feed</Th><Th className="text-right">Records</Th>
-                    <Th>Last seen</Th><Th className="text-right">Action</Th></tr>
-              </thead>
-              <tbody>
-                {unmapped.map((u) => (
-                  <tr key={`${u.feed}-${u.vehicle_desc}`} className="hover:bg-bg-light transition-colors">
-                    <Td className="font-mono text-[12px] text-navy font-semibold">{u.vehicle_desc}</Td>
-                    <Td><Chip tone={u.feed === "MAN" ? "sky" : "violet"} dot={false}>{u.feed}</Chip></Td>
-                    <Td className="text-right tabular-nums">{u.rows_.toLocaleString()}</Td>
-                    <Td className="text-txt-muted">{String(u.last_seen ?? "").slice(0, 16).replace("T", " ")}</Td>
-                    <Td className="text-right">
-                      {mayManage && (
-                        <Button size="sm" variant="primary" onClick={() => startRegister(u)}>
-                          <Plus className="w-3.5 h-3.5" /> Register
-                        </Button>
-                      )}
-                    </Td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
       )}
 
       {/* The register */}
@@ -345,6 +314,53 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
           </table>
         </div>
       </Card>
+      {/* The queue: telematics with nothing to attribute it to */}
+      {unmapped.length > 0 && (
+        <Card tone="amber">
+          <CardHeader title={`${unmapped.length} machines transmitting but unregistered`}
+            icon={Radio} tone="amber"
+            subtitle="These send telematics the platform cannot attribute to anything. Registering one links its history in the same action."
+            actions={unmapped.length > 8 && (
+              <Button size="sm" variant="secondary" onClick={() => setAllUnmapped((v) => !v)}>
+                {allUnmapped ? "Show fewer" : `Show all ${unmapped.length}`}
+              </Button>
+            )} />
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[560px]">
+              <thead>
+                <tr><Th>Telematics name</Th><Th>Feed</Th><Th className="text-right">Records</Th>
+                    <Th>Last seen</Th><Th className="text-right">Action</Th></tr>
+              </thead>
+              <tbody>
+                {(allUnmapped ? unmapped : unmapped.slice(0, 8)).map((u) => (
+                  <tr key={`${u.feed}-${u.vehicle_desc}`} className="hover:bg-bg-light transition-colors">
+                    <Td className="font-mono text-[12px] text-navy font-semibold">{u.vehicle_desc}</Td>
+                    <Td><Chip tone={u.feed === "MAN" ? "sky" : "violet"} dot={false}>{u.feed}</Chip></Td>
+                    <Td className="text-right tabular-nums">{u.rows_.toLocaleString()}</Td>
+                    <Td className="text-txt-muted">{String(u.last_seen ?? "").slice(0, 16).replace("T", " ")}</Td>
+                    <Td className="text-right">
+                      {mayManage && (
+                        <Button size="sm" variant="primary" onClick={() => startRegister(u)}>
+                          <Plus className="w-3.5 h-3.5" /> Register
+                        </Button>
+                      )}
+                    </Td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {!allUnmapped && unmapped.length > 8 && (
+            <button type="button" onClick={() => setAllUnmapped(true)}
+              className="w-full px-5 py-3 text-[12.5px] font-semibold text-gold-dark
+                         border-t border-border-light hover:bg-gold/[0.05] transition-colors">
+              {unmapped.length - 8} more waiting to be registered
+            </button>
+          )}
+        </Card>
+      )}
+
+
     </div>
   );
 }
