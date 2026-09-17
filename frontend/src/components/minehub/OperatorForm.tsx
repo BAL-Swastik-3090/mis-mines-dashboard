@@ -554,8 +554,8 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
       {dialogs}
 
       {/* Everything that must stay reachable however far the page has scrolled */}
-      <div className="sticky top-[68px] z-30 -mx-5 px-5 pt-1 pb-3 bg-bg-base/95 backdrop-blur
-                      border-b border-border-light">
+      <div className="sticky top-[71px] z-[15] -mt-5 pt-4 pb-3 bg-bg-base/95 backdrop-blur
+                      border-b border-border-light rounded-t-xl">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0 flex items-center gap-3">
             <button onClick={leave}
@@ -619,7 +619,7 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
       {/* The section strip: where in the profile you are, and a way to jump.
           It follows the scroll rather than replacing it — every section is on
           the page, one under the other. */}
-      <nav className="sticky top-[132px] z-20 -mx-5 px-5 py-2 bg-bg-base/95 backdrop-blur
+      <nav className="sticky top-[140px] z-[14] py-2 bg-bg-base/95 backdrop-blur
                       border-b border-border-light overflow-x-auto">
         <div className="flex gap-1.5 w-max">
           {SECTIONS.map((sec) => {
@@ -651,7 +651,7 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
           )}
 
           {/* Personal */}
-          <section id="sec-personal" ref={register("personal")} className="scroll-mt-[200px]">
+          <section id="sec-personal" ref={register("personal")} className="scroll-mt-[210px]">
             <Band title="Personal details"
                   hint="Blood group and date of birth are what the first aid post asks for" />
             <Sheet>
@@ -740,7 +740,7 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
           </section>
 
           {/* Employment */}
-          <section id="sec-employment" ref={register("employment")} className="scroll-mt-[200px]">
+          <section id="sec-employment" ref={register("employment")} className="scroll-mt-[210px]">
             <Band title="Employment" hint="An attribute of the person, not the shape of the record" />
             <Sheet>
               <Row label="Employment type" required invalid={invalid.has("employment_type")}>
@@ -835,7 +835,7 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
           </section>
 
           {/* Background */}
-          <section id="sec-background" ref={register("background")} className="scroll-mt-[200px] space-y-4">
+          <section id="sec-background" ref={register("background")} className="scroll-mt-[210px] space-y-4">
             <RecordSection kind="EXPERIENCE" title="Previous employers"
               hint="Where they worked before, and on what"
               records={records} onSave={saveRecord} onRemove={removeRecord}
@@ -849,13 +849,13 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
           </section>
 
           {/* Languages */}
-          <section id="sec-languages" ref={register("languages")} className="scroll-mt-[200px]">
+          <section id="sec-languages" ref={register("languages")} className="scroll-mt-[210px]">
             <LanguageSection records={records} onSave={saveRecord} onRemove={removeRecord}
               disabled={!editing || !rights.may_manage} />
           </section>
 
           {/* Documents */}
-          <section id="sec-documents" ref={register("documents")} className="scroll-mt-[200px] space-y-4">
+          <section id="sec-documents" ref={register("documents")} className="scroll-mt-[210px] space-y-4">
             {DOC_KINDS.map((d) => (
               <RecordSection key={d.kind} kind={d.kind} title={d.label} hint={d.hint}
                 records={records} onSave={saveRecord} onRemove={removeRecord}
@@ -865,14 +865,14 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
           </section>
 
           {/* Skills */}
-          <section id="sec-skills" ref={register("skills")} className="scroll-mt-[200px]">
+          <section id="sec-skills" ref={register("skills")} className="scroll-mt-[210px]">
             <SkillSection skills={skills} records={records}
               disabled={!editing || !rights.may_manage}
               onSave={saveRecord} onRemove={removeRecord} />
           </section>
 
           {/* Competency */}
-          <section id="sec-competency" ref={register("competency")} className="scroll-mt-[200px]">
+          <section id="sec-competency" ref={register("competency")} className="scroll-mt-[210px]">
             <Band title="What they can run, and how well they understand it"
                   hint="Training is not competency. A level here means someone assessed them, and every assessment is kept"
                   right={
@@ -970,13 +970,13 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
           </section>
 
           {/* Machines */}
-          <section id="sec-machines" ref={register("machines")} className="scroll-mt-[200px]">
+          <section id="sec-machines" ref={register("machines")} className="scroll-mt-[210px]">
             <AssignmentSection assets={assets} assignments={assignments}
               disabled={!editing || !rights.may_manage} onAssign={assign} />
           </section>
 
           {/* Identity */}
-          <section id="sec-identity" ref={register("identity")} className="scroll-mt-[200px]">
+          <section id="sec-identity" ref={register("identity")} className="scroll-mt-[210px]">
             <IdentitySection idents={idents} disabled={!editing || !rights.may_manage}
               onAdd={addIdentity}
               onRemove={async (identityId) => {
@@ -987,7 +987,7 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
           </section>
 
           {/* Files */}
-          <section id="sec-files" ref={register("files")} className="scroll-mt-[200px]">
+          <section id="sec-files" ref={register("files")} className="scroll-mt-[210px]">
             <FileSection documents={documents} disabled={!editing || !rights.may_manage}
               onUpload={(file, kind) => uploadFor(file, kind)}
               onOpen={openDocument} onRemove={removeDocument} />
@@ -1015,7 +1015,7 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
 
         {/* Approval, alerts, trail */}
         {editing && (
-          <div className="hidden xl:block sticky top-[190px] space-y-4">
+          <div className="hidden xl:block sticky top-[200px] space-y-4">
             <div className="bg-bg-base border border-border-light rounded-xl shadow-sm overflow-hidden">
               <header className="px-4 py-3 border-b border-border-light flex items-center justify-between gap-2">
                 <h3 className="font-condensed font-bold text-[12.5px] uppercase tracking-[.1em] text-navy
