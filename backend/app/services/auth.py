@@ -65,6 +65,17 @@ DEFAULT_ROLE = "viewer"
 PLATFORM_ROLE = "superadmin"
 
 
+def _known_role(value: object) -> str | None:
+    """A stored role name normalised to one this build knows, or None.
+
+    Values are compared case-insensitively and trimmed: the column is free text
+    on the MySQL side and a row written by hand is not guaranteed to match the
+    exact spelling used here.
+    """
+    name = str(value).strip().lower() if value is not None else ""
+    return name if name in ROLE_RANK else None
+
+
 def mines_role(db: Session, emp_id: str) -> str:
     """The Mines access role for an employee, defaulting to 'viewer'.
 
@@ -77,7 +88,7 @@ def mines_role(db: Session, emp_id: str) -> str:
     except Exception:
         # The role table not existing must not lock everyone out of the app.
         return DEFAULT_ROLE
-    return r if r in ROLE_RANK else DEFAULT_ROLE
+    return _known_role(r) or DEFAULT_ROLE
 
 
 def explicit_role(db: Session, emp_id: str) -> str | None:
@@ -90,13 +101,24 @@ def explicit_role(db: Session, emp_id: str) -> str | None:
     Returns DEFAULT_ROLE rather than None if the table cannot be read. A database
     problem must not lock the whole company out of a dashboard used for daily
     operations — that failure mode is worse than the one this gate prevents.
+
+    A row holding a role this build does not know is still a grant, and is
+    answered with DEFAULT_ROLE rather than None. The two are not the same
+    question: the gate asks whether the person was invited, not whether this
+    build recognises the name of what they were given. Answering None locked out
+    everyone whose role was added by a newer build than the one running — which
+    is exactly what happened when 'superadmin' was granted while the server was
+    still on a build that knew only viewer/manager/admin. An unknown name now
+    costs privileges, not access.
     """
     try:
         r = db.execute(text(f"SELECT role FROM {ROLE_TBL} WHERE emp_id = :e"),
                        {"e": emp_id}).scalar()
     except Exception:
         return DEFAULT_ROLE
-    return r if r in ROLE_RANK else None
+    if r is None or not str(r).strip():
+        return None
+    return _known_role(r) or DEFAULT_ROLE
 
 
 def has_role(db: Session, emp_id: str, minimum: str) -> bool:
