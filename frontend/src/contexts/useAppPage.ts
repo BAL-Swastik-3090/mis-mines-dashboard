@@ -1,9 +1,9 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-// "access-control" is the super-admin screen; it is not part of the page-access
-// matrix, it is gated on the admin role itself.
-export type AppPage = "mis" | "fuel-management" | "ev-tracking" | "oee" | "intelligence" | "access-control" | "minehub";
+// "minehub" is the platform screen (access administration + master data). It is
+// not part of the page-access matrix; it is gated on the permissions it needs.
+export type AppPage = "mis" | "fuel-management" | "ev-tracking" | "oee" | "intelligence" | "minehub";
 
 interface AppPageStore {
   page: AppPage;

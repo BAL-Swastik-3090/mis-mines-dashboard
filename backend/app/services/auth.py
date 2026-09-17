@@ -213,12 +213,20 @@ def employee(db: Session, empid: str) -> dict:
             FROM {EMP_TBL} WHERE EMPID = :e"""), {"e": empid}).mappings().first()
     if not e:
         # A valid login with no HR record still gets in — as a viewer.
-        role = mines_role(db, empid)
+        from app.services import access as access_svc
+        perms = sorted(access_svc.permissions_for(db, empid))
         return {"emp_id": empid, "name": empid, "designation": None, "department": None,
                 "email": None, "title": None, "location": None, "plant": None,
-                "mines_role": role, "allowed_pages": sorted(allowed_pages(db, role))}
+                "roles": access_svc.roles_for(db, empid), "permissions": perms,
+                "allowed_pages": [pg for pg, code in (
+                    ("mis", "dashboard.mis"), ("oee", "dashboard.oee"),
+                    ("intelligence", "dashboard.intelligence"),
+                    ("fuel-management", "dashboard.fuel"), ("ev-tracking", "dashboard.ev"),
+                ) if code in perms]}
     s = lambda v: (v or "").strip() or None  # noqa: E731
-    _role = mines_role(db, e["EMPID"])
+    from app.services import access as access_svc
+    _perms = sorted(access_svc.permissions_for(db, e["EMPID"]))
+    _roles = access_svc.roles_for(db, e["EMPID"])
     return {
         "emp_id": e["EMPID"],
         "name": s(e["EMPNAME"]) or empid,
@@ -228,10 +236,17 @@ def employee(db: Session, empid: str) -> dict:
         "email": s(e["EMAILID"]),
         "location": s(e["LOCATION"]),
         "plant": s(e["PLANT_CD"]),
-        "mines_role": _role,
+        # Roles are data now, so the UI is given the permissions themselves
+        # rather than a role name to reason about.
+        "roles": _roles,
+        "permissions": _perms,
         # The pages this user may open, so the sidebar shows only those. The
         # same rule is enforced on the API, so this is convenience, not security.
-        "allowed_pages": sorted(allowed_pages(db, _role)),
+        "allowed_pages": [pg for pg, code in (
+            ("mis", "dashboard.mis"), ("oee", "dashboard.oee"),
+            ("intelligence", "dashboard.intelligence"),
+            ("fuel-management", "dashboard.fuel"), ("ev-tracking", "dashboard.ev"),
+        ) if code in _perms],
     }
 
 

@@ -1,5 +1,5 @@
 "use client";
-import { LayoutDashboard, Gauge, Zap, Activity, ClipboardList, Sparkles, Shield, Boxes,
+import { LayoutDashboard, Gauge, Zap, Activity, ClipboardList, Sparkles, Boxes,
          ChevronLeft, ChevronRight, LogOut, ExternalLink } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { useSidebar }               from "@/contexts/useSidebar";
@@ -35,14 +35,11 @@ const NAV_ITEMS: NavItem[] = [
   { kind: "link", href: PRPO_URL,        label: "PR/PO Status",               icon: ClipboardList   },
 ];
 
-/* Super-admin only, and deliberately not part of the role x page matrix — the
-   screen that grants access must not be something you can accidentally revoke
-   from yourself. Appended after the external link so it sits at the bottom. */
-const ADMIN_ITEM: NavItem =
-  { kind: "page", id: "access-control", label: "Access Control", icon: Shield };
-
-/* The platform itself — master data registry and integration. Superadmin only:
-   admin decides who sees which dashboard, superadmin administers the platform. */
+/* Access administration and the master-data registry are one screen with tabs,
+   not two sidebar entries: they are the same job, and splitting them made them
+   look like unrelated products. Deliberately outside the page matrix — the
+   screen that grants access must not be something you can revoke from
+   yourself. */
 const PLATFORM_ITEM: NavItem =
   { kind: "page", id: "minehub", label: "MineHub Platform", icon: Boxes };
 
@@ -53,6 +50,7 @@ export default function AppSidebar() {
   const { page, setPage }      = useAppPage();
   const { collapsed, toggle }  = useSidebar();
   const user                   = useAuth((s) => s.user);
+  const canAny                 = useAuth((s) => s.canAny);
 
   /* Only the pages this user may open. The same rule is enforced on the API, so
      this hides entries that would 403 anyway rather than being the gate itself.
@@ -63,8 +61,9 @@ export default function AppSidebar() {
     ...NAV_ITEMS.filter(
       (i) => i.kind === "link" || allowed.length === 0 || allowed.includes(i.id),
     ),
-    ...(user?.mines_role === "admin" || user?.mines_role === "superadmin" ? [ADMIN_ITEM] : []),
-    ...(user?.mines_role === "superadmin" ? [PLATFORM_ITEM] : []),
+    // Permission, not role name — a role created in the UI reaches this entry
+    // without any code change.
+    ...(canAny("access.users.view", "platform.registry.view") ? [PLATFORM_ITEM] : []),
   ];
 
   return (

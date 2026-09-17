@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import api from "@/lib/api";
 
-export type MinesRole = "viewer" | "manager" | "admin" | "superadmin";
+export interface UserRole { code: string; name: string }
 
 export interface AuthUser {
   emp_id: string;
@@ -12,24 +12,29 @@ export interface AuthUser {
   email: string | null;
   location: string | null;
   plant: string | null;
-  mines_role: MinesRole;
-  /** Pages this user may open, from the role x page matrix. */
+  /** The roles this person holds. Roles are data now — never branch on a role
+   *  name in the UI; test the permission that role carries. */
+  roles: UserRole[];
+  /** Everything this person may do. The single source of truth for the UI. */
+  permissions: string[];
+  /** Pages this user may open, derived server-side from the dashboard.* permissions. */
   allowed_pages: string[];
 }
 
 interface AuthStore {
   user: AuthUser | null;
-  /** null until the first /auth/me call settles — distinguishes "checking" from "signed out". */
+  /** false until the first /auth/me call settles — distinguishes "checking" from "signed out". */
   checked: boolean;
   setUser: (u: AuthUser | null) => void;
   /** Ask the server who we are. The session cookie is httpOnly, so this is the
    *  only way to know — the browser cannot read it. */
   refresh: () => Promise<AuthUser | null>;
   logout: () => Promise<void>;
-  hasRole: (minimum: MinesRole) => boolean;
+  /** Whether the signed-in user holds a permission. Hiding a control is a
+   *  courtesy; the API enforces the same check, so this is never the gate. */
+  can: (permission: string) => boolean;
+  canAny: (...permissions: string[]) => boolean;
 }
-
-const RANK: Record<MinesRole, number> = { viewer: 1, manager: 2, admin: 3, superadmin: 4 };
 
 export const useAuth = create<AuthStore>()((set, get) => ({
   user: null,
@@ -59,8 +64,10 @@ export const useAuth = create<AuthStore>()((set, get) => ({
     }
   },
 
-  hasRole: (minimum) => {
-    const role = get().user?.mines_role;
-    return role ? RANK[role] >= RANK[minimum] : false;
+  can: (permission) => (get().user?.permissions ?? []).includes(permission),
+
+  canAny: (...permissions) => {
+    const held = get().user?.permissions ?? [];
+    return permissions.some((p) => held.includes(p));
   },
 }));

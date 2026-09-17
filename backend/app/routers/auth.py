@@ -71,7 +71,8 @@ def login(response: Response, request: Request, body: dict = Body(...),
     # the ~730 active employees could open the dashboard, which is exactly what
     # was happening — people from Medical, Secretarial and an unauthorised
     # external auditor account had all signed in without being granted anything.
-    if auth.explicit_role(db, emp["emp_id"]) is None:
+    from app.services import access as access_svc
+    if not access_svc.has_access(db, emp["emp_id"]):
         raise HTTPException(
             403,
             "You do not have access to the Mines Dashboard. "

@@ -112,13 +112,26 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 # router — a new router is protected the moment it is added.
 _AUTH_EXEMPT = ("/api/auth/", "/api/health", "/api/docs", "/api/redoc", "/api/openapi.json")
 
-# Minimum role per API path prefix. This is for routes that are not part of a
-# page — page access itself is data-driven from the Access Control screen (see
-# PREFIX_PAGE in services/auth.py), not listed here.
-_ROLE_RULES: tuple[tuple[str, str], ...] = (
-    ("/api/roles", "admin"),          # the Access Control screen's own endpoints
-    ("/api/minehub", "superadmin"),   # the MineHub platform modules
+# The permission a path prefix requires. Permissions rather than role names, so
+# a new role created in the UI can be given exactly these without any code
+# change — which is the whole point of roles being data.
+#
+# Page access is separate and data-driven: a page maps to a dashboard.* code,
+# resolved through PREFIX_PAGE in services/auth.py.
+_PERMISSION_RULES: tuple[tuple[str, str], ...] = (
+    ("/api/access",  "access.users.view"),   # finer checks are inside the router
+    ("/api/roles",   "access.users.manage"),
+    ("/api/minehub", "platform.registry.view"),
 )
+
+# A page is reachable with the matching dashboard permission.
+_PAGE_PERMISSION = {
+    "mis": "dashboard.mis",
+    "oee": "dashboard.oee",
+    "intelligence": "dashboard.intelligence",
+    "fuel-management": "dashboard.fuel",
+    "ev-tracking": "dashboard.ev",
+}
 # Skip the session-touch write if it happened recently. One dashboard page load
 # fires ~15 API calls at once, and each touch is a round trip to a MySQL server
 # that is already refusing connections daily.
@@ -137,22 +150,24 @@ def _check_auth(sid: str | None, path: str) -> tuple[dict | None, str | None]:
         last = s.get("last_active_at")
         if last is None or datetime.now() - last > _TOUCH_THROTTLE:
             auth_svc.touch(db, sid)
-        need = next((r for pre, r in _ROLE_RULES if path.startswith(pre)), None)
-        if need and not auth_svc.has_role(db, s["emp_id"], need):
-            return s, need
+        from app.services import access as access_svc
+        perms = access_svc.permissions_for(db, s["emp_id"])
 
         # Invite-only, checked on every request rather than only at login, so
         # revoking someone takes effect at once instead of when their session
-        # eventually expires.
-        role = auth_svc.explicit_role(db, s["emp_id"])
-        if role is None:
+        # eventually expires. No permissions at all means no access.
+        if not perms:
             return s, "revoked"
 
-        # Page access, configured from the Access Control screen. Enforced on the
-        # API prefix behind each page — hiding the sidebar entry alone would
-        # leave the data reachable to anyone who knows the URL.
+        need = next((c for pre, c in _PERMISSION_RULES if path.startswith(pre)), None)
+        if need and need not in perms:
+            return s, need
+
+        # Page access, enforced on the API prefix behind each page — hiding the
+        # sidebar entry alone would leave the data reachable to anyone who knows
+        # the URL.
         page = auth_svc.page_for_path(path)
-        if page and not auth_svc.can_open_page(db, role, page):
+        if page and _PAGE_PERMISSION.get(page) not in perms:
             return s, f"page:{page}"
         return s, None
 
@@ -174,7 +189,8 @@ async def require_auth(request: Request, call_next):
             elif role_error.startswith("page:"):
                 detail = f"You do not have access to the {role_error[5:]} page."
             else:
-                detail = f"Requires '{role_error}' access or higher."
+                detail = ("You do not have permission for this "
+                          f"({role_error}). Ask an Access Manager to add it to your role.")
             # code lets the frontend distinguish "you have been removed" (sign
             # out) from "you cannot open that page" (stay signed in).
             body = {"detail": detail}
@@ -212,7 +228,7 @@ def health_check():
 
 
 # ── Routers ───────────────────────────────────────────────────
-from app.routers import production, stock, cob, plant, ob, despatch, equipment, dewatering, insights, live_tracking, fuel_management, ev_tracking, auth, oee, roles, minehub
+from app.routers import production, stock, cob, plant, ob, despatch, equipment, dewatering, insights, live_tracking, fuel_management, ev_tracking, auth, oee, roles, minehub, access
 app.include_router(production.router,      prefix="/api/production",    tags=["Production"])
 app.include_router(stock.router,           prefix="/api/stock",         tags=["Stock"])
 app.include_router(cob.router,             prefix="/api/cob",           tags=["COB Plant"])
@@ -229,3 +245,4 @@ app.include_router(auth.router)
 app.include_router(oee.router)
 app.include_router(roles.router)
 app.include_router(minehub.router)
+app.include_router(access.router)

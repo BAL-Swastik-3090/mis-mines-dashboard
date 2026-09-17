@@ -62,16 +62,13 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
     if (!user) return;
     const allowed = user.allowed_pages ?? [];
     if (allowed.length === 0) return;                       // nothing to enforce
-    // Role-gated pages are not in the page matrix, so they must be exempted from
-    // the allowed_pages check or the guard would bounce a superadmin off them.
-    if (page === "access-control") {
-      if (user.mines_role !== "admin" && user.mines_role !== "superadmin") {
-        setPage(allowed[0] as typeof page);
-      }
-      return;
-    }
+    // The platform screen is not in the page matrix — it is gated on the
+    // permissions it needs, so it must be exempted from the allowed_pages check
+    // or the guard would bounce a platform owner straight off it.
     if (page === "minehub") {
-      if (user.mines_role !== "superadmin") setPage(allowed[0] as typeof page);
+      const mayOpen = (user.permissions ?? []).some(
+        (p) => p === "access.users.view" || p === "platform.registry.view");
+      if (!mayOpen) setPage(allowed[0] as typeof page);
       return;
     }
     if (!allowed.includes(page)) setPage(allowed[0] as typeof page);
