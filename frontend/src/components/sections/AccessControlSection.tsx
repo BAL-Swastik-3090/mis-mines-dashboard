@@ -14,7 +14,7 @@
  * main.py, so hitting them directly without admin returns 403.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Search, Shield, Trash2, Check, Loader2, AlertCircle } from "lucide-react";
+import { Search, Shield, Trash2, Check, Loader2, AlertCircle, ChevronDown, Users } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth, type MinesRole } from "@/contexts/useAuth";
 
@@ -45,6 +45,8 @@ const ROLE_STYLE: Record<MinesRole, string> = {
   viewer: "bg-white/10 text-white/60 border-white/15",
 };
 
+const RANK: Record<MinesRole, number> = { viewer: 1, manager: 2, admin: 3, superadmin: 4 };
+
 const ROLE_HELP: Record<MinesRole, string> = {
   superadmin: "Platform owner — everything admin can do, plus the MineHub platform modules.",
   admin: "Manages roles and page access. Sees this screen.",
@@ -69,6 +71,8 @@ export default function AccessControlSection() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [roleFilter, setRoleFilter] = useState<MinesRole | "">("");
+  const [changing, setChanging] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -110,6 +114,26 @@ export default function AccessControlSection() {
     [matrix, savedMatrix],
   );
 
+  /** Roles this user is allowed to hand out. You can never grant above your own
+   *  level — the server enforces the same rule, this just avoids offering it. */
+  const grantable = useMemo<MinesRole[]>(() => {
+    const all: MinesRole[] = ["viewer", "manager", "admin", "superadmin"];
+    const mine = me?.mines_role;
+    if (!mine) return [];
+    return all.filter((r) => RANK[r] <= RANK[mine]);
+  }, [me]);
+
+  const counts = useMemo(() => {
+    const c: Record<string, number> = {};
+    roles.forEach((r) => { c[r.role] = (c[r.role] ?? 0) + 1; });
+    return c;
+  }, [roles]);
+
+  const visibleRoles = useMemo(
+    () => (roleFilter ? roles.filter((r) => r.role === roleFilter) : roles),
+    [roles, roleFilter],
+  );
+
   const assign = async (emp_id: string, role: MinesRole) => {
     setError(null);
     try {
@@ -128,7 +152,7 @@ export default function AccessControlSection() {
     setError(null);
     try {
       await api.delete(`/roles/${emp_id}`);
-      setNotice(`${emp_id} reset to viewer.`);
+      setNotice(`${emp_id} can no longer sign in.`);
       await load();
     } catch (e: unknown) {
       const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
@@ -204,12 +228,39 @@ export default function AccessControlSection() {
         <header className="px-4 py-3 border-b border-white/10">
           <h2 className="text-white/90 text-[13px] font-semibold tracking-wide">People</h2>
           <p className="text-white/45 text-[11.5px] mt-0.5">
-            Anyone with intranet credentials can sign in as a viewer. Only people
-            listed here have anything more.
+            The dashboard is invite-only: only people listed here can sign in at
+            all. Change a role from the dropdown on the row.
           </p>
         </header>
 
         <div className="p-4 space-y-4">
+          {/* Who holds what, and a one-click filter. Clicking the active chip
+              clears it, so the control explains itself without a reset button. */}
+          <div className="flex flex-wrap gap-2">
+            {(["superadmin", "admin", "manager", "viewer"] as MinesRole[]).map((r) => {
+              const n = counts[r] ?? 0;
+              const active = roleFilter === r;
+              return (
+                <button
+                  key={r}
+                  onClick={() => setRoleFilter(active ? "" : r)}
+                  title={ROLE_HELP[r]}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-md border text-[11.5px] font-medium capitalize transition
+                              ${active ? "ring-1 ring-[#c8960c]/60 " : "opacity-80 hover:opacity-100 "}${ROLE_STYLE[r]}`}
+                >
+                  <Users className="w-3 h-3" />
+                  {r}
+                  <span className="tabular-nums opacity-70">{n}</span>
+                </button>
+              );
+            })}
+            {roleFilter && (
+              <span className="self-center text-[11.5px] text-white/40">
+                showing {visibleRoles.length} of {roles.length}
+              </span>
+            )}
+          </div>
+
           <div className="relative">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-white/35" />
             <input
@@ -262,18 +313,20 @@ export default function AccessControlSection() {
                   <th className="text-left font-medium px-3 py-2">Employee</th>
                   <th className="text-left font-medium px-3 py-2 hidden sm:table-cell">Department</th>
                   <th className="text-left font-medium px-3 py-2">Role</th>
-                  <th className="text-right font-medium px-3 py-2">Remove</th>
+                  <th className="text-right font-medium px-3 py-2">Revoke</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {roles.length === 0 && (
+                {visibleRoles.length === 0 && (
                   <tr>
                     <td colSpan={4} className="px-3 py-6 text-center text-white/35">
-                      Nobody has been given an elevated role yet.
+                      {roles.length === 0
+                        ? "Nobody has been given access yet."
+                        : `No one currently holds the ${roleFilter} role.`}
                     </td>
                   </tr>
                 )}
-                {roles.map((r) => {
+                {visibleRoles.map((r) => {
                   const isMe = r.emp_id === me?.emp_id;
                   return (
                     <tr key={r.emp_id} className="text-white/80">
@@ -286,17 +339,44 @@ export default function AccessControlSection() {
                         {r.department ?? "—"}
                       </td>
                       <td className="px-3 py-2.5">
-                        <span className={`px-2 py-0.5 rounded border text-[11px] font-medium capitalize ${ROLE_STYLE[r.role]}`}>
-                          {r.role}
-                        </span>
+                        {/* Change a role in place. Searching for someone you can
+                            already see, just to change their role, was busywork. */}
+                        <div className="relative inline-block">
+                          <select
+                            id={`role-${r.emp_id}`}
+                            value={r.role}
+                            disabled={changing === r.emp_id || grantable.length === 0}
+                            onChange={async (e) => {
+                              const next = e.target.value as MinesRole;
+                              if (next === r.role) return;
+                              setChanging(r.emp_id);
+                              await assign(r.emp_id, next);
+                              setChanging(null);
+                            }}
+                            title={ROLE_HELP[r.role]}
+                            className={`appearance-none cursor-pointer pl-2 pr-6 py-0.5 rounded border text-[11px] font-medium capitalize
+                                        focus:outline-none focus:ring-1 focus:ring-[#c8960c]/60 disabled:opacity-50
+                                        ${ROLE_STYLE[r.role]}`}
+                          >
+                            {grantable.map((g) => (
+                              <option key={g} value={g} className="bg-[#0a1526] text-white">{g}</option>
+                            ))}
+                            {/* Their current role may be above what we can grant —
+                                show it so the control never misrepresents reality. */}
+                            {!grantable.includes(r.role) && (
+                              <option value={r.role} className="bg-[#0a1526] text-white">{r.role}</option>
+                            )}
+                          </select>
+                          <ChevronDown className="w-3 h-3 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none opacity-60" />
+                        </div>
                       </td>
                       <td className="px-3 py-2.5 text-right">
                         <button
                           onClick={() => revoke(r.emp_id)}
                           disabled={isMe}
                           title={isMe
-                            ? "You cannot remove your own admin access"
-                            : "Reset to viewer"}
+                            ? "You cannot remove your own access"
+                            : "Remove access — this person will no longer be able to sign in"}
                           className="text-white/40 hover:text-red-400 disabled:opacity-25 disabled:hover:text-white/40 disabled:cursor-not-allowed"
                         >
                           <Trash2 className="w-4 h-4 inline" />

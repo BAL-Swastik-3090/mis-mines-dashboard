@@ -85,7 +85,11 @@ def set_role(request: Request, body: dict = Body(...), db: Session = Depends(get
 
 @router.delete("/{emp_id}")
 def delete_role(emp_id: str, request: Request, db: Session = Depends(get_db)) -> dict:
-    """Drop an explicit role — the employee falls back to viewer."""
+    """Remove someone's access entirely.
+
+    Not a demotion: the dashboard is invite-only, so deleting the row means this
+    person can no longer sign in at all.
+    """
     if emp_id == getattr(request.state, "emp_id", None):
         raise HTTPException(400, "You cannot remove your own admin access.")
     db.execute(text(f"DELETE FROM {ROLE_TBL} WHERE emp_id = :e"), {"e": emp_id})
