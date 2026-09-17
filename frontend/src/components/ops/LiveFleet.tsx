@@ -78,10 +78,11 @@ export default function LiveFleet({ shiftInstanceId, rights, onChanged, onHandov
 
   useEffect(() => { void load(); }, [load]);
 
-  // The board is only useful if it is current. Thirty seconds is often enough
-  // to catch a breakdown and rare enough not to fight with somebody typing.
+  // The board is only useful if it is current, but every poll is a round trip to
+  // another site, and a screen that refreshes while somebody is reading it is
+  // its own kind of useless. A minute, and only while the tab is in front.
   useEffect(() => {
-    const t = setInterval(() => { if (document.visibilityState === "visible") void load(); }, 30000);
+    const t = setInterval(() => { if (document.visibilityState === "visible") void load(); }, 60000);
     return () => clearInterval(t);
   }, [load]);
 

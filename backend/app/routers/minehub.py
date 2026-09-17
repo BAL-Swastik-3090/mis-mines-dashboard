@@ -250,9 +250,8 @@ def list_assets(q: str = Query(""), status: str = Query(""),
                a.nickname, a.version, a.approval_status,
                t.asset_type_id, t.name AS asset_type, t.category,
                o.display_name AS owner,
-               (SELECT count(*) FROM asset_identity i WHERE i.asset_id = a.asset_id) AS alias_count,
-               (SELECT string_agg(i.system, ',' ORDER BY i.system)
-                  FROM asset_identity i WHERE i.asset_id = a.asset_id) AS alias_systems
+               COALESCE(ident.alias_count, 0) AS alias_count,
+               ident.alias_systems
         FROM asset a
         -- LEFT, because a draft is allowed to have no equipment type yet. An
         -- inner join dropped exactly the rows someone still has to finish, so
@@ -262,6 +261,14 @@ def list_assets(q: str = Query(""), status: str = Query(""),
         LEFT JOIN party o ON o.party_id = a.owner_party_id
         LEFT JOIN plant pl ON pl.plant_id = a.plant_id
         LEFT JOIN org_unit ou ON ou.org_unit_id = a.org_unit_id
+        -- Grouped once rather than two correlated subqueries per row: over a
+        -- tunnel that difference was two and a half seconds on eleven machines,
+        -- and it grows with the fleet.
+        LEFT JOIN (
+            SELECT asset_id, count(*) AS alias_count,
+                   string_agg(system, ',' ORDER BY system) AS alias_systems
+            FROM asset_identity GROUP BY asset_id
+        ) ident ON ident.asset_id = a.asset_id
         WHERE {' AND '.join(where)}
         ORDER BY a.fleet_code
     """), params).mappings().all()

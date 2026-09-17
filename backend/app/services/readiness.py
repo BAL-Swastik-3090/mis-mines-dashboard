@@ -323,6 +323,196 @@ def deployment_readiness(db: Session, asset_id: int, operator_id: int | None,
     return Readiness(_settle(blockers, warnings), blockers, warnings, facts)
 
 
+def fleet_readiness(db: Session, plant_id: int | None = None) -> list[dict]:
+    """The whole fleet's state and readiness, in a fixed number of queries.
+
+    The per-machine functions above are right for one machine and wrong for
+    thirty: each does half a dozen round trips, and over a tunnel to another
+    site that is six hundred round trips for one screen — which is exactly how
+    this timed out at sixty seconds and took every other request down with it,
+    since they all queue behind the same worker.
+
+    So the fleet screen asks five questions about all the machines at once and
+    assembles the answers here. The reasoning is identical to
+    deployment_readiness — deliberately, because two functions that decide
+    readiness differently would be worse than a slow one.
+    """
+    where = "(CAST(:plant AS bigint) IS NULL OR a.plant_id = CAST(:plant AS bigint))"
+    params = {"plant": plant_id}
+
+    machines = db.execute(text(f"""
+        SELECT a.asset_id, a.asset_ref, a.fleet_code, a.nickname, a.status AS register_status,
+               a.approval_status, a.asset_type_id, t.name AS asset_type,
+               a.current_reading, a.reading_uom, pl.name AS plant
+        FROM asset a
+        LEFT JOIN asset_type t ON t.asset_type_id = a.asset_type_id
+        LEFT JOIN plant pl     ON pl.plant_id = a.plant_id
+        WHERE {where} AND COALESCE(a.status, 'ACTIVE') <> 'DISPOSED'
+        ORDER BY a.fleet_code
+    """), params).mappings().all()
+    if not machines:
+        return []
+
+    holds: dict[int, list[dict]] = {}
+    for row in db.execute(text("""
+        SELECT availability_event_id, asset_id, state, reason, started_at, source
+        FROM availability_event WHERE asset_id IS NOT NULL AND ended_at IS NULL
+        ORDER BY started_at DESC
+    """)).mappings():
+        holds.setdefault(row["asset_id"], []).append(dict(row))
+
+    expired: dict[int, list[dict]] = {}
+    for row in db.execute(text("""
+        SELECT asset_id, alert_type, days_left FROM asset_alert WHERE severity = 'EXPIRED'
+    """)).mappings():
+        expired.setdefault(row["asset_id"], []).append(dict(row))
+
+    live: dict[int, dict] = {}
+    for row in db.execute(text("""
+        SELECT d.deployment_id, d.deployment_ref, d.status, d.started_at, d.asset_id,
+               d.operator_id, p.display_name AS operator_name, o.approval_status AS operator_approval
+        FROM deployment d
+        LEFT JOIN operator o ON o.operator_id = d.operator_id
+        LEFT JOIN party p    ON p.party_id = o.party_id
+        WHERE d.status IN ('READY', 'RUNNING', 'PAUSED')
+    """)).mappings():
+        live[row["asset_id"]] = dict(row)
+
+    open_hoto: dict[int, dict] = {}
+    for row in db.execute(text("""
+        SELECT DISTINCT ON (asset_id) asset_id, hoto_id, hoto_ref, status
+        FROM hoto WHERE status IN ('PENDING', 'BLOCKED')
+        ORDER BY asset_id, created_at DESC
+    """)).mappings():
+        open_hoto[row["asset_id"]] = dict(row)
+
+    # Everything about the operators who are currently on a machine, in one go.
+    operator_ids = [d["operator_id"] for d in live.values() if d["operator_id"]]
+    op_holds: dict[int, list[str]] = {}
+    op_docs: dict[int, dict] = {}
+    op_comp: dict[tuple[int, int], dict] = {}
+    if operator_ids:
+        for row in db.execute(text("""
+            SELECT operator_id, state FROM availability_event
+            WHERE operator_id = ANY(:ids) AND ended_at IS NULL
+        """), {"ids": operator_ids}).mappings():
+            op_holds.setdefault(row["operator_id"], []).append(row["state"])
+
+        for row in db.execute(text("""
+            SELECT operator_id, record_type,
+                   bool_or(valid_upto IS NULL OR valid_upto >= CURRENT_DATE) AS current,
+                   bool_or(verification_status = 'VERIFIED')                 AS verified
+            FROM operator_record
+            WHERE operator_id = ANY(:ids) AND status = 'ACTIVE'
+              AND record_type IN ('LICENCE', 'MEDICAL')
+            GROUP BY operator_id, record_type
+        """), {"ids": operator_ids}).mappings():
+            op_docs.setdefault(row["operator_id"], {})[row["record_type"]] = dict(row)
+
+        for row in db.execute(text("""
+            SELECT operator_id, asset_type_id, level, valid_upto, next_assessment_due
+            FROM operator_competency
+            WHERE operator_id = ANY(:ids) AND dimension = 'OVERALL'
+              AND asset_id IS NULL AND status = 'ACTIVE'
+        """), {"ids": operator_ids}).mappings():
+            op_comp[(row["operator_id"], row["asset_type_id"])] = dict(row)
+
+    today = date.today()
+    out: list[dict] = []
+
+    for m in machines:
+        asset_id = m["asset_id"]
+        machine_holds = holds.get(asset_id, [])
+        hold_states = [h["state"] for h in machine_holds]
+        deployment = live.get(asset_id)
+        hoto = open_hoto.get(asset_id)
+        docs_expired = expired.get(asset_id, [])
+
+        if m["register_status"] in ("DISPOSED", "INACTIVE"):
+            state = "DECOMMISSIONED"
+        elif any(s in BLOCKING_MACHINE_STATES for s in hold_states):
+            state = next(s for s in hold_states if s in BLOCKING_MACHINE_STATES)
+        elif deployment and deployment["status"] == "RUNNING":
+            state = "RUNNING"
+        elif deployment:
+            state = "ASSIGNED"
+        elif hoto:
+            state = "AWAITING_HOTO"
+        elif any(s in WARNING_MACHINE_STATES for s in hold_states):
+            state = next(s for s in hold_states if s in WARNING_MACHINE_STATES)
+        else:
+            state = "AVAILABLE"
+
+        blockers: list[str] = []
+        warnings: list[str] = []
+
+        if m["register_status"] in ("DISPOSED", "INACTIVE"):
+            blockers.append(f"Machine is {m['register_status'].lower()} on the register")
+        if m["approval_status"] != "APPROVED":
+            warnings.append("Machine registration has not been approved")
+        for h in machine_holds:
+            if h["state"] in BLOCKING_MACHINE_STATES:
+                blockers.append(h["state"].replace("_", " ").capitalize()
+                                + (f" — {h['reason']}" if h["reason"] else ""))
+            elif h["state"] in WARNING_MACHINE_STATES:
+                warnings.append(h["state"].replace("_", " ").capitalize())
+        for d in docs_expired:
+            blockers.append(f"{d['alert_type']} expired {-d['days_left']} days ago")
+        if hoto and hoto["status"] == "BLOCKED":
+            blockers.append(f"Handover {hoto['hoto_ref']} is blocked")
+        elif hoto:
+            warnings.append(f"Handover {hoto['hoto_ref']} is not finished")
+
+        operator_id = deployment["operator_id"] if deployment else None
+        if not operator_id:
+            blockers.append("No operator")
+        else:
+            if deployment["operator_approval"] != "APPROVED":
+                warnings.append("Operator profile has not been approved")
+            states = op_holds.get(operator_id, [])
+            blocking = next((s for s in states if s in BLOCKING_OPERATOR_STATES), None)
+            if blocking:
+                blockers.append(f"Operator {blocking.replace('_', ' ').lower()}")
+            elif "PRESENT" not in states:
+                warnings.append("Attendance not recorded for this operator")
+
+            docs = op_docs.get(operator_id, {})
+            for kind, label in (("LICENCE", "licence"), ("MEDICAL", "medical fitness")):
+                held = docs.get(kind)
+                if not held:
+                    blockers.append(f"No {label} on file")
+                elif not held["current"]:
+                    blockers.append(f"{label.capitalize()} expired")
+                elif not held["verified"]:
+                    warnings.append(f"{label.capitalize()} has not been verified")
+
+            comp = op_comp.get((operator_id, m["asset_type_id"]))
+            if not comp or (comp["level"] or 0) == 0:
+                blockers.append(f"Not assessed on {m['asset_type'] or 'this class'}")
+            elif comp["level"] == 1:
+                warnings.append("Assessed at level 1 — assisted operation only")
+            if comp and comp["valid_upto"] and comp["valid_upto"] < today:
+                blockers.append("Competency assessment has lapsed")
+            if comp and comp["next_assessment_due"] and comp["next_assessment_due"] < today:
+                warnings.append(
+                    f"Reassessment overdue by {(today - comp['next_assessment_due']).days} days")
+
+        out.append({
+            **dict(m), "state": state, "holds": machine_holds,
+            "expired_documents": docs_expired,
+            "operator": deployment["operator_name"] if deployment else None,
+            "operator_id": operator_id,
+            "deployment_ref": deployment["deployment_ref"] if deployment else None,
+            "deployment_status": deployment["status"] if deployment else None,
+            "deployment_id": deployment["deployment_id"] if deployment else None,
+            "open_hoto": hoto,
+            "readiness": _settle(blockers, warnings),
+            "blockers": blockers, "warnings": warnings,
+        })
+
+    return out
+
+
 def candidates_for(db: Session, asset_id: int, limit: int = 10) -> list[dict]:
     """Who could run this machine instead — best first.
 

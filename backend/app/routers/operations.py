@@ -91,39 +91,7 @@ def live_fleet(plant_id: int | None = Query(None),
     cleared to sit in it, and a board that merges the two hides which of the two
     problems the supervisor actually has.
     """
-    rows = db.execute(text("""
-        SELECT a.asset_id, a.asset_ref, a.fleet_code, a.nickname, a.status AS register_status,
-               a.approval_status, t.name AS asset_type, t.asset_type_id,
-               a.current_reading, a.reading_uom, pl.name AS plant
-        FROM asset a
-        LEFT JOIN asset_type t ON t.asset_type_id = a.asset_type_id
-        LEFT JOIN plant pl     ON pl.plant_id = a.plant_id
-        WHERE (CAST(:plant AS bigint) IS NULL OR a.plant_id = CAST(:plant AS bigint))
-          AND COALESCE(a.status, 'ACTIVE') NOT IN ('DISPOSED')
-        ORDER BY a.fleet_code
-    """), {"plant": plant_id}).mappings().all()
-
-    out = []
-    for r in rows:
-        state = readiness.machine_state(db, r["asset_id"])
-        deployment = state.get("deployment")
-        check = readiness.deployment_readiness(
-            db, r["asset_id"], deployment["operator_id"] if deployment else None)
-        out.append({
-            **dict(r),
-            "state": state["state"],
-            "holds": state["holds"],
-            "expired_documents": state["expired_documents"],
-            "operator": deployment["operator_name"] if deployment else None,
-            "operator_id": deployment["operator_id"] if deployment else None,
-            "deployment_ref": deployment["deployment_ref"] if deployment else None,
-            "deployment_status": deployment["status"] if deployment else None,
-            "open_hoto": state["open_hoto"],
-            "readiness": check.status,
-            "blockers": check.blockers,
-            "warnings": check.warnings,
-        })
-    return out
+    return readiness.fleet_readiness(db, plant_id)
 
 
 @router.get("/assets/{asset_id}/readiness")
@@ -1124,17 +1092,9 @@ def analysis(days: int = Query(30, ge=1, le=365),
     # derived, so there is no history of it unless one is deliberately kept.
     ready = {"READY": 0, "READY_WITH_WARNING": 0, "BLOCKED": 0}
     reasons: dict[str, int] = {}
-    for row in db.execute(text("""
-        SELECT a.asset_id FROM asset a
-        WHERE COALESCE(a.status, 'ACTIVE') = 'ACTIVE'
-          AND (CAST(:plant AS bigint) IS NULL OR a.plant_id = CAST(:plant AS bigint))
-    """), window).mappings().all():
-        state = readiness.machine_state(db, row["asset_id"])
-        deployment = state.get("deployment")
-        check = readiness.deployment_readiness(
-            db, row["asset_id"], deployment["operator_id"] if deployment else None)
-        ready[check.status] = ready.get(check.status, 0) + 1
-        for blocker in check.blockers:
+    for machine in readiness.fleet_readiness(db, plant_id):
+        ready[machine["readiness"]] = ready.get(machine["readiness"], 0) + 1
+        for blocker in machine["blockers"]:
             # Group by the kind of problem, not its particulars, so "no licence"
             # counts as one recurring thing rather than as twelve names.
             key = blocker.split("—")[0].strip()
