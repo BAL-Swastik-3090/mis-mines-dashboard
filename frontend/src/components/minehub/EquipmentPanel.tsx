@@ -25,7 +25,7 @@ interface Summary {
   people: number; organisations: number; events: number;
 }
 interface Asset {
-  asset_id: number; fleet_code: string; nickname?: string | null;
+  asset_id: number; asset_ref?: string | null; fleet_code: string; nickname?: string | null;
   registration_no: string | null; make: string | null; model: string | null;
   ownership: string; status: string; asset_type: string; category: string;
   owner: string | null; alias_count: number; alias_systems: string | null;
@@ -201,7 +201,7 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
               <div className="relative">
                 <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-txt-light" />
                 <input id="eq-search" value={query} onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search fleet…"
+                  placeholder="Search by reference, code, make…"
                   className="bg-bg-base border border-border rounded-lg pl-8 pr-3 py-1.5 text-[12px]
                              text-txt-primary placeholder:text-txt-light focus:outline-none focus:border-gold w-[180px]" />
               </div>
@@ -245,8 +245,11 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
                                         group-hover:underline underline-offset-2 transition-colors">
                           {a.nickname || a.fleet_code}
                         </div>
-                        <div className="text-[11px] text-txt-light font-mono">
-                          {a.fleet_code}{a.registration_no ? ` · ${a.registration_no}` : ""}
+                        <div className="text-[11px] text-txt-light font-mono flex flex-wrap items-center gap-1.5">
+                          {a.asset_ref && (
+                            <span className="text-violet font-bold">{a.asset_ref}</span>
+                          )}
+                          <span>{a.fleet_code}{a.registration_no ? ` · ${a.registration_no}` : ""}</span>
                         </div>
                       </button>
                     </Td>

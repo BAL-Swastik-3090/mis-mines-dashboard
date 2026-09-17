@@ -206,7 +206,8 @@ def list_assets(q: str = Query(""), status: str = Query(""),
     where, params = ["1=1"], {}
     if q.strip():
         where.append("(a.fleet_code ILIKE :q OR a.registration_no ILIKE :q "
-                     "OR a.make ILIKE :q OR a.model ILIKE :q)")
+                     "OR a.make ILIKE :q OR a.model ILIKE :q OR a.asset_ref ILIKE :q "
+                     "OR a.nickname ILIKE :q)")
         params["q"] = f"%{q.strip()}%"
     if status:
         where.append("a.status = :status")
@@ -216,7 +217,7 @@ def list_assets(q: str = Query(""), status: str = Query(""),
         params["atid"] = asset_type_id
 
     rows = db.execute(text(f"""
-        SELECT a.asset_id, a.fleet_code, a.registration_no, a.make, a.model,
+        SELECT a.asset_id, a.asset_ref, a.fleet_code, a.registration_no, a.make, a.model,
                a.capacity, a.capacity_uom, a.ownership, a.status,
                a.rated_output_per_hr, a.rated_fuel_lph, a.commissioned_on,
                a.nickname, a.version, a.approval_status,
@@ -274,10 +275,11 @@ def create_asset(request: Request, body: dict = Body(...),
 
     cols = list(data.keys())
     placeholders = ", ".join(":" + c for c in cols)
-    asset_id = db.execute(text(
-        f"INSERT INTO asset ({', '.join(cols)}, created_by) "
-        f"VALUES ({placeholders}, :by) RETURNING asset_id"
-    ), {**data, "by": _actor(request)}).scalar()
+    created = db.execute(text(
+        f"INSERT INTO asset ({', '.join(cols)}, created_by, asset_ref) "
+        f"VALUES ({placeholders}, :by, next_asset_ref()) RETURNING asset_id, asset_ref"
+    ), {**data, "by": _actor(request)}).mappings().first()
+    asset_id, asset_ref = created["asset_id"], created["asset_ref"]
 
     if placeholder:
         # Now that the row has an id, name it after that instead: DRAFT-7 is
@@ -293,12 +295,13 @@ def create_asset(request: Request, body: dict = Body(...),
             {k: {"from": None, "to": _jsonable(v)} for k, v in data.items() if v is not None},
             remarks="Registered")
     _activity(db, request, "ASSET_REGISTERED", asset_id=asset_id,
-              payload={"fleet_code": fleet_code, "nickname": data.get("nickname"),
+              payload={"asset_ref": asset_ref,
+                       "fleet_code": fleet_code, "nickname": data.get("nickname"),
                        "ownership": ownership,
                        "documents": len(body.get("documents") or []),
                        "schedules": len(body.get("schedules") or [])})
     db.commit()
-    return {"ok": True, "asset_id": asset_id, "fleet_code": fleet_code}
+    return {"ok": True, "asset_id": asset_id, "fleet_code": fleet_code, "asset_ref": asset_ref}
 
 
 def _save_children(db, request: Request, asset_id: int, body: dict,
@@ -373,7 +376,10 @@ def get_asset(asset_id: int, db: Session = Depends(get_minehub_db)) -> dict:
         "       o.display_name AS owner, s.display_name AS supplier, "
         "       l.name AS home_location "
         "FROM asset a "
-        "JOIN asset_type t ON t.asset_type_id = a.asset_type_id "
+        # LEFT, for the same reason as the register listing: a draft need not
+        # have chosen an equipment type yet, and an inner join turns that draft
+        # into a 404 on the only screen that could finish it.
+        "LEFT JOIN asset_type t ON t.asset_type_id = a.asset_type_id "
         "LEFT JOIN party o    ON o.party_id = a.owner_party_id "
         "LEFT JOIN party s    ON s.party_id = a.supplier_party_id "
         "LEFT JOIN location l ON l.location_id = a.home_location_id "

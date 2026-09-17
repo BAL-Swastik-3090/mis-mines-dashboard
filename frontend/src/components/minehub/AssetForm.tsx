@@ -13,7 +13,7 @@
  * that typing is blocked.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, Trash2, Check, Loader2, Info, ArrowLeft, Send, CheckCircle2, Undo2 } from "lucide-react";
+import { Plus, Trash2, Check, Loader2, Info, ArrowLeft, Send, CheckCircle2, Undo2, Copy } from "lucide-react";
 import api from "@/lib/api";
 import { Alert, Button, Chip, type Tone } from "./ui";
 import Toast from "./Toast";
@@ -501,10 +501,23 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <button onClick={leave}
-            className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-txt-muted
-                       hover:text-navy transition-colors mb-2">
-            <ArrowLeft className="w-4 h-4" /> Back to registry
+            className="inline-flex items-center gap-1.5 mb-2.5 rounded-lg border border-border
+                       bg-bg-base px-3 py-1.5 text-[12px] font-bold text-navy shadow-sm
+                       hover:border-gold hover:bg-gold/[0.06] hover:shadow
+                       focus:outline-none focus:ring-2 focus:ring-gold/25 transition-all">
+            <ArrowLeft className="w-4 h-4 text-gold-dark" /> Back to registry
           </button>
+          {editing && loaded?.asset_ref ? (
+            <button type="button"
+              onClick={() => { void navigator.clipboard?.writeText(String(loaded.asset_ref)); 
+                               setNotice(`${loaded.asset_ref} copied.`); }}
+              title="Our own reference for this machine — copy it"
+              className="inline-flex items-center gap-1.5 mb-2 ml-2 rounded-md bg-violet-bg
+                         border border-violet-ring px-2 py-1 font-mono text-[11.5px] font-bold
+                         text-violet hover:bg-violet/10 transition-colors">
+              {String(loaded.asset_ref)} <Copy className="w-3 h-3" />
+            </button>
+          ) : null}
           <h2 className="font-condensed font-extrabold text-[24px] leading-none text-navy">
             {editing
               ? <>{String(f.nickname || f.fleet_code || "Machine")}<span className="text-gold-dark ml-2 text-[16px] font-mono">v{String(loaded?.version ?? 1)}</span></>
