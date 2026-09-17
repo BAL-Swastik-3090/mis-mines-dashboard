@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     pg_user:     str = Field(default="")
     pg_password: str = Field(default="")
     pg_schema:   str = Field(default="minehub")
+    # How much encryption to insist on. libpq's own default is "prefer", which
+    # uses TLS when the server offers it and plaintext when it does not — so a
+    # server that quietly stops offering TLS is never noticed. Set "require"
+    # once the server actually has ssl = on, and a silent downgrade becomes a
+    # refused connection instead.
+    pg_sslmode:  str = Field(default="prefer")
 
     # LiteLLM / AI Insights
     litellm_base_url: str = Field(default="")
@@ -74,6 +80,7 @@ class Settings(BaseSettings):
             host=self.pg_host,
             port=self.pg_port,
             database=self.pg_database,
+            query={"sslmode": self.pg_sslmode},
         )
 
     @property
