@@ -614,7 +614,11 @@ def approve_asset(asset_id: int, request: Request, body: dict = Body(default={})
         raise HTTPException(404, "Machine not found.")
     if row[0] != "SUBMITTED":
         raise HTTPException(400, "Only a machine awaiting approval can be approved.")
-    if row[2] and row[2] == _actor(request):
+    own = bool(row[2]) and row[2] == _actor(request)
+    # The same exception the operator register makes, for the same reason: two
+    # people are the point, and the one account that has to be able to finish
+    # the job alone cannot be held to it. It is recorded rather than hidden.
+    if own and "platform.settings" not in (getattr(request.state, "permissions", None) or set()):
         raise HTTPException(
             403, "You submitted this machine — someone else has to approve it.")
 
@@ -622,9 +626,13 @@ def approve_asset(asset_id: int, request: Request, body: dict = Body(default={})
         "UPDATE asset SET approval_status = 'APPROVED', approved_by = :by, "
         "approved_at = now() WHERE asset_id = :id"
     ), {"by": _actor(request), "id": asset_id})
-    _revise(db, request, asset_id, row[1], "APPROVED", {}, remarks=body.get("remarks"))
+    note = body.get("remarks")
+    if own:
+        note = ((note + " · ") if note else "") + "Self-approved by the platform owner"
+    _revise(db, request, asset_id, row[1], "APPROVED", {}, remarks=note)
+    _activity(db, request, "ASSET_APPROVED", asset_id=asset_id, payload={"self_approved": own})
     db.commit()
-    return {"ok": True, "approval_status": "APPROVED"}
+    return {"ok": True, "approval_status": "APPROVED", "self_approved": own}
 
 
 @router.post("/assets/{asset_id}/send-back")

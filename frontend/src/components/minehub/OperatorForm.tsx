@@ -57,8 +57,10 @@ interface Rec {
 
 interface Comp {
   operator_competency_id?: number; asset_type_id: number | null; asset_type?: string | null;
+  asset_id?: number | null; fleet_code?: string | null; nickname?: string | null;
   dimension: string; level: number | null; previous_level?: number | null;
-  assessment_count?: number; assessed_on?: string | null; valid_upto?: string | null;
+  rating?: number | null; assessment_count?: number;
+  assessed_on?: string | null; valid_upto?: string | null;
 }
 
 interface Assignment {
@@ -75,7 +77,9 @@ interface Doc {
 
 interface Ident { party_identity_id: number; system: string; external_code: string }
 interface AssetType { asset_type_id: number; name: string }
-interface Asset { asset_id: number; fleet_code: string; nickname?: string | null }
+interface Asset {
+  asset_id: number; fleet_code: string; nickname?: string | null; asset_type_id?: number | null;
+}
 interface Plant { plant_id: number; code: string; name: string; is_default: boolean }
 interface OrgUnit { org_unit_id: number; code: string; name: string }
 interface Party { party_id: number; display_name: string }
@@ -105,8 +109,8 @@ const DIMENSIONS: { id: string; label: string }[] = [
 
 const LEVELS = ["Not assessed", "Basic / assisted", "Operational", "Competent / independent", "Advanced / trainer"];
 const LEVEL_TONE: Tone[] = ["slate", "rose", "amber", "emerald", "violet"];
-const CAPABILITY = ["Cannot", "Basic", "Functional", "Good", "Advanced"];
-const LANGUAGE_LEVELS = ["", "Basic", "Functional", "Good", "Fluent"];
+const CAPABILITY = ["No knowledge", "Basic", "Functional", "Good", "Advanced"];
+const LANGUAGE_LEVELS = ["", "No knowledge", "Basic", "Functional", "Good", "Fluent"];
 const CORE_LANGUAGES = ["Hindi", "Odia", "English"];
 
 const DOC_KINDS = [
@@ -166,6 +170,10 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
   const [ask, setAsk] = useState<null | "discard" | "leave" | "send-back">(null);
   const [sendBackWhy, setSendBackWhy] = useState("");
   const [compType, setCompType] = useState<string>("");
+  // Optional: the particular machine being assessed. A level against the class
+  // is what clearance means; a level against ZX470 is how they are on that
+  // machine, which the mine knows even when the certificate does not.
+  const [compAsset, setCompAsset] = useState<string>("");
   const [here, setHere] = useState<SectionId>("personal");
 
   const raise = (msg: string) => { setNotice(null); setError(msg); };
@@ -440,13 +448,15 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
     } catch { raise("Could not remove that record."); }
   };
 
-  const setLevel = async (assetTypeId: number, dimension: string, level: number) => {
+  const assess = async (payload: Record<string, unknown>) => {
     if (!id) { raise("Save the profile first."); return; }
     try {
       await api.post(`/operators/${id}/competency`, {
-        asset_type_id: assetTypeId, dimension, level,
-        assessment_type: "PRACTICAL", result: level >= 2 ? "PASS" : "PENDING",
+        asset_type_id: Number(compType),
+        asset_id: compAsset ? Number(compAsset) : null,
+        assessment_type: "PRACTICAL",
         assessed_on: new Date().toISOString().slice(0, 10),
+        ...payload,
       });
       await loadProfile();
     } catch (e: unknown) {
@@ -454,6 +464,11 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
       raise(d ?? "Could not record that assessment.");
     }
   };
+
+  const setLevel = (dimension: string, level: number) =>
+    assess({ dimension, level, result: level >= 2 ? "PASS" : "PENDING" });
+
+  const setRating = (rating: number) => assess({ dimension: "OVERALL", rating });
 
   const assign = async (assetId: number, shift: string, role: string) => {
     if (!id) return;
@@ -539,8 +554,11 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
 
   const done = checklist.filter((c) => c.done).length;
   const outstanding = checklist.filter((c) => !c.done).map((c) => c.label);
-  const levelFor = (assetTypeId: number, dimension: string): number =>
-    comps.find((c) => c.asset_type_id === assetTypeId && c.dimension === dimension)?.level ?? 0;
+  const rowFor = (dimension: string): Comp | undefined =>
+    comps.find((c) => c.asset_type_id === Number(compType)
+      && String(c.asset_id ?? "") === compAsset
+      && c.dimension === dimension);
+  const levelFor = (dimension: string): number => rowFor(dimension)?.level ?? 0;
   const name = String(f.display_name || "this profile");
 
   /* ── messages and questions ───────────────────────────────────────────── */
@@ -948,6 +966,52 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
                     </select>
                   } />
             <div className="border border-t-0 border-border-light rounded-b-xl bg-bg-base p-4">
+              {compType && (
+                <div className="flex flex-wrap items-center gap-3 pb-3 mb-3 border-b border-border-light">
+                  <label className="flex items-center gap-2 text-[12.5px] text-txt-muted">
+                    Machine
+                    <select value={compAsset} onChange={(e) => setCompAsset(e.target.value)}
+                      className="bg-bg-base border border-border rounded-lg px-3 py-1.5 text-[12.5px]">
+                      <option value="">The class as a whole</option>
+                      {assets
+                        .filter((a) => !a.asset_type_id || String(a.asset_type_id) === compType)
+                        .map((a) => (
+                        <option key={a.asset_id} value={a.asset_id}>
+                          {a.fleet_code}{a.nickname ? ` · ${a.nickname}` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <span className="text-[11.5px] text-txt-light max-w-[420px]">
+                    {compAsset
+                      ? "Recorded against this machine. Eligibility still reads the class."
+                      : "Recorded against the class — this is what decides whether they can be assigned."}
+                  </span>
+
+                  {rights.may_assess && editing && (
+                    <span className="ml-auto flex items-center gap-2">
+                      <span className="text-[12.5px] text-txt-muted">Expertise</span>
+                      {[1, 2, 3, 4, 5].map((n) => {
+                        const on = (rowFor("OVERALL")?.rating ?? 0) >= n;
+                        return (
+                          <button key={n} type="button" onClick={() => void setRating(n)}
+                            aria-label={`${n} out of 5`} title={`${n} out of 5`}
+                            className={`text-[17px] leading-none transition-colors
+                                        ${on ? "text-gold" : "text-border hover:text-gold/60"}`}>
+                            ★
+                          </button>
+                        );
+                      })}
+                      <span className="text-[11.5px] text-txt-light">
+                        {rowFor("OVERALL")?.rating
+                          ? `${rowFor("OVERALL")?.rating} of 5`
+                          : "not rated"}
+                      </span>
+                    </span>
+                  )}
+                </div>
+              )}
+
               {!compType ? (
                 <p className="text-[12.5px] text-txt-muted py-6 text-center">
                   Choose an equipment class above. Overall competency decides eligibility;
@@ -961,7 +1025,7 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1">
                   {DIMENSIONS.map((d) => {
-                    const lvl = levelFor(Number(compType), d.id);
+                    const lvl = levelFor(d.id);
                     return (
                       <div key={d.id}
                         className={`flex items-center justify-between gap-3 py-1.5 border-b border-border-light
@@ -972,7 +1036,7 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
                         <span className="flex items-center gap-1">
                           {[0, 1, 2, 3, 4].map((n) => (
                             <button key={n} type="button" disabled={!editing}
-                              onClick={() => void setLevel(Number(compType), d.id, n)}
+                              onClick={() => void setLevel(d.id, n)}
                               title={LEVELS[n]}
                               className={`w-7 h-7 rounded-md text-[11px] font-bold border transition-colors
                                 ${lvl === n ? "bg-navy text-white border-navy"
@@ -995,8 +1059,9 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
               <div className="mt-3 rounded-xl border border-border-light bg-bg-base p-3 flex flex-wrap gap-2">
                 {comps.filter((c) => c.dimension === "OVERALL").map((c) => (
                   <Chip key={c.operator_competency_id} tone={LEVEL_TONE[c.level ?? 0]}>
-                    {c.asset_type} · L{c.level ?? 0}
-                    {c.assessment_count && c.assessment_count > 1 ? ` · ${c.assessment_count} assessments` : ""}
+                    {c.fleet_code ? `${c.fleet_code}` : c.asset_type} · L{c.level ?? 0}
+                    {c.rating ? ` · ${"★".repeat(c.rating)}` : ""}
+                    {c.assessment_count && c.assessment_count > 1 ? ` · ${c.assessment_count}×` : ""}
                   </Chip>
                 ))}
               </div>
@@ -1327,7 +1392,7 @@ function LanguageSection({ records, onSave, onRemove, disabled }: {
                         value={details[which] ?? ""}
                         onChange={(e) => void setSkillLevel(language, which, e.target.value)}>
                         {LANGUAGE_LEVELS.map((l) => (
-                          <option key={l || "none"} value={l}>{l || "—"}</option>
+                          <option key={l || "blank"} value={l}>{l || "Not recorded"}</option>
                         ))}
                       </select>
                     </td>

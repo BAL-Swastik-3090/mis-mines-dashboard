@@ -71,7 +71,7 @@ RECORD_FIELDS = (
 
 INT_FIELDS = {
     "employer_party_id", "org_unit_id", "plant_id", "supervisor_party_id",
-    "work_location_id", "asset_type_id", "asset_id", "year_of_passing",
+    "work_location_id", "asset_type_id", "asset_id", "year_of_passing", "rating",
     "exp_total_months", "exp_mining_months", "exp_hemm_months", "exp_operator_months",
     "exp_kaliapani_months", "exp_current_role_months", "exp_verified_months", "level",
 }
@@ -376,7 +376,7 @@ def get_operator(operator_id: int, db: Session = Depends(get_minehub_db),
     ), {"id": operator_id}).mappings().all()]
 
     out["competencies"] = [dict(r) for r in db.execute(text(
-        "SELECT c.*, t.name AS asset_type, a.fleet_code FROM operator_competency c "
+        "SELECT c.*, t.name AS asset_type, a.fleet_code, a.nickname FROM operator_competency c "
         "LEFT JOIN asset_type t ON t.asset_type_id = c.asset_type_id "
         "LEFT JOIN asset a ON a.asset_id = c.asset_id "
         "WHERE c.operator_id = :id ORDER BY t.name, c.dimension"
@@ -570,15 +570,27 @@ def approve_operator(operator_id: int, request: Request, body: dict = Body(defau
         raise HTTPException(404, "Operator not found.")
     if row["approval_status"] != "SUBMITTED":
         raise HTTPException(400, "Only a profile awaiting approval can be approved.")
-    if row["submitted_by"] and row["submitted_by"] == _actor(request):
+    own = bool(row["submitted_by"]) and row["submitted_by"] == _actor(request)
+    # Two people are the point of approval, and that rule holds for everyone who
+    # works here. It cannot hold for the one account that has to be able to
+    # finish the job alone — a platform owner setting the register up, or
+    # unblocking a submission at ten at night when the approver is asleep. So
+    # the exception is allowed and then written down: the revision says it was
+    # self-approved, and by whom, which is the part that matters when anyone
+    # asks later how this profile got onto the register.
+    if own and "platform.settings" not in _perms(request):
         raise HTTPException(403, "You submitted this profile — someone else has to approve it.")
 
     db.execute(text("UPDATE operator SET approval_status = 'APPROVED', approved_by = :by, "
                     "approved_at = now() WHERE operator_id = :id"),
                {"by": _actor(request), "id": operator_id})
-    _revise(db, request, operator_id, row["version"], "APPROVED", {}, body.get("remarks"))
+    note = body.get("remarks")
+    if own:
+        note = ((note + " · ") if note else "") + "Self-approved by the platform owner"
+    _revise(db, request, operator_id, row["version"], "APPROVED", {}, note)
+    _activity(db, request, "OPERATOR_APPROVED", operator_id, {"self_approved": own})
     db.commit()
-    return {"ok": True, "approval_status": "APPROVED"}
+    return {"ok": True, "approval_status": "APPROVED", "self_approved": own}
 
 
 @router.post("/{operator_id}/send-back")
@@ -696,24 +708,30 @@ def set_competency(operator_id: int, request: Request, body: dict = Body(...),
     _require(request, ASSESS, "assess competency")
     data = _clean(body, ("asset_type_id", "asset_id", "dimension", "level", "assessment_type",
                          "assessor", "assessed_on", "score", "result", "valid_upto", "remarks",
-                         "next_assessment_due"))
+                         "next_assessment_due", "rating", "rated_by", "rated_on"))
     if not data.get("asset_type_id"):
         raise HTTPException(400, "Choose the equipment class being assessed.")
     data["dimension"] = (data.get("dimension") or "OVERALL").upper()
     data.setdefault("assessor", _actor(request))
     data.setdefault("assessed_on", date.today().isoformat())
 
+    if data.get("rating") is not None:
+        data.setdefault("rated_by", _actor(request))
+        data.setdefault("rated_on", date.today().isoformat())
+
     previous = db.execute(text(
         "SELECT level, assessment_count FROM operator_competency "
-        "WHERE operator_id = :o AND asset_type_id = :t AND dimension = :d"
-    ), {"o": operator_id, "t": data["asset_type_id"], "d": data["dimension"]}).mappings().first()
+        "WHERE operator_id = :o AND asset_type_id = :t AND dimension = :d "
+        "  AND asset_id IS NOT DISTINCT FROM CAST(:a AS bigint)"
+    ), {"o": operator_id, "t": data["asset_type_id"], "d": data["dimension"],
+        "a": data.get("asset_id")}).mappings().first()
 
     evidence = json.dumps(body.get("evidence") or {}, default=str)
     cols = list(data.keys())
     row = db.execute(text(
         f"INSERT INTO operator_competency (operator_id, {', '.join(cols)}, evidence, created_by) "
         f"VALUES (:oid, {', '.join(':' + c for c in cols)}, CAST(:ev AS jsonb), :by) "
-        "ON CONFLICT (operator_id, asset_type_id, dimension) DO UPDATE SET "
+        "ON CONFLICT (operator_id, asset_type_id, asset_id, dimension) DO UPDATE SET "
         + ", ".join(f"{c} = EXCLUDED.{c}" for c in cols)
         + ", evidence = EXCLUDED.evidence, updated_at = now()"
         + ", previous_level = operator_competency.level"
@@ -724,6 +742,10 @@ def set_competency(operator_id: int, request: Request, body: dict = Body(...),
     # The assessment as an event in its own right, which nothing later overwrites.
     type_name = db.execute(text("SELECT name FROM asset_type WHERE asset_type_id = :t"),
                            {"t": data["asset_type_id"]}).scalar()
+    if data.get("asset_id"):
+        machine = db.execute(text("SELECT fleet_code FROM asset WHERE asset_id = :a"),
+                             {"a": data["asset_id"]}).scalar()
+        type_name = f"{type_name or 'Equipment'} · {machine}"
     db.execute(text("""
         INSERT INTO operator_record (operator_id, record_type, title, category, asset_type_id,
                                      issuer, issued_on, valid_upto, result, score,
@@ -738,6 +760,8 @@ def set_competency(operator_id: int, request: Request, body: dict = Body(...),
            "score": data.get("score"), "remarks": data.get("remarks"),
            "details": json.dumps({"level": data.get("level"),
                                   "previous_level": previous["level"] if previous else None,
+                                  "rating": data.get("rating"),
+                                  "asset_id": data.get("asset_id"),
                                   "assessment_type": data.get("assessment_type"),
                                   "evidence": body.get("evidence") or {}}, default=str),
            "by": _actor(request)})
@@ -843,10 +867,19 @@ def eligibility(operator_id: int, asset_id: int,
         elif all(d["verification_status"] != "VERIFIED" for d in held):
             warnings.append(f"{label.capitalize()} has not been verified")
 
+    # The class-wide row is what clearance means; a level recorded against one
+    # machine says how they are on that machine, which is a different question
+    # and must not quietly stand in for the certificate.
     comp = db.execute(text(
         "SELECT level, valid_upto FROM operator_competency WHERE operator_id = :o "
-        "AND asset_type_id = :t AND dimension = 'OVERALL' AND status = 'ACTIVE'"
+        "AND asset_type_id = :t AND dimension = 'OVERALL' AND asset_id IS NULL "
+        "AND status = 'ACTIVE'"
     ), {"o": operator_id, "t": machine["asset_type_id"]}).mappings().first()
+
+    on_machine = db.execute(text(
+        "SELECT level, rating FROM operator_competency WHERE operator_id = :o "
+        "AND asset_id = :a AND dimension = 'OVERALL' AND status = 'ACTIVE'"
+    ), {"o": operator_id, "a": asset_id}).mappings().first()
 
     if not comp or comp["level"] is None or comp["level"] == 0:
         blockers.append(f"Not assessed on {machine['asset_type'] or 'this class'}")
@@ -860,7 +893,9 @@ def eligibility(operator_id: int, asset_id: int,
               else "ELIGIBLE")
     return {"status": status, "blockers": blockers, "warnings": warnings,
             "operator": op["display_name"], "machine": machine["fleet_code"],
-            "level": comp["level"] if comp else 0}
+            "level": comp["level"] if comp else 0,
+            "machine_level": on_machine["level"] if on_machine else None,
+            "machine_rating": on_machine["rating"] if on_machine else None}
 
 
 # ── identities ───────────────────────────────────────────────────────────────
