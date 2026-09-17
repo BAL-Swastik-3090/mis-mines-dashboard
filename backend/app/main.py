@@ -137,7 +137,7 @@ _PAGE_PERMISSION = {
 # frozen at the moment it was cached and would make the throttle fire every time.
 
 
-def _check_auth(sid: str | None, path: str) -> tuple[dict | None, str | None]:
+def _check_auth(sid: str | None, path: str) -> tuple[dict | None, str | None, set | None]:
     """Session + permission check. Returns (session, denial_reason).
 
     Both databases are remote — MySQL about 100ms away, Postgres about 50ms —
@@ -159,7 +159,7 @@ def _check_auth(sid: str | None, path: str) -> tuple[dict | None, str | None]:
         with SessionLocal() as db:
             s = auth_svc.get_session(db, sid)
             if not s:
-                return None, None
+                return None, None, None
             perms = access_svc.permissions_for(db, s["emp_id"])
             if auth_svc.touch_due(sid):
                 auth_svc.touch(db, sid)
@@ -173,19 +173,19 @@ def _check_auth(sid: str | None, path: str) -> tuple[dict | None, str | None]:
     # revoking someone takes effect at once instead of when their session
     # eventually expires. No permissions at all means no access.
     if not perms:
-        return s, "revoked"
+        return s, "revoked", perms
 
     need = next((c for pre, c in _PERMISSION_RULES if path.startswith(pre)), None)
     if need and need not in perms:
-        return s, need
+        return s, need, perms
 
     # Page access, enforced on the API prefix behind each page — hiding the
     # sidebar entry alone would leave the data reachable to anyone who knows
     # the URL.
     page = auth_svc.page_for_path(path)
     if page and _PAGE_PERMISSION.get(page) not in perms:
-        return s, f"page:{page}"
-    return s, None
+        return s, f"page:{page}", perms
+    return s, None, perms
 
 
 @app.middleware("http")
@@ -195,7 +195,7 @@ async def require_auth(request: Request, call_next):
         sid = request.cookies.get("mines_session")
         # The check is blocking DB I/O over the WAN. Run it off the event loop so
         # it cannot stall every other in-flight request behind it.
-        session, role_error = await run_in_threadpool(_check_auth, sid, path)
+        session, role_error, perms = await run_in_threadpool(_check_auth, sid, path)
         if not session:
             return JSONResponse({"detail": "Not authenticated."}, status_code=401)
         if role_error:
@@ -214,6 +214,9 @@ async def require_auth(request: Request, call_next):
                 body["code"] = "access_revoked"
             return JSONResponse(body, status_code=403)
         request.state.emp_id = session["emp_id"]
+        # Routers that make finer distinctions than a path prefix can read these
+        # rather than asking the database a question already answered here.
+        request.state.permissions = perms or set()
     return await call_next(request)
 
 

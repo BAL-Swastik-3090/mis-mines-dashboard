@@ -132,7 +132,8 @@ const BTN =
 
 export function Button({ variant = "secondary", size = "md", className = "", ...rest }:
   React.ButtonHTMLAttributes<HTMLButtonElement> & {
-    variant?: "primary" | "accent" | "secondary" | "ghost" | "danger"; size?: "sm" | "md" | "lg";
+    variant?: "primary" | "accent" | "success" | "secondary" | "ghost" | "danger";
+    size?: "sm" | "md" | "lg";
   }) {
   const sizes = {
     sm: "px-2.5 py-1.5 text-[11.5px]",
@@ -142,6 +143,9 @@ export function Button({ variant = "secondary", size = "md", className = "", ...
   const variants = {
     primary:   "bg-grad-gold text-white shadow-sm hover:shadow-md hover:brightness-105",
     accent:    "bg-grad-sky text-white shadow-sm hover:shadow-md hover:brightness-105",
+    // Approval is the one action on these screens that means "yes, this is
+    // right", and it should not look like every other button on the row.
+    success:   "bg-grad-emerald text-white shadow-sm hover:shadow-md hover:brightness-105",
     secondary: "bg-bg-base text-txt-secondary border border-border hover:border-navy/30 hover:text-navy shadow-sm",
     ghost:     "text-txt-muted hover:text-navy hover:bg-bg-section",
     danger:    "text-rose hover:bg-rose-bg border border-transparent hover:border-rose-ring",

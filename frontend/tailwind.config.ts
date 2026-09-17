@@ -71,6 +71,7 @@ const config: Config = {
         "grad-navy":   "linear-gradient(135deg, #0f1c35 0%, #2c4a7c 100%)",
         "grad-gold":   "linear-gradient(135deg, #c8960c 0%, #f5a623 100%)",
         "grad-violet": "linear-gradient(135deg, #6d28d9 0%, #8b5cf6 100%)",
+        "grad-emerald": "linear-gradient(135deg, #047857 0%, #10b981 100%)",
         "grad-sky":    "linear-gradient(135deg, #0369a1 0%, #0ea5e9 100%)",
       },
     },

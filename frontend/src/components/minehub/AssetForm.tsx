@@ -175,6 +175,9 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   const [saved, setSaved] = useState("");
   const [ask, setAsk] = useState<null | "discard" | "revert" | "leave" | "send-back">(null);
   const [sendBackWhy, setSendBackWhy] = useState("");
+  // Whether this person may accept entries onto the register. Asked rather than
+  // assumed, so the button is absent instead of present and refused.
+  const [mayApprove, setMayApprove] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -232,6 +235,12 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   }, [id]);
 
   useEffect(() => { void loadAsset(); void loadRevisions(); }, [loadAsset, loadRevisions]);
+
+  useEffect(() => {
+    void api.get("/minehub/me")
+      .then((r) => setMayApprove(Boolean(r.data?.may_approve)))
+      .catch(() => setMayApprove(false));
+  }, []);
 
   // A blank new form is not unsaved work, so the baseline is the untouched
   // sheet. Prefill is deliberately NOT part of it: registering a machine from
@@ -564,21 +573,6 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
                     : dirty ? <><Check className="w-3.5 h-3.5" /> {editing ? "Save changes" : "Save as draft"}</>
                     : <><Check className="w-3.5 h-3.5" /> Saved</>}
           </Button>
-          {editing && (status === "DRAFT" || status === "SENT_BACK") && (
-            <Button size="sm" variant="accent" disabled={busy !== null} onClick={() => act("submit")}>
-              <Send className="w-3.5 h-3.5" /> Submit for approval
-            </Button>
-          )}
-          {editing && status === "SUBMITTED" && (
-            <>
-              <Button size="sm" variant="primary" disabled={busy !== null} onClick={() => act("approve")}>
-                <CheckCircle2 className="w-3.5 h-3.5" /> Approve
-              </Button>
-              <Button size="sm" variant="danger" disabled={busy !== null} onClick={() => setAsk("send-back")}>
-                <Undo2 className="w-3.5 h-3.5" /> Send back
-              </Button>
-            </>
-          )}
         </div>
       </div>
 
@@ -1097,7 +1091,58 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
       {messages}
       {dialogs}
       {sheet}
-      <div className="xl:sticky xl:top-[86px]">
+      <div className="xl:sticky xl:top-[86px] space-y-4">
+        {/* Above the trail, because approving and reading the history are the
+            same job: you look at what changed, then you decide. */}
+        <div className="bg-bg-base border border-border-light rounded-xl shadow-sm overflow-hidden">
+          <header className="px-4 py-3 border-b border-border-light flex items-center justify-between gap-2">
+            <h3 className="font-condensed font-bold text-[12.5px] uppercase tracking-[.1em] text-navy
+                           flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-gold" /> Approval
+            </h3>
+            <Chip tone={statusTone}>{status.replace("_", " ").toLowerCase()}</Chip>
+          </header>
+
+          <div className="p-4 space-y-2.5">
+            <p className="text-[12px] text-txt-muted leading-relaxed">
+              {status === "APPROVED"
+                ? "On the register. Editing it returns it to draft, since what was approved would no longer be what is on file."
+                : status === "SUBMITTED"
+                ? "Waiting for someone other than whoever submitted it."
+                : status === "SENT_BACK"
+                ? "Sent back for correction — the reason is in the trail below."
+                : "A draft. It stays off the register until it is approved."}
+            </p>
+
+            {(status === "DRAFT" || status === "SENT_BACK") && (
+              <Button variant="accent" size="md" disabled={busy !== null}
+                className="w-full justify-center" onClick={() => void act("submit")}>
+                <Send className="w-4 h-4" /> Submit for approval
+              </Button>
+            )}
+
+            {status === "SUBMITTED" && !mayApprove && (
+              <p className="text-[12px] text-txt-light border-t border-border-light pt-2.5">
+                Approving is a separate permission, which you do not hold. An
+                Access Manager grants it under Access Control.
+              </p>
+            )}
+
+            {status === "SUBMITTED" && mayApprove && (
+              <div className="grid grid-cols-2 gap-2">
+                <Button variant="success" size="md" disabled={busy !== null}
+                  className="justify-center" onClick={() => void act("approve")}>
+                  <CheckCircle2 className="w-4 h-4" /> Approve
+                </Button>
+                <Button variant="danger" size="md" disabled={busy !== null}
+                  className="justify-center" onClick={() => setAsk("send-back")}>
+                  <Undo2 className="w-4 h-4" /> Send back
+                </Button>
+              </div>
+            )}
+          </div>
+        </div>
+
         <RevisionPanel revisions={revisions} loading={loadingRev} />
       </div>
     </div>

@@ -61,6 +61,22 @@ LOCATION_TYPES = ("SITE", "PIT", "BENCH", "PLANT", "WORKSHOP",
 OWNERSHIP = ("OWN", "HIRED")
 
 
+APPROVE_PERMISSION = "platform.registry.approve"
+
+
+def _may_approve(request: Request) -> bool:
+    return APPROVE_PERMISSION in (getattr(request.state, "permissions", None) or set())
+
+
+def _require_approver(request: Request) -> None:
+    """Deciding what goes on the register is a separate responsibility from
+    filling it in, and the mine grants it from the Access Control screen."""
+    if not _may_approve(request):
+        raise HTTPException(
+            403, "You do not have permission to approve register entries. "
+                 "An Access Manager can add it to your role.")
+
+
 def _actor(request: Request) -> str:
     return getattr(request.state, "emp_id", None) or "unknown"
 
@@ -138,6 +154,16 @@ def _next_due(sched: dict, current_reading: float | None) -> tuple:
 def health() -> dict:
     """Platform database state — connectivity and which migrations have run."""
     return {"minehub": test_connection()}
+
+
+@router.get("/me")
+def whoami(request: Request) -> dict:
+    """What this user may do here, so the screen offers only what will work.
+
+    The check still happens on every write; this exists so the approve button is
+    absent rather than present and refused.
+    """
+    return {"emp_id": _actor(request), "may_approve": _may_approve(request)}
 
 
 @router.get("/summary")
@@ -566,6 +592,7 @@ def approve_asset(asset_id: int, request: Request, body: dict = Body(default={})
     not review, and the register is what contractor billing and statutory
     compliance are later read from.
     """
+    _require_approver(request)
     row = db.execute(text(
         "SELECT approval_status, version, submitted_by FROM asset WHERE asset_id = :id"
     ), {"id": asset_id}).first()
@@ -590,6 +617,7 @@ def approve_asset(asset_id: int, request: Request, body: dict = Body(default={})
 def send_back_asset(asset_id: int, request: Request, body: dict = Body(default={}),
                     db: Session = Depends(get_minehub_db)) -> dict:
     """Return a machine for correction, with a reason."""
+    _require_approver(request)
     remarks = (body.get("remarks") or "").strip()
     if not remarks:
         raise HTTPException(400, "Say what needs correcting — a bare rejection helps nobody.")

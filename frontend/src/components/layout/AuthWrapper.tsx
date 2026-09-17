@@ -36,22 +36,48 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
     return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired);
   }, []);
 
-  // Keep a session alive while someone is actually using the dashboard. The
-  // timeout is meant to catch unattended machines, not to sign out a person who
-  // is reading a chart and has not triggered a fetch for half an hour. Driven by
-  // real interaction and throttled, so an idle tab still expires on schedule.
-  const lastBeat = useRef(0);
+  // Keep a session alive while someone is actually using the dashboard.
+  //
+  // The session row lives in the shared intranet table, and something outside
+  // this application sweeps it: sessions were being closed with end_reason
+  // TIMEOUT about fourteen minutes after their last recorded activity, well
+  // inside this app's own thirty-minute window. So what matters is that
+  // last_active_at keeps moving while someone is working, and the old approach
+  // could not guarantee that — it beat on the event itself, at most every five
+  // minutes, which leaves a gap whenever a burst of typing is followed by a
+  // pause spent reading the form.
+  //
+  // Now interaction only raises a flag, and a timer decides. Someone filling in
+  // a long sheet is seen every two minutes; a machine left unattended raises
+  // nothing, so the tab still expires on schedule, which is the point of the
+  // timeout.
+  const active = useRef(false);
   useEffect(() => {
     if (!user) return;
+
+    const mark = () => { active.current = true; };
+    const events: (keyof WindowEventMap)[] = [
+      "click", "keydown", "scroll", "pointerdown", "input",
+    ];
+    events.forEach((e) => window.addEventListener(e, mark, { passive: true }));
+
     const beat = () => {
-      const now = Date.now();
-      if (now - lastBeat.current < 5 * 60 * 1000) return;   // at most every 5 min
-      lastBeat.current = now;
+      if (!active.current || document.visibilityState === "hidden") return;
+      active.current = false;
       void api.post("/auth/heartbeat").catch(() => {});
     };
-    const events: (keyof WindowEventMap)[] = ["click", "keydown", "scroll"];
-    events.forEach((e) => window.addEventListener(e, beat, { passive: true }));
-    return () => events.forEach((e) => window.removeEventListener(e, beat));
+    const timer = setInterval(beat, 2 * 60 * 1000);
+
+    // Coming back to the tab counts as being here, and is the moment a stale
+    // session is about to be noticed.
+    const onVisible = () => { if (document.visibilityState === "visible") { mark(); beat(); } };
+    document.addEventListener("visibilitychange", onVisible);
+
+    return () => {
+      events.forEach((e) => window.removeEventListener(e, mark));
+      document.removeEventListener("visibilitychange", onVisible);
+      clearInterval(timer);
+    };
   }, [user]);
 
   // `page` is persisted to localStorage, so a user whose access was revoked
