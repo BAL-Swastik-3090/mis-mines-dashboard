@@ -1,36 +1,123 @@
 "use client";
 /**
- * Shared surfaces for the MineHub platform screens.
+ * Design system for the platform screens.
  *
- * The dashboard is a LIGHT application — white cards on #f5f7fb, navy text,
- * gold accents — and these screens were first built with dark-surface colours,
- * which rendered white text on a white ground and made whole panels unreadable.
- * Everything here uses the design tokens in tailwind.config.ts so that cannot
- * happen again by hand: reach for these rather than raw colours.
+ * Two rules it exists to enforce.
+ *
+ * Colour carries meaning, it is not decoration. Each state has one hue and
+ * keeps it everywhere: expired is always rose, due is always amber, live is
+ * always emerald. A status is then recognised before it is read, which is the
+ * whole point of a status.
+ *
+ * And nothing hand-picks a colour. These screens were once built with
+ * dark-surface classes on a light application and rendered white text on white
+ * ground — invisible, and only found by someone screenshotting it. Reach for
+ * these components instead.
  */
 import React from "react";
 
-/* ── Card ────────────────────────────────────────────────────────────────── */
-export function Card({ children, className = "" }: {
-  children: React.ReactNode; className?: string;
+/* ── Tone system ─────────────────────────────────────────────────────────── */
+export type Tone =
+  | "navy" | "gold" | "violet" | "indigo" | "teal" | "rose"
+  | "amber" | "sky" | "emerald" | "slate";
+
+const TONE: Record<Tone, { text: string; bg: string; ring: string; solid: string; dot: string }> = {
+  navy:    { text: "text-navy",       bg: "bg-bg-section",  ring: "ring-border",        solid: "bg-navy",       dot: "bg-navy" },
+  gold:    { text: "text-gold-dark",  bg: "bg-gold/10",     ring: "ring-gold/25",       solid: "bg-gold",       dot: "bg-gold" },
+  violet:  { text: "text-violet",     bg: "bg-violet-bg",   ring: "ring-violet-ring",   solid: "bg-violet",     dot: "bg-violet-light" },
+  indigo:  { text: "text-indigo",     bg: "bg-indigo-bg",   ring: "ring-indigo-ring",   solid: "bg-indigo",     dot: "bg-indigo-light" },
+  teal:    { text: "text-teal",       bg: "bg-teal-bg",     ring: "ring-teal-ring",     solid: "bg-teal",       dot: "bg-teal-light" },
+  rose:    { text: "text-rose",       bg: "bg-rose-bg",     ring: "ring-rose-ring",     solid: "bg-rose",       dot: "bg-rose-light" },
+  amber:   { text: "text-amber",      bg: "bg-amber-bg",    ring: "ring-amber-ring",    solid: "bg-amber",      dot: "bg-amber-light" },
+  sky:     { text: "text-sky",        bg: "bg-sky-bg",      ring: "ring-sky-ring",      solid: "bg-sky",        dot: "bg-sky-light" },
+  emerald: { text: "text-emerald",    bg: "bg-emerald-bg",  ring: "ring-emerald-ring",  solid: "bg-emerald",    dot: "bg-emerald-light" },
+  slate:   { text: "text-slate",      bg: "bg-slate-bg",    ring: "ring-slate-ring",    solid: "bg-slate",      dot: "bg-slate-light" },
+};
+
+/* ── Page header ─────────────────────────────────────────────────────────── */
+/** Two-tone title, subtitle, and the page's primary actions on the right. */
+export function PageHeader({ lead, rest, subtitle, tone = "gold", actions, icon: Icon }: {
+  lead: string; rest?: string; subtitle?: string; tone?: Tone;
+  actions?: React.ReactNode; icon?: React.ElementType;
+}) {
+  const t = TONE[tone];
+  return (
+    <div className="flex flex-wrap items-end justify-between gap-4 pb-1">
+      <div className="min-w-0 flex items-start gap-3.5">
+        {Icon && (
+          <span className={`shrink-0 w-11 h-11 rounded-xl ${t.bg} ring-1 ${t.ring}
+                            flex items-center justify-center mt-0.5`}>
+            <Icon className={`w-5 h-5 ${t.text}`} />
+          </span>
+        )}
+        <div className="min-w-0">
+          <h1 className="font-condensed font-extrabold text-[30px] leading-none tracking-tight text-navy">
+            {lead}{rest && <span className={`ml-2 ${t.text}`}>{rest}</span>}
+          </h1>
+          {subtitle && <p className="text-[13px] text-txt-muted mt-1.5 max-w-[68ch]">{subtitle}</p>}
+        </div>
+      </div>
+      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+    </div>
+  );
+}
+
+/* ── Tabs ────────────────────────────────────────────────────────────────── */
+export function Tabs<T extends string>({ tabs, value, onChange }: {
+  tabs: { id: T; label: string; icon?: React.ElementType; tone?: Tone }[];
+  value: T; onChange: (id: T) => void;
 }) {
   return (
-    <section className={`bg-bg-base border border-border-light rounded-lg shadow-sm ${className}`}>
+    <div className="flex flex-wrap gap-1.5 p-1 bg-bg-section rounded-xl w-fit">
+      {tabs.map((t) => {
+        const on = t.id === value;
+        const tone = TONE[t.tone ?? "gold"];
+        const Icon = t.icon;
+        return (
+          <button key={t.id} onClick={() => onChange(t.id)}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-[12.5px] font-semibold
+                        transition-all duration-150
+                        ${on ? "bg-bg-base text-navy shadow-sm"
+                             : "text-txt-muted hover:text-navy hover:bg-bg-base/60"}`}>
+            {Icon && <Icon className={`w-4 h-4 ${on ? tone.text : "text-txt-light"}`} />}
+            {t.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ── Card ────────────────────────────────────────────────────────────────── */
+export function Card({ children, className = "", tone }: {
+  children: React.ReactNode; className?: string; tone?: Tone;
+}) {
+  return (
+    <section className={`bg-bg-base rounded-xl border border-border-light shadow-sm overflow-hidden
+                         ${tone ? `border-t-[3px] ${TONE[tone].solid.replace("bg-", "border-t-")}` : ""}
+                         ${className}`}>
       {children}
     </section>
   );
 }
 
-export function CardHeader({ title, subtitle, actions }: {
+export function CardHeader({ title, subtitle, actions, icon: Icon, tone = "slate" }: {
   title: string; subtitle?: string; actions?: React.ReactNode;
+  icon?: React.ElementType; tone?: Tone;
 }) {
+  const t = TONE[tone];
   return (
-    <header className="px-4 py-3 border-b border-border-light flex flex-wrap items-start justify-between gap-3">
-      <div className="min-w-0">
-        <h2 className="font-condensed font-bold text-[14px] tracking-wide uppercase text-navy">
-          {title}
-        </h2>
-        {subtitle && <p className="text-[11.5px] text-txt-muted mt-0.5">{subtitle}</p>}
+    <header className="px-5 py-4 border-b border-border-light flex flex-wrap items-start justify-between gap-3">
+      <div className="min-w-0 flex items-start gap-3">
+        {Icon && (
+          <span className={`shrink-0 w-8 h-8 rounded-lg ${t.bg} ring-1 ${t.ring} flex items-center justify-center`}>
+            <Icon className={`w-4 h-4 ${t.text}`} />
+          </span>
+        )}
+        <div className="min-w-0">
+          <h2 className="font-semibold text-[14px] text-navy leading-tight">{title}</h2>
+          {subtitle && <p className="text-[12px] text-txt-muted mt-1 max-w-[74ch]">{subtitle}</p>}
+        </div>
       </div>
       {actions && <div className="flex items-center gap-2 shrink-0">{actions}</div>}
     </header>
@@ -38,111 +125,125 @@ export function CardHeader({ title, subtitle, actions }: {
 }
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
-const BTN_BASE =
-  "inline-flex items-center gap-1.5 rounded font-semibold transition-colors " +
-  "focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/50 disabled:opacity-40 " +
-  "disabled:cursor-not-allowed";
+const BTN =
+  "inline-flex items-center justify-center gap-1.5 rounded-lg font-semibold transition-all " +
+  "focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-gold " +
+  "disabled:opacity-40 disabled:cursor-not-allowed active:scale-[.98]";
 
 export function Button({ variant = "secondary", size = "md", className = "", ...rest }:
   React.ButtonHTMLAttributes<HTMLButtonElement> & {
-    variant?: "primary" | "secondary" | "ghost" | "danger"; size?: "sm" | "md";
+    variant?: "primary" | "accent" | "secondary" | "ghost" | "danger"; size?: "sm" | "md" | "lg";
   }) {
-  const sizes = { sm: "px-2.5 py-1 text-[11.5px]", md: "px-3.5 py-1.5 text-[12.5px]" };
-  const variants = {
-    primary:   "bg-gold text-white hover:bg-gold-dark shadow-sm",
-    secondary: "bg-bg-base text-txt-secondary border border-border hover:border-border-strong hover:text-navy",
-    ghost:     "text-txt-muted hover:text-navy hover:bg-bg-section",
-    danger:    "text-danger hover:bg-danger-bg border border-transparent hover:border-danger/20",
+  const sizes = {
+    sm: "px-2.5 py-1.5 text-[11.5px]",
+    md: "px-4 py-2 text-[12.5px]",
+    lg: "px-5 py-2.5 text-[13.5px]",
   };
-  return <button className={`${BTN_BASE} ${sizes[size]} ${variants[variant]} ${className}`} {...rest} />;
+  const variants = {
+    primary:   "bg-grad-gold text-white shadow-sm hover:shadow-md hover:brightness-105",
+    accent:    "bg-grad-sky text-white shadow-sm hover:shadow-md hover:brightness-105",
+    secondary: "bg-bg-base text-txt-secondary border border-border hover:border-navy/30 hover:text-navy shadow-sm",
+    ghost:     "text-txt-muted hover:text-navy hover:bg-bg-section",
+    danger:    "text-rose hover:bg-rose-bg border border-transparent hover:border-rose-ring",
+  };
+  return <button className={`${BTN} ${sizes[size]} ${variants[variant]} ${className}`} {...rest} />;
 }
 
-/* ── Badge ───────────────────────────────────────────────────────────────── */
-export function Badge({ tone = "neutral", children, title }: {
-  tone?: "neutral" | "gold" | "success" | "warning" | "danger" | "info";
-  children: React.ReactNode; title?: string;
+/* ── Chip ────────────────────────────────────────────────────────────────── */
+/** A status. The dot makes it readable at a glance and without relying on hue
+ *  alone, which matters for anyone who cannot separate red from green. */
+export function Chip({ tone = "slate", dot = true, children, title, className = "" }: {
+  tone?: Tone; dot?: boolean; children: React.ReactNode; title?: string; className?: string;
 }) {
-  const tones = {
-    neutral: "bg-bg-section text-txt-secondary border-border",
-    gold:    "bg-gold/10 text-gold-dark border-gold/30",
-    success: "bg-success-bg text-success border-success/25",
-    warning: "bg-warning-bg text-warning border-warning/25",
-    danger:  "bg-danger-bg text-danger border-danger/25",
-    info:    "bg-accent/10 text-accent-dark border-accent/25",
-  };
+  const t = TONE[tone];
   return (
     <span title={title}
-      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[11px] font-semibold ${tones[tone]}`}>
+      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full ring-1 ${t.bg} ${t.ring}
+                  ${t.text} text-[11px] font-semibold whitespace-nowrap ${className}`}>
+      {dot && <span className={`w-1.5 h-1.5 rounded-full ${t.dot}`} />}
       {children}
     </span>
   );
 }
 
 /* ── Stat tile ───────────────────────────────────────────────────────────── */
-export function Tile({ label, value, hint, tone = "navy" }: {
-  label: string; value: React.ReactNode; hint?: string; tone?: "navy" | "gold" | "warning";
+export function Tile({ label, value, hint, tone = "navy", icon: Icon, onClick, active }: {
+  label: string; value: React.ReactNode; hint?: string; tone?: Tone;
+  icon?: React.ElementType; onClick?: () => void; active?: boolean;
 }) {
-  const tones = { navy: "text-navy", gold: "text-gold-dark", warning: "text-warning" };
+  const t = TONE[tone];
+  const Tag = onClick ? "button" : "div";
   return (
-    <div className="bg-bg-base border border-border-light rounded-lg shadow-sm px-4 py-3">
-      <div className="font-condensed text-[10px] font-bold uppercase tracking-[.14em] text-txt-light">
-        {label}
+    <Tag onClick={onClick}
+      className={`text-left w-full bg-bg-base rounded-xl border shadow-sm px-4 py-3.5 transition-all
+                  ${onClick ? "hover:shadow-md hover:-translate-y-px" : ""}
+                  ${active ? "border-gold ring-2 ring-gold/20" : "border-border-light"}`}>
+      <div className="flex items-start justify-between gap-2">
+        <span className="font-condensed text-[10.5px] font-bold uppercase tracking-[.14em] text-txt-light">
+          {label}
+        </span>
+        {Icon && (
+          <span className={`w-7 h-7 rounded-lg ${t.bg} ring-1 ${t.ring} flex items-center justify-center shrink-0`}>
+            <Icon className={`w-3.5 h-3.5 ${t.text}`} />
+          </span>
+        )}
       </div>
-      <div className={`font-condensed font-extrabold text-[26px] leading-none mt-1.5 tabular-nums ${tones[tone]}`}>
+      <div className={`font-condensed font-extrabold text-[30px] leading-none mt-2 tabular-nums ${t.text}`}>
         {value}
       </div>
-      {hint && <div className="text-[11px] text-txt-muted mt-1">{hint}</div>}
-    </div>
+      {hint && <div className="text-[11.5px] text-txt-muted mt-1.5">{hint}</div>}
+    </Tag>
   );
 }
 
 /* ── Inputs ──────────────────────────────────────────────────────────────── */
 export const inputClass =
-  "w-full bg-bg-base border border-border rounded px-3 py-2 text-[13px] text-txt-primary " +
-  "placeholder:text-txt-light focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold/30";
+  "w-full bg-bg-base border border-border rounded-lg px-3 py-2 text-[13px] text-txt-primary " +
+  "placeholder:text-txt-light transition-colors " +
+  "focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/15";
 
-export function Field({ label, children, hint }: {
-  label: string; children: React.ReactNode; hint?: string;
+export function Field({ label, children, hint, required }: {
+  label: string; children: React.ReactNode; hint?: string; required?: boolean;
 }) {
   return (
     <label className="block">
-      <span className="block font-condensed text-[10px] font-bold uppercase tracking-[.12em] text-txt-light mb-1">
-        {label}
+      <span className="block text-[11px] font-semibold text-txt-secondary mb-1.5">
+        {label}{required && <span className="text-rose ml-0.5">*</span>}
       </span>
       {children}
-      {hint && <span className="block text-[11px] text-txt-light mt-1">{hint}</span>}
+      {hint && <span className="block text-[10.5px] text-txt-light mt-1">{hint}</span>}
     </label>
   );
 }
 
 /* ── Feedback ────────────────────────────────────────────────────────────── */
 export function Alert({ tone, children }: {
-  tone: "error" | "success" | "info"; children: React.ReactNode;
+  tone: "error" | "success" | "info" | "warning"; children: React.ReactNode;
 }) {
-  const tones = {
-    error:   "bg-danger-bg border-danger/25 text-danger",
-    success: "bg-success-bg border-success/25 text-success",
-    info:    "bg-accent/5 border-accent/20 text-accent-dark",
-  };
+  const map = { error: "rose", success: "emerald", info: "sky", warning: "amber" } as const;
+  const t = TONE[map[tone]];
   return (
-    <div className={`rounded border px-3 py-2.5 text-[12.5px] ${tones[tone]}`}>{children}</div>
+    <div className={`rounded-xl ring-1 px-4 py-3 text-[12.5px] font-medium ${t.bg} ${t.ring} ${t.text}`}>
+      {children}
+    </div>
   );
 }
 
-/* ── Table helpers ───────────────────────────────────────────────────────── */
-export const Th = ({ children, className = "" }: {
-  children?: React.ReactNode; className?: string;
+/* ── Table ───────────────────────────────────────────────────────────────── */
+export const Th = ({ children, className = "", colSpan }: {
+  children?: React.ReactNode; className?: string; colSpan?: number;
 }) => (
-  <th className={`text-left font-condensed text-[10.5px] font-bold uppercase tracking-[.1em]
-                  text-txt-light px-3 py-2 border-b border-border ${className}`}>
+  <th colSpan={colSpan} className={`text-left font-condensed text-[10.5px] font-bold uppercase tracking-[.12em]
+                  text-txt-light px-4 py-2.5 bg-bg-light border-b border-border ${className}`}>
     {children}
   </th>
 );
 
-export const Td = ({ children, className = "" }: {
-  children?: React.ReactNode; className?: string;
+export const Td = ({ children, className = "", colSpan }: {
+  children?: React.ReactNode; className?: string; colSpan?: number;
 }) => (
-  <td className={`px-3 py-2.5 border-b border-border-light text-[12.5px] text-txt-secondary align-top ${className}`}>
+  <td colSpan={colSpan}
+      className={`px-4 py-3 border-b border-border-light text-[12.5px] text-txt-secondary align-middle ${className}`}>
     {children}
   </td>
 );
@@ -150,9 +251,28 @@ export const Td = ({ children, className = "" }: {
 export function EmptyRow({ colSpan, children }: { colSpan: number; children: React.ReactNode }) {
   return (
     <tr>
-      <td colSpan={colSpan} className="px-3 py-10 text-center text-[12.5px] text-txt-light">
+      <td colSpan={colSpan} className="px-4 py-12 text-center text-[13px] text-txt-light">
         {children}
       </td>
     </tr>
+  );
+}
+
+/* ── Avatar ──────────────────────────────────────────────────────────────── */
+/** Initials on a hue derived from the name, so the same person is always the
+ *  same colour and a long list stays scannable. */
+export function Avatar({ name, size = "md" }: { name: string; size?: "sm" | "md" }) {
+  const tones: Tone[] = ["violet", "indigo", "teal", "sky", "amber", "emerald", "rose"];
+  const hash = [...(name || "?")].reduce((a, c) => a + c.charCodeAt(0), 0);
+  const t = TONE[tones[hash % tones.length]];
+  const initials = (name || "?")
+    .split(/\s+/).filter((p) => /[A-Za-z]/.test(p)).slice(0, 2)
+    .map((p) => p[0]!.toUpperCase()).join("") || "?";
+  const dims = size === "sm" ? "w-7 h-7 text-[10px]" : "w-9 h-9 text-[11.5px]";
+  return (
+    <span className={`${dims} ${t.bg} ${t.text} ring-1 ${t.ring} rounded-full
+                      flex items-center justify-center font-bold shrink-0`}>
+      {initials}
+    </span>
   );
 }

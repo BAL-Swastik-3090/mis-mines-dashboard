@@ -13,7 +13,7 @@ import {
   Loader2, Search, UserCheck, UserX, KeyRound, Pencil, Trash2, ShieldCheck,
 } from "lucide-react";
 import api from "@/lib/api";
-import { Alert, Badge, Card, CardHeader, EmptyRow, Td, Th, inputClass } from "./ui";
+import { Alert, Chip, Card, CardHeader, EmptyRow, Td, Th, inputClass , type Tone } from "./ui";
 
 interface AuditRow {
   access_audit_id: number;
@@ -26,13 +26,13 @@ interface AuditRow {
   ip_address: string | null;
 }
 
-const ACTION: Record<string, { label: string; icon: React.ElementType; tone: "gold" | "success" | "danger" | "info" | "neutral" }> = {
-  USER_ROLES_SET:       { label: "Access changed",      icon: UserCheck,   tone: "info" },
-  USER_REVOKED:         { label: "Access removed",      icon: UserX,       tone: "danger" },
-  ROLE_CREATED:         { label: "Role created",        icon: KeyRound,    tone: "success" },
+const ACTION: Record<string, { label: string; icon: React.ElementType; tone: Tone }> = {
+  USER_ROLES_SET:       { label: "Access changed",      icon: UserCheck,   tone: "sky" },
+  USER_REVOKED:         { label: "Access removed",      icon: UserX,       tone: "rose" },
+  ROLE_CREATED:         { label: "Role created",        icon: KeyRound,    tone: "emerald" },
   ROLE_UPDATED:         { label: "Role edited",         icon: Pencil,      tone: "gold" },
   ROLE_PERMISSIONS_SET: { label: "Permissions changed", icon: ShieldCheck, tone: "gold" },
-  ROLE_DELETED:         { label: "Role deleted",        icon: Trash2,      tone: "danger" },
+  ROLE_DELETED:         { label: "Role deleted",        icon: Trash2,      tone: "rose" },
 };
 
 function when(iso: string): string {
@@ -114,13 +114,13 @@ export default function AuditPanel() {
                   </EmptyRow>
                 )}
                 {rows.map((r) => {
-                  const meta = ACTION[r.action] ?? { label: r.action, icon: KeyRound, tone: "neutral" as const };
+                  const meta = ACTION[r.action] ?? { label: r.action, icon: KeyRound, tone: "slate" as const };
                   const Icon = meta.icon;
                   return (
                     <tr key={r.access_audit_id} className="hover:bg-bg-light">
                       <Td className="text-txt-muted whitespace-nowrap">{when(r.occurred_at)}</Td>
                       <Td>
-                        <Badge tone={meta.tone}><Icon className="w-3 h-3" />{meta.label}</Badge>
+                        <Chip tone={meta.tone}><Icon className="w-3 h-3" />{meta.label}</Chip>
                       </Td>
                       <Td>
                         {r.subject_emp_id ? (

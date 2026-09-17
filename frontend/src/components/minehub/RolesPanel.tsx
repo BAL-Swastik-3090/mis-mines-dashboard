@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Plus, Trash2, Loader2, Check, Lock, ShieldAlert, X } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
-import { Alert, Badge, Button, Card, CardHeader, Field, inputClass } from "./ui";
+import { Alert, Chip, Button, Card, CardHeader, Field, inputClass } from "./ui";
 
 interface Permission {
   permission_id: number; code: string; module: string; name: string;
@@ -206,13 +206,13 @@ export default function RolesPanel() {
               actions={
                 <>
                   {r.is_system && (
-                    <Badge tone="neutral" title="A system role — it cannot be renamed or deleted">
+                    <Chip tone="slate" title="A system role — it cannot be renamed or deleted">
                       <Lock className="w-3 h-3" /> system
-                    </Badge>
+                    </Chip>
                   )}
-                  <Badge tone="info">
+                  <Chip tone="sky">
                     {r.user_count} {r.user_count === 1 ? "person" : "people"}
-                  </Badge>
+                  </Chip>
                   {mayManage && !isOwner && (
                     <Button size="sm" variant="secondary"
                       onClick={() => { setEditing(isEditing ? null : r.role_id); setDraft(r.permissions); }}>
@@ -253,10 +253,10 @@ export default function RolesPanel() {
                   {r.permissions.map((code) => {
                     const p = perms.find((x) => x.code === code);
                     return (
-                      <Badge key={code} tone={p?.is_sensitive ? "warning" : "neutral"}
+                      <Chip key={code} tone={p?.is_sensitive ? "amber" : "slate"}
                              title={p?.description ?? code}>
                         {p?.name ?? code}
-                      </Badge>
+                      </Chip>
                     );
                   })}
                 </div>

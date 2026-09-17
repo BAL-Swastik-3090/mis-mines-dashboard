@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Search, Trash2, Loader2, UserPlus, Check, X } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
-import { Alert, Badge, Button, Card, CardHeader, EmptyRow, Td, Th, Tile, inputClass } from "./ui";
+import { Alert, Chip, Button, Card, CardHeader, EmptyRow, Td, Th, Tile, inputClass } from "./ui";
 
 interface Role { role_id: number; code: string; name: string; permissions: string[] }
 interface AccessUser {
@@ -259,7 +259,7 @@ export default function UsersPanel() {
                         </div>
                       ) : (
                         <div className="flex flex-wrap items-center gap-1.5">
-                          {u.roles.map((r) => <Badge key={r.role_id} tone="gold">{r.name}</Badge>)}
+                          {u.roles.map((r) => <Chip key={r.role_id} tone="gold">{r.name}</Chip>)}
                           {mayManage && (
                             <button onClick={() => { setEditing(u.emp_id); setDraft(u.roles.map((r) => r.role_id)); }}
                               className="text-[11.5px] text-accent hover:text-accent-dark underline underline-offset-2">

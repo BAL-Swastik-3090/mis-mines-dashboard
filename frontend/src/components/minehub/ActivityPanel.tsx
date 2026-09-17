@@ -9,7 +9,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Loader2, Truck, Link2, Unlink, UserPlus, Pencil, Activity as Pulse } from "lucide-react";
 import api from "@/lib/api";
-import { Alert, Badge, Card, CardHeader, EmptyRow, Td, Th } from "./ui";
+import { Alert, Chip, Card, CardHeader, EmptyRow, Td, Th , type Tone } from "./ui";
 
 interface EventRow {
   event_id: string;
@@ -21,12 +21,12 @@ interface EventRow {
   fleet_code: string | null;
 }
 
-const TYPE: Record<string, { label: string; icon: React.ElementType; tone: "gold" | "success" | "danger" | "info" | "neutral" }> = {
-  ASSET_REGISTERED:        { label: "Machine registered", icon: Truck,    tone: "success" },
+const TYPE: Record<string, { label: string; icon: React.ElementType; tone: Tone }> = {
+  ASSET_REGISTERED:        { label: "Machine registered", icon: Truck,    tone: "emerald" },
   ASSET_UPDATED:           { label: "Machine updated",    icon: Pencil,   tone: "gold" },
-  ASSET_IDENTITY_LINKED:   { label: "Identity linked",    icon: Link2,    tone: "info" },
-  ASSET_IDENTITY_UNLINKED: { label: "Identity removed",   icon: Unlink,   tone: "danger" },
-  PARTY_REGISTERED:        { label: "Party registered",   icon: UserPlus, tone: "success" },
+  ASSET_IDENTITY_LINKED:   { label: "Identity linked",    icon: Link2,    tone: "sky" },
+  ASSET_IDENTITY_UNLINKED: { label: "Identity removed",   icon: Unlink,   tone: "rose" },
+  PARTY_REGISTERED:        { label: "Party registered",   icon: UserPlus, tone: "emerald" },
 };
 
 function when(iso: string): string {
@@ -103,12 +103,12 @@ export default function ActivityPanel() {
                   </EmptyRow>
                 )}
                 {rows.map((e) => {
-                  const meta = TYPE[e.event_type] ?? { label: e.event_type, icon: Pulse, tone: "neutral" as const };
+                  const meta = TYPE[e.event_type] ?? { label: e.event_type, icon: Pulse, tone: "slate" as const };
                   const Icon = meta.icon;
                   return (
                     <tr key={e.event_id} className="hover:bg-bg-light">
                       <Td className="text-txt-muted whitespace-nowrap">{when(e.occurred_at)}</Td>
-                      <Td><Badge tone={meta.tone}><Icon className="w-3 h-3" />{meta.label}</Badge></Td>
+                      <Td><Chip tone={meta.tone}><Icon className="w-3 h-3" />{meta.label}</Chip></Td>
                       <Td className="font-mono text-[11.5px] text-txt-primary">{e.fleet_code ?? "—"}</Td>
                       <Td>{describe(e)}</Td>
                       <Td className="hidden lg:table-cell text-txt-muted">{e.recorded_by ?? "—"}</Td>

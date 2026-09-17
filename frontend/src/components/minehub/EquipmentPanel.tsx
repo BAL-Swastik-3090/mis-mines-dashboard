@@ -1,80 +1,59 @@
 "use client";
 /**
- * Equipment Registry — a tab of the MineHub Platform screen.
+ * Equipment Registry.
  *
- * Phase 0 of the platform: give every machine one identity. The mine has no
- * authoritative fleet list today — four partial lists exist, none complete —
- * and telematics calls a truck MAN18 where the handover register calls it
- * MAN-18, so no query joins them.
- *
- * The screen is built around the work rather than around the tables: the first
- * thing it shows is the list of machines that are transmitting data nobody can
- * attribute to anything, because clearing that list IS the task. Registering a
- * machine straight from that row takes one click and pre-fills the alias, so
- * the common path never involves typing a code twice.
+ * Opens with the machines that are transmitting telematics nobody can attribute
+ * to anything, because clearing that list IS the task — 42 machines currently
+ * send data under names no register claims. Registering from one of those rows
+ * carries the telematics name across, so the common path never involves typing
+ * a code twice and then wondering why the join does not work.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Boxes, Search, Plus, Link2, Trash2, Check, AlertCircle, Loader2,
-  Radio, X, ChevronDown, ChevronRight,
+  Search, Link2, Trash2, Check, Loader2, Radio, ChevronDown, ChevronRight,
+  Cpu, Fuel, Zap, Wrench, Plus, Building2,
 } from "lucide-react";
 import api from "@/lib/api";
+import { useAuth } from "@/contexts/useAuth";
 import AssetForm from "./AssetForm";
+import {
+  Alert, Button, Card, CardHeader, Chip, EmptyRow, Td, Th, Tile, inputClass, type Tone,
+} from "./ui";
 
 interface Summary {
   assets: number; assets_active: number; aliases: number; asset_types: number;
-  people: number; organisations: number; locations: number; materials: number;
-  competencies: number; events: number;
-}
-interface AssetType {
-  asset_type_id: number; code: string; name: string; category: string;
-  rated_output_per_hr: number | null; rated_fuel_lph: number | null;
-  standard_crew: number | null; asset_count: number;
+  people: number; organisations: number; events: number;
 }
 interface Asset {
-  asset_id: number; fleet_code: string; registration_no: string | null;
-  make: string | null; model: string | null; capacity: number | null;
-  capacity_uom: string | null; ownership: string; status: string;
-  asset_type_id: number; asset_type: string; category: string;
+  asset_id: number; fleet_code: string; nickname?: string | null;
+  registration_no: string | null; make: string | null; model: string | null;
+  ownership: string; status: string; asset_type: string; category: string;
   owner: string | null; alias_count: number; alias_systems: string | null;
 }
-interface Identity {
-  asset_identity_id: number; system: string; external_code: string;
-}
-interface Unmapped {
-  vehicle_desc: string; feed: string; rows_: number; last_seen: string;
-}
-interface Party { party_id: number; display_name: string; legal_name: string }
+interface Identity { asset_identity_id: number; system: string; external_code: string }
+interface Unmapped { vehicle_desc: string; feed: string; rows_: number; last_seen: string }
 
-const STATUS_STYLE: Record<string, string> = {
-  ACTIVE:      "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
-  MAINTENANCE: "bg-amber-500/15 text-warning border-amber-500/30",
-  STANDBY:     "bg-sky-500/15 text-sky-300 border-sky-500/30",
-  IDLE:        "bg-white/10 text-txt-muted border-border",
-  DISPOSED:    "bg-red-500/15 text-red-300 border-red-500/30",
+const STATUS_TONE: Record<string, Tone> = {
+  ACTIVE: "emerald", MAINTENANCE: "amber", STANDBY: "sky",
+  IDLE: "slate", DISPOSED: "rose",
 };
 
-function Tile({ label, value, hint }: { label: string; value: number | string; hint?: string }) {
-  return (
-    <div className="rounded-lg border border-border-light bg-bg-base px-4 py-3">
-      <div className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-txt-light font-condensed">
-        {label}
-      </div>
-      <div className="text-[22px] font-semibold text-txt-primary leading-tight mt-1 tabular-nums">
-        {value}
-      </div>
-      {hint && <div className="text-[11px] text-txt-light mt-0.5">{hint}</div>}
-    </div>
-  );
-}
+/** Equipment categories get their own hue so a long register stays scannable. */
+const CATEGORY_TONE: Record<string, Tone> = {
+  EXCAVATION: "violet", HAULAGE: "sky", DRILLING: "indigo", DOZING: "teal",
+  GRADING: "emerald", LIFTING: "amber", WATER: "sky", PUMP: "teal",
+  SUPPORT: "slate", LIGHTING: "amber", LMV: "slate", OTHER: "slate",
+};
 
-export default function EquipmentPanel() {
+export default function EquipmentPanel({ addOpen, onAddOpenChange, onChanged }: {
+  addOpen?: boolean; onAddOpenChange?: (v: boolean) => void; onChanged?: () => void;
+}) {
+  const can = useAuth((s) => s.can);
+  const mayManage = can("platform.registry.manage");
+
   const [summary, setSummary] = useState<Summary | null>(null);
-  const [types, setTypes] = useState<AssetType[]>([]);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [unmapped, setUnmapped] = useState<Unmapped[]>([]);
-  const [parties, setParties] = useState<Party[]>([]);
-
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -82,32 +61,24 @@ export default function EquipmentPanel() {
 
   const [expanded, setExpanded] = useState<number | null>(null);
   const [identities, setIdentities] = useState<Identity[]>([]);
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
+  const [prefill, setPrefill] = useState<{ fleet_code?: string; telematics_code?: string }>({});
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [s, t, a, u, p] = await Promise.all([
+      const [s, a, u] = await Promise.all([
         api.get("/minehub/summary"),
-        api.get("/minehub/asset-types"),
         api.get("/minehub/assets"),
         api.get("/minehub/unmapped-telematics"),
-        api.get("/minehub/parties", { params: { party_type: "ORGANISATION" } }),
       ]);
-      setSummary(s.data); setTypes(t.data ?? []); setAssets(a.data ?? []);
-      setUnmapped(u.data ?? []); setParties(p.data ?? []);
+      setSummary(s.data); setAssets(a.data ?? []); setUnmapped(u.data ?? []);
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setError(d ?? "Could not reach the MineHub platform database.");
-    } finally {
-      setLoading(false);
-    }
+      setError(d ?? "Could not reach the platform database.");
+    } finally { setLoading(false); }
   }, []);
 
   useEffect(() => { void load(); }, [load]);
-
   useEffect(() => {
     if (!notice) return;
     const t = setTimeout(() => setNotice(null), 4000);
@@ -117,67 +88,27 @@ export default function EquipmentPanel() {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return assets;
-    return assets.filter((a) =>
-      [a.fleet_code, a.registration_no, a.make, a.model, a.asset_type]
-        .some((v) => (v ?? "").toLowerCase().includes(q)));
+    return assets.filter((a) => [a.fleet_code, a.nickname, a.registration_no, a.make, a.model, a.asset_type]
+      .some((v) => (v ?? "").toLowerCase().includes(q)));
   }, [assets, query]);
 
-  const openIdentities = async (assetId: number) => {
-    if (expanded === assetId) { setExpanded(null); return; }
-    setExpanded(assetId);
-    try {
-      const r = await api.get(`/minehub/assets/${assetId}/identities`);
-      setIdentities(r.data ?? []);
-    } catch { setIdentities([]); }
+  const openIdentities = async (id: number) => {
+    if (expanded === id) { setExpanded(null); return; }
+    setExpanded(id);
+    try { setIdentities((await api.get(`/minehub/assets/${id}/identities`)).data ?? []); }
+    catch { setIdentities([]); }
   };
 
   const startRegister = (u?: Unmapped) => {
-    setForm(u
-      ? { fleet_code: u.vehicle_desc, telematics_code: u.vehicle_desc, ownership: "OWN" }
-      : { ownership: "OWN" });
-    setShowForm(true);
-    setError(null);
-  };
-
-  const saveAsset = async () => {
-    if (!form.fleet_code?.trim()) { setError("Fleet code is required."); return; }
-    if (!form.asset_type_id) { setError("Choose an equipment type."); return; }
-    setSaving(true); setError(null);
-    try {
-      const res = await api.post("/minehub/assets", {
-        fleet_code: form.fleet_code.trim(),
-        registration_no: form.registration_no,
-        asset_type_id: Number(form.asset_type_id),
-        make: form.make, model: form.model,
-        capacity: form.capacity ? Number(form.capacity) : null,
-        capacity_uom: form.capacity_uom,
-        ownership: form.ownership || "OWN",
-        owner_party_id: form.owner_party_id ? Number(form.owner_party_id) : null,
-      });
-      // Registering from an unmapped row carries the telematics name across, so
-      // the machine is joined to its data in the same action.
-      if (form.telematics_code) {
-        await api.post(`/minehub/assets/${res.data.asset_id}/identities`, {
-          system: "TELEMATICS", external_code: form.telematics_code,
-        });
-      }
-      setNotice(`${form.fleet_code} registered.`);
-      setShowForm(false); setForm({});
-      await load();
-    } catch (e: unknown) {
-      const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setError(d ?? "Could not register the machine.");
-    } finally { setSaving(false); }
+    setPrefill(u ? { fleet_code: u.vehicle_desc, telematics_code: u.vehicle_desc } : {});
+    onAddOpenChange?.(true);
   };
 
   const addAlias = async (assetId: number, system: string, code: string) => {
-    if (!code.trim()) return;
     try {
-      await api.post(`/minehub/assets/${assetId}/identities`, {
-        system, external_code: code.trim(),
-      });
+      await api.post(`/minehub/assets/${assetId}/identities`, { system, external_code: code.trim() });
       setNotice("Identity linked.");
-      await openIdentities(assetId); await openIdentities(assetId);
+      setIdentities((await api.get(`/minehub/assets/${assetId}/identities`)).data ?? []);
       await load();
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
@@ -188,220 +119,162 @@ export default function EquipmentPanel() {
   const removeAlias = async (id: number, assetId: number) => {
     try {
       await api.delete(`/minehub/assets/identities/${id}`);
-      const r = await api.get(`/minehub/assets/${assetId}/identities`);
-      setIdentities(r.data ?? []);
+      setIdentities((await api.get(`/minehub/assets/${assetId}/identities`)).data ?? []);
       await load();
     } catch { setError("Could not remove that identity."); }
   };
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center py-24">
-        <Loader2 className="w-6 h-6 animate-spin text-gold-dark" />
-      </div>
-    );
+    return <div className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-gold" /></div>;
   }
 
   return (
-    <div className="space-y-5">
-
-      {error && (
-        <div className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2.5 text-[12.5px] text-red-300">
-          <AlertCircle className="w-4 h-4 shrink-0 mt-px" /><span>{error}</span>
-        </div>
-      )}
+    <div className="space-y-4">
+      {error && <Alert tone="error">{error}</Alert>}
       {notice && (
-        <div className="flex items-start gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2.5 text-[12.5px] text-emerald-300">
-          <Check className="w-4 h-4 shrink-0 mt-px" /><span>{notice}</span>
-        </div>
+        <Alert tone="success"><span className="inline-flex items-center gap-2"><Check className="w-4 h-4" />{notice}</span></Alert>
+      )}
+
+      {/* Registration */}
+      {addOpen && (
+        <Card tone="gold">
+          <div className="p-5">
+            <AssetForm prefill={prefill}
+              onDone={() => { onAddOpenChange?.(false); setPrefill({}); setNotice("Machine registered."); void load(); onChanged?.(); }}
+              onCancel={() => { onAddOpenChange?.(false); setPrefill({}); }} />
+          </div>
+        </Card>
       )}
 
       {/* Registry state */}
       {summary && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-          <Tile label="Machines" value={summary.assets} hint={`${summary.assets_active} active`} />
-          <Tile label="Identities linked" value={summary.aliases} hint="across all systems" />
-          <Tile label="Equipment types" value={summary.asset_types} />
-          <Tile label="People" value={summary.people} hint={`${summary.organisations} organisations`} />
-          <Tile label="Events" value={summary.events} hint="platform log" />
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <Tile label="Machines" value={summary.assets} tone="sky" icon={Cpu}
+                hint={`${summary.assets_active} active`} />
+          <Tile label="Identities linked" value={summary.aliases} tone="violet" icon={Link2}
+                hint="across all systems" />
+          <Tile label="Unregistered" value={unmapped.length} tone={unmapped.length ? "amber" : "emerald"}
+                icon={Radio} hint="transmitting telematics" />
+          <Tile label="Contractors" value={summary.organisations} tone="teal" icon={Building2}
+                hint="owning hired machines" />
         </div>
       )}
 
-      {/* ── The working list ─────────────────────────────────── */}
-      <section className="rounded-lg border border-border-light bg-bg-base">
-        <header className="px-4 py-3 border-b border-border-light flex items-center gap-2.5">
-          <Radio className="w-4 h-4 text-warning shrink-0" />
-          <div className="min-w-0">
-            <h2 className="text-txt-primary text-[13px] font-semibold tracking-wide">
-              Transmitting but unregistered
-              {unmapped.length > 0 && (
-                <span className="ml-2 text-warning">{unmapped.length}</span>
-              )}
-            </h2>
-            <p className="text-txt-light text-[11.5px] mt-0.5">
-              These machines are sending telematics that the platform cannot attribute
-              to anything. Registering one links its history in the same action.
-            </p>
-          </div>
-        </header>
-
-        <div className="p-4">
-          {unmapped.length === 0 ? (
-            <div className="text-center py-6 text-emerald-300/80 text-[13px]">
-              <Check className="w-5 h-5 mx-auto mb-1.5" />
-              Every transmitting machine is registered.
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[520px] text-[12.5px]">
-                <thead className="text-txt-light">
-                  <tr>
-                    <th className="text-left font-medium px-3 py-2">Telematics name</th>
-                    <th className="text-left font-medium px-3 py-2">Feed</th>
-                    <th className="text-right font-medium px-3 py-2">Records</th>
-                    <th className="text-left font-medium px-3 py-2">Last seen</th>
-                    <th className="text-right font-medium px-3 py-2">Action</th>
+      {/* The working list */}
+      {unmapped.length > 0 && (
+        <Card tone="amber">
+          <CardHeader title={`${unmapped.length} machines transmitting but unregistered`}
+            icon={Radio} tone="amber"
+            subtitle="These send telematics the platform cannot attribute to anything. Registering one links its history in the same action." />
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[560px]">
+              <thead>
+                <tr><Th>Telematics name</Th><Th>Feed</Th><Th className="text-right">Records</Th>
+                    <Th>Last seen</Th><Th className="text-right">Action</Th></tr>
+              </thead>
+              <tbody>
+                {unmapped.map((u) => (
+                  <tr key={`${u.feed}-${u.vehicle_desc}`} className="hover:bg-bg-light transition-colors">
+                    <Td className="font-mono text-[12px] text-navy font-semibold">{u.vehicle_desc}</Td>
+                    <Td><Chip tone={u.feed === "MAN" ? "sky" : "violet"} dot={false}>{u.feed}</Chip></Td>
+                    <Td className="text-right tabular-nums">{u.rows_.toLocaleString()}</Td>
+                    <Td className="text-txt-muted">{String(u.last_seen ?? "").slice(0, 16).replace("T", " ")}</Td>
+                    <Td className="text-right">
+                      {mayManage && (
+                        <Button size="sm" variant="primary" onClick={() => startRegister(u)}>
+                          <Plus className="w-3.5 h-3.5" /> Register
+                        </Button>
+                      )}
+                    </Td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5">
-                  {unmapped.map((u) => (
-                    <tr key={`${u.feed}-${u.vehicle_desc}`} className="text-txt-secondary">
-                      <td className="px-3 py-2.5 font-mono text-[12px]">{u.vehicle_desc}</td>
-                      <td className="px-3 py-2.5 text-txt-muted">{u.feed}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums text-txt-muted">
-                        {u.rows_.toLocaleString()}
-                      </td>
-                      <td className="px-3 py-2.5 text-txt-muted">
-                        {u.last_seen ? String(u.last_seen).slice(0, 16).replace("T", " ") : "—"}
-                      </td>
-                      <td className="px-3 py-2.5 text-right">
-                        <button
-                          onClick={() => startRegister(u)}
-                          className="px-2.5 py-1 rounded border border-gold/40 bg-gold/10 text-gold-dark text-[11px] font-medium hover:brightness-125"
-                        >
-                          Register
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </section>
-
-      {/* ── Registration ─────────────────────────────────────── */}
-      {showForm && (
-        <section className="bg-bg-base border border-gold/40 rounded-lg shadow-sm p-4">
-          <AssetForm
-            prefill={{ fleet_code: form.fleet_code, telematics_code: form.telematics_code }}
-            onDone={() => { setShowForm(false); setForm({}); setNotice("Machine registered."); void load(); }}
-            onCancel={() => { setShowForm(false); setForm({}); }}
-          />
-        </section>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
       )}
 
-      {/* ── The registry ─────────────────────────────────────── */}
-      <section className="rounded-lg border border-border-light bg-bg-base">
-        <header className="px-4 py-3 border-b border-border-light flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-txt-primary text-[13px] font-semibold tracking-wide">Fleet register</h2>
-            <p className="text-txt-light text-[11.5px] mt-0.5">
-              Own and hired machines. Expand a row to link the names other systems use.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-txt-light" />
-              <input
-                id="mh-search"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search fleet…"
-                className="bg-bg-base border border-border rounded-md pl-8 pr-3 py-1.5 text-[12.5px] text-txt-primary placeholder:text-txt-light focus:outline-none focus:border-gold w-[170px]"
-              />
-            </div>
-            <button
-              onClick={() => startRegister()}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-semibold bg-gold text-white hover:brightness-110"
-            >
-              <Plus className="w-3.5 h-3.5" /> Add
-            </button>
-          </div>
-        </header>
-
-        <div className="p-4 overflow-x-auto">
-          <table className="w-full min-w-[640px] text-[12.5px]">
-            <thead className="text-txt-light">
+      {/* The register */}
+      <Card tone="sky">
+        <CardHeader title={`Fleet register · ${filtered.length}`} icon={Cpu} tone="sky"
+          subtitle="Own and hired machines. Expand a row to link the names other systems use."
+          actions={
+            <>
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-txt-light" />
+                <input id="eq-search" value={query} onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search fleet…"
+                  className="bg-bg-base border border-border rounded-lg pl-8 pr-3 py-1.5 text-[12px]
+                             text-txt-primary placeholder:text-txt-light focus:outline-none focus:border-gold w-[180px]" />
+              </div>
+              {mayManage && (
+                <Button size="sm" variant="primary" onClick={() => startRegister()}>
+                  <Plus className="w-3.5 h-3.5" /> Add
+                </Button>
+              )}
+            </>
+          } />
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[720px]">
+            <thead>
               <tr>
-                <th className="w-6" />
-                <th className="text-left font-medium px-3 py-2">Fleet code</th>
-                <th className="text-left font-medium px-3 py-2">Type</th>
-                <th className="text-left font-medium px-3 py-2 hidden md:table-cell">Make / model</th>
-                <th className="text-left font-medium px-3 py-2">Ownership</th>
-                <th className="text-left font-medium px-3 py-2">Linked</th>
-                <th className="text-left font-medium px-3 py-2">Status</th>
+                <Th className="w-8" /><Th>Machine</Th><Th>Type</Th>
+                <Th className="hidden md:table-cell">Make / model</Th>
+                <Th>Owner</Th><Th>Linked</Th><Th className="text-right">Status</Th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody>
               {filtered.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="px-3 py-8 text-center text-txt-light">
-                    {assets.length === 0
-                      ? "No machine registered yet. Start from the list above — those are transmitting already."
-                      : "No machine matches that search."}
-                  </td>
-                </tr>
+                <EmptyRow colSpan={7}>
+                  {assets.length === 0
+                    ? "No machine registered yet — start from the list above, those are transmitting already."
+                    : "No machine matches that search."}
+                </EmptyRow>
               )}
               {filtered.map((a) => (
                 <React.Fragment key={a.asset_id}>
-                  <tr className="text-txt-secondary hover:bg-bg-section">
-                    <td className="px-1 py-2.5">
-                      <button onClick={() => openIdentities(a.asset_id)}
-                              className="text-txt-light hover:text-txt-secondary"
-                              aria-label="Show identities">
-                        {expanded === a.asset_id
-                          ? <ChevronDown className="w-4 h-4" />
-                          : <ChevronRight className="w-4 h-4" />}
+                  <tr className="hover:bg-bg-light transition-colors">
+                    <Td className="pr-0">
+                      <button onClick={() => openIdentities(a.asset_id)} aria-label="Show identities"
+                        className="text-txt-light hover:text-navy">
+                        {expanded === a.asset_id ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                       </button>
-                    </td>
-                    <td className="px-3 py-2.5 font-medium text-txt-primary">
-                      {a.fleet_code}
-                      {a.registration_no && (
-                        <span className="text-txt-light font-mono text-[11px] ml-2">{a.registration_no}</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2.5 text-txt-muted">{a.asset_type}</td>
-                    <td className="px-3 py-2.5 text-txt-muted hidden md:table-cell">
+                    </Td>
+                    <Td>
+                      <div className="font-semibold text-navy text-[13px]">{a.nickname || a.fleet_code}</div>
+                      <div className="text-[11px] text-txt-light font-mono">
+                        {a.fleet_code}{a.registration_no ? ` · ${a.registration_no}` : ""}
+                      </div>
+                    </Td>
+                    <Td>
+                      <Chip tone={CATEGORY_TONE[a.category] ?? "slate"} dot={false}>{a.asset_type}</Chip>
+                    </Td>
+                    <Td className="hidden md:table-cell text-txt-muted">
                       {[a.make, a.model].filter(Boolean).join(" ") || "—"}
-                    </td>
-                    <td className="px-3 py-2.5 text-txt-muted">
-                      {a.ownership === "HIRED" ? (a.owner ?? "Hired") : "BAL"}
-                    </td>
-                    <td className="px-3 py-2.5">
-                      {a.alias_count === 0 ? (
-                        <span className="text-warning text-[11.5px]">none</span>
-                      ) : (
-                        <span className="text-txt-muted text-[11px] font-mono">{a.alias_systems}</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <span className={`px-2 py-0.5 rounded border text-[11px] font-medium ${STATUS_STYLE[a.status] ?? STATUS_STYLE.IDLE}`}>
-                        {a.status.toLowerCase()}
-                      </span>
-                    </td>
+                    </Td>
+                    <Td>
+                      {a.ownership === "HIRED"
+                        ? <Chip tone="amber" dot={false}>{a.owner ?? "Hired"}</Chip>
+                        : <span className="text-txt-muted">BAL</span>}
+                    </Td>
+                    <Td>
+                      {a.alias_count === 0
+                        ? <Chip tone="amber">none</Chip>
+                        : <span className="text-[11px] font-mono text-txt-muted">{a.alias_systems}</span>}
+                    </Td>
+                    <Td className="text-right">
+                      <Chip tone={STATUS_TONE[a.status] ?? "slate"}>{a.status.toLowerCase()}</Chip>
+                    </Td>
                   </tr>
 
                   {expanded === a.asset_id && (
-                    <tr className="bg-bg-base/60">
-                      <td />
-                      <td colSpan={6} className="px-3 py-3">
-                        <div className="text-[11px] font-bold uppercase tracking-[0.12em] text-txt-light mb-2 font-condensed">
+                    <tr className="bg-bg-light">
+                      <Td /><Td colSpan={6} className="pb-4">
+                        <div className="text-[10.5px] font-bold uppercase tracking-[.12em] text-txt-light mb-2 font-condensed">
                           What other systems call this machine
                         </div>
                         {identities.length === 0 ? (
-                          <p className="text-txt-light text-[12px] mb-2">
+                          <p className="text-txt-muted text-[12px] mb-3">
                             Nothing linked yet — this machine&apos;s telematics, handover and
                             weighbridge records cannot be joined to it.
                           </p>
@@ -409,19 +282,21 @@ export default function EquipmentPanel() {
                           <div className="flex flex-wrap gap-2 mb-3">
                             {identities.map((i) => (
                               <span key={i.asset_identity_id}
-                                    className="inline-flex items-center gap-2 rounded border border-border bg-bg-section px-2.5 py-1 text-[11.5px]">
-                                <span className="text-txt-light">{i.system}</span>
-                                <span className="font-mono text-txt-primary">{i.external_code}</span>
-                                <button onClick={() => removeAlias(i.asset_identity_id, a.asset_id)}
-                                        className="text-txt-light hover:text-red-400" aria-label="Remove">
-                                  <Trash2 className="w-3 h-3" />
-                                </button>
+                                className="inline-flex items-center gap-2 rounded-lg bg-bg-base ring-1 ring-border px-2.5 py-1 text-[11.5px]">
+                                <span className="text-txt-light font-semibold">{i.system}</span>
+                                <span className="font-mono text-navy">{i.external_code}</span>
+                                {mayManage && (
+                                  <button onClick={() => removeAlias(i.asset_identity_id, a.asset_id)}
+                                    className="text-txt-light hover:text-rose" aria-label="Remove">
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                )}
                               </span>
                             ))}
                           </div>
                         )}
-                        <AliasAdder onAdd={(sys, code) => addAlias(a.asset_id, sys, code)} />
-                      </td>
+                        {mayManage && <AliasAdder onAdd={(s, c) => addAlias(a.asset_id, s, c)} />}
+                      </Td>
                     </tr>
                   )}
                 </React.Fragment>
@@ -429,83 +304,30 @@ export default function EquipmentPanel() {
             </tbody>
           </table>
         </div>
-      </section>
-
-      {/* ── Ideal operating model ────────────────────────────── */}
-      <section className="rounded-lg border border-border-light bg-bg-base">
-        <header className="px-4 py-3 border-b border-border-light">
-          <h2 className="text-txt-primary text-[13px] font-semibold tracking-wide">Rated capacity by type</h2>
-          <p className="text-txt-light text-[11.5px] mt-0.5">
-            These set every capacity-gap figure the platform reports. Left blank until
-            someone signs them off — a guess here quietly becomes fact everywhere.
-          </p>
-        </header>
-        <div className="p-4 overflow-x-auto">
-          <table className="w-full min-w-[520px] text-[12.5px]">
-            <thead className="text-txt-light">
-              <tr>
-                <th className="text-left font-medium px-3 py-2">Type</th>
-                <th className="text-left font-medium px-3 py-2">Category</th>
-                <th className="text-right font-medium px-3 py-2">Machines</th>
-                <th className="text-right font-medium px-3 py-2">Output / hr</th>
-                <th className="text-right font-medium px-3 py-2">Fuel L/hr</th>
-                <th className="text-right font-medium px-3 py-2">Crew</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5">
-              {types.map((t) => (
-                <tr key={t.asset_type_id} className="text-txt-secondary">
-                  <td className="px-3 py-2.5">{t.name}</td>
-                  <td className="px-3 py-2.5 text-txt-light text-[11.5px]">{t.category}</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums text-txt-muted">{t.asset_count}</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums">
-                    {t.rated_output_per_hr ?? <span className="text-warning">not set</span>}
-                  </td>
-                  <td className="px-3 py-2.5 text-right tabular-nums">
-                    {t.rated_fuel_lph ?? <span className="text-warning">not set</span>}
-                  </td>
-                  <td className="px-3 py-2.5 text-right tabular-nums">
-                    {t.standard_crew ?? <span className="text-warning">—</span>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      </Card>
     </div>
   );
 }
 
-/** Small inline form for linking one more external name to a machine. */
 function AliasAdder({ onAdd }: { onAdd: (system: string, code: string) => void }) {
   const [system, setSystem] = useState("TELEMATICS");
   const [code, setCode] = useState("");
+  const submit = () => { if (code.trim()) { onAdd(system, code); setCode(""); } };
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <select
-        value={system}
-        onChange={(e) => setSystem(e.target.value)}
-        className="bg-bg-base border border-border rounded-md px-2.5 py-1.5 text-[12px] text-txt-primary focus:outline-none focus:border-gold"
-      >
+      <select value={system} onChange={(e) => setSystem(e.target.value)}
+        className="bg-bg-base border border-border rounded-lg px-2.5 py-1.5 text-[12px] text-txt-primary focus:outline-none focus:border-gold">
         {["TELEMATICS", "HOTO", "WEIGHBRIDGE", "RFID", "SAP", "SECURITY", "LEGACY"].map((s) => (
           <option key={s} value={s}>{s}</option>
         ))}
       </select>
-      <input
-        value={code}
-        onChange={(e) => setCode(e.target.value)}
-        onKeyDown={(e) => { if (e.key === "Enter" && code.trim()) { onAdd(system, code); setCode(""); } }}
+      <input value={code} onChange={(e) => setCode(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
         placeholder="The name that system uses, e.g. MAN18"
-        className="bg-bg-base border border-border rounded-md px-3 py-1.5 text-[12px] text-txt-primary placeholder:text-txt-light focus:outline-none focus:border-gold w-[260px] max-w-full font-mono"
-      />
-      <button
-        onClick={() => { if (code.trim()) { onAdd(system, code); setCode(""); } }}
-        disabled={!code.trim()}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-medium border border-border text-white/70 hover:text-txt-primary hover:border-white/25 disabled:opacity-30"
-      >
+        className={`${inputClass} font-mono w-[280px] max-w-full py-1.5`} />
+      <Button size="sm" variant="secondary" onClick={submit} disabled={!code.trim()}>
         <Link2 className="w-3.5 h-3.5" /> Link
-      </button>
+      </Button>
     </div>
   );
 }
