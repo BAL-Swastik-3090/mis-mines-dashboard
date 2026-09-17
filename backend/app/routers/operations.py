@@ -1003,6 +1003,161 @@ def resolve_exception(ops_exception_id: int, request: Request, body: dict = Body
     return {"ok": True}
 
 
+# ── analysis ─────────────────────────────────────────────────────────────────
+@router.get("/analysis")
+def analysis(days: int = Query(30, ge=1, le=365),
+             plant_id: int | None = Query(None),
+             db: Session = Depends(get_minehub_db)) -> dict:
+    """Where the hours went, and what stopped the work.
+
+    Every figure here is counted from events that were recorded for their own
+    reasons — a deployment that started and ended, a hold that was opened and
+    released, a handover that was blocked. Nothing is a separately maintained
+    statistic, because a statistic maintained separately is one that disagrees
+    with the thing it describes.
+
+    Lost hours carry their reason. "Eighteen hours down" is not actionable;
+    "eleven of them waiting for an operator" is a rostering problem, and the
+    same eleven under breakdown is a maintenance one.
+    """
+    window = {"days": days, "plant": plant_id}
+
+    fleet = db.execute(text("""
+        SELECT count(*) FILTER (WHERE COALESCE(a.status, 'ACTIVE') = 'ACTIVE')      AS active,
+               count(*)                                                            AS total
+        FROM asset a
+        WHERE (CAST(:plant AS bigint) IS NULL OR a.plant_id = CAST(:plant AS bigint))
+          AND COALESCE(a.status, 'ACTIVE') <> 'DISPOSED'
+    """), window).mappings().first()
+
+    # Deployment hours, from the readings where they were taken and from the
+    # clock where they were not. Both are said, because a figure that silently
+    # mixes a meter with a wall clock is a figure nobody can check.
+    worked = db.execute(text("""
+        SELECT count(*)                                              AS deployments,
+               count(*) FILTER (WHERE d.status = 'RELEASED')          AS completed,
+               count(*) FILTER (WHERE d.override_reason IS NOT NULL)  AS overridden,
+               COALESCE(sum(EXTRACT(EPOCH FROM (COALESCE(d.ended_at, now()) - d.started_at))
+                            / 3600.0) FILTER (WHERE d.started_at IS NOT NULL), 0) AS clock_hours,
+               COALESCE(sum(d.end_reading - d.start_reading)
+                        FILTER (WHERE d.end_reading IS NOT NULL
+                                  AND d.start_reading IS NOT NULL), 0)            AS meter_hours,
+               count(DISTINCT d.operator_id)                         AS operators_used,
+               count(DISTINCT d.asset_id)                            AS machines_used
+        FROM deployment d
+        JOIN asset a ON a.asset_id = d.asset_id
+        WHERE d.created_at >= now() - make_interval(days => :days)
+          AND (CAST(:plant AS bigint) IS NULL OR a.plant_id = CAST(:plant AS bigint))
+    """), window).mappings().first()
+
+    lost = db.execute(text("""
+        SELECT ae.state,
+               count(*)                                                      AS occurrences,
+               round(COALESCE(sum(EXTRACT(EPOCH FROM
+                     (COALESCE(ae.ended_at, now()) - ae.started_at)) / 3600.0), 0)::numeric, 1) AS hours,
+               count(*) FILTER (WHERE ae.ended_at IS NULL)                    AS still_open
+        FROM availability_event ae
+        LEFT JOIN asset a ON a.asset_id = ae.asset_id
+        WHERE ae.started_at >= now() - make_interval(days => :days)
+          AND ae.asset_id IS NOT NULL
+          AND ae.state <> 'AVAILABLE'
+          AND (CAST(:plant AS bigint) IS NULL OR a.plant_id = CAST(:plant AS bigint))
+        GROUP BY ae.state
+        ORDER BY hours DESC
+    """), window).mappings().all()
+
+    absence = db.execute(text("""
+        SELECT ae.state, count(*) AS occurrences,
+               count(DISTINCT ae.operator_id) AS people
+        FROM availability_event ae
+        WHERE ae.started_at >= now() - make_interval(days => :days)
+          AND ae.operator_id IS NOT NULL AND ae.state IN ('ABSENT','LEAVE','MEDICAL_HOLD','SUSPENDED')
+        GROUP BY ae.state ORDER BY occurrences DESC
+    """), window).mappings().all()
+
+    handover = db.execute(text("""
+        SELECT count(*)                                            AS total,
+               count(*) FILTER (WHERE status = 'COMPLETED')         AS completed,
+               count(*) FILTER (WHERE status = 'BLOCKED')           AS blocked,
+               count(*) FILTER (WHERE status = 'PENDING')           AS pending,
+               round(COALESCE(avg(EXTRACT(EPOCH FROM (updated_at - created_at)) / 60.0)
+                     FILTER (WHERE status = 'COMPLETED'), 0)::numeric, 1) AS avg_minutes,
+               count(*) FILTER (WHERE jsonb_array_length(defects) > 0) AS with_defects
+        FROM hoto WHERE created_at >= now() - make_interval(days => :days)
+    """), window).mappings().first()
+
+    exceptions = db.execute(text("""
+        SELECT kind, severity, count(*) AS raised,
+               count(*) FILTER (WHERE status IN ('OPEN','ACKNOWLEDGED')) AS still_open,
+               round(COALESCE(avg(EXTRACT(EPOCH FROM (resolved_at - created_at)) / 3600.0)
+                     FILTER (WHERE resolved_at IS NOT NULL), 0)::numeric, 1) AS avg_hours_to_resolve
+        FROM ops_exception WHERE created_at >= now() - make_interval(days => :days)
+        GROUP BY kind, severity ORDER BY raised DESC
+    """), window).mappings().all()
+
+    # The machines that cost the most time, which is not always the ones that
+    # broke most often.
+    worst = db.execute(text("""
+        SELECT a.fleet_code, a.nickname, t.name AS asset_type,
+               count(*) AS holds,
+               round(COALESCE(sum(EXTRACT(EPOCH FROM
+                     (COALESCE(ae.ended_at, now()) - ae.started_at)) / 3600.0), 0)::numeric, 1) AS hours
+        FROM availability_event ae
+        JOIN asset a           ON a.asset_id = ae.asset_id
+        LEFT JOIN asset_type t ON t.asset_type_id = a.asset_type_id
+        WHERE ae.started_at >= now() - make_interval(days => :days)
+          AND ae.state IN ('BREAKDOWN','MAINTENANCE','INSPECTION_HOLD','COMPLIANCE_HOLD','PLANNED_DOWN')
+          AND (CAST(:plant AS bigint) IS NULL OR a.plant_id = CAST(:plant AS bigint))
+        GROUP BY a.fleet_code, a.nickname, t.name
+        ORDER BY hours DESC LIMIT 8
+    """), window).mappings().all()
+
+    shifts = db.execute(text("""
+        SELECT count(*)                                        AS shifts,
+               count(*) FILTER (WHERE status = 'CLOSED')        AS closed,
+               count(*) FILTER (WHERE status = 'OPEN')          AS open
+        FROM shift_instance
+        WHERE production_day >= CURRENT_DATE - :days
+    """), window).mappings().first()
+
+    # Readiness right now, which is the only moment it can be measured — it is
+    # derived, so there is no history of it unless one is deliberately kept.
+    ready = {"READY": 0, "READY_WITH_WARNING": 0, "BLOCKED": 0}
+    reasons: dict[str, int] = {}
+    for row in db.execute(text("""
+        SELECT a.asset_id FROM asset a
+        WHERE COALESCE(a.status, 'ACTIVE') = 'ACTIVE'
+          AND (CAST(:plant AS bigint) IS NULL OR a.plant_id = CAST(:plant AS bigint))
+    """), window).mappings().all():
+        state = readiness.machine_state(db, row["asset_id"])
+        deployment = state.get("deployment")
+        check = readiness.deployment_readiness(
+            db, row["asset_id"], deployment["operator_id"] if deployment else None)
+        ready[check.status] = ready.get(check.status, 0) + 1
+        for blocker in check.blockers:
+            # Group by the kind of problem, not its particulars, so "no licence"
+            # counts as one recurring thing rather than as twelve names.
+            key = blocker.split("—")[0].strip()
+            key = key.split("(")[0].strip()
+            reasons[key] = reasons.get(key, 0) + 1
+
+    return {
+        "window_days": days,
+        "fleet": dict(fleet or {}),
+        "work": {k: (float(v) if isinstance(v, (int, float)) and k.endswith("hours") else v)
+                 for k, v in dict(worked or {}).items()},
+        "lost_hours": [dict(r) for r in lost],
+        "absence": [dict(r) for r in absence],
+        "handover": dict(handover or {}),
+        "exceptions": [dict(r) for r in exceptions],
+        "worst_machines": [dict(r) for r in worst],
+        "shifts": dict(shifts or {}),
+        "readiness_now": ready,
+        "top_blockers": sorted(({"reason": k, "machines": v} for k, v in reasons.items()),
+                               key=lambda x: -x["machines"])[:8],
+    }
+
+
 @router.get("/meta/me")
 def whoami(request: Request) -> dict:
     """What this user may do here, so the screen offers only what will work."""

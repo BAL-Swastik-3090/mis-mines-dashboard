@@ -1,5 +1,6 @@
 "use client";
-import { LayoutDashboard, Gauge, Zap, Activity, ClipboardList, Sparkles, Boxes, ShieldCheck,
+import {
+  Radar, LayoutDashboard, Gauge, Zap, Activity, ClipboardList, Sparkles, Boxes, ShieldCheck,
          ChevronLeft, ChevronRight, LogOut, ExternalLink } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { useSidebar }               from "@/contexts/useSidebar";
@@ -45,6 +46,12 @@ const ACCESS_ITEM: NavItem =
 const PLATFORM_ITEM: NavItem =
   { kind: "page", id: "minehub", label: "MineHub Platform", icon: Boxes };
 
+/* Shift Control is daily work for a supervisor rather than administration, so it
+   sits with the operational pages and behind its own permission — the board
+   names who is on which machine. */
+const OPERATIONS_ITEM: NavItem =
+  { kind: "page", id: "operations", label: "Shift Control", icon: Radar };
+
 const ITEM_BASE =
   "w-full flex items-center gap-3 px-3 py-2.5 transition-colors duration-150 relative group";
 
@@ -75,6 +82,7 @@ export default function AppSidebar() {
     ),
     // Permission, not role name — a role created in the UI reaches these entries
     // without any code change.
+    ...(canAny("ops.shift.view") ? [OPERATIONS_ITEM] : []),
     ...(canAny("access.users.view") ? [ACCESS_ITEM] : []),
     ...(canAny("platform.registry.view") ? [PLATFORM_ITEM] : []),
   ];
