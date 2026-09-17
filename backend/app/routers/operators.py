@@ -151,14 +151,19 @@ def _revise(db, request: Request, operator_id: int, version: int, action: str,
 
 
 def _activity(db, request: Request, event_type: str, operator_id: int | None = None,
-              payload: dict | None = None) -> None:
-    """The append-only log, shared with the equipment side."""
-    db.execute(text(
-        "INSERT INTO event (occurred_at, event_type, source, payload, created_by) "
-        "VALUES (now(), :t, 'MINEHUB', CAST(:p AS jsonb), :by)"
-    ), {"t": event_type,
-        "p": json.dumps({**(payload or {}), "operator_id": operator_id}, default=str),
-        "by": _actor(request)})
+              payload: dict | None = None, party_id: int | None = None) -> None:
+    """The append-only log, shared with the equipment side.
+
+    party_id is a real column on the event table, so an operator's activity can
+    be found by the person rather than only by reading payloads.
+    """
+    db.execute(text("""
+        INSERT INTO event (event_type, occurred_at, recorded_at, source,
+                           party_id, payload, recorded_by)
+        VALUES (:t, now(), now(), 'WEB', :party, CAST(:p AS jsonb), :by)
+    """), {"t": event_type, "party": party_id,
+           "p": json.dumps({**(payload or {}), "operator_id": operator_id}, default=str),
+           "by": _actor(request)})
 
 
 # ── the register ─────────────────────────────────────────────────────────────
@@ -406,7 +411,7 @@ def create_operator(request: Request, body: dict = Body(...),
             {k: {"from": None, "to": _jsonable(v)} for k, v in {**party, **data}.items() if v is not None},
             remarks="Profile started")
     _activity(db, request, "OPERATOR_REGISTERED", operator_id,
-              {"name": name, "operator_ref": created["operator_ref"]})
+              {"name": name, "operator_ref": created["operator_ref"]}, party_id=party_id)
     db.commit()
     return {"ok": True, "operator_id": operator_id, "party_id": party_id,
             "operator_ref": created["operator_ref"]}
