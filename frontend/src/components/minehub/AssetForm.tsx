@@ -324,7 +324,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   /** Raise a message that finds the reader wherever they are on the sheet. */
   const raise = (msg: string) => { setNotice(null); setError(msg); };
 
-  const submit = async (then: "stay" | "submit" = "stay") => {
+  const submit = async (then: "stay" | "submit" = "stay"): Promise<boolean> => {
     // Only the path that puts this in front of someone else checks for
     // completeness. Saving a draft takes whatever has been typed so far — the
     // rest can be filled in after a walk to the machine.
@@ -342,7 +342,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
         // Take the person to the first one; a mark they cannot see helps nobody.
         document.getElementById(FIELD_INPUT[short[0][0]])
           ?.scrollIntoView({ behavior: "smooth", block: "center" });
-        return;
+        return false;
       }
       setInvalid(new Set());
     }
@@ -358,7 +358,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
           : "Nothing had changed.");
         await loadAsset(); await loadRevisions();
         setSaving(false);
-        return;
+        return true;
       }
       const created = await api.post("/minehub/assets", {
         ...f, documents: docs, schedules: scheds,
@@ -377,7 +377,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
       }).catch(() => {});
 
       const newId = created.data?.asset_id as number | undefined;
-      if (!newId) { onDone(); return; }      // nothing to stay on
+      if (!newId) { onDone(); return true; }   // nothing to stay on
       setCreatedId(newId);
       setSaved(snapshot);
       onSaved?.();                           // the register behind is now stale
@@ -388,9 +388,11 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
         setNotice("Saved as draft. Nothing is on the register until it is approved — "
                 + "submit it when the details are complete.");
       }
+      return true;
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       raise(d ?? "Could not register the machine.");
+      return false;
     } finally { setSaving(false); }
   };
 
@@ -410,6 +412,19 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
 
   /** Going back, with whatever is unsaved accounted for. */
   const leave = () => { if (dirty) setAsk("leave"); else onCancel(); };
+
+  /** The answer most people want: keep the work, then go. Leaving is held back
+   *  until the save actually lands, or a failed write would take the changes
+   *  with it. */
+  const saveAndLeave = async () => {
+    setBusy("save-leave");
+    const stored = await submit("stay");
+    setBusy(null);
+    if (!stored) { setAsk(null); return; }   // the message says what went wrong
+    setAsk(null);
+    onSaved?.();
+    onDone();
+  };
 
   const discard = async () => {
     setAsk(null);
@@ -480,10 +495,15 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
       </Dialog>
 
       <Dialog open={ask === "leave"} tone="warning" title="Leave without saving?"
-        confirmLabel="Leave, lose the changes" cancelLabel="Stay here"
-        onConfirm={() => { setAsk(null); onCancel(); }} onCancel={() => setAsk(null)}>
-        This sheet has changes that have not been saved. Saving as a draft keeps
-        them — nothing has to be complete for that.
+        confirmLabel={editing ? "Save and leave" : "Save as draft and leave"}
+        cancelLabel="Stay here"
+        busy={busy === "save-leave"}
+        onConfirm={saveAndLeave}
+        onCancel={() => setAsk(null)}
+        secondary={{ label: "Leave, lose the changes", tone: "danger",
+                     onClick: () => { setAsk(null); onCancel(); } }}>
+        This sheet has changes that have not been saved. Keeping them costs
+        nothing — a draft does not have to be complete.
       </Dialog>
     </>
   );
