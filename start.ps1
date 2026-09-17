@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 #  Mines Dashboard — Windows Startup Script (PowerShell)
 #  Checks ports, then starts frontend + backend natively
 #  Usage: .\start.ps1
@@ -38,6 +38,27 @@ if ($portCheckExitCode -ne 0) {
     Write-Host "     Run: .\scripts\check_ports.ps1 -Fix" -ForegroundColor Yellow
     Write-Host ""
     exit 1
+}
+
+# ── Step 1b: the MineHub tunnel ───────────────────────────────
+# MineHub's data lives on the corporate PostgreSQL box. From the office LAN the
+# backend reaches it directly; over the VPN the server sees a different address
+# and pg_hba refuses it unencrypted, while the server does not serve TLS. An SSH
+# tunnel sidesteps both: the connection arrives as 127.0.0.1, which is trusted.
+# Without it every MineHub screen answers 503 while the rest of the dashboard,
+# which reads MySQL, carries on — a confusing half-failure worth naming up front.
+$pgPort = (Select-String -Path "$PSScriptRoot\.env" -Pattern '^PG_PORT=(\d+)' -EA 0).Matches.Groups[1].Value
+$pgHost = (Select-String -Path "$PSScriptRoot\.env" -Pattern '^PG_HOST=(.+)' -EA 0).Matches.Groups[1].Value
+if ($pgHost -match 'localhost|127\.0\.0\.1') {
+    $tunnel = Get-NetTCPConnection -LocalPort $pgPort -State Listen -EA SilentlyContinue
+    if ($tunnel) {
+        Write-Host "  ✅ MineHub tunnel is up on port $pgPort" -ForegroundColor Green
+    } else {
+        Write-Host "  ⚠️  Nothing is listening on port $pgPort — MineHub screens will show a database error." -ForegroundColor Yellow
+        Write-Host "     Open the tunnel in its own window, then start again:" -ForegroundColor Yellow
+        Write-Host "     ssh -L ${pgPort}:127.0.0.1:5432 USER@POSTGRES-HOST" -ForegroundColor Yellow
+    }
+    Write-Host ""
 }
 
 if ($CheckOnly) {

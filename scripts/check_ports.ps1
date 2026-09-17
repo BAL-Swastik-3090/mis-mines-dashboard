@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 #  Mines Dashboard — Port Availability Checker (PowerShell)
 #  Usage: .\scripts\check_ports.ps1
 #         .\scripts\check_ports.ps1 -Fix
@@ -83,7 +83,7 @@ foreach ($p in $ports) {
         if ($Fix) {
             Write-Yellow "             To free this port:"
             Write-Yellow "               Find PID : netstat -ano | findstr :$($p.Port)"
-            Write-Yellow "               Kill PID : taskkill /PID <PID> /F"
+            Write-Yellow "               Kill PID : taskkill /PID THE-PID /F"
         }
 
         if ($p.Required) { $allRequiredFree = $false }

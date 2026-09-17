@@ -147,6 +147,7 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onChanged }: 
           <AssetForm
             assetId={editingId ?? undefined}
             prefill={prefill}
+            onSaved={() => { void load(); onChanged?.(); }}
             onDone={() => {
               onAddOpenChange?.(false); setEditingId(null); setPrefill({});
               setNotice("Machine registered."); void load(); onChanged?.();

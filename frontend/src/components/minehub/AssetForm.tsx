@@ -107,14 +107,22 @@ function Sheet({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default function AssetForm({ assetId, prefill, onDone, onCancel }: {
+export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel }: {
   /** Editing an existing machine rather than registering a new one. */
   assetId?: number;
   prefill?: { fleet_code?: string; telematics_code?: string };
+  /** A save happened — the register behind this form is out of date. */
+  onSaved?: () => void;
   onDone: () => void;
   onCancel: () => void;
 }) {
-  const editing = Boolean(assetId);
+  // A machine just created in this session. Keeping its id turns the form into
+  // the edit form for what was saved, so the draft status, the approval button
+  // and the trail appear where the person is already looking — rather than
+  // after they find the row again in the register and reopen it.
+  const [createdId, setCreatedId] = useState<number | null>(null);
+  const id = assetId ?? createdId;
+  const editing = Boolean(id);
   const [types, setTypes] = useState<AssetType[]>([]);
   const [parties, setParties] = useState<Party[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
@@ -153,18 +161,18 @@ export default function AssetForm({ assetId, prefill, onDone, onCancel }: {
   }, []);
 
   const loadRevisions = useCallback(async () => {
-    if (!assetId) return;
+    if (!id) return;
     setLoadingRev(true);
     try {
-      const r = await api.get(`/minehub/assets/${assetId}/revisions`);
+      const r = await api.get(`/minehub/assets/${id}/revisions`);
       setRevisions(r.data ?? []);
     } catch { setRevisions([]); } finally { setLoadingRev(false); }
-  }, [assetId]);
+  }, [id]);
 
   const loadAsset = useCallback(async () => {
-    if (!assetId) return;
+    if (!id) return;
     try {
-      const r = await api.get(`/minehub/assets/${assetId}`);
+      const r = await api.get(`/minehub/assets/${id}`);
       const a = r.data ?? {};
       setLoaded(a);
       // Dates arrive as ISO and the inputs want yyyy-mm-dd; everything else
@@ -192,7 +200,7 @@ export default function AssetForm({ assetId, prefill, onDone, onCancel }: {
     } catch {
       setError("Could not load this machine.");
     }
-  }, [assetId]);
+  }, [id]);
 
   useEffect(() => { void loadAsset(); void loadRevisions(); }, [loadAsset, loadRevisions]);
 
@@ -210,7 +218,7 @@ export default function AssetForm({ assetId, prefill, onDone, onCancel }: {
     return Math.round((done / total) * 100);
   }, [f]);
 
-  const submit = async () => {
+  const submit = async (then: "stay" | "submit" = "stay") => {
     if (!f.fleet_code?.trim()) { setError("Fleet code is required."); return; }
     if (!f.asset_type_id) { setError("Choose an equipment type."); return; }
     if (isHired && !f.owner_party_id) { setError("A hired machine must record its contractor."); return; }
@@ -218,7 +226,7 @@ export default function AssetForm({ assetId, prefill, onDone, onCancel }: {
     setSaving(true); setError(null);
     try {
       if (editing) {
-        const r = await api.put(`/minehub/assets/${assetId}`, f);
+        const r = await api.put(`/minehub/assets/${id}`, f);
         setNotice(r.data?.changed
           ? `Saved — ${r.data.changed} field${r.data.changed === 1 ? "" : "s"} changed, now v${r.data.version}.`
              + (r.data.approval_reset ? " Approval was reset, because what was approved is no longer what is on file." : "")
@@ -227,7 +235,7 @@ export default function AssetForm({ assetId, prefill, onDone, onCancel }: {
         setSaving(false);
         return;
       }
-      await api.post("/minehub/assets", {
+      const created = await api.post("/minehub/assets", {
         ...f, documents: docs, schedules: scheds,
         identities: idents.filter((i) => i.external_code.trim()),
       });
@@ -242,7 +250,18 @@ export default function AssetForm({ assetId, prefill, onDone, onCancel }: {
           ...scheds.map((s) => ({ category: "SERVICE_NAME", value: s.name })),
         ].filter((v) => v.value),
       }).catch(() => {});
-      onDone();
+
+      const newId = created.data?.asset_id as number | undefined;
+      if (!newId) { onDone(); return; }      // nothing to stay on
+      setCreatedId(newId);
+      onSaved?.();                           // the register behind is now stale
+      if (then === "submit") {
+        await api.post(`/minehub/assets/${newId}/submit`, {});
+        setNotice("Saved and submitted for approval. Someone else has to approve it.");
+      } else {
+        setNotice("Saved as draft. Nothing is on the register until it is approved — "
+                + "submit it when the details are complete.");
+      }
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(d ?? "Could not register the machine.");
@@ -258,7 +277,7 @@ export default function AssetForm({ assetId, prefill, onDone, onCancel }: {
     }
     setBusy(what); setError(null);
     try {
-      await api.post(`/minehub/assets/${assetId}/${what}`, { remarks });
+      await api.post(`/minehub/assets/${id}/${what}`, { remarks });
       setNotice(what === "approve" ? "Approved onto the register."
         : what === "submit" ? "Submitted for approval."
         : "Sent back for correction.");
@@ -767,11 +786,23 @@ export default function AssetForm({ assetId, prefill, onDone, onCancel }: {
 
       <div className="flex flex-wrap gap-2 pt-1 sticky bottom-0 bg-bg-base/95 backdrop-blur py-3 -mx-1 px-1
                       border-t border-border-light">
-        <Button variant="primary" size="lg" onClick={submit} disabled={saving}>
+        <Button variant="primary" size="lg" onClick={() => submit("stay")} disabled={saving}>
           {saving ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
-                  : <><Check className="w-4 h-4" /> {editing ? "Save changes" : "Register machine"}</>}
+                  : <><Check className="w-4 h-4" /> {editing ? "Save changes" : "Save as draft"}</>}
         </Button>
-        <Button variant="ghost" size="lg" onClick={onCancel}>Cancel</Button>
+        {!editing && (
+          <Button variant="accent" size="lg" onClick={() => submit("submit")} disabled={saving}>
+            <Send className="w-4 h-4" /> Save and submit for approval
+          </Button>
+        )}
+        <Button variant="ghost" size="lg" onClick={onCancel}>
+          {editing ? "Back to registry" : "Cancel"}
+        </Button>
+        <p className="w-full text-[11.5px] text-txt-light pt-0.5">
+          {editing
+            ? "Each save records what changed, against your name, in the trail on the right."
+            : "A draft is yours to finish — it stays off the register until someone else approves it."}
+        </p>
       </div>
     </div>
   );
