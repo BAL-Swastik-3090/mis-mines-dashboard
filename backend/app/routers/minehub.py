@@ -563,3 +563,71 @@ def list_locations(db: Session = Depends(get_minehub_db)) -> list[dict]:
         "FROM location WHERE status = 'ACTIVE' ORDER BY location_type, name"
     )).mappings().all()
     return [dict(r) for r in rows]
+
+
+# ------------------------------------------------------------------ lookups
+@router.get("/lookups")
+def list_lookups(category: str = Query(...), q: str = Query(""),
+                 db: Session = Depends(get_minehub_db)) -> list[dict]:
+    """Suggestions for one field.
+
+    Ordered by how often each has been chosen, so the values people actually use
+    rise above the ones seeded and never picked. Alphabetical would bury them.
+    """
+    where = ["category = :c", "status = 'ACTIVE'"]
+    params: dict = {"c": category.upper()}
+    if q.strip():
+        where.append("value ILIKE :q")
+        params["q"] = f"%{q.strip()}%"
+    rows = db.execute(text(
+        f"SELECT lookup_id, value, usage_count, is_system FROM lookup "
+        f"WHERE {' AND '.join(where)} ORDER BY usage_count DESC, value LIMIT 50"
+    ), params).mappings().all()
+    return [dict(r) for r in rows]
+
+
+@router.post("/lookups")
+def add_lookup(request: Request, body: dict = Body(...),
+               db: Session = Depends(get_minehub_db)) -> dict:
+    """Add a value a user could not find.
+
+    Deliberately never refused. The aim is standardisation, not gatekeeping: if
+    adding is hard, people type into a free-text field instead and the register
+    fragments — which is exactly how the legacy driver master ended up recording
+    equipment types that match nothing.
+    """
+    category = (body.get("category") or "").strip().upper()
+    value = (body.get("value") or "").strip()
+    if not category or not value:
+        raise HTTPException(400, "Both a category and a value are required.")
+
+    # Same value in a different case is the same value. Return the existing one
+    # rather than creating a near-duplicate.
+    existing = db.execute(text(
+        "SELECT lookup_id, value FROM lookup WHERE category = :c AND lower(value) = lower(:v)"
+    ), {"c": category, "v": value}).first()
+    if existing:
+        return {"ok": True, "lookup_id": existing[0], "value": existing[1], "existed": True}
+
+    row = db.execute(text(
+        "INSERT INTO lookup (category, value, created_by) VALUES (:c, :v, :by) "
+        "RETURNING lookup_id, value"
+    ), {"c": category, "v": value, "by": _actor(request)}).first()
+    db.commit()
+    return {"ok": True, "lookup_id": row[0], "value": row[1], "existed": False}
+
+
+@router.post("/lookups/used")
+def record_lookup_use(body: dict = Body(...),
+                      db: Session = Depends(get_minehub_db)) -> dict:
+    """Count a value as chosen, so the list learns what this mine uses."""
+    pairs = body.get("values") or []
+    for p in pairs:
+        cat, val = (p.get("category") or "").upper(), (p.get("value") or "").strip()
+        if cat and val:
+            db.execute(text(
+                "UPDATE lookup SET usage_count = usage_count + 1 "
+                "WHERE category = :c AND lower(value) = lower(:v)"
+            ), {"c": cat, "v": val})
+    db.commit()
+    return {"ok": True}
