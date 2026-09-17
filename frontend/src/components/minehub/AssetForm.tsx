@@ -12,10 +12,11 @@
  * click and never refused; the aim is that picking is easier than typing, not
  * that typing is blocked.
  */
-import React, { useEffect, useMemo, useState } from "react";
-import { Plus, Trash2, Check, AlertCircle, Loader2, Info, ArrowLeft } from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Plus, Trash2, Check, AlertCircle, Loader2, Info, ArrowLeft, Send, CheckCircle2, Undo2 } from "lucide-react";
 import api from "@/lib/api";
-import { Alert, Button, Chip } from "./ui";
+import { Alert, Button, Chip, type Tone } from "./ui";
+import RevisionPanel, { type Revision } from "./RevisionPanel";
 import Combobox from "./Combobox";
 
 interface AssetType { asset_type_id: number; name: string; category: string }
@@ -106,11 +107,14 @@ function Sheet({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default function AssetForm({ prefill, onDone, onCancel }: {
+export default function AssetForm({ assetId, prefill, onDone, onCancel }: {
+  /** Editing an existing machine rather than registering a new one. */
+  assetId?: number;
   prefill?: { fleet_code?: string; telematics_code?: string };
   onDone: () => void;
   onCancel: () => void;
 }) {
+  const editing = Boolean(assetId);
   const [types, setTypes] = useState<AssetType[]>([]);
   const [parties, setParties] = useState<Party[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
@@ -129,6 +133,11 @@ export default function AssetForm({ prefill, onDone, onCancel }: {
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState<Record<string, unknown> | null>(null);
+  const [revisions, setRevisions] = useState<Revision[]>([]);
+  const [loadingRev, setLoadingRev] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -142,6 +151,50 @@ export default function AssetForm({ prefill, onDone, onCancel }: {
       } catch { /* the form still works; the pickers are simply empty */ }
     })();
   }, []);
+
+  const loadRevisions = useCallback(async () => {
+    if (!assetId) return;
+    setLoadingRev(true);
+    try {
+      const r = await api.get(`/minehub/assets/${assetId}/revisions`);
+      setRevisions(r.data ?? []);
+    } catch { setRevisions([]); } finally { setLoadingRev(false); }
+  }, [assetId]);
+
+  const loadAsset = useCallback(async () => {
+    if (!assetId) return;
+    try {
+      const r = await api.get(`/minehub/assets/${assetId}`);
+      const a = r.data ?? {};
+      setLoaded(a);
+      // Dates arrive as ISO and the inputs want yyyy-mm-dd; everything else
+      // becomes a string because that is what a form field holds.
+      const asForm: Record<string, string> = {};
+      Object.entries(a).forEach(([k, v]) => {
+        if (v === null || v === undefined || typeof v === "object") return;
+        asForm[k] = String(v);
+      });
+      setF(asForm);
+      setDocs((a.documents ?? []).map((d: Record<string, unknown>) => ({
+        document_type: String(d.document_type ?? "INSURANCE"),
+        document_no: String(d.document_no ?? ""), provider: String(d.provider ?? ""),
+        valid_from: String(d.valid_from ?? ""), valid_upto: String(d.valid_upto ?? ""),
+        amount: String(d.amount ?? ""),
+      })));
+      setScheds((a.schedules ?? []).map((x: Record<string, unknown>) => ({
+        schedule_type: String(x.schedule_type ?? "SERVICE"), name: String(x.name ?? ""),
+        interval_value: String(x.interval_value ?? ""), interval_uom: String(x.interval_uom ?? "HOURS"),
+        last_done_on: String(x.last_done_on ?? ""), last_done_reading: String(x.last_done_reading ?? ""),
+      })));
+      setIdents((a.identities ?? []).map((i: Record<string, unknown>) => ({
+        system: String(i.system ?? "TELEMATICS"), external_code: String(i.external_code ?? ""),
+      })));
+    } catch {
+      setError("Could not load this machine.");
+    }
+  }, [assetId]);
+
+  useEffect(() => { void loadAsset(); void loadRevisions(); }, [loadAsset, loadRevisions]);
 
   const set = (k: string, v: string) => setF((prev) => ({ ...prev, [k]: v }));
   const isElectric = f.fuel_type === "ELECTRIC" || f.fuel_type === "HYBRID";
@@ -164,6 +217,16 @@ export default function AssetForm({ prefill, onDone, onCancel }: {
 
     setSaving(true); setError(null);
     try {
+      if (editing) {
+        const r = await api.put(`/minehub/assets/${assetId}`, f);
+        setNotice(r.data?.changed
+          ? `Saved — ${r.data.changed} field${r.data.changed === 1 ? "" : "s"} changed, now v${r.data.version}.`
+             + (r.data.approval_reset ? " Approval was reset, because what was approved is no longer what is on file." : "")
+          : "Nothing had changed.");
+        await loadAsset(); await loadRevisions();
+        setSaving(false);
+        return;
+      }
       await api.post("/minehub/assets", {
         ...f, documents: docs, schedules: scheds,
         identities: idents.filter((i) => i.external_code.trim()),
@@ -186,7 +249,32 @@ export default function AssetForm({ prefill, onDone, onCancel }: {
     } finally { setSaving(false); }
   };
 
-  return (
+  const act = async (what: "submit" | "approve" | "send-back") => {
+    let remarks: string | undefined;
+    if (what === "send-back") {
+      const said = window.prompt("What needs correcting?");
+      if (!said?.trim()) return;      // a bare rejection helps nobody
+      remarks = said.trim();
+    }
+    setBusy(what); setError(null);
+    try {
+      await api.post(`/minehub/assets/${assetId}/${what}`, { remarks });
+      setNotice(what === "approve" ? "Approved onto the register."
+        : what === "submit" ? "Submitted for approval."
+        : "Sent back for correction.");
+      await loadAsset(); await loadRevisions();
+    } catch (e: unknown) {
+      const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(d ?? "Could not complete that.");
+    } finally { setBusy(null); }
+  };
+
+  const status = String(loaded?.approval_status ?? "DRAFT");
+  const statusTone: Tone =
+    status === "APPROVED" ? "emerald" : status === "SUBMITTED" ? "amber"
+    : status === "SENT_BACK" ? "rose" : "slate";
+
+  const sheet = (
     <div className="space-y-4">
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -197,21 +285,47 @@ export default function AssetForm({ prefill, onDone, onCancel }: {
             <ArrowLeft className="w-4 h-4" /> Back to registry
           </button>
           <h2 className="font-condensed font-extrabold text-[24px] leading-none text-navy">
-            Register a <span className="text-gold-dark">machine</span>
+            {editing
+              ? <>{String(f.nickname || f.fleet_code || "Machine")}<span className="text-gold-dark ml-2 text-[16px] font-mono">v{String(loaded?.version ?? 1)}</span></>
+              : <>Register a <span className="text-gold-dark">machine</span></>}
           </h2>
           <p className="text-[12px] text-txt-muted mt-1.5">
-            Only fleet code and type are required. What is left blank shows up under Alerts
-            rather than blocking the registration.
+            {editing
+              ? "Every change is recorded with its old and new value. Editing an approved machine returns it to draft."
+              : "Only fleet code and type are required. What is left blank shows up under Alerts rather than blocking the registration."}
           </p>
         </div>
-        <Chip tone={filled > 70 ? "emerald" : filled > 35 ? "amber" : "slate"}>
-          {filled}% filled
-        </Chip>
+        <div className="flex flex-wrap items-center gap-2">
+          {editing && <Chip tone={statusTone}>{status.replace("_", " ").toLowerCase()}</Chip>}
+          <Chip tone={filled > 70 ? "emerald" : filled > 35 ? "amber" : "slate"}>
+            {filled}% filled
+          </Chip>
+          {editing && (status === "DRAFT" || status === "SENT_BACK") && (
+            <Button size="sm" variant="accent" disabled={busy !== null} onClick={() => act("submit")}>
+              <Send className="w-3.5 h-3.5" /> Submit for approval
+            </Button>
+          )}
+          {editing && status === "SUBMITTED" && (
+            <>
+              <Button size="sm" variant="primary" disabled={busy !== null} onClick={() => act("approve")}>
+                <CheckCircle2 className="w-3.5 h-3.5" /> Approve
+              </Button>
+              <Button size="sm" variant="danger" disabled={busy !== null} onClick={() => act("send-back")}>
+                <Undo2 className="w-3.5 h-3.5" /> Send back
+              </Button>
+            </>
+          )}
+        </div>
       </div>
 
       {error && (
         <Alert tone="error">
           <span className="inline-flex items-center gap-2"><AlertCircle className="w-4 h-4" />{error}</span>
+        </Alert>
+      )}
+      {notice && (
+        <Alert tone="success">
+          <span className="inline-flex items-center gap-2"><Check className="w-4 h-4" />{notice}</span>
         </Alert>
       )}
 
@@ -319,8 +433,10 @@ export default function AssetForm({ prefill, onDone, onCancel }: {
           ) : (
             <>
               <Row label="SAP asset no." hint="Blank for hired machines — SAP is an identity, not the key">
-                <input id="af-sap" className={cellInput} value={f.sap_asset_no ?? ""}
-                  onChange={(e) => set("sap_asset_no", e.target.value)} />
+                <div className="px-1.5 py-1">
+                  <Combobox id="af-sap" category="SAP_ASSET" value={f.sap_asset_no ?? ""}
+                    onChange={(v) => set("sap_asset_no", v)} placeholder="Search or add…" />
+                </div>
               </Row>
               <Row label="Purchase date">
                 <input id="af-pdate" type="date" className={cellInput} value={f.purchase_date ?? ""}
@@ -628,10 +744,24 @@ export default function AssetForm({ prefill, onDone, onCancel }: {
       <div className="flex flex-wrap gap-2 pt-1 sticky bottom-0 bg-bg-base/95 backdrop-blur py-3 -mx-1 px-1
                       border-t border-border-light">
         <Button variant="primary" size="lg" onClick={submit} disabled={saving}>
-          {saving ? <><Loader2 className="w-4 h-4 animate-spin" /> Registering…</>
-                  : <><Check className="w-4 h-4" /> Register machine</>}
+          {saving ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
+                  : <><Check className="w-4 h-4" /> {editing ? "Save changes" : "Register machine"}</>}
         </Button>
         <Button variant="ghost" size="lg" onClick={onCancel}>Cancel</Button>
+      </div>
+    </div>
+  );
+
+  if (!editing) return sheet;
+
+  // Editing shows the trail beside the sheet: the history is the reason to open
+  // an existing machine at all, and putting it below would hide it under a long
+  // form.
+  return (
+    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_340px] gap-5 items-start">
+      {sheet}
+      <div className="xl:sticky xl:top-[86px]">
+        <RevisionPanel revisions={revisions} loading={loadingRev} />
       </div>
     </div>
   );

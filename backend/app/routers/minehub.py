@@ -14,6 +14,8 @@ Two registers are exposed here, and they are the ones everything else waits on:
 from __future__ import annotations
 
 import json
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from sqlalchemy import text
@@ -210,6 +212,7 @@ def list_assets(q: str = Query(""), status: str = Query(""),
         SELECT a.asset_id, a.fleet_code, a.registration_no, a.make, a.model,
                a.capacity, a.capacity_uom, a.ownership, a.status,
                a.rated_output_per_hr, a.rated_fuel_lph, a.commissioned_on,
+               a.nickname, a.version, a.approval_status,
                t.asset_type_id, t.name AS asset_type, t.category,
                o.display_name AS owner,
                (SELECT count(*) FROM asset_identity i WHERE i.asset_id = a.asset_id) AS alias_count,
@@ -261,6 +264,9 @@ def create_asset(request: Request, body: dict = Body(...),
 
     _save_children(db, request, asset_id, body, data.get("current_reading"))
 
+    _revise(db, request, asset_id, 1, "CREATED",
+            {k: {"from": None, "to": _jsonable(v)} for k, v in data.items() if v is not None},
+            remarks="Registered")
     _activity(db, request, "ASSET_REGISTERED", asset_id=asset_id,
               payload={"fleet_code": fleet_code, "nickname": data.get("nickname"),
                        "ownership": ownership,
@@ -389,28 +395,180 @@ def alerts(db: Session = Depends(get_minehub_db)) -> list[dict]:
 @router.put("/assets/{asset_id}")
 def update_asset(asset_id: int, request: Request, body: dict = Body(...),
                  db: Session = Depends(get_minehub_db)) -> dict:
-    allowed = ("fleet_code", "registration_no", "asset_type_id", "make", "model",
-               "year_of_make", "capacity", "capacity_uom", "ownership", "owner_party_id",
-               "sap_asset_no", "rated_output_per_hr", "rated_fuel_lph",
-               "commissioned_on", "status", "remarks")
-    fields, params = [], {"id": asset_id}
-    for key in allowed:
-        if key in body:
-            fields.append(f"{key} = :{key}")
-            params[key] = body[key] if body[key] != "" else None
-    if not fields:
-        raise HTTPException(400, "Nothing to update.")
-    if params.get("status") and params["status"] not in ASSET_STATUS:
-        raise HTTPException(400, f"Status must be one of {ASSET_STATUS}.")
+    """Save a change, recording what actually moved.
 
-    res = db.execute(text(
-        f"UPDATE asset SET {', '.join(fields)} WHERE asset_id = :id"), params)
-    if res.rowcount == 0:
-        raise HTTPException(404, "Asset not found.")
+    The diff is taken against the stored row rather than trusted from the
+    client: a form posts every field it holds, so without comparing, a revision
+    would claim forty changes when someone corrected one date.
+    """
+    before = db.execute(text("SELECT * FROM asset WHERE asset_id = :id"),
+                        {"id": asset_id}).mappings().first()
+    if not before:
+        raise HTTPException(404, "Machine not found.")
+
+    data = _clean(body)
+    data.pop("fleet_code", None) if body.get("keep_code") else None
+
+    changes: dict = {}
+    for key, new_value in data.items():
+        old_value = before.get(key)
+        if _same(old_value, new_value):
+            continue
+        changes[key] = {"from": _jsonable(old_value), "to": _jsonable(new_value)}
+
+    if not changes:
+        return {"ok": True, "asset_id": asset_id, "changed": 0,
+                "version": before["version"], "message": "Nothing changed."}
+
+    cols = list(data.keys())
+    # An approved record that is edited goes back to draft: the thing that was
+    # approved is no longer the thing on file.
+    reset_approval = before["approval_status"] == "APPROVED"
+    version = before["version"] + 1
+
+    db.execute(text(
+        f"UPDATE asset SET {', '.join(f'{c} = :{c}' for c in cols)}, version = :ver"
+        + (", approval_status = 'DRAFT', approved_by = NULL, approved_at = NULL" if reset_approval else "")
+        + " WHERE asset_id = :id"
+    ), {**data, "ver": version, "id": asset_id})
+
+    _revise(db, request, asset_id, version, "UPDATED", changes,
+            remarks=body.get("remarks_for_change"))
     _activity(db, request, "ASSET_UPDATED", asset_id=asset_id,
-              payload={k: str(v) for k, v in params.items() if k != "id"})
+              payload={"version": version, "fields": sorted(changes.keys())})
     db.commit()
-    return {"ok": True, "asset_id": asset_id}
+    return {"ok": True, "asset_id": asset_id, "version": version,
+            "changed": len(changes),
+            "approval_reset": reset_approval}
+
+
+def _same(a, b) -> bool:
+    """Whether a stored value and a submitted one mean the same thing.
+
+    Forms return strings; the database returns dates, Decimals and ints. Without
+    normalising, every save would look like a change to every field.
+    """
+    if a is None and b is None:
+        return True
+    if a is None or b is None:
+        return False
+    if isinstance(a, (int, float, Decimal)) or isinstance(b, (int, float, Decimal)):
+        try:
+            return Decimal(str(a)) == Decimal(str(b))
+        except (InvalidOperation, ValueError):
+            pass
+    return str(a).strip() == str(b).strip()
+
+
+def _jsonable(v):
+    if v is None:
+        return None
+    if isinstance(v, Decimal):
+        return float(v)
+    if isinstance(v, (date, datetime)):
+        return v.isoformat()
+    return v
+
+
+def _revise(db, request: Request, asset_id: int, version: int, action: str,
+            changes: dict, remarks: str | None = None) -> None:
+    """Append a revision. Snapshots the record so any version can be read back
+    without replaying everything before it."""
+    snap = db.execute(text("SELECT * FROM asset WHERE asset_id = :id"),
+                      {"id": asset_id}).mappings().first()
+    db.execute(text(
+        "INSERT INTO asset_revision (asset_id, version, action, changes, snapshot, remarks, changed_by) "
+        "VALUES (:a, :v, :act, CAST(:ch AS jsonb), CAST(:sn AS jsonb), :rm, :by)"
+    ), {"a": asset_id, "v": version, "act": action,
+        "ch": json.dumps(changes, default=str),
+        "sn": json.dumps({k: _jsonable(v) for k, v in dict(snap).items()}, default=str) if snap else None,
+        "rm": remarks, "by": _actor(request)})
+
+
+# --------------------------------------------------------------- approval
+@router.post("/assets/{asset_id}/submit")
+def submit_asset(asset_id: int, request: Request, body: dict = Body(default={}),
+                 db: Session = Depends(get_minehub_db)) -> dict:
+    """Put a machine forward for approval."""
+    row = db.execute(text(
+        "SELECT approval_status, version, fleet_code FROM asset WHERE asset_id = :id"
+    ), {"id": asset_id}).first()
+    if not row:
+        raise HTTPException(404, "Machine not found.")
+    if row[0] == "SUBMITTED":
+        raise HTTPException(400, "This machine is already awaiting approval.")
+    if row[0] == "APPROVED":
+        raise HTTPException(400, "This machine is already approved.")
+
+    db.execute(text(
+        "UPDATE asset SET approval_status = 'SUBMITTED', submitted_by = :by, "
+        "submitted_at = now() WHERE asset_id = :id"
+    ), {"by": _actor(request), "id": asset_id})
+    _revise(db, request, asset_id, row[1], "SUBMITTED", {}, remarks=body.get("remarks"))
+    db.commit()
+    return {"ok": True, "approval_status": "SUBMITTED"}
+
+
+@router.post("/assets/{asset_id}/approve")
+def approve_asset(asset_id: int, request: Request, body: dict = Body(default={}),
+                  db: Session = Depends(get_minehub_db)) -> dict:
+    """Accept a machine onto the register.
+
+    Approving your own submission is refused. One person doing both halves is
+    not review, and the register is what contractor billing and statutory
+    compliance are later read from.
+    """
+    row = db.execute(text(
+        "SELECT approval_status, version, submitted_by FROM asset WHERE asset_id = :id"
+    ), {"id": asset_id}).first()
+    if not row:
+        raise HTTPException(404, "Machine not found.")
+    if row[0] != "SUBMITTED":
+        raise HTTPException(400, "Only a machine awaiting approval can be approved.")
+    if row[2] and row[2] == _actor(request):
+        raise HTTPException(
+            403, "You submitted this machine — someone else has to approve it.")
+
+    db.execute(text(
+        "UPDATE asset SET approval_status = 'APPROVED', approved_by = :by, "
+        "approved_at = now() WHERE asset_id = :id"
+    ), {"by": _actor(request), "id": asset_id})
+    _revise(db, request, asset_id, row[1], "APPROVED", {}, remarks=body.get("remarks"))
+    db.commit()
+    return {"ok": True, "approval_status": "APPROVED"}
+
+
+@router.post("/assets/{asset_id}/send-back")
+def send_back_asset(asset_id: int, request: Request, body: dict = Body(default={}),
+                    db: Session = Depends(get_minehub_db)) -> dict:
+    """Return a machine for correction, with a reason."""
+    remarks = (body.get("remarks") or "").strip()
+    if not remarks:
+        raise HTTPException(400, "Say what needs correcting — a bare rejection helps nobody.")
+
+    row = db.execute(text(
+        "SELECT approval_status, version FROM asset WHERE asset_id = :id"
+    ), {"id": asset_id}).first()
+    if not row:
+        raise HTTPException(404, "Machine not found.")
+    if row[0] != "SUBMITTED":
+        raise HTTPException(400, "Only a machine awaiting approval can be sent back.")
+
+    db.execute(text("UPDATE asset SET approval_status = 'SENT_BACK' WHERE asset_id = :id"),
+               {"id": asset_id})
+    _revise(db, request, asset_id, row[1], "SENT_BACK", {}, remarks=remarks)
+    db.commit()
+    return {"ok": True, "approval_status": "SENT_BACK"}
+
+
+@router.get("/assets/{asset_id}/revisions")
+def asset_revisions(asset_id: int, db: Session = Depends(get_minehub_db)) -> list[dict]:
+    """The full history of one machine, newest first."""
+    rows = db.execute(text(
+        "SELECT revision_id, version, action, changes, remarks, changed_by, changed_at "
+        "FROM asset_revision WHERE asset_id = :id ORDER BY changed_at DESC, revision_id DESC"
+    ), {"id": asset_id}).mappings().all()
+    return [dict(r) for r in rows]
 
 
 # -------------------------------------------------------------- identities

@@ -29,9 +29,16 @@ interface Asset {
   registration_no: string | null; make: string | null; model: string | null;
   ownership: string; status: string; asset_type: string; category: string;
   owner: string | null; alias_count: number; alias_systems: string | null;
+  version?: number; approval_status?: string;
 }
 interface Identity { asset_identity_id: number; system: string; external_code: string }
 interface Unmapped { vehicle_desc: string; feed: string; rows_: number; last_seen: string }
+
+/** Approval state is separate from operating state — a machine can be running
+    while its record is still awaiting review. */
+const APPROVAL_TONE: Record<string, Tone> = {
+  DRAFT: "slate", SUBMITTED: "amber", SENT_BACK: "rose", APPROVED: "emerald",
+};
 
 const STATUS_TONE: Record<string, Tone> = {
   ACTIVE: "emerald", MAINTENANCE: "amber", STANDBY: "sky",
@@ -62,6 +69,7 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onChanged }: 
   const [expanded, setExpanded] = useState<number | null>(null);
   const [identities, setIdentities] = useState<Identity[]>([]);
   const [prefill, setPrefill] = useState<{ fleet_code?: string; telematics_code?: string }>({});
+  const [editingId, setEditingId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -132,13 +140,18 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onChanged }: 
   // the unregistered list. Filling a long form beneath a dashboard made it
   // unclear what the screen was for, and left the save button a scroll away
   // from anything explaining it.
-  if (addOpen) {
+  if (addOpen || editingId) {
     return (
       <Card tone="gold">
         <div className="p-5">
-          <AssetForm prefill={prefill}
-            onDone={() => { onAddOpenChange?.(false); setPrefill({}); setNotice("Machine registered."); void load(); onChanged?.(); }}
-            onCancel={() => { onAddOpenChange?.(false); setPrefill({}); }} />
+          <AssetForm
+            assetId={editingId ?? undefined}
+            prefill={prefill}
+            onDone={() => {
+              onAddOpenChange?.(false); setEditingId(null); setPrefill({});
+              setNotice("Machine registered."); void load(); onChanged?.();
+            }}
+            onCancel={() => { onAddOpenChange?.(false); setEditingId(null); setPrefill({}); void load(); }} />
         </div>
       </Card>
     );
@@ -247,10 +260,16 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onChanged }: 
                       </button>
                     </Td>
                     <Td>
-                      <div className="font-semibold text-navy text-[13px]">{a.nickname || a.fleet_code}</div>
-                      <div className="text-[11px] text-txt-light font-mono">
-                        {a.fleet_code}{a.registration_no ? ` · ${a.registration_no}` : ""}
-                      </div>
+                      <button onClick={() => setEditingId(a.asset_id)}
+                        className="text-left group">
+                        <div className="font-semibold text-navy text-[13px] group-hover:text-gold-dark
+                                        group-hover:underline underline-offset-2 transition-colors">
+                          {a.nickname || a.fleet_code}
+                        </div>
+                        <div className="text-[11px] text-txt-light font-mono">
+                          {a.fleet_code}{a.registration_no ? ` · ${a.registration_no}` : ""}
+                        </div>
+                      </button>
                     </Td>
                     <Td>
                       <Chip tone={CATEGORY_TONE[a.category] ?? "slate"} dot={false}>{a.asset_type}</Chip>
@@ -268,7 +287,12 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onChanged }: 
                         ? <Chip tone="amber">none</Chip>
                         : <span className="text-[11px] font-mono text-txt-muted">{a.alias_systems}</span>}
                     </Td>
-                    <Td className="text-right">
+                    <Td className="text-right whitespace-nowrap">
+                      {a.approval_status && a.approval_status !== "APPROVED" && (
+                        <Chip tone={APPROVAL_TONE[a.approval_status] ?? "slate"} className="mr-1.5">
+                          {a.approval_status.replace("_", " ").toLowerCase()}
+                        </Chip>
+                      )}
                       <Chip tone={STATUS_TONE[a.status] ?? "slate"}>{a.status.toLowerCase()}</Chip>
                     </Td>
                   </tr>
