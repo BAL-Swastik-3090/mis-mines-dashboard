@@ -52,6 +52,16 @@ export default function AppSidebar() {
   const user                   = useAuth((s) => s.user);
   const canAny                 = useAuth((s) => s.canAny);
 
+  /* Initials for the avatar. Names here arrive as "AKASH ." and
+     "SWASTIK ROY CHOUDHURY", so take the first letter of the first two parts
+     that are actually letters — a trailing "." must not become an initial. */
+  const initials = (user?.name ?? "")
+    .split(/\s+/)
+    .filter((part) => /[A-Za-z]/.test(part))
+    .slice(0, 2)
+    .map((part) => part[0]!.toUpperCase())
+    .join("") || (user?.emp_id ?? "?").slice(0, 2);
+
   /* Only the pages this user may open. The same rule is enforced on the API, so
      this hides entries that would 403 anyway rather than being the gate itself.
      An empty allowed_pages (older session payload) shows everything rather than
@@ -162,24 +172,86 @@ export default function AppSidebar() {
         })}
       </nav>
 
-      {/* Logout button */}
+      {/* Signed in as ─────────────────────────────────────────────
+          Who you are is worth stating plainly on a dashboard that several
+          people share on the same machine: before this, the only way to tell
+          whose session was open was to go looking for it. It sits directly
+          above Logout because that is the pair — check who this is, then leave. */}
+      {user && (
+        <div className="border-t border-white/10 shrink-0">
+          {collapsed ? (
+            <div className="flex justify-center py-3 group relative">
+              <span className="w-8 h-8 rounded-full bg-[#c8960c]/20 border border-[#c8960c]/40
+                               text-[#f5a623] text-[11px] font-bold flex items-center justify-center">
+                {initials}
+              </span>
+              <span className="
+                pointer-events-none select-none
+                absolute left-[56px] top-1/2 -translate-y-1/2
+                bg-[#0f1c35] text-white text-[11px] px-2.5 py-1.5 rounded shadow-lg whitespace-nowrap
+                opacity-0 group-hover:opacity-100 transition-opacity duration-150
+                z-50 border border-white/10
+              ">
+                <span className="font-semibold">{user.name}</span>
+                <span className="text-white/45"> · {user.emp_id}</span>
+              </span>
+            </div>
+          ) : (
+            <div className="px-3 py-3">
+              <div className="text-[9.5px] font-bold tracking-[.16em] text-white/30 uppercase font-condensed mb-1.5">
+                Signed in as
+              </div>
+              <div className="flex items-center gap-2.5">
+                <span className="w-8 h-8 shrink-0 rounded-full bg-[#c8960c]/20 border border-[#c8960c]/40
+                                 text-[#f5a623] text-[11px] font-bold flex items-center justify-center">
+                  {initials}
+                </span>
+                <div className="min-w-0">
+                  <div className="text-[12.5px] font-semibold text-white/90 truncate leading-tight">
+                    {user.name}
+                  </div>
+                  <div className="text-[10.5px] text-white/40 truncate">
+                    {user.emp_id}{user.department ? ` · ${user.department}` : ""}
+                  </div>
+                </div>
+              </div>
+              {user.roles?.length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-2">
+                  {user.roles.map((r) => (
+                    <span key={r.code}
+                          title={`Your access level: ${r.name}`}
+                          className="px-1.5 py-0.5 rounded border border-[#c8960c]/30 bg-[#c8960c]/10
+                                     text-[9.5px] font-semibold tracking-wide text-[#f5a623] uppercase font-condensed">
+                      {r.name}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Logout */}
       <div className="border-t border-white/10 shrink-0">
         <button
           onClick={async () => {
             // Ends the session row server-side (is_active=0, logout_at, end_reason)
             // so it stops counting as a live session in the intranet activity
-            // tables. Clearing the browser alone would leave it open for 8 hours.
+            // tables. Clearing the browser alone would leave it open until it
+            // idles out.
             await useAuth.getState().logout();
             localStorage.removeItem("kaliapani-app-page");
             window.location.reload();
           }}
-          title={collapsed ? "Logout" : undefined}
-          className="w-full flex items-center gap-3 px-3 py-3 text-white/55 hover:text-white/90 hover:bg-white/5 transition-colors group relative"
+          title={collapsed ? "Sign out" : undefined}
+          className="w-full flex items-center gap-3 px-3 py-2.5 text-white/55
+                     hover:text-red-300 hover:bg-red-500/10 transition-colors group relative"
         >
-          <LogOut size={16} className="shrink-0 text-danger-light group-hover:text-danger" />
+          <LogOut size={15} className="shrink-0 text-white/40 group-hover:text-red-400 transition-colors" />
           {!collapsed && (
-            <span className="text-[12px] font-semibold tracking-wide leading-tight truncate font-condensed text-left">
-              LOGOUT
+            <span className="text-[11.5px] font-semibold tracking-wide leading-tight truncate font-condensed text-left">
+              SIGN OUT
             </span>
           )}
           {collapsed && (
@@ -192,7 +264,7 @@ export default function AppSidebar() {
               transition-opacity duration-150
               z-50 border border-white/10
             ">
-              Logout
+              Sign out
             </span>
           )}
         </button>
