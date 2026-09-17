@@ -10,19 +10,22 @@
  * the Equipment Registry the whole point of the screen is to add machines.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Boxes, Cpu, Activity, LayoutGrid, Plus, AlertTriangle } from "lucide-react";
+import { Boxes, Cpu, Activity, LayoutGrid, Plus, AlertTriangle, Users } from "lucide-react";
 import { useAuth } from "@/contexts/useAuth";
 import EquipmentPanel from "@/components/minehub/EquipmentPanel";
+import OperatorPanel from "@/components/minehub/OperatorPanel";
 import ActivityPanel from "@/components/minehub/ActivityPanel";
 import AlertsPanel from "@/components/minehub/AlertsPanel";
 import { Button, Card, CardHeader, Chip, PageHeader, Tabs, type Tone } from "@/components/minehub/ui";
 import api from "@/lib/api";
 
-type TabId = "equipment" | "alerts" | "activity" | "modules";
+type TabId = "equipment" | "operators" | "alerts" | "activity" | "modules";
 
 const TABS: { id: TabId; label: string; icon: React.ElementType; tone: Tone; hint: string }[] = [
   { id: "equipment", label: "Equipment Registry", icon: Cpu, tone: "sky",
     hint: "One identity per machine, across telematics, handover, weighbridge and RFID" },
+  { id: "operators", label: "Operators", icon: Users, tone: "emerald",
+    hint: "Who may run each machine, what they are certified for, and what is about to lapse" },
   { id: "alerts", label: "Alerts", icon: AlertTriangle, tone: "rose",
     hint: "Documents expiring and services falling due" },
   { id: "activity", label: "Activity", icon: Activity, tone: "violet",
@@ -34,8 +37,8 @@ const TABS: { id: TabId; label: string; icon: React.ElementType; tone: Tone; hin
 const ROADMAP: { phase: string; status: "live" | "next" | "planned"; items: string[] }[] = [
   { phase: "Registry", status: "live",
     items: ["Equipment register", "System identity mapping", "Compliance & maintenance", "Activity log"] },
-  { phase: "People", status: "next",
-    items: ["Operator register", "Competency and licence expiry", "Contractor workforce"] },
+  { phase: "People", status: "live",
+    items: ["Operator register", "Competency and machine understanding", "Licence and medical expiry"] },
   { phase: "Deployment", status: "planned",
     items: ["One handover replacing nine forms", "Shift deployment plan", "Attendance link"] },
   { phase: "Operations", status: "planned",
@@ -57,6 +60,8 @@ export default function MineHubSection() {
 
   const mayView = can("platform.registry.view");
   const mayManage = can("platform.registry.manage");
+  const mayOperators = can("platform.operators.manage");
+  const mayOperatorsView = can("platform.operators.view");
   const active = useMemo(() => TABS.find((t) => t.id === tab), [tab]);
 
   const loadAlerts = useCallback(async () => {
@@ -88,6 +93,11 @@ export default function MineHubSection() {
                 <Plus className="w-4 h-4" /> Register machine
               </Button>
             )}
+            {tab === "operators" && mayOperators && !formOpen && (
+              <Button variant="primary" size="lg" onClick={() => setAddOpen(true)}>
+                <Plus className="w-4 h-4" /> Register operator
+              </Button>
+            )}
             {alertCount ? (
               <Button variant="secondary" size="lg" onClick={() => setTab("alerts")}>
                 <AlertTriangle className="w-4 h-4 text-rose" />
@@ -106,6 +116,19 @@ export default function MineHubSection() {
         <Card><div className="px-5 py-12 text-center text-[13px] text-txt-muted">
           You do not have permission to open the platform registry.
         </div></Card>
+      )}
+
+      {tab === "operators" && (
+        mayOperatorsView ? (
+          <OperatorPanel addOpen={addOpen} onAddOpenChange={setAddOpen}
+            onFormOpenChange={setFormOpen} onChanged={loadAlerts} />
+        ) : (
+          <Card><div className="px-5 py-12 text-center text-[13px] text-txt-muted">
+            Operator profiles hold dates of birth, medical expiry and photographs, so
+            they sit behind their own permission. An Access Manager can add
+            platform.operators.view to your role.
+          </div></Card>
+        )
       )}
 
       {mayView && tab === "equipment" && (
