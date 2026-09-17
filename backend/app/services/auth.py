@@ -284,6 +284,53 @@ def create_session(db: Session, emp: dict, ip: str | None, ua: str | None) -> st
     return sid
 
 
+# A validated session, cached in-process for a few seconds.
+#
+# The session check runs on EVERY api request and costs a round trip to a MySQL
+# server ~100ms away, so one dashboard page load spent well over a second just
+# re-answering "is this cookie still valid" — a question whose answer cannot
+# plausibly change between two calls made milliseconds apart.
+#
+# The window is deliberately short. Revoking access still takes effect within
+# it, and the permission check is NOT cached here: only the fact that the
+# session exists. Sessions are keyed by a 64-hex token, so this holds nothing an
+# attacker could guess at.
+_SESSION_TTL = 15.0
+_session_cache: dict[str, tuple[dict, float]] = {}
+
+
+# When each session was last written to the database. Tracked here rather than
+# read off the cached row, whose last_active_at is frozen at the moment it was
+# cached and would otherwise make the throttle fire on every request.
+_last_touch: dict[str, float] = {}
+
+
+def peek_session(sid: str | None) -> dict | None:
+    """The session from cache only — never touches the database.
+
+    Lets the middleware decide without any I/O in the common case. Returns None
+    when the answer is not cached, which means 'ask the database', not 'invalid'.
+    """
+    if not sid:
+        return None
+    hit = _session_cache.get(sid)
+    if hit and (time.monotonic() - hit[1]) < _SESSION_TTL:
+        return hit[0]
+    return None
+
+
+def touch_due(sid: str, throttle_seconds: float = 30.0) -> bool:
+    """Whether the session's activity timestamp is worth another write."""
+    last = _last_touch.get(sid)
+    return last is None or (time.monotonic() - last) > throttle_seconds
+
+
+def forget_session(sid: str) -> None:
+    """Drop a cached session — called on logout so signing out is immediate."""
+    _session_cache.pop(sid, None)
+    _last_touch.pop(sid, None)
+
+
 def get_session(db: Session, sid: str | None) -> dict | None:
     """The active, non-idle Mines session for a session id, or None.
 
@@ -292,17 +339,35 @@ def get_session(db: Session, sid: str | None) -> dict | None:
     """
     if not sid:
         return None
+
+    hit = _session_cache.get(sid)
+    if hit and (time.monotonic() - hit[1]) < _SESSION_TTL:
+        return hit[0]
+
     row = db.execute(text(
         f"""SELECT session_id, emp_id, emp_name, role, department, last_active_at
             FROM {SESS_TBL}
             WHERE session_id = :sid AND is_active = 1 AND app_source = :app
               AND last_active_at > (NOW() - INTERVAL {IDLE_MINUTES} MINUTE)"""),
         {"sid": sid, "app": APP_SOURCE}).mappings().first()
-    return dict(row) if row else None
+    if not row:
+        _session_cache.pop(sid, None)
+        return None
+    out = dict(row)
+    _session_cache[sid] = (out, time.monotonic())
+    # The cache is bounded by the number of live sessions, but a long-running
+    # process would otherwise accumulate expired entries forever.
+    if len(_session_cache) > 500:
+        now = time.monotonic()
+        for k, (_v, t) in list(_session_cache.items()):
+            if now - t > _SESSION_TTL:
+                _session_cache.pop(k, None)
+    return out
 
 
 def touch(db: Session, sid: str) -> None:
     """Push the idle timeout out. Throttled by the caller — see main.py."""
+    _last_touch[sid] = time.monotonic()
     db.execute(text(
         f"UPDATE {SESS_TBL} SET last_active_at = NOW() WHERE session_id = :sid AND is_active = 1"),
         {"sid": sid})
@@ -310,6 +375,7 @@ def touch(db: Session, sid: str) -> None:
 
 
 def end_session(db: Session, sid: str, reason: str = "LOGOUT") -> None:
+    forget_session(sid)     # otherwise the cookie keeps working until the TTL
     # duration_minutes is a generated column — the DB derives it from login/logout.
     db.execute(text(
         f"""UPDATE {SESS_TBL}

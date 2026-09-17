@@ -35,8 +35,10 @@ export default function RolesPanel() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [r, p] = await Promise.all([api.get("/access/roles"), api.get("/access/permissions")]);
-      setRoles(r.data ?? []); setPerms(p.data ?? []);
+      // One call, not two: each request pays the whole middleware round trip
+      // again, which is the dominant cost when the database is far away.
+      const r = await api.get("/access/catalogue");
+      setRoles(r.data?.roles ?? []); setPerms(r.data?.permissions ?? []);
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(d ?? "Could not load roles.");

@@ -15,6 +15,7 @@ to the UI:
 from __future__ import annotations
 
 import json
+import time
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from sqlalchemy import bindparam, text
@@ -30,6 +31,31 @@ router = APIRouter(prefix="/api/access", tags=["Access"])
 
 def _actor(request: Request) -> str:
     return getattr(request.state, "emp_id", None) or "unknown"
+
+
+# Employee names come from the HR master on the remote MySQL, cost a round trip,
+# and change about never. Cached so the user list does not pay for them on every
+# open.
+_NAME_TTL = 600.0
+_name_cache: dict[str, tuple[dict[str, dict], float]] = {}
+
+
+def _employee_details(db, emp_ids: list[str]) -> dict[str, dict]:
+    if not emp_ids:
+        return {}
+    key = ",".join(sorted(emp_ids))
+    hit = _name_cache.get(key)
+    if hit and (time.monotonic() - hit[1]) < _NAME_TTL:
+        return hit[0]
+    stmt = text(
+        f"SELECT EMPID, EMPNAME, EMPDEPT, EMPDESG FROM {EMP_TBL} WHERE EMPID IN :ids"
+    ).bindparams(bindparam("ids", expanding=True))
+    rows = db.execute(stmt, {"ids": emp_ids}).mappings().all()
+    out = {r["EMPID"]: {"name": r["EMPNAME"], "department": r["EMPDEPT"],
+                        "designation": r["EMPDESG"]} for r in rows}
+    _name_cache.clear()          # one entry is enough; the key is the id set
+    _name_cache[key] = (out, time.monotonic())
+    return out
 
 
 def _describe_permission_change(before: list[str], after: list[str]) -> str:
@@ -254,19 +280,9 @@ def list_users(db: Session = Depends(get_db),
 
     # Names come from the HR master in MySQL; the platform holds identity, not a
     # copy of the employee record.
-    if by_emp:
-        # expanding=True is required for IN with a list — without it the driver
-        # is handed a tuple it cannot convert and the whole screen fails.
-        stmt = text(
-            f"SELECT EMPID, EMPNAME, EMPDEPT, EMPDESG FROM {EMP_TBL} WHERE EMPID IN :ids"
-        ).bindparams(bindparam("ids", expanding=True))
-        hr = db.execute(stmt, {"ids": list(by_emp.keys())}).mappings().all()
-        for h in hr:
-            if h["EMPID"] in by_emp:
-                by_emp[h["EMPID"]].update({
-                    "name": h["EMPNAME"], "department": h["EMPDEPT"],
-                    "designation": h["EMPDESG"],
-                })
+    for emp_id, details in _employee_details(db, list(by_emp.keys())).items():
+        if emp_id in by_emp:
+            by_emp[emp_id].update(details)
     return sorted(by_emp.values(), key=lambda u: (u.get("name") or u["emp_id"]))
 
 
@@ -401,3 +417,14 @@ def access_audit(limit: int = Query(100, le=500),
         r["actor_name"] = names.get(r["actor_emp_id"], r["actor_emp_id"])
         r["subject_name"] = names.get(r["subject_emp_id"], r["subject_emp_id"])
     return out
+
+
+@router.get("/catalogue")
+def catalogue(pg: Session = Depends(get_minehub_db)) -> dict:
+    """Roles and permissions together.
+
+    The Roles screen needs both, and every separate request pays the whole
+    middleware round trip again — session check included. One call is measurably
+    faster than two against databases this far away.
+    """
+    return {"roles": list_roles(pg), "permissions": list_permissions(pg)}

@@ -134,6 +134,13 @@ def _legacy(db, emp_id: str) -> set[str]:
     return set(_LEGACY_PERMISSIONS.get(role, set()))
 
 
+def peek_permissions(emp_id: str) -> set[str] | None:
+    """Permissions from cache only. None means 'not cached', not 'none held'."""
+    if not _cache_ok or (time.monotonic() - _cache_at) >= CACHE_TTL:
+        return None
+    return _cache.get(emp_id, set())
+
+
 def permissions_for(db, emp_id: str) -> set[str]:
     """Everything this person may do. Empty set means no access at all."""
     try:

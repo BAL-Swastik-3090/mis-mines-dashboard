@@ -132,44 +132,60 @@ _PAGE_PERMISSION = {
     "fuel-management": "dashboard.fuel",
     "ev-tracking": "dashboard.ev",
 }
-# Skip the session-touch write if it happened recently. One dashboard page load
-# fires ~15 API calls at once, and each touch is a round trip to a MySQL server
-# that is already refusing connections daily.
-_TOUCH_THROTTLE = timedelta(seconds=30)
+# The session-touch throttle now lives in services/auth.py (touch_due), keyed on
+# when we last wrote rather than on the cached row's last_active_at — which is
+# frozen at the moment it was cached and would make the throttle fire every time.
 
 
 def _check_auth(sid: str | None, path: str) -> tuple[dict | None, str | None]:
-    """Blocking session + role check. Returns (session, required_role_if_denied)."""
+    """Session + permission check. Returns (session, denial_reason).
+
+    Both databases are remote — MySQL about 100ms away, Postgres about 50ms —
+    so the cost here is dominated by round trips, not by work. The common case
+    is therefore answered entirely from cache with no connection opened at all.
+    Before that, every API call re-asked a question whose answer cannot change
+    between two requests made milliseconds apart, and one dashboard page firing
+    fifteen calls paid for it fifteen times.
+    """
     from app.database import SessionLocal
+    from app.services import access as access_svc
     from app.services import auth as auth_svc
 
-    with SessionLocal() as db:
-        s = auth_svc.get_session(db, sid)
-        if not s:
-            return None, None
-        last = s.get("last_active_at")
-        if last is None or datetime.now() - last > _TOUCH_THROTTLE:
+    s = auth_svc.peek_session(sid)
+    perms = access_svc.peek_permissions(s["emp_id"]) if s else None
+
+    if s is None or perms is None:
+        # Cold: ask the databases, and cache the answers for the next caller.
+        with SessionLocal() as db:
+            s = auth_svc.get_session(db, sid)
+            if not s:
+                return None, None
+            perms = access_svc.permissions_for(db, s["emp_id"])
+            if auth_svc.touch_due(sid):
+                auth_svc.touch(db, sid)
+    elif auth_svc.touch_due(sid):
+        # Warm, but the activity timestamp is stale enough to be worth a write.
+        # Without this an active user would idle out while still working.
+        with SessionLocal() as db:
             auth_svc.touch(db, sid)
-        from app.services import access as access_svc
-        perms = access_svc.permissions_for(db, s["emp_id"])
 
-        # Invite-only, checked on every request rather than only at login, so
-        # revoking someone takes effect at once instead of when their session
-        # eventually expires. No permissions at all means no access.
-        if not perms:
-            return s, "revoked"
+    # Invite-only, checked on every request rather than only at login, so
+    # revoking someone takes effect at once instead of when their session
+    # eventually expires. No permissions at all means no access.
+    if not perms:
+        return s, "revoked"
 
-        need = next((c for pre, c in _PERMISSION_RULES if path.startswith(pre)), None)
-        if need and need not in perms:
-            return s, need
+    need = next((c for pre, c in _PERMISSION_RULES if path.startswith(pre)), None)
+    if need and need not in perms:
+        return s, need
 
-        # Page access, enforced on the API prefix behind each page — hiding the
-        # sidebar entry alone would leave the data reachable to anyone who knows
-        # the URL.
-        page = auth_svc.page_for_path(path)
-        if page and _PAGE_PERMISSION.get(page) not in perms:
-            return s, f"page:{page}"
-        return s, None
+    # Page access, enforced on the API prefix behind each page — hiding the
+    # sidebar entry alone would leave the data reachable to anyone who knows
+    # the URL.
+    page = auth_svc.page_for_path(path)
+    if page and _PAGE_PERMISSION.get(page) not in perms:
+        return s, f"page:{page}"
+    return s, None
 
 
 @app.middleware("http")
