@@ -41,7 +41,7 @@ SCHEDULE_TYPES = ("PREVENTIVE", "SERVICE", "OIL_CHANGE", "INSPECTION", "OVERHAUL
 ASSET_FIELDS = (
     "fleet_code", "nickname", "registration_no", "asset_type_id", "make", "model",
     "year_of_make", "chassis_no", "engine_no", "capacity", "capacity_uom",
-    "ownership", "owner_party_id", "supplier_party_id",
+    "plant_id", "ownership", "owner_party_id", "supplier_party_id",
     "sap_equipment_no", "contract_no", "service_po_no", "po_valid_from", "po_valid_to",
     "purchase_date", "purchase_cost", "hire_rate", "hire_rate_uom",
     "rated_output_per_hr", "rated_fuel_lph", "fuel_type", "tank_capacity_l",
@@ -244,6 +244,7 @@ def list_assets(q: str = Query(""), status: str = Query(""),
 
     rows = db.execute(text(f"""
         SELECT a.asset_id, a.asset_ref, a.fleet_code, a.registration_no, a.make, a.model,
+               pl.code AS plant_code, pl.name AS plant, ou.name AS department,
                a.capacity, a.capacity_uom, a.ownership, a.status,
                a.rated_output_per_hr, a.rated_fuel_lph, a.commissioned_on,
                a.nickname, a.version, a.approval_status,
@@ -259,6 +260,8 @@ def list_assets(q: str = Query(""), status: str = Query(""),
         -- their fleet code.
         LEFT JOIN asset_type t ON t.asset_type_id = a.asset_type_id
         LEFT JOIN party o ON o.party_id = a.owner_party_id
+        LEFT JOIN plant pl ON pl.plant_id = a.plant_id
+        LEFT JOIN org_unit ou ON ou.org_unit_id = a.org_unit_id
         WHERE {' AND '.join(where)}
         ORDER BY a.fleet_code
     """), params).mappings().all()
@@ -288,6 +291,11 @@ def create_asset(request: Request, body: dict = Body(...),
         raise HTTPException(400, f"Ownership must be one of {OWNERSHIP}.")
     data["ownership"] = ownership
     data.setdefault("status", "ACTIVE")
+    if not data.get("plant_id"):
+        # Almost every machine registered here is Kaliapani's, and a field that
+        # is right by default should not be left empty by default.
+        data["plant_id"] = db.execute(text(
+            "SELECT plant_id FROM plant WHERE is_default LIMIT 1")).scalar()
 
     if fleet_code and db.execute(
             text("SELECT 1 FROM asset WHERE fleet_code = :c"), {"c": fleet_code}).first():
@@ -400,7 +408,7 @@ def get_asset(asset_id: int, db: Session = Depends(get_minehub_db)) -> dict:
     row = db.execute(text(
         "SELECT a.*, t.name AS asset_type, t.category, "
         "       o.display_name AS owner, s.display_name AS supplier, "
-        "       l.name AS home_location "
+        "       l.name AS home_location, pl.name AS plant, ou.name AS department "
         "FROM asset a "
         # LEFT, for the same reason as the register listing: a draft need not
         # have chosen an equipment type yet, and an inner join turns that draft
@@ -409,6 +417,8 @@ def get_asset(asset_id: int, db: Session = Depends(get_minehub_db)) -> dict:
         "LEFT JOIN party o    ON o.party_id = a.owner_party_id "
         "LEFT JOIN party s    ON s.party_id = a.supplier_party_id "
         "LEFT JOIN location l ON l.location_id = a.home_location_id "
+        "LEFT JOIN plant pl   ON pl.plant_id = a.plant_id "
+        "LEFT JOIN org_unit ou ON ou.org_unit_id = a.org_unit_id "
         "WHERE a.asset_id = :id"
     ), {"id": asset_id}).mappings().first()
     if not row:
@@ -548,8 +558,8 @@ def submit_asset(asset_id: int, request: Request, body: dict = Body(default={}),
                  db: Session = Depends(get_minehub_db)) -> dict:
     """Put a machine forward for approval."""
     row = db.execute(text(
-        "SELECT approval_status, version, fleet_code, asset_type_id, ownership, owner_party_id "
-        "FROM asset WHERE asset_id = :id"
+        "SELECT approval_status, version, fleet_code, asset_type_id, ownership, owner_party_id, "
+        "       plant_id, org_unit_id FROM asset WHERE asset_id = :id"
     ), {"id": asset_id}).first()
     if not row:
         raise HTTPException(404, "Machine not found.")
@@ -564,6 +574,10 @@ def submit_asset(asset_id: int, request: Request, body: dict = Body(default={}),
         missing.append("an equipment type")
     if row[4] == "HIRED" and not row[5]:
         missing.append("the contractor that owns it")
+    if not row[6]:
+        missing.append("a plant")
+    if not row[7]:
+        missing.append("a department")
     if missing:
         raise HTTPException(400, "Before this can go for approval it needs "
                                  + ", ".join(missing[:-1]) + (" and " if len(missing) > 1 else "")
@@ -891,6 +905,62 @@ def list_locations(db: Session = Depends(get_minehub_db)) -> list[dict]:
         "FROM location WHERE status = 'ACTIVE' ORDER BY location_type, name"
     )).mappings().all()
     return [dict(r) for r in rows]
+
+
+@router.get("/plants")
+def list_plants(db: Session = Depends(get_minehub_db)) -> list[dict]:
+    """The SAP plants a machine can belong to, default first."""
+    rows = db.execute(text(
+        "SELECT plant_id, code, name, is_default FROM plant "
+        "WHERE status = 'ACTIVE' ORDER BY is_default DESC, code"
+    )).mappings().all()
+    return [dict(r) for r in rows]
+
+
+@router.get("/org-units")
+def list_org_units(db: Session = Depends(get_minehub_db)) -> list[dict]:
+    """Departments, as SAP spells them."""
+    rows = db.execute(text(
+        "SELECT org_unit_id, code, name FROM org_unit WHERE status = 'ACTIVE' ORDER BY name"
+    )).mappings().all()
+    return [dict(r) for r in rows]
+
+
+@router.post("/org-units")
+def create_org_unit(request: Request, body: dict = Body(...),
+                    db: Session = Depends(get_minehub_db)) -> dict:
+    """Add a department, from wherever a department is being chosen.
+
+    Not seeded from the employee master on purpose. That master says which
+    department a *person* is paid under, which is a different question from
+    which department answers for a machine — and a list arriving full of names
+    nobody chose invites people to pick the nearest one rather than the right
+    one. The mine builds this list as it meets it, the same as every other.
+    """
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "A department needs a name.")
+
+    existing = db.execute(text(
+        "SELECT org_unit_id, code, name FROM org_unit WHERE lower(name) = lower(:n)"
+    ), {"n": name}).mappings().first()
+    if existing:
+        return dict(existing)          # typing it twice should not create two
+
+    base = re.sub(r"[^A-Z0-9]+", "_", name.upper()).strip("_")[:28] or "DEPT"
+    code, n = base, 1
+    while db.execute(text("SELECT 1 FROM org_unit WHERE code = :c"), {"c": code}).first():
+        n += 1
+        code = f"{base}_{n}"
+
+    row = db.execute(text(
+        "INSERT INTO org_unit (code, name, created_by) VALUES (:c, :n, :by) "
+        "RETURNING org_unit_id, code, name"
+    ), {"c": code, "n": name, "by": _actor(request)}).mappings().first()
+
+    _activity(db, request, "ORG_UNIT_ADDED", payload=dict(row))
+    db.commit()
+    return dict(row)
 
 
 @router.post("/locations")

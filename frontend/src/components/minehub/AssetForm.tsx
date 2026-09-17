@@ -23,6 +23,8 @@ import Combobox from "./Combobox";
 
 interface AssetType { asset_type_id: number; name: string; category: string }
 interface Party { party_id: number; display_name: string; legal_name: string }
+interface Plant { plant_id: number; code: string; name: string; is_default: boolean }
+interface OrgUnit { org_unit_id: number; code: string; name: string }
 interface Location { location_id: number; name: string; location_type: string }
 
 interface DocRow {
@@ -83,6 +85,7 @@ function Band({ title, hint, right }: { title: string; hint?: string; right?: Re
 /** Where each refused field lives on the page, for taking someone to it. */
 const FIELD_INPUT: Record<string, string> = {
   fleet_code: "af-fleet", asset_type_id: "af-type", owner_party_id: "af-owner",
+  plant_id: "af-plant", org_unit_id: "af-dept",
 };
 
 function Row({ label, required, hint, children, wide, invalid }: {
@@ -146,6 +149,8 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   const [types, setTypes] = useState<AssetType[]>([]);
   const [parties, setParties] = useState<Party[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
+  const [plants, setPlants] = useState<Plant[]>([]);
+  const [orgUnits, setOrgUnits] = useState<OrgUnit[]>([]);
 
   const [f, setF] = useState<Record<string, string>>({
     fleet_code: prefill?.fleet_code ?? "",
@@ -182,12 +187,37 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   useEffect(() => {
     void (async () => {
       try {
-        const [t, p, l] = await Promise.all([
+        const [t, p, l, pl, ou] = await Promise.all([
           api.get("/minehub/asset-types"),
           api.get("/minehub/parties", { params: { party_type: "ORGANISATION" } }),
           api.get("/minehub/locations"),
+          api.get("/minehub/plants"),
+          api.get("/minehub/org-units"),
         ]);
         setTypes(t.data ?? []); setParties(p.data ?? []); setLocations(l.data ?? []);
+        setPlants(pl.data ?? []); setOrgUnits(ou.data ?? []);
+
+        // A new machine starts at the default plant — almost every machine
+        // registered here is Kaliapani's. It goes into the baseline too, so a
+        // value nobody chose does not make the sheet look unsaved.
+        if (!assetId) {
+          const fallback = (pl.data ?? []).find((x: Plant) => x.is_default);
+          if (fallback) {
+            setF((prev) => {
+              if (prev.plant_id) return prev;
+              const next = { ...prev, plant_id: String(fallback.plant_id) };
+              setSaved((was) => {
+                try {
+                  const parts = JSON.parse(was || "[]");
+                  if (!parts.length) return was;
+                  parts[0] = { ...parts[0], plant_id: String(fallback.plant_id) };
+                  return JSON.stringify(parts);
+                } catch { return was; }
+              });
+              return next;
+            });
+          }
+        }
       } catch { /* the form still works; the pickers are simply empty */ }
     })();
   }, []);
@@ -304,6 +334,8 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
       { label: "Model",           done: has("model"),           needed: false },
       { label: "Registration no.", done: has("registration_no"), needed: false },
       { label: "Capacity",        done: has("capacity"),        needed: false },
+      { label: "Plant",           done: has("plant_id"),        needed: true },
+      { label: "Department",      done: has("org_unit_id"),     needed: true },
       { label: "Home location",   done: has("home_location_id"), needed: false },
       { label: "Meter reading",   done: has("current_reading"), needed: false },
       { label: "Commissioned on", done: has("commissioned_on"), needed: false },
@@ -342,6 +374,8 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
         ["fleet_code",     "a fleet code",                Boolean(f.fleet_code?.trim())],
         ["asset_type_id",  "an equipment type",           Boolean(f.asset_type_id)],
         ["owner_party_id", "the contractor that owns it", !isHired || Boolean(f.owner_party_id)],
+        ["plant_id",       "a plant",                     Boolean(f.plant_id)],
+        ["org_unit_id",    "a department",                Boolean(f.org_unit_id)],
       ];
       const short = needed.filter(([, , ok]) => !ok);
       if (short.length) {
@@ -822,6 +856,38 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
         <Band title="Deployment & meter"
           hint="The reading every handover and service interval counts from" />
         <Sheet>
+          <Row label="Plant" required invalid={invalid.has("plant_id")}
+               hint="The SAP plant this machine belongs to. Kaliapani machines are 1200">
+            <select id="af-plant" className={cellInput} value={f.plant_id ?? ""}
+              onChange={(e) => set("plant_id", e.target.value)}>
+              <option value="">Select…</option>
+              {plants.map((pl) => (
+                <option key={pl.plant_id} value={pl.plant_id}>{pl.code} · {pl.name}</option>
+              ))}
+            </select>
+          </Row>
+          <Row label="Department" required invalid={invalid.has("org_unit_id")}
+               hint="Who answers for it day to day. Not on the list? Type it and it is added">
+            <div className="px-1.5 py-1">
+              <Combobox
+                id="af-dept"
+                options={orgUnits.map((o) => ({ value: o.name }))}
+                value={orgUnits.find((o) => String(o.org_unit_id) === f.org_unit_id)?.name ?? ""}
+                placeholder="Type the department — it joins the list"
+                onChange={(name) => {
+                  const hit = orgUnits.find((o) => o.name === name);
+                  set("org_unit_id", hit ? String(hit.org_unit_id) : "");
+                }}
+                onAddNew={async (name) => {
+                  const r = await api.post("/minehub/org-units", { name });
+                  const made = { org_unit_id: r.data.org_unit_id, code: r.data.code, name: r.data.name };
+                  setOrgUnits((prev) => prev.some((o) => o.org_unit_id === made.org_unit_id)
+                    ? prev : [...prev, made]);
+                  set("org_unit_id", String(made.org_unit_id));
+                  return made.name;
+                }} />
+            </div>
+          </Row>
           <Row label="Home location"
                hint="Add a pit, workshop or stockyard here if it is not on the list yet">
             <div className="px-1.5 py-1">
