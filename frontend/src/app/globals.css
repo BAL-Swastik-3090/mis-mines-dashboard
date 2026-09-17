@@ -432,3 +432,10 @@ html, body {
 @media (prefers-reduced-motion: reduce) {
   .lg-panel, .lg-rise, .lg-photo, .lg-dot { animation: none !important; }
 }
+
+/* A toast arrives from just above its resting place — enough to catch the eye
+   without the page appearing to move. Held behind motion-safe in the markup. */
+@keyframes toastIn {
+  from { opacity: 0; transform: translate(-50%, -8px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}

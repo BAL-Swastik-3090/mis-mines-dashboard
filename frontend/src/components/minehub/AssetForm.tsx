@@ -12,10 +12,11 @@
  * click and never refused; the aim is that picking is easier than typing, not
  * that typing is blocked.
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Trash2, Check, AlertCircle, Loader2, Info, ArrowLeft, Send, CheckCircle2, Undo2 } from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Plus, Trash2, Check, Loader2, Info, ArrowLeft, Send, CheckCircle2, Undo2 } from "lucide-react";
 import api from "@/lib/api";
 import { Alert, Button, Chip, type Tone } from "./ui";
+import Toast from "./Toast";
 import RevisionPanel, { type Revision } from "./RevisionPanel";
 import Combobox from "./Combobox";
 
@@ -147,9 +148,6 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   const [loadingRev, setLoadingRev] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [showMissing, setShowMissing] = useState(false);
-  // Submitting from the footer set an error in the header, two screens up, so
-  // the button appeared to do nothing. The form scrolls to it.
-  const topRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     void (async () => {
@@ -256,11 +254,8 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   const filled = Math.round((doneCount / checklist.length) * 100);
   const outstanding = checklist.filter((i) => !i.done).map((i) => i.label);
 
-  /** Put the message where the person is looking. */
-  const raise = (msg: string) => {
-    setError(msg);
-    topRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
+  /** Raise a message that finds the reader wherever they are on the sheet. */
+  const raise = (msg: string) => { setNotice(null); setError(msg); };
 
   const submit = async (then: "stay" | "submit" = "stay") => {
     // Only the path that puts this in front of someone else checks for
@@ -382,9 +377,15 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
     status === "APPROVED" ? "emerald" : status === "SUBMITTED" ? "amber"
     : status === "SENT_BACK" ? "rose" : "slate";
 
+  const messages = (
+    <>
+      <Toast tone="error" message={error} onClose={() => setError(null)} />
+      <Toast tone="success" message={error ? null : notice} onClose={() => setNotice(null)} />
+    </>
+  );
+
   const sheet = (
     <div className="space-y-4">
-      <div ref={topRef} className="scroll-mt-[110px]" />
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
@@ -446,16 +447,6 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
         </Alert>
       )}
 
-      {error && (
-        <Alert tone="error">
-          <span className="inline-flex items-center gap-2"><AlertCircle className="w-4 h-4" />{error}</span>
-        </Alert>
-      )}
-      {notice && (
-        <Alert tone="success">
-          <span className="inline-flex items-center gap-2"><Check className="w-4 h-4" />{notice}</span>
-        </Alert>
-      )}
 
       {/* ── Identity ─────────────────────────────────────────── */}
       <div>
@@ -907,12 +898,6 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
         </div>
       </div>
 
-      {error && (
-        <Alert tone="error">
-          <span className="inline-flex items-center gap-2"><AlertCircle className="w-4 h-4" />{error}</span>
-        </Alert>
-      )}
-
       <div className="flex flex-wrap gap-2 pt-1 sticky bottom-0 bg-bg-base/95 backdrop-blur py-3 -mx-1 px-1
                       border-t border-border-light">
         <Button variant="primary" size="lg" onClick={() => submit("stay")} disabled={saving}>
@@ -951,13 +936,14 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
     </div>
   );
 
-  if (!editing) return sheet;
+  if (!editing) return <>{messages}{sheet}</>;
 
   // Editing shows the trail beside the sheet: the history is the reason to open
   // an existing machine at all, and putting it below would hide it under a long
   // form.
   return (
     <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_340px] gap-5 items-start">
+      {messages}
       {sheet}
       <div className="xl:sticky xl:top-[86px]">
         <RevisionPanel revisions={revisions} loading={loadingRev} />
