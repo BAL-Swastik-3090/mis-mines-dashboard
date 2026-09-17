@@ -844,6 +844,26 @@ def set_competency(operator_id: int, request: Request, body: dict = Body(...),
         + " RETURNING *"
     ), {**data, "oid": operator_id, "ev": evidence, "by": _actor(request)}).mappings().first()
 
+    # One sitting, one reference. The same person, class, machine, day, assessor
+    # and method is the same assessment however many scores it produced — those
+    # are the five facts anyone uses when they say which assessment they mean —
+    # so the reference is looked up before it is minted.
+    sitting = db.execute(text("""
+        SELECT record_ref FROM operator_record
+         WHERE record_type = 'ASSESSMENT' AND record_ref IS NOT NULL
+           AND operator_id = :o
+           AND asset_type_id IS NOT DISTINCT FROM CAST(:t AS bigint)
+           AND asset_id      IS NOT DISTINCT FROM CAST(:a AS bigint)
+           AND issued_on     IS NOT DISTINCT FROM CAST(:on AS date)
+           AND issuer        IS NOT DISTINCT FROM :by
+           AND COALESCE(details ->> 'assessment_type', '') = COALESCE(:m, '')
+         LIMIT 1
+    """), {"o": operator_id, "t": data.get("asset_type_id"), "a": data.get("asset_id"),
+           "on": data.get("assessed_on"), "by": data.get("assessor"),
+           "m": data.get("assessment_type") or ""}).scalar()
+    if not sitting:
+        sitting = db.execute(text("SELECT next_assessment_ref()")).scalar()
+
     # The assessment as an event in its own right, which nothing later overwrites.
     type_name = db.execute(text("SELECT name FROM asset_type WHERE asset_type_id = :t"),
                            {"t": data["asset_type_id"]}).scalar()
@@ -852,12 +872,13 @@ def set_competency(operator_id: int, request: Request, body: dict = Body(...),
                              {"a": data["asset_id"]}).scalar()
         type_name = f"{type_name or 'Equipment'} · {machine}"
     db.execute(text("""
-        INSERT INTO operator_record (operator_id, record_type, title, category, asset_type_id,
-                                     issuer, issued_on, valid_upto, result, score,
-                                     verification_status, remarks, details, created_by)
-        VALUES (:o, 'ASSESSMENT', :title, :dim, :t, :assessor, :on, :upto, :result, :score,
-                'VERIFIED', :remarks, CAST(:details AS jsonb), :by)
-    """), {"o": operator_id,
+        INSERT INTO operator_record (operator_id, record_type, record_ref, title, category,
+                                     asset_type_id, asset_id, issuer, issued_on, valid_upto,
+                                     result, score, verification_status, remarks, details,
+                                     created_by)
+        VALUES (:o, 'ASSESSMENT', :ref, :title, :dim, :t, CAST(:asset AS bigint), :assessor,
+                :on, :upto, :result, :score, 'VERIFIED', :remarks, CAST(:details AS jsonb), :by)
+    """), {"o": operator_id, "ref": sitting, "asset": data.get("asset_id"),
            "title": f"{type_name or 'Equipment'} · {data['dimension'].replace('_', ' ').title()}",
            "dim": data["dimension"], "t": data["asset_type_id"],
            "assessor": data.get("assessor"), "on": data.get("assessed_on"),
@@ -872,22 +893,69 @@ def set_competency(operator_id: int, request: Request, body: dict = Body(...),
            "by": _actor(request)})
 
     _activity(db, request, "OPERATOR_ASSESSED", operator_id,
-              {"dimension": data["dimension"], "level": data.get("level"),
+              {"assessment_ref": sitting, "dimension": data["dimension"],
+               "level": data.get("level"),
                "previous_level": previous["level"] if previous else None})
     db.commit()
-    return dict(row)
+    return {**dict(row), "assessment_ref": sitting}
 
 
 @router.get("/{operator_id}/assessments")
-def assessment_history(operator_id: int, db: Session = Depends(get_minehub_db)) -> list[dict]:
-    """Every assessment ever recorded for this person, newest first."""
-    rows = db.execute(text(
-        "SELECT r.*, t.name AS asset_type FROM operator_record r "
-        "LEFT JOIN asset_type t ON t.asset_type_id = r.asset_type_id "
-        "WHERE r.operator_id = :id AND r.record_type = 'ASSESSMENT' "
-        "ORDER BY r.issued_on DESC NULLS LAST, r.operator_record_id DESC"
-    ), {"id": operator_id}).mappings().all()
-    return [dict(r) for r in rows]
+def assessment_history(operator_id: int, db: Session = Depends(get_minehub_db),
+                       corp: Session = Depends(get_db)) -> list[dict]:
+    """Every assessment ever recorded for this person, as sittings.
+
+    Grouped by reference rather than returned as loose scores: what happened was
+    an assessment on a day, and fifteen rows describing one event read as
+    fifteen events unless something puts them back together.
+    """
+    rows = db.execute(text("""
+        SELECT r.operator_record_id, r.record_ref, r.title, r.category AS dimension,
+               r.asset_type_id, r.asset_id, r.issuer AS assessor, r.issued_on,
+               r.result, r.score, r.remarks, r.details, r.created_at,
+               t.name AS asset_type, a.fleet_code
+        FROM operator_record r
+        LEFT JOIN asset_type t ON t.asset_type_id = r.asset_type_id
+        LEFT JOIN asset a      ON a.asset_id = r.asset_id
+        WHERE r.operator_id = :id AND r.record_type = 'ASSESSMENT'
+        ORDER BY r.issued_on DESC NULLS LAST, r.operator_record_id DESC
+    """), {"id": operator_id}).mappings().all()
+
+    names = people.names_for(corp, [r["assessor"] for r in rows])
+
+    sittings: dict[str, dict] = {}
+    for r in rows:
+        ref = r["record_ref"] or f"row-{r['operator_record_id']}"
+        details = r["details"] or {}
+        sitting = sittings.setdefault(ref, {
+            "assessment_ref": r["record_ref"],
+            "assessed_on": r["issued_on"],
+            "assessor": r["assessor"],
+            "assessor_name": names.get(r["assessor"]),
+            "assessment_type": details.get("assessment_type"),
+            "asset_type": r["asset_type"],
+            "fleet_code": r["fleet_code"],
+            "recorded_at": r["created_at"],
+            "remarks": r["remarks"],
+            "scores": [],
+        })
+        sitting["scores"].append({
+            "dimension": r["dimension"],
+            "title": r["title"],
+            "level": details.get("level"),
+            "previous_level": details.get("previous_level"),
+            "rating": details.get("rating"),
+            "result": r["result"],
+            "score": r["score"],
+        })
+        if r["dimension"] == "OVERALL":
+            sitting["level"] = details.get("level")
+            sitting["previous_level"] = details.get("previous_level")
+            sitting["rating"] = details.get("rating")
+        if r["remarks"] and not sitting["remarks"]:
+            sitting["remarks"] = r["remarks"]
+
+    return list(sittings.values())
 
 
 # ── assignment ───────────────────────────────────────────────────────────────

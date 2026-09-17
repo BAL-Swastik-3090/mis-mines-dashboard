@@ -76,6 +76,23 @@ interface Doc {
   uploaded_by?: string | null; uploaded_at: string;
 }
 
+/** One assessment: a day, an assessor, a method, and the scores it produced. */
+interface Sitting {
+  assessment_ref: string | null;
+  assessed_on: string | null;
+  assessor: string | null;
+  assessor_name: string | null;
+  assessment_type: string | null;
+  asset_type: string | null;
+  fleet_code: string | null;
+  remarks: string | null;
+  level?: number | null;
+  previous_level?: number | null;
+  rating?: number | null;
+  scores: { dimension: string; title: string; level: number | null;
+            previous_level: number | null; result: string | null }[];
+}
+
 interface Ident { party_identity_id: number; system: string; external_code: string }
 interface AssetType { asset_type_id: number; name: string }
 interface Asset {
@@ -154,7 +171,7 @@ export default function OperatorForm({ operatorId, openAt, prefill, onSaved, onD
   const [idents, setIdents] = useState<Ident[]>([]);
   const [documents, setDocuments] = useState<Doc[]>([]);
   const [revisions, setRevisions] = useState<Revision[]>([]);
-  const [history, setHistory] = useState<Rec[]>([]);
+  const [history, setHistory] = useState<Sitting[]>([]);
 
   const [types, setTypes] = useState<AssetType[]>([]);
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -1142,22 +1159,49 @@ export default function OperatorForm({ operatorId, openAt, prefill, onSaved, onD
               <div className="mt-3 rounded-xl border border-border-light bg-bg-base overflow-hidden">
                 <div className="px-4 py-2.5 border-b border-border-light text-[12px] font-bold
                                 uppercase tracking-[.1em] text-navy flex items-center gap-2">
-                  <History className="w-3.5 h-3.5 text-gold" /> Assessment history · {history.length}
+                  <History className="w-3.5 h-3.5 text-gold" /> Assessments · {history.length}
                 </div>
-                <ul className="max-h-[260px] overflow-y-auto divide-y divide-border-light">
-                  {history.map((h) => {
-                    const from = (h.details as { previous_level?: number })?.previous_level;
-                    const to = (h.details as { level?: number })?.level ?? 0;
+                <ul className="max-h-[340px] overflow-y-auto divide-y divide-border-light">
+                  {history.map((h, i) => {
+                    const to = h.level ?? null;
+                    const from = h.previous_level;
                     return (
-                      <li key={h.operator_record_id} className="px-4 py-2 flex items-center justify-between gap-3">
-                        <span className="text-[12.5px] text-txt-secondary min-w-0 truncate">{h.title}</span>
-                        <span className="flex items-center gap-2 shrink-0">
-                          <span className="text-[11.5px] text-txt-light">{h.issued_on}</span>
-                          {from !== null && from !== undefined && from !== to && (
-                            <span className="text-[11.5px] text-txt-light">L{from} →</span>
-                          )}
-                          <Chip tone={LEVEL_TONE[to]} dot={false}>L{to}</Chip>
-                        </span>
+                      <li key={h.assessment_ref ?? i} className="px-4 py-2.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="flex items-center gap-2 min-w-0">
+                            {h.assessment_ref && (
+                              <button type="button" title="Copy this assessment number"
+                                onClick={() => { void navigator.clipboard?.writeText(h.assessment_ref ?? "");
+                                                 setNotice(`${h.assessment_ref} copied.`); }}
+                                className="font-mono text-[11px] font-bold text-violet bg-violet-bg
+                                           border border-violet-ring rounded px-1.5 py-0.5">
+                                {h.assessment_ref}
+                              </button>
+                            )}
+                            <span className="text-[12.5px] font-semibold text-navy truncate">
+                              {h.fleet_code ?? h.asset_type ?? "Equipment"}
+                            </span>
+                          </span>
+                          <span className="flex items-center gap-2 shrink-0">
+                            {from !== null && from !== undefined && from !== to && (
+                              <span className="text-[11.5px] text-txt-light">L{from} →</span>
+                            )}
+                            {to !== null && <Chip tone={LEVEL_TONE[to]} dot={false}>L{to}</Chip>}
+                            {h.rating ? (
+                              <span className="text-[11.5px] text-gold-dark font-bold">
+                                {"★".repeat(h.rating)}
+                              </span>
+                            ) : null}
+                          </span>
+                        </div>
+                        <div className="text-[11.5px] text-txt-light mt-0.5">
+                          {h.assessed_on} · {(h.assessment_type ?? "").toLowerCase() || "method not recorded"}
+                          {h.assessor_name ? ` · by ${h.assessor_name}` : ""}
+                          {h.scores.length > 1 ? ` · ${h.scores.length} scores` : ""}
+                        </div>
+                        {h.remarks && (
+                          <p className="text-[11.5px] text-txt-secondary italic mt-1">“{h.remarks}”</p>
+                        )}
                       </li>
                     );
                   })}
