@@ -10,7 +10,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Users, Search, Plus, Loader2, HardHat, ShieldCheck, AlertTriangle,
-  ClipboardList, Pencil, Grid3x3, Award,
+  ClipboardList, Pencil, Grid3x3, Award, CalendarClock, Settings2, Check,
 } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
@@ -26,6 +26,22 @@ interface Operator {
   employer: string | null; department: string | null; plant: string | null;
   exp_total_months: number | null; exp_hemm_months: number | null;
   machines_competent: number; expired_documents: number; assigned_to: string | null;
+  last_assessed: string | null; last_assessed_by: string | null; next_due: string | null;
+}
+
+interface Due {
+  operator_id: number; operator_ref: string | null; display_name: string;
+  designation: string | null; asset_type: string | null; fleet_code: string | null;
+  level: number | null; rating: number | null; assessed_on: string | null;
+  last_assessed_by_name: string | null; next_assessment_due: string;
+  days_left: number;
+}
+
+interface Schedule {
+  default_interval_months: number;
+  settings: { key: string; value: string; description: string | null;
+              updated_by: string | null; updated_at: string }[];
+  classes: { asset_type_id: number; name: string; assessment_interval_months: number | null }[];
 }
 
 interface Plant { plant_id: number; code: string; name: string; is_default: boolean }
@@ -55,6 +71,20 @@ const EMPLOYMENT_TONE: Record<string, Tone> = {
   OWN: "sky", CONTRACT: "violet", TRAINEE: "amber", OTHER: "slate",
 };
 
+/** A due date, said the way people ask about it: how long have I got. */
+function dueChip(on: string | null | undefined) {
+  if (!on) return <span className="text-[12px] text-txt-light">not scheduled</span>;
+  const days = Math.round((new Date(on).getTime() - Date.now()) / 86400000);
+  const tone: Tone = days < 0 ? "rose" : days <= 30 ? "amber" : "emerald";
+  const label = days < 0 ? `overdue ${-days}d` : days === 0 ? "due today" : `in ${days}d`;
+  return (
+    <span className="inline-flex flex-col gap-0.5">
+      <Chip tone={tone}>{label}</Chip>
+      <span className="text-[11px] text-txt-light tabular-nums">{on}</span>
+    </span>
+  );
+}
+
 /** Months read as years by everyone who talks about experience. */
 function years(months: number | null): string {
   if (!months) return "—";
@@ -71,6 +101,8 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
 }) {
   const can = useAuth((s) => s.can);
   const mayManage = can("platform.operators.manage");
+  const mayAssess = can("platform.operators.assess");
+  const maySchedule = can("platform.operators.approve");
 
   const [operators, setOperators] = useState<Operator[]>([]);
   const [waiting, setWaiting] = useState<Waiting[]>([]);
@@ -80,26 +112,35 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
   const [error, setError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [prefill, setPrefill] = useState<{ display_name?: string; code?: string }>({});
+  // Which part of the profile to land on. "Assess this person" and "look at
+  // this person" are different errands, and the first one should not begin with
+  // a scroll past nine sections.
+  const [openAt, setOpenAt] = useState<string | undefined>(undefined);
   const [allWaiting, setAllWaiting] = useState(false);
   const [plants, setPlants] = useState<Plant[]>([]);
   const [plantId, setPlantId] = useState<string>("");
   const [view, setView] = useState<"register" | "capability">("register");
   const [matrix, setMatrix] = useState<Matrix | null>(null);
   const [coverage, setCoverage] = useState<Coverage[]>([]);
+  const [due, setDue] = useState<Due[]>([]);
+  const [schedule, setSchedule] = useState<Schedule | null>(null);
+  const [savingSchedule, setSavingSchedule] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [list, queue, sum, pl] = await Promise.all([
+      const [list, queue, sum, pl, dueList] = await Promise.all([
         api.get("/operators", { params: plantId ? { plant_id: plantId } : {} }),
         api.get("/operators/unregistered"),
         api.get("/operators/summary"),
         api.get("/minehub/plants").catch(() => ({ data: [] })),
+        api.get("/operators/meta/due").catch(() => ({ data: [] })),
       ]);
       setOperators(list.data ?? []);
       setWaiting(queue.data ?? []);
       setSummary(sum.data ?? null);
       setPlants(pl.data ?? []);
+      setDue(dueList.data ?? []);
       setError(null);
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
@@ -115,12 +156,14 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
     if (view !== "capability") return;
     (async () => {
       try {
-        const [m, c] = await Promise.all([
+        const [m, c, sch] = await Promise.all([
           api.get("/operators/matrix", { params: plantId ? { plant_id: plantId } : {} }),
           api.get("/operators/meta/skill-coverage"),
+          api.get("/operators/meta/settings").catch(() => ({ data: null })),
         ]);
         setMatrix(m.data ?? null);
         setCoverage(c.data ?? []);
+        setSchedule(sch.data ?? null);
       } catch { setMatrix(null); setCoverage([]); }
     })();
   }, [view, plantId]);
@@ -146,13 +189,15 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
       <div className="pb-8">
           <OperatorForm
             operatorId={editingId ?? undefined}
+            openAt={openAt}
             prefill={prefill}
             onSaved={() => { void load(); onChanged?.(); }}
             onDone={() => {
               onAddOpenChange?.(false); setEditingId(null); setPrefill({});
               void load(); onChanged?.();
             }}
-            onCancel={() => { onAddOpenChange?.(false); setEditingId(null); setPrefill({}); }} />
+            onCancel={() => { onAddOpenChange?.(false); setEditingId(null); setPrefill({});
+                              setOpenAt(undefined); }} />
       </div>
     );
   }
@@ -191,7 +236,24 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
       </div>
 
       {view === "capability" && (
-        <CapabilityView matrix={matrix} coverage={coverage} />
+        <>
+          <CapabilityView matrix={matrix} coverage={coverage} />
+          {schedule && (
+            <SchedulePanel schedule={schedule} disabled={!maySchedule} saving={savingSchedule}
+              onSave={async (settings, classes) => {
+                setSavingSchedule(true);
+                try {
+                  await api.put("/operators/meta/settings", { settings, classes });
+                  const r = await api.get("/operators/meta/settings");
+                  setSchedule(r.data);
+                  await load();
+                } catch (e: unknown) {
+                  const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+                  setError(d ?? "Could not change the schedule.");
+                } finally { setSavingSchedule(false); }
+              }} />
+          )}
+        </>
       )}
 
       {view === "register" && summary && (
@@ -208,6 +270,58 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
                 icon={AlertTriangle}
                 hint={`${summary.expired ?? 0} already expired`} />
         </div>
+      )}
+
+      {view === "register" && due.length > 0 && (
+        <Card tone="amber">
+          <CardHeader title={`${due.length} assessment${due.length === 1 ? "" : "s"} due`}
+            icon={CalendarClock} tone="amber"
+            subtitle="Overdue first. The register says who is on the books; this says what has to happen this month." />
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px]">
+              <thead>
+                <tr><Th>Operator</Th><Th>On</Th><Th>Last assessed</Th>
+                    <Th>Due</Th><Th className="text-right">Action</Th></tr>
+              </thead>
+              <tbody>
+                {due.map((d) => (
+                  <tr key={`${d.operator_id}-${d.asset_type}-${d.fleet_code ?? ""}`}
+                      className="hover:bg-bg-light transition-colors">
+                    <Td>
+                      <span className="font-semibold text-navy">{d.display_name}</span>
+                      {d.operator_ref && (
+                        <span className="block font-mono text-[11px] text-violet">{d.operator_ref}</span>
+                      )}
+                    </Td>
+                    <Td className="text-txt-secondary">
+                      {d.fleet_code ?? d.asset_type ?? "—"}
+                      {d.level !== null && (
+                        <span className="text-[11px] text-txt-light ml-1.5">L{d.level}</span>
+                      )}
+                    </Td>
+                    <Td>
+                      <span className="tabular-nums text-[12.5px]">{d.assessed_on ?? "—"}</span>
+                      {d.last_assessed_by_name && (
+                        <span className="block text-[11px] text-txt-light">
+                          by {d.last_assessed_by_name}
+                        </span>
+                      )}
+                    </Td>
+                    <Td>{dueChip(d.next_assessment_due)}</Td>
+                    <Td className="text-right">
+                      {mayAssess && (
+                        <Button size="sm" variant="primary"
+                          onClick={() => { setOpenAt("competency"); setEditingId(d.operator_id); }}>
+                          <ShieldCheck className="w-3.5 h-3.5" /> Assess now
+                        </Button>
+                      )}
+                    </Td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
       )}
 
       {view === "register" && (<>
@@ -236,13 +350,14 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
           <table className="w-full min-w-[820px]">
             <thead>
               <tr>
-                <Th>Operator</Th><Th>Employment</Th><Th>Experience</Th>
-                <Th>Can run</Th><Th>Assigned to</Th><Th className="text-right">Status</Th>
+                <Th>Operator</Th><Th>Employment</Th><Th>Can run</Th>
+                <Th>Last assessed</Th><Th>Next due</Th>
+                <Th className="text-right">Status</Th><Th className="text-right">Action</Th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 ? (
-                <EmptyRow colSpan={6}>
+                <EmptyRow colSpan={7}>
                   {operators.length === 0
                     ? "Nobody registered yet — start from the list below, those names are already in mine records."
                     : "Nobody matches that search."}
@@ -269,18 +384,33 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
                       <span className="text-[11.5px] text-txt-muted ml-2">{o.employer}</span>
                     )}
                   </Td>
-                  <Td className="tabular-nums text-txt-secondary">
-                    {years(o.exp_hemm_months)}
-                    <span className="text-[11px] text-txt-light ml-1">HEMM</span>
-                  </Td>
                   <Td>
                     {o.machines_competent > 0 ? (
                       <Chip tone="violet" dot={false}>
                         {o.machines_competent} class{o.machines_competent === 1 ? "" : "es"}
                       </Chip>
                     ) : <span className="text-[12px] text-txt-light">not assessed</span>}
+                    {o.assigned_to && (
+                      <span className="block font-mono text-[11px] text-txt-light mt-0.5">
+                        on {o.assigned_to}
+                      </span>
+                    )}
                   </Td>
-                  <Td className="font-mono text-[12px] text-txt-secondary">{o.assigned_to || "—"}</Td>
+                  <Td>
+                    {o.last_assessed ? (
+                      <>
+                        <span className="text-[12.5px] tabular-nums text-txt-secondary">
+                          {o.last_assessed}
+                        </span>
+                        {o.last_assessed_by && (
+                          <span className="block text-[11px] text-txt-light">
+                            by {o.last_assessed_by}
+                          </span>
+                        )}
+                      </>
+                    ) : <span className="text-[12px] text-txt-light">never</span>}
+                  </Td>
+                  <Td>{dueChip(o.next_due)}</Td>
                   <Td className="text-right">
                     <span className="inline-flex items-center gap-1.5 justify-end flex-wrap">
                       {o.expired_documents > 0 && (
@@ -289,14 +419,20 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
                       <Chip tone={APPROVAL_TONE[o.approval_status] ?? "slate"}>
                         {o.approval_status.replace("_", " ").toLowerCase()}
                       </Chip>
-                      {mayManage && (
-                        <button onClick={() => setEditingId(o.operator_id)}
-                          aria-label={`Open ${o.display_name}`}
-                          className="p-1 text-txt-light hover:text-gold-dark transition-colors">
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
-                      )}
                     </span>
+                  </Td>
+                  <Td className="text-right whitespace-nowrap">
+                    {mayAssess && (
+                      <Button size="sm" variant="secondary"
+                        onClick={() => { setOpenAt("competency"); setEditingId(o.operator_id); }}>
+                        <ShieldCheck className="w-3.5 h-3.5" /> Assess
+                      </Button>
+                    )}
+                    <button onClick={() => { setOpenAt(undefined); setEditingId(o.operator_id); }}
+                      aria-label={`Open ${o.display_name}`}
+                      className="ml-1.5 p-1 text-txt-light hover:text-gold-dark transition-colors">
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
                   </Td>
                 </tr>
               ))}
@@ -354,6 +490,115 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
       )}
       </>)}
     </div>
+  );
+}
+
+/* ── how often the mine reassesses its people ───────────────────────────── */
+function SchedulePanel({ schedule, disabled, saving, onSave }: {
+  schedule: Schedule; disabled: boolean; saving: boolean;
+  onSave: (settings: Record<string, number>, classes: Record<string, string>) => Promise<void>;
+}) {
+  const value = (key: string) =>
+    schedule.settings.find((x) => x.key === key)?.value ?? "";
+
+  const [interval, setInterval] = useState(value("assessment.interval_months"));
+  const [window, setWindow] = useState(value("assessment.due_window_days"));
+  const [backdate, setBackdate] = useState(value("assessment.backdate_limit_days"));
+  const [classes, setClasses] = useState<Record<string, string>>(() =>
+    Object.fromEntries(schedule.classes.map((c) =>
+      [String(c.asset_type_id), c.assessment_interval_months?.toString() ?? ""])));
+
+  const changed =
+    interval !== value("assessment.interval_months")
+    || window !== value("assessment.due_window_days")
+    || backdate !== value("assessment.backdate_limit_days")
+    || schedule.classes.some((c) =>
+        (classes[String(c.asset_type_id)] ?? "") !== (c.assessment_interval_months?.toString() ?? ""));
+
+  const updated = schedule.settings
+    .map((x) => x.updated_at).sort().slice(-1)[0];
+
+  return (
+    <Card tone="slate">
+      <CardHeader title="Assessment schedule" icon={Settings2} tone="slate"
+        subtitle="How often people are reassessed, and how much warning the register gives. Changing it moves every future due date — the ones already set stay where they are."
+        actions={!disabled && (
+          <Button size="sm" variant="primary" disabled={!changed || saving}
+            onClick={() => onSave(
+              { "assessment.interval_months": Number(interval),
+                "assessment.due_window_days": Number(window),
+                "assessment.backdate_limit_days": Number(backdate) },
+              classes)}>
+            {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
+                    : <><Check className="w-3.5 h-3.5" /> Save schedule</>}
+          </Button>
+        )} />
+
+      <div className="p-5 space-y-5">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {([
+            ["Reassess every", interval, setInterval, "months",
+             "The default. An equipment class can be set shorter or longer below."],
+            ["Warn ahead by", window, setWindow, "days",
+             "How long before the date it shows as due, so there is time to arrange it. Zero makes the date hard."],
+            ["Allow backdating", backdate, setBackdate, "days",
+             "How far back an assessment may be dated. Stops a register being caught up months later."],
+          ] as const).map(([label, v, setV, unit, hint]) => (
+            <label key={label} className="block">
+              <span className="block text-[12px] font-semibold text-txt-secondary mb-1">{label}</span>
+              <span className="flex items-center gap-2">
+                <input type="number" min={0} max={120} value={v} disabled={disabled}
+                  onChange={(e) => setV(e.target.value)}
+                  className="w-20 bg-bg-base border border-border rounded-lg px-3 py-1.5
+                             text-[13px] tabular-nums disabled:opacity-60" />
+                <span className="text-[12px] text-txt-muted">{unit}</span>
+              </span>
+              <span className="block text-[11px] text-txt-light mt-1 leading-snug">{hint}</span>
+            </label>
+          ))}
+        </div>
+
+        <div>
+          <div className="text-[12px] font-semibold text-txt-secondary mb-2">
+            By equipment class
+            <span className="font-normal text-txt-light ml-2">
+              blank follows the default of {schedule.default_interval_months} months
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {schedule.classes.map((c) => (
+              <label key={c.asset_type_id}
+                className="inline-flex items-center gap-2 rounded-lg border border-border
+                           bg-bg-light px-3 py-1.5 text-[12.5px]">
+                <span className="text-txt-secondary">{c.name}</span>
+                <input type="number" min={0} max={120} placeholder="—" disabled={disabled}
+                  value={classes[String(c.asset_type_id)] ?? ""}
+                  onChange={(e) => setClasses((prev) =>
+                    ({ ...prev, [String(c.asset_type_id)]: e.target.value }))}
+                  className="w-14 bg-bg-base border border-border rounded px-2 py-1
+                             text-[12px] tabular-nums disabled:opacity-60" />
+                <span className="text-txt-light">mo</span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {disabled && (
+          <Alert tone="info">
+            Changing how often the mine checks its operators is a decision about
+            assurance rather than data entry, so it sits with the approval
+            permission. You can see the schedule but not move it.
+          </Alert>
+        )}
+
+        {updated && (
+          <p className="text-[11.5px] text-txt-light">
+            Last changed {String(updated).slice(0, 16).replace("T", " ")}.
+            Every change is written to the activity log with both values.
+          </p>
+        )}
+      </div>
+    </Card>
   );
 }
 

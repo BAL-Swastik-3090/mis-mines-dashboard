@@ -23,7 +23,7 @@ import json
 import os
 import re
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from decimal import Decimal, InvalidOperation
 
@@ -93,6 +93,36 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 MANAGE = "platform.operators.manage"
 ASSESS = "platform.operators.assess"
 APPROVE = "platform.operators.approve"
+
+
+DEFAULTS = {"assessment.interval_months": 6,
+            "assessment.due_window_days": 30,
+            "assessment.backdate_limit_days": 30}
+
+
+def _setting(db, key: str) -> int:
+    """A number the mine set, or the one it would have set.
+
+    Read per call rather than cached: these change rarely but when they change
+    somebody has just decided they should, and waiting for a cache to expire is
+    not an answer they would accept.
+    """
+    v = db.execute(text("SELECT value FROM platform_setting WHERE key = :k"), {"k": key}).scalar()
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return DEFAULTS.get(key, 0)
+
+
+def _interval_months(db, asset_type_id: int | None) -> int:
+    """How often this class is reassessed. The class decides, or the mine does."""
+    if asset_type_id:
+        per_class = db.execute(text(
+            "SELECT assessment_interval_months FROM asset_type WHERE asset_type_id = :t"
+        ), {"t": asset_type_id}).scalar()
+        if per_class:
+            return int(per_class)
+    return _setting(db, "assessment.interval_months")
 
 
 # ── shared plumbing ──────────────────────────────────────────────────────────
@@ -227,7 +257,15 @@ def list_operators(q: str = Query(""), status: str = Query(""),
                (SELECT string_agg(DISTINCT a.fleet_code, ', ')
                   FROM operator_assignment oa JOIN asset a ON a.asset_id = oa.asset_id
                  WHERE oa.operator_id = o.operator_id AND oa.status = 'ACTIVE'
-                   AND (oa.valid_to IS NULL OR oa.valid_to >= CURRENT_DATE)) AS assigned_to
+                   AND (oa.valid_to IS NULL OR oa.valid_to >= CURRENT_DATE)) AS assigned_to,
+               (SELECT max(c.assessed_on) FROM operator_competency c
+                 WHERE c.operator_id = o.operator_id AND c.dimension = 'OVERALL') AS last_assessed,
+               (SELECT c.last_assessed_by FROM operator_competency c
+                 WHERE c.operator_id = o.operator_id AND c.dimension = 'OVERALL'
+                 ORDER BY c.assessed_on DESC NULLS LAST LIMIT 1)                  AS last_assessed_by,
+               (SELECT min(c.next_assessment_due) FROM operator_competency c
+                 WHERE c.operator_id = o.operator_id AND c.dimension = 'OVERALL'
+                   AND c.status = 'ACTIVE')                                       AS next_due
         FROM operator o
         JOIN party p           ON p.party_id = o.party_id
         LEFT JOIN party e      ON e.party_id = o.employer_party_id
@@ -708,12 +746,52 @@ def set_competency(operator_id: int, request: Request, body: dict = Body(...),
     _require(request, ASSESS, "assess competency")
     data = _clean(body, ("asset_type_id", "asset_id", "dimension", "level", "assessment_type",
                          "assessor", "assessed_on", "score", "result", "valid_upto", "remarks",
-                         "next_assessment_due", "rating", "rated_by", "rated_on"))
+                         "next_assessment_due", "rating", "rated_by", "rated_on",
+                         "last_assessed_by"))
     if not data.get("asset_type_id"):
         raise HTTPException(400, "Choose the equipment class being assessed.")
     data["dimension"] = (data.get("dimension") or "OVERALL").upper()
-    data.setdefault("assessor", _actor(request))
+    # The assessor is taken from the session, never from the request body: a
+    # field that says who did the assessment is worth nothing if the person
+    # recording it can type somebody else's name into it.
+    data["assessor"] = _actor(request)
     data.setdefault("assessed_on", date.today().isoformat())
+
+    # Nobody assesses themselves. The check is by identity rather than by name,
+    # since names collide and employee numbers do not.
+    if db.execute(text(
+        "SELECT 1 FROM party_identity i JOIN operator o ON o.party_id = i.party_id "
+        "WHERE o.operator_id = :o AND i.external_code = :me AND i.system IN ('SAP', 'HRMS')"
+    ), {"o": operator_id, "me": _actor(request)}).first():
+        raise HTTPException(403, "This is your own profile — someone else has to assess you.")
+
+    # A date in the future is a plan, not an assessment; one from months ago is a
+    # register being caught up, which is how a cycle quietly becomes paperwork.
+    try:
+        when = date.fromisoformat(str(data["assessed_on"])[:10])
+    except ValueError:
+        raise HTTPException(400, "That assessment date could not be read.")
+    if when > date.today():
+        raise HTTPException(400, "An assessment cannot be dated in the future.")
+    limit = _setting(db, "assessment.backdate_limit_days")
+    if (date.today() - when).days > limit:
+        raise HTTPException(
+            400, f"That assessment is dated {(date.today() - when).days} days ago, and the mine "
+                 f"allows {limit}. Record it on the day it happened, or have the limit changed.")
+
+    # An overall level is a clearance decision, so it carries how it was reached.
+    if data["dimension"] == "OVERALL" and data.get("level") is not None:
+        if not data.get("assessment_type"):
+            raise HTTPException(400, "Say how this was assessed — practical, written or observation.")
+        if not data.get("result"):
+            data["result"] = "PASS" if int(data["level"]) >= 2 else "PENDING"
+
+    # The next one falls due on its own, from the interval the mine set.
+    if data["dimension"] == "OVERALL" and not data.get("next_assessment_due"):
+        months = _interval_months(db, data.get("asset_type_id"))
+        data["next_assessment_due"] = (
+            when + timedelta(days=int(round(months * 30.44)))).isoformat()
+    data["last_assessed_by"] = _actor(request)
 
     if data.get("rating") is not None:
         data.setdefault("rated_by", _actor(request))
@@ -1085,6 +1163,97 @@ def skill_coverage(db: Session = Depends(get_minehub_db)) -> list[dict]:
         ORDER BY holders DESC, s.name
     """)).mappings().all()
     return [dict(r) for r in rows]
+
+
+# -- the assessment cycle ----------------------------------------------------
+@router.get("/meta/due")
+def assessments_due(db: Session = Depends(get_minehub_db),
+                    corp: Session = Depends(get_db)) -> list[dict]:
+    """Who needs reassessing, soonest first — overdue at the top.
+
+    The register answers "who is on the books"; this answers "what has to happen
+    this month", which is the question a training officer actually opens a
+    screen with.
+    """
+    window = _setting(db, "assessment.due_window_days")
+    rows = db.execute(text("""
+        SELECT o.operator_id, o.operator_ref, p.display_name, o.designation,
+               t.name AS asset_type, a.fleet_code,
+               c.level, c.rating, c.assessed_on, c.last_assessed_by, c.next_assessment_due,
+               (c.next_assessment_due - CURRENT_DATE) AS days_left
+        FROM operator_competency c
+        JOIN operator o ON o.operator_id = c.operator_id
+        JOIN party p    ON p.party_id = o.party_id
+        LEFT JOIN asset_type t ON t.asset_type_id = c.asset_type_id
+        LEFT JOIN asset a      ON a.asset_id = c.asset_id
+        WHERE c.dimension = 'OVERALL' AND c.status = 'ACTIVE'
+          AND o.profile_status = 'ACTIVE'
+          AND c.next_assessment_due IS NOT NULL
+          AND c.next_assessment_due <= CURRENT_DATE + CAST(:window AS int)
+        ORDER BY c.next_assessment_due
+    """), {"window": window}).mappings().all()
+
+    names = people.names_for(corp, [r["last_assessed_by"] for r in rows])
+    return [{**dict(r), "last_assessed_by_name": names.get(r["last_assessed_by"])} for r in rows]
+
+
+@router.get("/meta/settings")
+def read_settings(db: Session = Depends(get_minehub_db)) -> dict:
+    """The assessment schedule, as the mine has set it."""
+    rows = db.execute(text(
+        "SELECT key, value, description, updated_by, updated_at FROM platform_setting "
+        "WHERE key LIKE 'assessment.%' ORDER BY key"
+    )).mappings().all()
+    classes = db.execute(text(
+        "SELECT asset_type_id, name, assessment_interval_months FROM asset_type "
+        "WHERE status = 'ACTIVE' ORDER BY name"
+    )).mappings().all()
+    return {"settings": [dict(r) for r in rows],
+            "default_interval_months": _setting(db, "assessment.interval_months"),
+            "classes": [dict(c) for c in classes]}
+
+
+@router.put("/meta/settings")
+def write_settings(request: Request, body: dict = Body(...),
+                   db: Session = Depends(get_minehub_db)) -> dict:
+    """Change how often people are reassessed.
+
+    Behind the approve permission rather than manage: how often the mine checks
+    its operators is a decision about assurance, not data entry, and the person
+    who lengthens the interval should be the person answerable for it. Every
+    change is written to the activity log with both values.
+    """
+    _require(request, APPROVE, "change the assessment schedule")
+
+    changed = []
+    for key, value in (body.get("settings") or {}).items():
+        if not key.startswith("assessment."):
+            raise HTTPException(400, f"{key} is not an assessment setting.")
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            raise HTTPException(400, f"{key} has to be a number of days or months.")
+        if number < 0 or number > 120:
+            raise HTTPException(400, f"{number} is outside what {key} can sensibly be.")
+        was = db.execute(text("SELECT value FROM platform_setting WHERE key = :k"),
+                         {"k": key}).scalar()
+        db.execute(text(
+            "INSERT INTO platform_setting (key, value, updated_by, updated_at) "
+            "VALUES (:k, :v, :by, now()) ON CONFLICT (key) DO UPDATE SET "
+            "value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now()"
+        ), {"k": key, "v": str(number), "by": _actor(request)})
+        changed.append({"key": key, "from": was, "to": str(number)})
+
+    for raw_id, months in (body.get("classes") or {}).items():
+        value = None if months in (None, "", "default") else int(months)
+        db.execute(text("UPDATE asset_type SET assessment_interval_months = :m "
+                        "WHERE asset_type_id = :t"), {"m": value, "t": int(raw_id)})
+        changed.append({"key": f"class:{raw_id}", "to": value})
+
+    if changed:
+        _activity(db, request, "ASSESSMENT_SCHEDULE_CHANGED", payload={"changes": changed})
+    db.commit()
+    return {"ok": True, "changed": len(changed)}
 
 
 @router.get("/meta/me")

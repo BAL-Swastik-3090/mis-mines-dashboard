@@ -130,8 +130,10 @@ const emptyRecord = (kind: string): Rec => ({
   valid_from: "", valid_upto: "", verification_status: "PENDING",
 });
 
-export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onCancel }: {
+export default function OperatorForm({ operatorId, openAt, prefill, onSaved, onDone, onCancel }: {
   operatorId?: number;
+  /** Land on this section rather than at the top. */
+  openAt?: string;
   prefill?: { display_name?: string; code?: string };
   onSaved?: () => void;
   onDone: () => void;
@@ -298,6 +300,16 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
   }, [id]);
 
   useEffect(() => { void loadProfile(); void loadRevisions(); }, [loadProfile, loadRevisions]);
+
+  // Jump once, after the sections exist to jump to.
+  const jumped = useRef(false);
+  useEffect(() => {
+    if (!openAt || jumped.current || !loaded) return;
+    jumped.current = true;
+    const t = setTimeout(() => goTo(openAt as SectionId), 60);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openAt, loaded]);
 
   /** Ten digits, optionally with +91 or a leading 0, and nothing else. Checked
    *  as it is typed rather than only at submission, because a number is wrong
