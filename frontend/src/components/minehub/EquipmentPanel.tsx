@@ -128,6 +128,22 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onChanged }: 
     return <div className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-gold" /></div>;
   }
 
+  // Registration takes the whole panel rather than sitting above the tiles and
+  // the unregistered list. Filling a long form beneath a dashboard made it
+  // unclear what the screen was for, and left the save button a scroll away
+  // from anything explaining it.
+  if (addOpen) {
+    return (
+      <Card tone="gold">
+        <div className="p-5">
+          <AssetForm prefill={prefill}
+            onDone={() => { onAddOpenChange?.(false); setPrefill({}); setNotice("Machine registered."); void load(); onChanged?.(); }}
+            onCancel={() => { onAddOpenChange?.(false); setPrefill({}); }} />
+        </div>
+      </Card>
+    );
+  }
+
   return (
     <div className="space-y-4">
       {error && <Alert tone="error">{error}</Alert>}
@@ -135,16 +151,6 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onChanged }: 
         <Alert tone="success"><span className="inline-flex items-center gap-2"><Check className="w-4 h-4" />{notice}</span></Alert>
       )}
 
-      {/* Registration */}
-      {addOpen && (
-        <Card tone="gold">
-          <div className="p-5">
-            <AssetForm prefill={prefill}
-              onDone={() => { onAddOpenChange?.(false); setPrefill({}); setNotice("Machine registered."); void load(); onChanged?.(); }}
-              onCancel={() => { onAddOpenChange?.(false); setPrefill({}); }} />
-          </div>
-        </Card>
-      )}
 
       {/* Registry state */}
       {summary && (

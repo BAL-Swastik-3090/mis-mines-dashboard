@@ -13,7 +13,7 @@
  * that typing is blocked.
  */
 import React, { useEffect, useMemo, useState } from "react";
-import { Plus, Trash2, X, Check, AlertCircle, Loader2, Info } from "lucide-react";
+import { Plus, Trash2, Check, AlertCircle, Loader2, Info, ArrowLeft } from "lucide-react";
 import api from "@/lib/api";
 import { Alert, Button, Chip } from "./ui";
 import Combobox from "./Combobox";
@@ -145,6 +145,8 @@ export default function AssetForm({ prefill, onDone, onCancel }: {
 
   const set = (k: string, v: string) => setF((prev) => ({ ...prev, [k]: v }));
   const isElectric = f.fuel_type === "ELECTRIC" || f.fuel_type === "HYBRID";
+  // The picker shows a name; the form stores the id it resolves to.
+  const typeName = types.find((t) => String(t.asset_type_id) === f.asset_type_id)?.name ?? "";
   const isHired = f.ownership === "HIRED";
 
   const filled = useMemo(() => {
@@ -188,8 +190,13 @@ export default function AssetForm({ prefill, onDone, onCancel }: {
     <div className="space-y-4">
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="font-condensed font-extrabold text-[22px] leading-none text-navy">
+        <div className="min-w-0">
+          <button onClick={onCancel}
+            className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-txt-muted
+                       hover:text-navy transition-colors mb-2">
+            <ArrowLeft className="w-4 h-4" /> Back to registry
+          </button>
+          <h2 className="font-condensed font-extrabold text-[24px] leading-none text-navy">
             Register a <span className="text-gold-dark">machine</span>
           </h2>
           <p className="text-[12px] text-txt-muted mt-1.5">
@@ -197,12 +204,9 @@ export default function AssetForm({ prefill, onDone, onCancel }: {
             rather than blocking the registration.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Chip tone={filled > 70 ? "emerald" : filled > 35 ? "amber" : "slate"}>
-            {filled}% filled
-          </Chip>
-          <Button variant="ghost" size="sm" onClick={onCancel}><X className="w-4 h-4" /></Button>
-        </div>
+        <Chip tone={filled > 70 ? "emerald" : filled > 35 ? "amber" : "slate"}>
+          {filled}% filled
+        </Chip>
       </div>
 
       {error && (
@@ -223,12 +227,26 @@ export default function AssetForm({ prefill, onDone, onCancel }: {
             <input id="af-nick" className={cellInput} value={f.nickname ?? ""}
               onChange={(e) => set("nickname", e.target.value)} placeholder="Bada Tipper" />
           </Row>
-          <Row label="Equipment type" required>
-            <select id="af-type" className={cellInput} value={f.asset_type_id ?? ""}
-              onChange={(e) => set("asset_type_id", e.target.value)}>
-              <option value="">Select…</option>
-              {types.map((t) => <option key={t.asset_type_id} value={t.asset_type_id}>{t.name}</option>)}
-            </select>
+          <Row label="Equipment type" required
+               hint="Not on the list? Type it and add it — a near-enough type carries the wrong rated figures into every calculation">
+            <div className="px-1.5 py-1">
+              <Combobox id="af-type"
+                options={types.map((t) => ({ value: t.name, hint: t.category.toLowerCase() }))}
+                value={typeName}
+                placeholder="Excavator, Tipper, Drill…"
+                onChange={(name) => {
+                  const hit = types.find((t) => t.name === name);
+                  if (hit) set("asset_type_id", String(hit.asset_type_id));
+                }}
+                onAddNew={async (name) => {
+                  const r = await api.post("/minehub/asset-types", { name });
+                  const created = { asset_type_id: r.data.asset_type_id, name: r.data.name, category: "OTHER" };
+                  setTypes((prev) => prev.some((t) => t.asset_type_id === created.asset_type_id)
+                    ? prev : [...prev, created]);
+                  set("asset_type_id", String(created.asset_type_id));
+                  return created.name;
+                }} />
+            </div>
           </Row>
           <Row label="Registration no.">
             <input id="af-reg" className={cellInput} value={f.registration_no ?? ""}
@@ -449,7 +467,7 @@ export default function AssetForm({ prefill, onDone, onCancel }: {
           right={<Button size="sm" variant="secondary" onClick={() => setDocs([...docs, emptyDoc("PERMIT")])}>
             <Plus className="w-3.5 h-3.5" /> Add
           </Button>} />
-        <div className="border border-t-0 border-border-light rounded-b-lg overflow-x-auto">
+        <div className="border border-t-0 border-border-light rounded-b-lg overflow-x-auto overflow-y-visible">
           <table className="w-full min-w-[820px]">
             <thead>
               <tr className="bg-bg-light">
@@ -501,7 +519,7 @@ export default function AssetForm({ prefill, onDone, onCancel }: {
           right={<Button size="sm" variant="secondary" onClick={() => setScheds([...scheds, emptySched()])}>
             <Plus className="w-3.5 h-3.5" /> Add
           </Button>} />
-        <div className="border border-t-0 border-border-light rounded-b-lg overflow-x-auto">
+        <div className="border border-t-0 border-border-light rounded-b-lg overflow-x-auto overflow-y-visible">
           <table className="w-full min-w-[760px]">
             <thead>
               <tr className="bg-bg-light">
@@ -568,7 +586,7 @@ export default function AssetForm({ prefill, onDone, onCancel }: {
             onClick={() => setIdents([...idents, { system: "HOTO", external_code: "" }])}>
             <Plus className="w-3.5 h-3.5" /> Add
           </Button>} />
-        <div className="border border-t-0 border-border-light rounded-b-lg overflow-x-auto">
+        <div className="border border-t-0 border-border-light rounded-b-lg overflow-x-auto overflow-y-visible">
           <table className="w-full min-w-[480px]">
             <thead>
               <tr className="bg-bg-light">

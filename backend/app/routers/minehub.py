@@ -631,3 +631,35 @@ def record_lookup_use(body: dict = Body(...),
             ), {"c": cat, "v": val})
     db.commit()
     return {"ok": True}
+
+
+@router.post("/asset-types")
+def create_asset_type(request: Request, body: dict = Body(...),
+                      db: Session = Depends(get_minehub_db)) -> dict:
+    """Add an equipment type that was not on the list.
+
+    The thirteen seeded types came from the legacy master and will not cover
+    everything the mine runs. Refusing to add would push whoever is registering
+    into picking a near-enough type, which is worse than an extra row: a wrong
+    type carries wrong rated figures into every capacity calculation.
+    """
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "A name is required.")
+    code = "".join(ch for ch in name.upper().replace(" ", "_") if ch.isalnum() or ch == "_")
+    if not code:
+        raise HTTPException(400, "The name must contain letters or numbers.")
+
+    existing = db.execute(text(
+        "SELECT asset_type_id, name FROM asset_type WHERE code = :c OR lower(name) = lower(:n)"
+    ), {"c": code, "n": name}).first()
+    if existing:
+        return {"ok": True, "asset_type_id": existing[0], "name": existing[1], "existed": True}
+
+    row = db.execute(text(
+        "INSERT INTO asset_type (code, name, category, created_by) "
+        "VALUES (:c, :n, :cat, :by) RETURNING asset_type_id, name"
+    ), {"c": code, "n": name,
+        "cat": (body.get("category") or "OTHER").upper(), "by": _actor(request)}).first()
+    db.commit()
+    return {"ok": True, "asset_type_id": row[0], "name": row[1], "existed": False}
