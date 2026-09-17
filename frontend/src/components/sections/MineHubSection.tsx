@@ -72,9 +72,13 @@ export default function MineHubSection() {
   const tabsWithCount = TABS.map((t) =>
     t.id === "alerts" && alertCount ? { ...t, label: `Alerts · ${alertCount}` } : t);
 
+  // With the sheet open, the platform banner and the tab strip are a hundred
+  // vertical pixels describing where you already are, pushing the fields that
+  // are actually being filled in below the fold. The sheet carries its own
+  // "Back to registry", so nothing is lost by standing them down.
   return (
-    <div className="py-6 space-y-5 max-w-[1500px]">
-      <PageHeader
+    <div className={`py-6 space-y-5 ${formOpen ? "max-w-[1600px]" : "max-w-[1500px]"}`}>
+      {!formOpen && <PageHeader
         lead="MineHub" rest="Platform" tone="gold" icon={Boxes}
         subtitle={active?.hint}
         actions={
@@ -92,9 +96,9 @@ export default function MineHubSection() {
             ) : null}
           </>
         }
-      />
+      />}
 
-      {mayView && (
+      {mayView && !formOpen && (
         <Tabs tabs={tabsWithCount} value={tab} onChange={(id) => setTab(id as TabId)} />
       )}
 

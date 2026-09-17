@@ -12,7 +12,7 @@
  * click and never refused; the aim is that picking is easier than typing, not
  * that typing is blocked.
  */
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Trash2, Check, AlertCircle, Loader2, Info, ArrowLeft, Send, CheckCircle2, Undo2 } from "lucide-react";
 import api from "@/lib/api";
 import { Alert, Button, Chip, type Tone } from "./ui";
@@ -146,6 +146,10 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   const [revisions, setRevisions] = useState<Revision[]>([]);
   const [loadingRev, setLoadingRev] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [showMissing, setShowMissing] = useState(false);
+  // Submitting from the footer set an error in the header, two screens up, so
+  // the button appeared to do nothing. The form scrolls to it.
+  const topRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     void (async () => {
@@ -210,13 +214,53 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   const typeName = types.find((t) => String(t.asset_type_id) === f.asset_type_id)?.name ?? "";
   const isHired = f.ownership === "HIRED";
 
-  const filled = useMemo(() => {
-    const total = 12;
-    const done = ["fleet_code", "nickname", "asset_type_id", "registration_no", "make", "model",
-      "capacity", "current_reading", "home_location_id", "fuel_type", "purchase_date",
-      "commissioned_on"].filter((k) => (f[k] ?? "").toString().trim()).length;
-    return Math.round((done / total) * 100);
-  }, [f]);
+  /** What this particular machine still needs.
+   *
+   *  A fixed list of twelve fields counted a hired tipper against a purchase
+   *  date it will never have, and a diesel excavator against a battery size —
+   *  so the figure moved for reasons nobody could act on. The checklist now
+   *  depends on what kind of machine is being described, and says which items
+   *  are outstanding rather than only how many. */
+  const checklist = useMemo(() => {
+    const has = (k: string) => Boolean((f[k] ?? "").toString().trim());
+    const items: { label: string; done: boolean; needed: boolean }[] = [
+      { label: "Fleet code",      done: has("fleet_code"),      needed: true },
+      { label: "Equipment type",  done: has("asset_type_id"),   needed: true },
+      { label: "Make",            done: has("make"),            needed: false },
+      { label: "Model",           done: has("model"),           needed: false },
+      { label: "Registration no.", done: has("registration_no"), needed: false },
+      { label: "Capacity",        done: has("capacity"),        needed: false },
+      { label: "Home location",   done: has("home_location_id"), needed: false },
+      { label: "Meter reading",   done: has("current_reading"), needed: false },
+      { label: "Commissioned on", done: has("commissioned_on"), needed: false },
+    ];
+    if (isHired) {
+      items.push(
+        { label: "Contractor",     done: has("owner_party_id"), needed: true },
+        { label: "Contract no.",   done: has("contract_no"),    needed: false },
+        { label: "Service PO no.", done: has("service_po_no"),  needed: false },
+      );
+    } else {
+      items.push(
+        { label: "SAP equipment no.", done: has("sap_equipment_no"), needed: false },
+        { label: "Purchase date",     done: has("purchase_date"),    needed: false },
+      );
+    }
+    items.push(isElectric
+      ? { label: "Battery kWh", done: has("battery_kwh"), needed: false }
+      : { label: "Tank capacity", done: has("tank_capacity_l"), needed: false });
+    return items;
+  }, [f, isHired, isElectric]);
+
+  const doneCount = checklist.filter((i) => i.done).length;
+  const filled = Math.round((doneCount / checklist.length) * 100);
+  const outstanding = checklist.filter((i) => !i.done).map((i) => i.label);
+
+  /** Put the message where the person is looking. */
+  const raise = (msg: string) => {
+    setError(msg);
+    topRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   const submit = async (then: "stay" | "submit" = "stay") => {
     // Only the path that puts this in front of someone else checks for
@@ -229,8 +273,8 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
         isHired && !f.owner_party_id && "the contractor that owns it",
       ].filter(Boolean) as string[];
       if (missing.length) {
-        setError(`Before this can go for approval it needs ${missing.join(", ")}. `
-               + "Save it as a draft meanwhile — nothing typed is lost.");
+        raise(`Before this can go for approval it needs ${missing.join(", ")}. `
+            + "Save it as a draft meanwhile — nothing typed is lost.");
         return;
       }
     }
@@ -276,7 +320,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
       }
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setError(d ?? "Could not register the machine.");
+      raise(d ?? "Could not register the machine.");
     } finally { setSaving(false); }
   };
 
@@ -296,7 +340,40 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
       await loadAsset(); await loadRevisions();
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setError(d ?? "Could not complete that.");
+      raise(d ?? "Could not complete that.");
+    } finally { setBusy(null); }
+  };
+
+  const discard = async () => {
+    const name = String(f.nickname || f.fleet_code || "this draft");
+    if (!window.confirm(
+      `Discard ${name}? Everything typed into it goes, and it cannot be brought back. `
+      + "The register will record that it was registered and discarded.")) return;
+    setBusy("discard"); setError(null);
+    try {
+      await api.delete(`/minehub/assets/${id}`);
+      onSaved?.();
+      onDone();
+    } catch (e: unknown) {
+      const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      raise(d ?? "Could not discard it.");
+    } finally { setBusy(null); }
+  };
+
+  const revert = async () => {
+    if (!window.confirm(
+      "Put this machine back the way it was before the last change? "
+      + "The undo is itself recorded, so the trail keeps both.")) return;
+    setBusy("revert"); setError(null);
+    try {
+      const r = await api.post(`/minehub/assets/${id}/revert`, {});
+      setNotice(r.data?.changed
+        ? `Put back to v${r.data.reverted_to} — ${r.data.changed} field${r.data.changed === 1 ? "" : "s"} restored.`
+        : "It already looked like that.");
+      await loadAsset(); await loadRevisions(); onSaved?.();
+    } catch (e: unknown) {
+      const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      raise(d ?? "Could not undo that.");
     } finally { setBusy(null); }
   };
 
@@ -307,6 +384,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
 
   const sheet = (
     <div className="space-y-4">
+      <div ref={topRef} className="scroll-mt-[110px]" />
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
@@ -328,9 +406,12 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {editing && <Chip tone={statusTone}>{status.replace("_", " ").toLowerCase()}</Chip>}
-          <Chip tone={filled > 70 ? "emerald" : filled > 35 ? "amber" : "slate"}>
-            {filled}% filled
-          </Chip>
+          <button type="button" onClick={() => setShowMissing((v) => !v)}
+            title={outstanding.length ? `Still blank: ${outstanding.join(", ")}` : "Nothing outstanding"}>
+            <Chip tone={filled > 70 ? "emerald" : filled > 35 ? "amber" : "slate"}>
+              {doneCount} of {checklist.length} filled
+            </Chip>
+          </button>
           <Button size="sm" variant="primary" onClick={() => submit("stay")} disabled={saving}>
             {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
                     : <><Check className="w-3.5 h-3.5" /> {editing ? "Save changes" : "Save as draft"}</>}
@@ -352,6 +433,18 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
           )}
         </div>
       </div>
+
+      {showMissing && outstanding.length > 0 && (
+        <Alert tone="info">
+          <span className="font-semibold">Still blank:</span>{" "}
+          {outstanding.join(" · ")}
+          <span className="block text-[11.5px] text-txt-muted mt-1">
+            None of these stop you saving a draft. Only a fleet code
+            {isHired ? ", an equipment type and the contractor" : " and an equipment type"} are
+            needed to send it for approval.
+          </span>
+        </Alert>
+      )}
 
       {error && (
         <Alert tone="error">
@@ -814,6 +907,12 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
         </div>
       </div>
 
+      {error && (
+        <Alert tone="error">
+          <span className="inline-flex items-center gap-2"><AlertCircle className="w-4 h-4" />{error}</span>
+        </Alert>
+      )}
+
       <div className="flex flex-wrap gap-2 pt-1 sticky bottom-0 bg-bg-base/95 backdrop-blur py-3 -mx-1 px-1
                       border-t border-border-light">
         <Button variant="primary" size="lg" onClick={() => submit("stay")} disabled={saving}>
@@ -828,6 +927,21 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
         <Button variant="ghost" size="lg" onClick={onCancel}>
           {editing ? "Back to registry" : "Cancel"}
         </Button>
+
+        {editing && (
+          <span className="ml-auto flex flex-wrap gap-2">
+            {revisions.length > 1 && (
+              <Button variant="secondary" size="lg" disabled={busy !== null} onClick={revert}>
+                <Undo2 className="w-4 h-4" /> Undo last change
+              </Button>
+            )}
+            {(status === "DRAFT" || status === "SENT_BACK") && (
+              <Button variant="danger" size="lg" disabled={busy !== null} onClick={discard}>
+                <Trash2 className="w-4 h-4" /> Discard draft
+              </Button>
+            )}
+          </span>
+        )}
         <p className="w-full text-[11.5px] text-txt-light pt-0.5">
           {editing
             ? "Each save records what changed, against your name, in the trail on the right."

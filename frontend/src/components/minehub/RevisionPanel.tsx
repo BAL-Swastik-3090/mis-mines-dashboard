@@ -20,6 +20,8 @@ export interface Revision {
   changes: Record<string, { from: unknown; to: unknown }> | null;
   remarks: string | null;
   changed_by: string;
+  /** Resolved from the employee master; absent if it could not be read. */
+  changed_by_name?: string | null;
   changed_at: string;
 }
 
@@ -130,7 +132,18 @@ export default function RevisionPanel({ revisions, loading }: {
                       <span className="text-[11px] font-mono text-txt-light">v{r.version}</span>
                       <span className="text-[11px] text-txt-light">{when(r.changed_at)}</span>
                     </div>
-                    <div className="text-[11.5px] text-txt-muted mt-1">by {r.changed_by}</div>
+                    <div className="text-[11.5px] text-txt-muted mt-1">
+                      by <span className="font-semibold text-txt-secondary">
+                        {r.changed_by_name || r.changed_by}
+                      </span>
+                      {/* The id stays visible beside the name: two people share
+                          a name far more often than an employee number. */}
+                      {r.changed_by_name && (
+                        <span className="font-mono text-[10.5px] text-txt-light ml-1.5">
+                          {r.changed_by}
+                        </span>
+                      )}
+                    </div>
 
                     {r.remarks && (
                       <p className="mt-1.5 text-[12px] text-txt-secondary italic

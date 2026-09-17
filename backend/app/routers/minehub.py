@@ -23,7 +23,9 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.database import get_db
 from app.minehub_db import get_minehub_db, test_connection
+from app.services import people
 
 router = APIRouter(prefix="/api/minehub", tags=["MineHub"])
 
@@ -597,14 +599,108 @@ def send_back_asset(asset_id: int, request: Request, body: dict = Body(default={
     return {"ok": True, "approval_status": "SENT_BACK"}
 
 
+@router.delete("/assets/{asset_id}")
+def discard_draft(asset_id: int, request: Request,
+                  db: Session = Depends(get_minehub_db)) -> dict:
+    """Throw away a draft.
+
+    Only a draft, and only one that has never been approved. Anything that has
+    been through approval is what other people have acted on, and removing it
+    would leave their decisions pointing at nothing — those are retired by
+    status instead.
+
+    The revision trail goes with the row, since it only ever described a record
+    that no longer exists. What survives is the activity log, which is append
+    only and keeps the fact that this fleet code was registered and discarded.
+    """
+    row = db.execute(text(
+        "SELECT approval_status, fleet_code, nickname FROM asset WHERE asset_id = :id"
+    ), {"id": asset_id}).first()
+    if not row:
+        raise HTTPException(404, "Machine not found.")
+    if row[0] not in ("DRAFT", "SENT_BACK"):
+        raise HTTPException(
+            400, "Only a draft can be discarded. This one has been through approval — "
+                 "set its status to Disposed instead, so the history it carries stays readable.")
+
+    _activity(db, request, "ASSET_DISCARDED",
+              payload={"fleet_code": row[1], "nickname": row[2], "was": row[0]})
+    db.execute(text("DELETE FROM asset WHERE asset_id = :id"), {"id": asset_id})
+    db.commit()
+    return {"ok": True, "discarded": row[1]}
+
+
+@router.post("/assets/{asset_id}/revert")
+def revert_asset(asset_id: int, request: Request, body: dict = Body(default={}),
+                 db: Session = Depends(get_minehub_db)) -> dict:
+    """Put a machine back the way an earlier revision found it.
+
+    The earlier state is written as a new revision rather than by deleting the
+    ones after it: an undo that erases its own evidence is not an audit trail.
+    Anyone reading the history sees the change, and sees it being taken back.
+    """
+    target = body.get("revision_id")
+    rows = db.execute(text(
+        "SELECT revision_id, version, snapshot FROM asset_revision "
+        "WHERE asset_id = :id ORDER BY revision_id DESC LIMIT 2"
+    ), {"id": asset_id}).mappings().all()
+    if len(rows) < 2 and not target:
+        raise HTTPException(400, "There is nothing to go back to yet.")
+
+    if target:
+        snap_row = db.execute(text(
+            "SELECT version, snapshot FROM asset_revision "
+            "WHERE asset_id = :id AND revision_id = :r"
+        ), {"id": asset_id, "r": target}).mappings().first()
+        if not snap_row:
+            raise HTTPException(404, "That revision is not on this machine.")
+    else:
+        snap_row = rows[1]          # the state before the most recent change
+
+    snap = snap_row["snapshot"] or {}
+    before = db.execute(text("SELECT * FROM asset WHERE asset_id = :id"),
+                        {"id": asset_id}).mappings().first()
+    if not before:
+        raise HTTPException(404, "Machine not found.")
+
+    # Only the fields a person edits are restored. Identity, timestamps and the
+    # approval state are not part of what an undo means.
+    restore = {k: snap.get(k) for k in ASSET_FIELDS if k in snap}
+    changes = {k: {"from": _jsonable(before.get(k)), "to": _jsonable(v)}
+               for k, v in restore.items() if not _same(before.get(k), v)}
+    if not changes:
+        return {"ok": True, "changed": 0, "message": "It already looks like that."}
+
+    version = before["version"] + 1
+    db.execute(text(
+        f"UPDATE asset SET {', '.join(f'{c} = :{c}' for c in restore)}, version = :ver "
+        "WHERE asset_id = :id"
+    ), {**restore, "ver": version, "id": asset_id})
+
+    _revise(db, request, asset_id, version, "UPDATED", changes,
+            remarks=f"Reverted to v{snap_row['version']}")
+    _activity(db, request, "ASSET_REVERTED", asset_id=asset_id,
+              payload={"to_version": snap_row["version"], "fields": sorted(changes)})
+    db.commit()
+    return {"ok": True, "version": version, "changed": len(changes),
+            "reverted_to": snap_row["version"]}
+
+
 @router.get("/assets/{asset_id}/revisions")
-def asset_revisions(asset_id: int, db: Session = Depends(get_minehub_db)) -> list[dict]:
-    """The full history of one machine, newest first."""
+def asset_revisions(asset_id: int, db: Session = Depends(get_minehub_db),
+                    corp: Session = Depends(get_db)) -> list[dict]:
+    """The full history of one machine, newest first.
+
+    Carries the name beside the employee id it was recorded against. The id is
+    what makes the trail reliable; the name is what makes anyone read it.
+    """
     rows = db.execute(text(
         "SELECT revision_id, version, action, changes, remarks, changed_by, changed_at "
         "FROM asset_revision WHERE asset_id = :id ORDER BY changed_at DESC, revision_id DESC"
     ), {"id": asset_id}).mappings().all()
-    return [dict(r) for r in rows]
+
+    names = people.names_for(corp, [r["changed_by"] for r in rows])
+    return [{**dict(r), "changed_by_name": names.get(r["changed_by"])} for r in rows]
 
 
 # -------------------------------------------------------------- identities
