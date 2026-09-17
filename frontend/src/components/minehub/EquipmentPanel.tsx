@@ -90,6 +90,12 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Whether the registration sheet is on screen. Declared with the other hooks
+  // rather than beside the branch that uses it: a hook placed after an early
+  // return runs on some renders and not others, and React counts them.
+  const formOpen = Boolean(addOpen || editingId);
+  useEffect(() => { onFormOpenChange?.(formOpen); }, [formOpen, onFormOpenChange]);
   useEffect(() => {
     if (!notice) return;
     const t = setTimeout(() => setNotice(null), 4000);
@@ -143,9 +149,6 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
   // the unregistered list. Filling a long form beneath a dashboard made it
   // unclear what the screen was for, and left the save button a scroll away
   // from anything explaining it.
-  const formOpen = Boolean(addOpen || editingId);
-  useEffect(() => { onFormOpenChange?.(formOpen); }, [formOpen, onFormOpenChange]);
-
   if (formOpen) {
     return (
       <Card tone="gold">
