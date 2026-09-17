@@ -178,20 +178,37 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
     (key: SectionId) => (el: HTMLElement | null) => { sectionRefs.current[key] = el; }, []);
 
   useEffect(() => {
-    const seen = new Map<string, number>();
-    const io = new IntersectionObserver((entries) => {
-      entries.forEach((e) => seen.set(e.target.id, e.intersectionRatio));
-      // The section showing most of itself wins, so passing through a short one
-      // does not make the rail flicker.
-      let best = "";
-      let bestRatio = 0;
-      seen.forEach((ratio, key) => { if (ratio > bestRatio) { bestRatio = ratio; best = key; } });
-      if (best && bestRatio > 0) setHere(best.replace("sec-", "") as SectionId);
-    }, { rootMargin: "-140px 0px -55% 0px", threshold: [0, 0.2, 0.5, 1] });
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      // The line just under the two sticky bars. A section counts as the one
+      // being read once its top has crossed it.
+      const line = 210;
+      let current: SectionId = SECTIONS[0].id;
+      for (const sec of SECTIONS) {
+        const el = sectionRefs.current[sec.id];
+        if (!el) continue;
+        if (el.getBoundingClientRect().top <= line) current = sec.id;
+      }
+      // At the very bottom the last section may be too short to reach the line,
+      // and the strip would sit on whatever came before it.
+      if (window.innerHeight + window.scrollY >= document.body.scrollHeight - 4) {
+        const last = [...SECTIONS].reverse().find((x) => sectionRefs.current[x.id]);
+        if (last) current = last.id;
+      }
+      setHere((was) => (was === current ? was : current));
+    };
 
-    Object.values(sectionRefs.current).forEach((el) => el && io.observe(el));
-    return () => io.disconnect();
-  }, [editing, records.length]);
+    const onScroll = () => { if (!frame) frame = requestAnimationFrame(measure); };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    measure();
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [editing, records.length, documents.length]);
 
   const goTo = (key: SectionId) => {
     sectionRefs.current[key]?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -554,8 +571,7 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
       {dialogs}
 
       {/* Everything that must stay reachable however far the page has scrolled */}
-      <div className="sticky top-[71px] z-[15] -mt-5 pt-4 pb-3 bg-bg-base/95 backdrop-blur
-                      border-b border-border-light rounded-t-xl">
+      <div className="sticky top-[71px] z-[15] pt-1 pb-2.5 bg-bg-base">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0 flex items-center gap-3">
             <button onClick={leave}
@@ -619,8 +635,8 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
       {/* The section strip: where in the profile you are, and a way to jump.
           It follows the scroll rather than replacing it — every section is on
           the page, one under the other. */}
-      <nav className="sticky top-[140px] z-[14] py-2 bg-bg-base/95 backdrop-blur
-                      border-b border-border-light overflow-x-auto">
+      <nav className="sticky top-[136px] z-[14] py-2 bg-bg-base border-b border-border
+                      shadow-[0_6px_10px_-8px_rgba(15,28,54,.35)] overflow-x-auto">
         <div className="flex gap-1.5 w-max">
           {SECTIONS.map((sec) => {
             const Icon = sec.icon;
@@ -639,7 +655,8 @@ export default function OperatorForm({ operatorId, prefill, onSaved, onDone, onC
         </div>
       </nav>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px] gap-5 items-start mt-4">
+      <div className={`grid grid-cols-1 gap-5 items-start mt-4
+                       ${editing ? "xl:grid-cols-[minmax(0,1fr)_320px]" : ""}`}>
         {/* The sheet */}
         <div className="space-y-5 min-w-0">
           {!editing && (

@@ -143,8 +143,7 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
 
   if (formOpen) {
     return (
-      <Card tone="gold">
-        <div className="p-5">
+      <div className="pb-8">
           <OperatorForm
             operatorId={editingId ?? undefined}
             prefill={prefill}
@@ -154,8 +153,7 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
               void load(); onChanged?.();
             }}
             onCancel={() => { onAddOpenChange?.(false); setEditingId(null); setPrefill({}); }} />
-        </div>
-      </Card>
+      </div>
     );
   }
 
