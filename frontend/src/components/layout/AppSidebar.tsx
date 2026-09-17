@@ -1,5 +1,5 @@
 "use client";
-import { LayoutDashboard, Gauge, Zap, Activity, ClipboardList, Sparkles, Shield,
+import { LayoutDashboard, Gauge, Zap, Activity, ClipboardList, Sparkles, Shield, Boxes,
          ChevronLeft, ChevronRight, LogOut, ExternalLink } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { useSidebar }               from "@/contexts/useSidebar";
@@ -41,6 +41,11 @@ const NAV_ITEMS: NavItem[] = [
 const ADMIN_ITEM: NavItem =
   { kind: "page", id: "access-control", label: "Access Control", icon: Shield };
 
+/* The platform itself — master data registry and integration. Superadmin only:
+   admin decides who sees which dashboard, superadmin administers the platform. */
+const PLATFORM_ITEM: NavItem =
+  { kind: "page", id: "minehub", label: "MineHub Platform", icon: Boxes };
+
 const ITEM_BASE =
   "w-full flex items-center gap-3 px-3 py-2.5 transition-colors duration-150 relative group";
 
@@ -58,7 +63,8 @@ export default function AppSidebar() {
     ...NAV_ITEMS.filter(
       (i) => i.kind === "link" || allowed.length === 0 || allowed.includes(i.id),
     ),
-    ...(user?.mines_role === "admin" ? [ADMIN_ITEM] : []),
+    ...(user?.mines_role === "admin" || user?.mines_role === "superadmin" ? [ADMIN_ITEM] : []),
+    ...(user?.mines_role === "superadmin" ? [PLATFORM_ITEM] : []),
   ];
 
   return (

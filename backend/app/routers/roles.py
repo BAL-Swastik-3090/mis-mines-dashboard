@@ -25,7 +25,7 @@ def list_roles(db: Session = Depends(get_db)) -> list[dict]:
                    e.EMPNAME AS name, e.EMPDEPT AS department, e.EMPDESG AS designation
             FROM {ROLE_TBL} r
             LEFT JOIN {EMP_TBL} e ON e.EMPID = r.emp_id
-            ORDER BY FIELD(r.role,'admin','manager','viewer'), r.emp_id""")).mappings().all()
+            ORDER BY FIELD(r.role,'superadmin','admin','manager','viewer'), r.emp_id""")).mappings().all()
     return [dict(r) for r in rows]
 
 
@@ -60,10 +60,19 @@ def set_role(request: Request, body: dict = Body(...), db: Session = Depends(get
         raise HTTPException(400, f"role must be one of {sorted(ROLE_RANK)}.")
 
     by = getattr(request.state, "emp_id", None)
-    if emp_id == by and role != "admin":
+
+    # Without this an admin could grant themselves superadmin: /api/roles only
+    # requires admin, so the escalation would be one request. A role may only be
+    # granted by someone who already holds it or better.
+    granter = auth_svc.mines_role(db, by) if by else "viewer"
+    if ROLE_RANK.get(role, 99) > ROLE_RANK.get(granter, 0):
+        raise HTTPException(
+            403, f"You cannot grant '{role}' — it is above your own access level.")
+
+    if emp_id == by and ROLE_RANK.get(role, 0) < ROLE_RANK.get(granter, 0):
         # Removing your own admin with no other admin left would lock the screen
         # away from everyone and need a DBA to undo.
-        raise HTTPException(400, "You cannot remove your own admin access.")
+        raise HTTPException(400, "You cannot reduce your own access level.")
 
     db.execute(text(
         f"""INSERT INTO {ROLE_TBL} (emp_id, role, updated_by, updated_at)

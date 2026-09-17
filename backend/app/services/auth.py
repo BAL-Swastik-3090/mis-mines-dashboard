@@ -51,8 +51,18 @@ def _sha1(pw: str) -> str:
 
 
 # ------------------------------------------------------------------ access roles
-ROLE_RANK = {"viewer": 1, "manager": 2, "admin": 3}
+# Ranked, so a check is "at least this role" rather than a list of equals.
+#   viewer      read the dashboards the page matrix allows
+#   manager     reserved for elevated operational access
+#   admin       manages roles and page access (Access Control)
+#   superadmin  the above, plus the MineHub platform modules
+ROLE_RANK = {"viewer": 1, "manager": 2, "admin": 3, "superadmin": 4}
 DEFAULT_ROLE = "viewer"
+
+# The role required to reach the MineHub platform itself - master data registry,
+# migrations, platform administration. Deliberately above admin: admin
+# administers who sees which dashboard, superadmin administers the platform.
+PLATFORM_ROLE = "superadmin"
 
 
 def mines_role(db: Session, emp_id: str) -> str:

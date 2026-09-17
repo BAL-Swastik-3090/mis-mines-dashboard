@@ -26,6 +26,16 @@ class Settings(BaseSettings):
     secret_key: str = Field(default="change-this-secret")
     allowed_origins: str = Field(default="http://localhost:3000")
 
+    # MineHub platform database (PostgreSQL).
+    # The MySQL above stays a read-only SOURCE; everything the platform owns
+    # lives here. Optional so the dashboard still starts if it is not configured.
+    pg_host:     str = Field(default="")
+    pg_port:     int = Field(default=5432)
+    pg_database: str = Field(default="")
+    pg_user:     str = Field(default="")
+    pg_password: str = Field(default="")
+    pg_schema:   str = Field(default="minehub")
+
     # LiteLLM / AI Insights
     litellm_base_url: str = Field(default="")
     litellm_api_key:  str = Field(default="")
@@ -48,6 +58,22 @@ class Settings(BaseSettings):
             host=self.db_host,
             port=self.db_port,
             database=self.db_name,
+        )
+
+    @property
+    def minehub_enabled(self) -> bool:
+        return bool(self.pg_host and self.pg_database and self.pg_user)
+
+    @property
+    def minehub_url(self):
+        from sqlalchemy.engine import URL
+        return URL.create(
+            drivername="postgresql+psycopg",
+            username=self.pg_user,
+            password=self.pg_password,
+            host=self.pg_host,
+            port=self.pg_port,
+            database=self.pg_database,
         )
 
     @property

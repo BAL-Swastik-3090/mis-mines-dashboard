@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import api from "@/lib/api";
 
-export type MinesRole = "viewer" | "manager" | "admin";
+export type MinesRole = "viewer" | "manager" | "admin" | "superadmin";
 
 export interface AuthUser {
   emp_id: string;
@@ -29,7 +29,7 @@ interface AuthStore {
   hasRole: (minimum: MinesRole) => boolean;
 }
 
-const RANK: Record<MinesRole, number> = { viewer: 1, manager: 2, admin: 3 };
+const RANK: Record<MinesRole, number> = { viewer: 1, manager: 2, admin: 3, superadmin: 4 };
 
 export const useAuth = create<AuthStore>()((set, get) => ({
   user: null,

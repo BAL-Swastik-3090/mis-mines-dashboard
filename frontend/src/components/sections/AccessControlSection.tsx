@@ -39,13 +39,15 @@ interface PageDef { id: string; label: string }
 type Matrix = Record<string, Record<string, boolean>>;
 
 const ROLE_STYLE: Record<MinesRole, string> = {
+  superadmin: "bg-violet-500/15 text-violet-300 border-violet-500/30",
   admin: "bg-[#c8960c]/15 text-[#c8960c] border-[#c8960c]/30",
   manager: "bg-sky-500/15 text-sky-300 border-sky-500/30",
   viewer: "bg-white/10 text-white/60 border-white/15",
 };
 
 const ROLE_HELP: Record<MinesRole, string> = {
-  admin: "Super admin — manages roles and page access. Sees this screen.",
+  superadmin: "Platform owner — everything admin can do, plus the MineHub platform modules.",
+  admin: "Manages roles and page access. Sees this screen.",
   manager: "Elevated user. Page access is set by the matrix below.",
   viewer: "Default for anyone with valid intranet credentials.",
 };
@@ -235,7 +237,9 @@ export default function AccessControlSection() {
                     </div>
                   </div>
                   <div className="flex gap-1.5 shrink-0">
-                    {(["viewer", "manager", "admin"] as MinesRole[]).map((r) => (
+                    {((me?.mines_role === "superadmin"
+                       ? ["viewer", "manager", "admin", "superadmin"]
+                       : ["viewer", "manager", "admin"]) as MinesRole[]).map((r) => (
                       <button
                         key={r}
                         onClick={() => assign(h.emp_id, r)}

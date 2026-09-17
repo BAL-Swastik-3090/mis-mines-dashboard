@@ -117,6 +117,7 @@ _AUTH_EXEMPT = ("/api/auth/", "/api/health", "/api/docs", "/api/redoc", "/api/op
 # PREFIX_PAGE in services/auth.py), not listed here.
 _ROLE_RULES: tuple[tuple[str, str], ...] = (
     ("/api/roles", "admin"),          # the Access Control screen's own endpoints
+    ("/api/minehub", "superadmin"),   # the MineHub platform modules
 )
 # Skip the session-touch write if it happened recently. One dashboard page load
 # fires ~15 API calls at once, and each touch is a round trip to a MySQL server
@@ -211,7 +212,7 @@ def health_check():
 
 
 # ── Routers ───────────────────────────────────────────────────
-from app.routers import production, stock, cob, plant, ob, despatch, equipment, dewatering, insights, live_tracking, fuel_management, ev_tracking, auth, oee, roles
+from app.routers import production, stock, cob, plant, ob, despatch, equipment, dewatering, insights, live_tracking, fuel_management, ev_tracking, auth, oee, roles, minehub
 app.include_router(production.router,      prefix="/api/production",    tags=["Production"])
 app.include_router(stock.router,           prefix="/api/stock",         tags=["Stock"])
 app.include_router(cob.router,             prefix="/api/cob",           tags=["COB Plant"])
@@ -227,3 +228,4 @@ app.include_router(ev_tracking.router)
 app.include_router(auth.router)
 app.include_router(oee.router)
 app.include_router(roles.router)
+app.include_router(minehub.router)
