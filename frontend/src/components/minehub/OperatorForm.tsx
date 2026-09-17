@@ -61,6 +61,7 @@ interface Comp {
   dimension: string; level: number | null; previous_level?: number | null;
   rating?: number | null; assessment_count?: number;
   assessed_on?: string | null; valid_upto?: string | null;
+  next_assessment_due?: string | null; last_assessed_by?: string | null;
 }
 
 interface Assignment {
@@ -176,6 +177,12 @@ export default function OperatorForm({ operatorId, openAt, prefill, onSaved, onD
   // is what clearance means; a level against ZX470 is how they are on that
   // machine, which the mine knows even when the certificate does not.
   const [compAsset, setCompAsset] = useState<string>("");
+  // Set once for the sitting rather than per click: an assessment is one event
+  // that produced fifteen scores, not fifteen events.
+  const [assessedOn, setAssessedOn] = useState(new Date().toISOString().slice(0, 10));
+  const [method, setMethod] = useState("PRACTICAL");
+  const [assessNote, setAssessNote] = useState("");
+  const [lastSaved, setLastSaved] = useState<string | null>(null);
   const [here, setHere] = useState<SectionId>("personal");
 
   const raise = (msg: string) => { setNotice(null); setError(msg); };
@@ -460,27 +467,36 @@ export default function OperatorForm({ operatorId, openAt, prefill, onSaved, onD
     } catch { raise("Could not remove that record."); }
   };
 
-  const assess = async (payload: Record<string, unknown>) => {
+  /** Each click is written immediately — there is no separate save for
+   *  assessments, and pretending otherwise leaves people wondering whether the
+   *  score they just set survived. The confirmation says so plainly. */
+  const assess = async (payload: Record<string, unknown>, said: string) => {
     if (!id) { raise("Save the profile first."); return; }
     try {
       await api.post(`/operators/${id}/competency`, {
         asset_type_id: Number(compType),
         asset_id: compAsset ? Number(compAsset) : null,
-        assessment_type: "PRACTICAL",
-        assessed_on: new Date().toISOString().slice(0, 10),
+        assessment_type: method,
+        assessed_on: assessedOn,
+        remarks: assessNote || undefined,
         ...payload,
       });
       await loadProfile();
+      setLastSaved(new Date().toLocaleTimeString("en-IN",
+        { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }));
+      setNotice(`${said} — recorded against ${assessedOn}.`);
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       raise(d ?? "Could not record that assessment.");
     }
   };
 
-  const setLevel = (dimension: string, level: number) =>
-    assess({ dimension, level, result: level >= 2 ? "PASS" : "PENDING" });
+  const setLevel = (dimension: string, level: number, label: string) =>
+    assess({ dimension, level, result: level >= 2 ? "PASS" : "PENDING" },
+           `${label} set to ${LEVELS[level].toLowerCase()}`);
 
-  const setRating = (rating: number) => assess({ dimension: "OVERALL", rating });
+  const setRating = (rating: number) =>
+    assess({ dimension: "OVERALL", rating }, `Expertise rated ${rating} of 5`);
 
   const assign = async (assetId: number, shift: string, role: string) => {
     if (!id) return;
@@ -978,6 +994,38 @@ export default function OperatorForm({ operatorId, openAt, prefill, onSaved, onD
                     </select>
                   } />
             <div className="border border-t-0 border-border-light rounded-b-xl bg-bg-base p-4">
+              {compType && rights.may_assess && editing && (
+                <div className="mb-3 rounded-xl border border-gold/30 bg-gold/[0.05] px-3 py-2.5
+                                flex flex-wrap items-end gap-3">
+                  <label className="text-[12px]">
+                    <span className="block font-semibold text-txt-secondary mb-1">Assessed on</span>
+                    <input type="date" value={assessedOn} max={new Date().toISOString().slice(0, 10)}
+                      onChange={(e) => setAssessedOn(e.target.value)}
+                      className="bg-bg-base border border-border rounded-lg px-3 py-1.5 text-[12.5px]" />
+                  </label>
+                  <label className="text-[12px]">
+                    <span className="block font-semibold text-txt-secondary mb-1">How</span>
+                    <select value={method} onChange={(e) => setMethod(e.target.value)}
+                      className="bg-bg-base border border-border rounded-lg px-3 py-1.5 text-[12.5px]">
+                      <option value="PRACTICAL">Practical</option>
+                      <option value="WRITTEN">Written</option>
+                      <option value="OBSERVATION">Observation</option>
+                    </select>
+                  </label>
+                  <label className="text-[12px] flex-1 min-w-[200px]">
+                    <span className="block font-semibold text-txt-secondary mb-1">Note (optional)</span>
+                    <input value={assessNote} onChange={(e) => setAssessNote(e.target.value)}
+                      placeholder="Handled the face well; slow on reversing"
+                      className="w-full bg-bg-base border border-border rounded-lg px-3 py-1.5 text-[12.5px]" />
+                  </label>
+                  <p className="text-[11.5px] text-txt-muted basis-full">
+                    Every score below is saved the moment it is clicked — there is no separate
+                    save for assessments.
+                    {lastSaved && <span className="text-emerald font-semibold"> Last saved {lastSaved}.</span>}
+                  </p>
+                </div>
+              )}
+
               {compType && (
                 <div className="flex flex-wrap items-center gap-3 pb-3 mb-3 border-b border-border-light">
                   <label className="flex items-center gap-2 text-[12.5px] text-txt-muted">
@@ -1046,9 +1094,20 @@ export default function OperatorForm({ operatorId, openAt, prefill, onSaved, onD
                           {d.label}
                         </span>
                         <span className="flex items-center gap-1">
+                          {d.id === "OVERALL" && (() => {
+                            const row = rowFor("OVERALL");
+                            const was = row?.previous_level;
+                            if (was === null || was === undefined || was === row?.level) return null;
+                            const up = (row?.level ?? 0) > was;
+                            return (
+                              <Chip tone={up ? "emerald" : "rose"} dot={false}>
+                                {up ? "↑" : "↓"} was L{was}
+                              </Chip>
+                            );
+                          })()}
                           {[0, 1, 2, 3, 4].map((n) => (
                             <button key={n} type="button" disabled={!editing}
-                              onClick={() => void setLevel(d.id, n)}
+                              onClick={() => void setLevel(d.id, n, d.label)}
                               title={LEVELS[n]}
                               className={`w-7 h-7 rounded-md text-[11px] font-bold border transition-colors
                                 ${lvl === n ? "bg-navy text-white border-navy"

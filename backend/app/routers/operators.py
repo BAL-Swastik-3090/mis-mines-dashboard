@@ -265,7 +265,16 @@ def list_operators(q: str = Query(""), status: str = Query(""),
                  ORDER BY c.assessed_on DESC NULLS LAST LIMIT 1)                  AS last_assessed_by,
                (SELECT min(c.next_assessment_due) FROM operator_competency c
                  WHERE c.operator_id = o.operator_id AND c.dimension = 'OVERALL'
-                   AND c.status = 'ACTIVE')                                       AS next_due
+                   AND c.status = 'ACTIVE')                                       AS next_due,
+               (SELECT count(*) FROM operator_competency c
+                 WHERE c.operator_id = o.operator_id AND c.dimension = 'OVERALL'
+                   AND c.previous_level IS NOT NULL AND c.level < c.previous_level) AS declined_count,
+               (SELECT count(*) FROM operator_competency c
+                 WHERE c.operator_id = o.operator_id AND c.dimension = 'OVERALL'
+                   AND c.previous_level IS NOT NULL AND c.level > c.previous_level) AS improved_count,
+               (SELECT round(avg(c.rating), 1) FROM operator_competency c
+                 WHERE c.operator_id = o.operator_id AND c.dimension = 'OVERALL'
+                   AND c.rating IS NOT NULL)                                      AS avg_rating
         FROM operator o
         JOIN party p           ON p.party_id = o.party_id
         LEFT JOIN party e      ON e.party_id = o.employer_party_id
@@ -287,9 +296,27 @@ def summary(db: Session = Depends(get_minehub_db)) -> dict:
                (SELECT count(*) FROM operator_competency
                  WHERE dimension = 'OVERALL' AND level >= 2)                      AS competencies,
                (SELECT count(*) FROM operator_alert WHERE severity = 'EXPIRED')   AS expired,
-               (SELECT count(*) FROM operator_alert WHERE severity = 'DUE')       AS due
+               (SELECT count(*) FROM operator_alert WHERE severity = 'DUE')       AS due,
+               -- Improvement and decline, counted from the level a person was at
+               -- last time. The second number is the one worth a phone call.
+               (SELECT count(*) FROM operator_competency
+                 WHERE dimension = 'OVERALL' AND previous_level IS NOT NULL
+                   AND level > previous_level)                                    AS improved,
+               (SELECT count(*) FROM operator_competency
+                 WHERE dimension = 'OVERALL' AND previous_level IS NOT NULL
+                   AND level < previous_level)                                    AS declined,
+               (SELECT round(avg(rating), 1) FROM operator_competency
+                 WHERE dimension = 'OVERALL' AND rating IS NOT NULL)              AS avg_rating,
+               (SELECT count(*) FROM operator o
+                 WHERE o.profile_status = 'ACTIVE'
+                   AND NOT EXISTS (SELECT 1 FROM operator_competency c
+                                    WHERE c.operator_id = o.operator_id
+                                      AND c.dimension = 'OVERALL'))               AS never_assessed
     """)).mappings().first()
-    return dict(row or {})
+    out = dict(row or {})
+    if out.get("avg_rating") is not None:
+        out["avg_rating"] = float(out["avg_rating"])
+    return out
 
 
 @router.get("/unregistered")
@@ -1195,6 +1222,132 @@ def assessments_due(db: Session = Depends(get_minehub_db),
 
     names = people.names_for(corp, [r["last_assessed_by"] for r in rows])
     return [{**dict(r), "last_assessed_by_name": names.get(r["last_assessed_by"])} for r in rows]
+
+
+@router.get("/meta/training-needs")
+def training_needs(db: Session = Depends(get_minehub_db)) -> list[dict]:
+    """What each person needs next, derived rather than typed.
+
+    A training plan that someone maintains by hand is out of date the week after
+    it is written. Every gap here is read from what the register already knows —
+    a licence that has lapsed, an assessment that never happened, a level that
+    fell — so it cannot drift from the facts it is based on.
+
+    Each need carries why it was raised, because a recommendation nobody can
+    trace is a recommendation nobody acts on.
+    """
+    window = _setting(db, "assessment.due_window_days")
+    rows = db.execute(text("""
+        WITH latest AS (
+            SELECT c.operator_id, c.asset_type_id, c.asset_id, c.level, c.previous_level,
+                   c.rating, c.assessed_on, c.next_assessment_due, t.name AS asset_type
+            FROM operator_competency c
+            LEFT JOIN asset_type t ON t.asset_type_id = c.asset_type_id
+            WHERE c.dimension = 'OVERALL' AND c.status = 'ACTIVE'
+        )
+        SELECT o.operator_id, o.operator_ref, p.display_name, o.designation,
+               o.employment_type, pl.name AS plant,
+
+               -- Assigned to a machine they have never been assessed on. The
+               -- sharpest gap there is: the person is already running it.
+               (SELECT string_agg(DISTINCT a.fleet_code, ', ')
+                  FROM operator_assignment oa
+                  JOIN asset a ON a.asset_id = oa.asset_id
+                 WHERE oa.operator_id = o.operator_id AND oa.status = 'ACTIVE'
+                   AND NOT EXISTS (SELECT 1 FROM latest l
+                                    WHERE l.operator_id = o.operator_id
+                                      AND l.asset_type_id = a.asset_type_id
+                                      AND COALESCE(l.level, 0) >= 2)) AS unassessed_on,
+
+               -- A level that went down between two assessments.
+               (SELECT string_agg(l.asset_type || ' L' || l.previous_level || '→' || l.level, ', ')
+                  FROM latest l
+                 WHERE l.operator_id = o.operator_id
+                   AND l.previous_level IS NOT NULL AND l.level < l.previous_level) AS declined,
+
+               -- Assessed, but not to a level that can work unsupervised.
+               (SELECT string_agg(l.asset_type, ', ')
+                  FROM latest l
+                 WHERE l.operator_id = o.operator_id AND COALESCE(l.level, 0) = 1) AS assisted_only,
+
+               (SELECT min(l.next_assessment_due) FROM latest l
+                 WHERE l.operator_id = o.operator_id) AS next_due,
+
+               (SELECT count(*) FROM operator_record r
+                 WHERE r.operator_id = o.operator_id AND r.status = 'ACTIVE'
+                   AND r.record_type IN ('LICENCE', 'MEDICAL')
+                   AND r.valid_upto < CURRENT_DATE)                       AS expired_statutory,
+
+               (SELECT count(*) FROM operator_record r
+                 WHERE r.operator_id = o.operator_id AND r.status = 'ACTIVE'
+                   AND r.record_type = 'LICENCE')                         AS licences,
+               (SELECT count(*) FROM operator_record r
+                 WHERE r.operator_id = o.operator_id AND r.status = 'ACTIVE'
+                   AND r.record_type = 'MEDICAL')                         AS medicals,
+               (SELECT count(*) FROM operator_record r
+                 WHERE r.operator_id = o.operator_id AND r.status = 'ACTIVE'
+                   AND r.record_type = 'SKILL')                           AS skills,
+               (SELECT count(*) FROM latest l WHERE l.operator_id = o.operator_id) AS assessed_classes,
+               (SELECT avg(l.rating) FROM latest l
+                 WHERE l.operator_id = o.operator_id AND l.rating IS NOT NULL) AS avg_rating
+        FROM operator o
+        JOIN party p ON p.party_id = o.party_id
+        LEFT JOIN plant pl ON pl.plant_id = o.plant_id
+        WHERE o.profile_status = 'ACTIVE'
+        ORDER BY p.display_name
+    """)).mappings().all()
+
+    today = date.today()
+    out = []
+    for r in rows:
+        needs: list[dict] = []
+
+        if r["expired_statutory"]:
+            needs.append({"need": "Renew statutory documents", "urgency": "NOW",
+                          "because": f"{r['expired_statutory']} licence or medical record has expired"})
+        if not r["licences"]:
+            needs.append({"need": "Record a driving licence", "urgency": "NOW",
+                          "because": "No licence is on file at all"})
+        if not r["medicals"]:
+            needs.append({"need": "Arrange a medical examination", "urgency": "NOW",
+                          "because": "No medical fitness record is on file"})
+        if r["unassessed_on"]:
+            needs.append({"need": "Assess on the machine they are running", "urgency": "NOW",
+                          "because": f"Assigned to {r['unassessed_on']} with no competency for it"})
+        if r["declined"]:
+            needs.append({"need": "Refresher — performance has fallen", "urgency": "SOON",
+                          "because": f"Level went down: {r['declined']}"})
+        if r["assisted_only"]:
+            needs.append({"need": "Training towards independent operation", "urgency": "SOON",
+                          "because": f"Assessed at level 1 on {r['assisted_only']}"})
+        if not r["assessed_classes"]:
+            needs.append({"need": "First competency assessment", "urgency": "SOON",
+                          "because": "Never assessed on any equipment class"})
+        if r["next_due"]:
+            days = (r["next_due"] - today).days
+            if days < 0:
+                needs.append({"need": "Reassessment overdue", "urgency": "NOW",
+                              "because": f"Due {-days} days ago"})
+            elif days <= window:
+                needs.append({"need": "Reassessment due", "urgency": "SOON",
+                              "because": f"Due in {days} days"})
+        if not r["skills"]:
+            needs.append({"need": "Record qualifications held", "urgency": "WHEN_ABLE",
+                          "because": "No SCMS qualification pack recorded"})
+
+        if needs:
+            out.append({**{k: r[k] for k in (
+                "operator_id", "operator_ref", "display_name", "designation",
+                "employment_type", "plant", "next_due")},
+                "avg_rating": float(r["avg_rating"]) if r["avg_rating"] is not None else None,
+                "needs": needs,
+                "urgency": "NOW" if any(n["urgency"] == "NOW" for n in needs)
+                           else "SOON" if any(n["urgency"] == "SOON" for n in needs)
+                           else "WHEN_ABLE"})
+
+    order = {"NOW": 0, "SOON": 1, "WHEN_ABLE": 2}
+    out.sort(key=lambda x: (order[x["urgency"]], -len(x["needs"])))
+    return out
 
 
 @router.get("/meta/settings")

@@ -11,6 +11,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Users, Search, Plus, Loader2, HardHat, ShieldCheck, AlertTriangle,
   ClipboardList, Pencil, Grid3x3, Award, CalendarClock, Settings2, Check,
+  GraduationCap, TrendingUp, TrendingDown, Star,
 } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
@@ -27,6 +28,7 @@ interface Operator {
   exp_total_months: number | null; exp_hemm_months: number | null;
   machines_competent: number; expired_documents: number; assigned_to: string | null;
   last_assessed: string | null; last_assessed_by: string | null; next_due: string | null;
+  declined_count: number; improved_count: number; avg_rating: number | null;
 }
 
 interface Due {
@@ -35,6 +37,13 @@ interface Due {
   level: number | null; rating: number | null; assessed_on: string | null;
   last_assessed_by_name: string | null; next_assessment_due: string;
   days_left: number;
+}
+
+interface Need {
+  operator_id: number; operator_ref: string | null; display_name: string;
+  designation: string | null; employment_type: string | null; plant: string | null;
+  next_due: string | null; avg_rating: number | null; urgency: string;
+  needs: { need: string; urgency: string; because: string }[];
 }
 
 interface Schedule {
@@ -125,22 +134,25 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
   const [due, setDue] = useState<Due[]>([]);
   const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [savingSchedule, setSavingSchedule] = useState(false);
+  const [needs, setNeeds] = useState<Need[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [list, queue, sum, pl, dueList] = await Promise.all([
+      const [list, queue, sum, pl, dueList, needList] = await Promise.all([
         api.get("/operators", { params: plantId ? { plant_id: plantId } : {} }),
         api.get("/operators/unregistered"),
         api.get("/operators/summary"),
         api.get("/minehub/plants").catch(() => ({ data: [] })),
         api.get("/operators/meta/due").catch(() => ({ data: [] })),
+        api.get("/operators/meta/training-needs").catch(() => ({ data: [] })),
       ]);
       setOperators(list.data ?? []);
       setWaiting(queue.data ?? []);
       setSummary(sum.data ?? null);
       setPlants(pl.data ?? []);
       setDue(dueList.data ?? []);
+      setNeeds(needList.data ?? []);
       setError(null);
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
@@ -237,6 +249,9 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
 
       {view === "capability" && (
         <>
+          <NeedsPanel needs={needs} onOpen={(operatorId, section) => {
+            setOpenAt(section); setEditingId(operatorId);
+          }} />
           <CapabilityView matrix={matrix} coverage={coverage} />
           {schedule && (
             <SchedulePanel schedule={schedule} disabled={!maySchedule} saving={savingSchedule}
@@ -264,11 +279,15 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
                 tone={summary.awaiting ? "amber" : "emerald"} icon={ClipboardList}
                 hint="submitted profiles" />
           <Tile label="Competencies" value={summary.competencies ?? 0} tone="violet" icon={ShieldCheck}
-                hint="machine classes people can run" />
-          <Tile label="Expiring" value={(summary.expired ?? 0) + (summary.due ?? 0)}
-                tone={summary.expired ? "rose" : summary.due ? "amber" : "emerald"}
-                icon={AlertTriangle}
-                hint={`${summary.expired ?? 0} already expired`} />
+                hint={summary.avg_rating
+                  ? `${summary.avg_rating} of 5 average expertise`
+                  : "machine classes people can run"} />
+          <Tile label="Needs action" value={needs.filter((n) => n.urgency === "NOW").length}
+                tone={needs.some((n) => n.urgency === "NOW") ? "rose" : "emerald"}
+                icon={GraduationCap} onClick={() => setView("capability")}
+                hint={summary.declined
+                  ? `${summary.declined} fell at last assessment`
+                  : `${(summary.expired ?? 0) + (summary.due ?? 0)} documents expiring`} />
         </div>
       )}
 
@@ -402,6 +421,28 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
                         <span className="text-[12.5px] tabular-nums text-txt-secondary">
                           {o.last_assessed}
                         </span>
+                        {(o.declined_count > 0 || o.improved_count > 0) && (
+                          <span className="inline-flex items-center gap-1 ml-1.5 align-middle">
+                            {o.declined_count > 0 && (
+                              <span title={`${o.declined_count} level(s) fell at the last assessment`}
+                                className="inline-flex items-center gap-0.5 text-[11px] font-bold text-rose">
+                                <TrendingDown className="w-3 h-3" />{o.declined_count}
+                              </span>
+                            )}
+                            {o.improved_count > 0 && (
+                              <span title={`${o.improved_count} level(s) rose at the last assessment`}
+                                className="inline-flex items-center gap-0.5 text-[11px] font-bold text-emerald">
+                                <TrendingUp className="w-3 h-3" />{o.improved_count}
+                              </span>
+                            )}
+                          </span>
+                        )}
+                        {o.avg_rating && (
+                          <span title="Average expertise rating"
+                            className="inline-flex items-center gap-0.5 ml-1.5 text-[11px] font-bold text-gold-dark">
+                            <Star className="w-3 h-3 fill-current" />{o.avg_rating}
+                          </span>
+                        )}
                         {o.last_assessed_by && (
                           <span className="block text-[11px] text-txt-light">
                             by {o.last_assessed_by}
@@ -490,6 +531,84 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
       )}
       </>)}
     </div>
+  );
+}
+
+/* ── what to do about each person, derived rather than typed ────────────── */
+const URGENCY: Record<string, { label: string; tone: Tone }> = {
+  NOW:       { label: "now",        tone: "rose" },
+  SOON:      { label: "soon",       tone: "amber" },
+  WHEN_ABLE: { label: "when able",  tone: "slate" },
+};
+
+function NeedsPanel({ needs, onOpen }: {
+  needs: Need[];
+  onOpen: (operatorId: number, section: string) => void;
+}) {
+  const [showAll, setShowAll] = useState(false);
+  const shown = showAll ? needs : needs.filter((n) => n.urgency === "NOW");
+
+  return (
+    <Card tone="amber">
+      <CardHeader title={`Training and action needed · ${needs.length}`} icon={GraduationCap} tone="amber"
+        subtitle="Read from the register rather than kept by hand, so it cannot drift from the facts behind it. Each line says why it was raised."
+        actions={needs.length > shown.length || showAll ? (
+          <Button size="sm" variant="secondary" onClick={() => setShowAll((v) => !v)}>
+            {showAll ? "Only what is urgent" : `Show all ${needs.length}`}
+          </Button>
+        ) : undefined} />
+
+      {shown.length === 0 ? (
+        <div className="px-5 py-10 text-center text-[13px] text-txt-muted">
+          {needs.length === 0
+            ? "Nothing outstanding — every active operator has their documents, an assessment and a schedule."
+            : "Nothing urgent. The rest can wait; press Show all to see them."}
+        </div>
+      ) : (
+        <ul className="divide-y divide-border-light">
+          {shown.map((n) => (
+            <li key={n.operator_id} className="px-5 py-3.5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <span className="font-semibold text-navy text-[13.5px]">{n.display_name}</span>
+                  <span className="text-[11.5px] text-txt-light ml-2">
+                    {n.designation || "role not set"}
+                    {n.plant ? ` · ${n.plant}` : ""}
+                  </span>
+                  <ul className="mt-1.5 space-y-1">
+                    {n.needs.map((x, i) => (
+                      <li key={i} className="text-[12.5px] leading-snug">
+                        <Chip tone={URGENCY[x.urgency]?.tone ?? "slate"} dot={false}>
+                          {URGENCY[x.urgency]?.label ?? x.urgency}
+                        </Chip>
+                        <span className="font-medium text-txt-primary ml-2">{x.need}</span>
+                        <span className="text-txt-muted"> — {x.because}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <span className="flex items-center gap-2 shrink-0">
+                  {n.avg_rating && (
+                    <Chip tone={n.avg_rating >= 4 ? "emerald" : n.avg_rating >= 3 ? "amber" : "rose"}
+                          dot={false}>
+                      ★ {n.avg_rating.toFixed(1)}
+                    </Chip>
+                  )}
+                  <Button size="sm" variant="secondary"
+                    onClick={() => onOpen(n.operator_id, "documents")}>
+                    Documents
+                  </Button>
+                  <Button size="sm" variant="primary"
+                    onClick={() => onOpen(n.operator_id, "competency")}>
+                    <ShieldCheck className="w-3.5 h-3.5" /> Assess
+                  </Button>
+                </span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
   );
 }
 
