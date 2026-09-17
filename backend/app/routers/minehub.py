@@ -13,6 +13,8 @@ Two registers are exposed here, and they are the ones everything else waits on:
 """
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -28,6 +30,24 @@ OWNERSHIP = ("OWN", "HIRED")
 
 def _actor(request: Request) -> str:
     return getattr(request.state, "emp_id", None) or "unknown"
+
+
+def _activity(db, request: Request, event_type: str, *, asset_id: int | None = None,
+              payload: dict | None = None) -> None:
+    """Record a platform action in the event log.
+
+    Registering a machine is day-to-day work done by users, so it belongs in the
+    same append-only log as every other operational fact rather than in a
+    separate admin audit. occurred_at and recorded_at are both now because the
+    action happened as it was recorded — a distinction that matters for events
+    captured from the field, which arrive later than they occurred.
+    """
+    db.execute(text("""
+        INSERT INTO event (event_type, occurred_at, recorded_at, source,
+                           asset_id, payload, recorded_by)
+        VALUES (:t, now(), now(), 'WEB', :asset, CAST(:payload AS jsonb), :by)
+    """), {"t": event_type, "asset": asset_id,
+           "payload": json.dumps(payload or {}), "by": _actor(request)})
 
 
 # ---------------------------------------------------------------- platform
@@ -179,6 +199,9 @@ def create_asset(request: Request, body: dict = Body(...),
         "remarks": body.get("remarks") or None,
         "by": _actor(request),
     }).first()
+    _activity(db, request, "ASSET_REGISTERED", asset_id=row[0],
+              payload={"fleet_code": fleet_code, "ownership": ownership,
+                       "asset_type_id": body["asset_type_id"]})
     db.commit()
     return {"ok": True, "asset_id": row[0], "fleet_code": fleet_code}
 
@@ -204,6 +227,8 @@ def update_asset(asset_id: int, request: Request, body: dict = Body(...),
         f"UPDATE asset SET {', '.join(fields)} WHERE asset_id = :id"), params)
     if res.rowcount == 0:
         raise HTTPException(404, "Asset not found.")
+    _activity(db, request, "ASSET_UPDATED", asset_id=asset_id,
+              payload={k: str(v) for k, v in params.items() if k != "id"})
     db.commit()
     return {"ok": True, "asset_id": asset_id}
 
@@ -241,16 +266,24 @@ def add_identity(asset_id: int, request: Request, body: dict = Body(...),
         INSERT INTO asset_identity (asset_id, system, external_code, created_by)
         VALUES (:id, :s, :c, :by)
     """), {"id": asset_id, "s": system, "c": code, "by": _actor(request)})
+    _activity(db, request, "ASSET_IDENTITY_LINKED", asset_id=asset_id,
+              payload={"system": system, "external_code": code})
     db.commit()
     return {"ok": True}
 
 
 @router.delete("/assets/identities/{asset_identity_id}")
-def remove_identity(asset_identity_id: int, db: Session = Depends(get_minehub_db)) -> dict:
-    res = db.execute(text("DELETE FROM asset_identity WHERE asset_identity_id = :id"),
-                     {"id": asset_identity_id})
-    if res.rowcount == 0:
+def remove_identity(asset_identity_id: int, request: Request,
+                    db: Session = Depends(get_minehub_db)) -> dict:
+    row = db.execute(text("""
+        SELECT asset_id, system, external_code FROM asset_identity WHERE asset_identity_id = :id
+    """), {"id": asset_identity_id}).first()
+    if not row:
         raise HTTPException(404, "Identity not found.")
+    db.execute(text("DELETE FROM asset_identity WHERE asset_identity_id = :id"),
+               {"id": asset_identity_id})
+    _activity(db, request, "ASSET_IDENTITY_UNLINKED", asset_id=row[0],
+              payload={"system": row[1], "external_code": row[2]})
     db.commit()
     return {"ok": True}
 
@@ -316,5 +349,27 @@ def create_party(request: Request, body: dict = Body(...),
         "p": body.get("phone") or None, "e": body.get("email") or None,
         "by": _actor(request),
     }).first()
+    _activity(db, request, "PARTY_REGISTERED",
+              payload={"party_id": row[0], "name": name, "party_type": party_type})
     db.commit()
     return {"ok": True, "party_id": row[0]}
+
+
+# -------------------------------------------------------------- activity feed
+@router.get("/activity")
+def activity(limit: int = Query(100, le=500),
+             db: Session = Depends(get_minehub_db)) -> list[dict]:
+    """Day-to-day platform activity, newest first.
+
+    Read straight off the event log, so anything a module records shows up here
+    without this endpoint being changed.
+    """
+    rows = db.execute(text("""
+        SELECT e.event_id, e.event_type, e.occurred_at, e.recorded_by, e.source,
+               e.payload, a.fleet_code
+        FROM event e
+        LEFT JOIN asset a ON a.asset_id = e.asset_id
+        ORDER BY e.occurred_at DESC
+        LIMIT :lim
+    """), {"lim": limit}).mappings().all()
+    return [dict(r) for r in rows]

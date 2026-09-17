@@ -1,11 +1,9 @@
 "use client";
-import { LayoutDashboard, Gauge, Zap, Activity, ClipboardList, Sparkles, Boxes,
+import { LayoutDashboard, Gauge, Zap, Activity, ClipboardList, Sparkles, Boxes, ShieldCheck,
          ChevronLeft, ChevronRight, LogOut, ExternalLink } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { useSidebar }               from "@/contexts/useSidebar";
 import { useAuth }                  from "@/contexts/useAuth";
-import { useMineHubTab }            from "@/contexts/useMineHubTab";
-import { MINEHUB_TABS }             from "@/components/sections/MineHubSection";
 
 /** PR/PO Status is a separate application built by another IT team. It opens in
  *  its own tab rather than being embedded, so this dashboard stays alive behind
@@ -37,11 +35,13 @@ const NAV_ITEMS: NavItem[] = [
   { kind: "link", href: PRPO_URL,        label: "PR/PO Status",               icon: ClipboardList   },
 ];
 
-/* Access administration and the master-data registry are one screen with tabs,
-   not two sidebar entries: they are the same job, and splitting them made them
-   look like unrelated products. Deliberately outside the page matrix — the
-   screen that grants access must not be something you can revoke from
-   yourself. */
+/* Two administration entries, split by audience rather than merged for tidiness.
+   Access Control is an IT concern answered rarely; MineHub is operational work
+   done daily. Both sit outside the page matrix — the screen that grants access
+   must not be something you can revoke from yourself. */
+const ACCESS_ITEM: NavItem =
+  { kind: "page", id: "access-control", label: "Access Control", icon: ShieldCheck };
+
 const PLATFORM_ITEM: NavItem =
   { kind: "page", id: "minehub", label: "MineHub Platform", icon: Boxes };
 
@@ -53,8 +53,6 @@ export default function AppSidebar() {
   const { collapsed, toggle }  = useSidebar();
   const user                   = useAuth((s) => s.user);
   const canAny                 = useAuth((s) => s.canAny);
-  const can                    = useAuth((s) => s.can);
-  const { tab, setTab }        = useMineHubTab();
 
   /* Initials for the avatar. Names here arrive as "AKASH ." and
      "SWASTIK ROY CHOUDHURY", so take the first letter of the first two parts
@@ -75,9 +73,10 @@ export default function AppSidebar() {
     ...NAV_ITEMS.filter(
       (i) => i.kind === "link" || allowed.length === 0 || allowed.includes(i.id),
     ),
-    // Permission, not role name — a role created in the UI reaches this entry
+    // Permission, not role name — a role created in the UI reaches these entries
     // without any code change.
-    ...(canAny("access.users.view", "platform.registry.view") ? [PLATFORM_ITEM] : []),
+    ...(canAny("access.users.view") ? [ACCESS_ITEM] : []),
+    ...(canAny("platform.registry.view") ? [PLATFORM_ITEM] : []),
   ];
 
   return (
@@ -161,48 +160,6 @@ export default function AppSidebar() {
           }
 
           const isActive = page === item.id;
-
-          /* The platform entry lists its sections beneath it. Merging Access
-             Control into this screen put it one click deeper and it stopped
-             being findable — this restores the visibility without going back to
-             several top-level pages. */
-          if (item.id === "minehub") {
-            const sections = MINEHUB_TABS.filter((t) => can(t.permission));
-            return (
-              <div key={item.id}>
-                <button
-                  onClick={() => setPage(item.id)}
-                  title={collapsed ? label : undefined}
-                  className={`${ITEM_BASE} ${isActive
-                    ? "bg-white/10 text-white"
-                    : "text-white/55 hover:text-white/90 hover:bg-white/5"}`}
-                >
-                  {inner(isActive)}
-                </button>
-                {!collapsed && isActive && sections.length > 1 && (
-                  <div className="pb-1">
-                    {sections.map((sec) => {
-                      const on = tab === sec.id;
-                      return (
-                        <button
-                          key={sec.id}
-                          onClick={() => { setPage("minehub"); setTab(sec.id); }}
-                          className={`w-full text-left pl-[42px] pr-3 py-1.5 text-[11.5px] leading-tight
-                                      font-medium transition-colors relative
-                                      ${on ? "text-[#f5a623]" : "text-white/40 hover:text-white/75"}`}
-                        >
-                          {on && (
-                            <span className="absolute left-[30px] top-1/2 -translate-y-1/2 w-1 h-1 rounded-full bg-[#f5a623]" />
-                          )}
-                          {sec.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          }
 
           return (
             <button

@@ -1,62 +1,66 @@
 "use client";
 /**
- * MineHub Platform — one screen for everything the platform administers.
+ * MineHub Platform — the operational platform.
  *
- * Access and the registry were two sidebar entries, which made them look like
- * unrelated products. They are the same job: deciding who may do what, and
- * keeping the master data they act on. One entry, tabs inside — and the sidebar
- * lists those tabs as sub-items so nothing is hidden a click deep.
+ * This is where the mine's own work lives: registering equipment, and the
+ * operational modules and KPIs built on top of it. Access administration is a
+ * separate screen on purpose — it is an IT concern answered rarely, while this
+ * is day-to-day work done by the people running the mine.
  *
- * Each tab is gated on a permission rather than a role name, so a role created
- * in the Roles tab immediately controls what its holders see here, with no code
- * change. That is the point of roles being data.
+ * Every action here is recorded in the event log and shown under Activity, so
+ * the platform accounts for itself as it is used rather than only when someone
+ * goes looking.
  */
-import React, { useEffect, useMemo } from "react";
-import { Boxes, Users, KeyRound, Cpu, History } from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
+import { Boxes, Cpu, Activity, LayoutGrid } from "lucide-react";
 import { useAuth } from "@/contexts/useAuth";
-import { useMineHubTab, type MineHubTab } from "@/contexts/useMineHubTab";
-import UsersPanel from "@/components/minehub/UsersPanel";
-import RolesPanel from "@/components/minehub/RolesPanel";
-import AuditPanel from "@/components/minehub/AuditPanel";
 import EquipmentPanel from "@/components/minehub/EquipmentPanel";
+import ActivityPanel from "@/components/minehub/ActivityPanel";
+import { Card, CardHeader } from "@/components/minehub/ui";
 
-interface TabDef {
-  id: MineHubTab; label: string; icon: React.ElementType; hint: string; permission: string;
-}
+type TabId = "equipment" | "activity" | "modules";
 
-export const MINEHUB_TABS: TabDef[] = [
-  { id: "users", label: "People & Access", icon: Users, permission: "access.users.view",
-    hint: "Who can sign in, and what each person may do" },
-  { id: "roles", label: "Roles", icon: KeyRound, permission: "access.users.view",
-    hint: "Create roles and decide what each one carries" },
-  { id: "audit", label: "Access History", icon: History, permission: "access.users.view",
-    hint: "Every grant, change and revocation — append-only" },
-  { id: "equipment", label: "Equipment Registry", icon: Cpu, permission: "platform.registry.view",
-    hint: "One identity per machine, across every system" },
+const TABS: { id: TabId; label: string; icon: React.ElementType; hint: string }[] = [
+  { id: "equipment", label: "Equipment Registry", icon: Cpu,
+    hint: "One identity per machine, across telematics, handover, weighbridge and RFID" },
+  { id: "activity", label: "Activity", icon: Activity,
+    hint: "Everything recorded on the platform, as it happens" },
+  { id: "modules", label: "Modules", icon: LayoutGrid,
+    hint: "What is built, and what comes next" },
 ];
+
+/** The build order from the platform blueprint, so the screen states where the
+ *  work actually stands rather than implying more exists than does. */
+const ROADMAP = [
+  { phase: "Registry", status: "live",
+    items: ["Equipment register", "System identity mapping", "Activity log"] },
+  { phase: "People", status: "next",
+    items: ["Operator register", "Competency and licence expiry", "Contractor workforce"] },
+  { phase: "Deployment", status: "planned",
+    items: ["One handover replacing nine forms", "Shift deployment plan", "Attendance link"] },
+  { phase: "Operations", status: "planned",
+    items: ["Production from the weighbridge", "Utilisation and OEE", "Fuel reconciliation"] },
+  { phase: "Planning", status: "planned",
+    items: ["Work orders", "Plan versus actual", "Capacity gap and loss attribution"] },
+];
+
+const STATUS_STYLE: Record<string, string> = {
+  live:    "bg-success-bg text-success border-success/25",
+  next:    "bg-gold/10 text-gold-dark border-gold/30",
+  planned: "bg-bg-section text-txt-muted border-border",
+};
 
 export default function MineHubSection() {
   const can = useAuth((s) => s.can);
-  const permissions = useAuth((s) => s.user?.permissions ?? []);
-  const { tab, setTab } = useMineHubTab();
+  const [tab, setTab] = useState<TabId>("equipment");
 
-  const visible = useMemo(
-    () => MINEHUB_TABS.filter((t) => can(t.permission)),
-    [can, permissions],
-  );
+  const mayView = can("platform.registry.view");
+  const active = useMemo(() => TABS.find((t) => t.id === tab), [tab]);
 
-  // If the current tab disappears because the user's own access changed while
-  // they were on it, move them somewhere they can still be rather than showing
-  // an empty screen.
-  useEffect(() => {
-    if (visible.length && !visible.some((t) => t.id === tab)) setTab(visible[0].id);
-  }, [visible, tab, setTab]);
-
-  const active = visible.find((t) => t.id === tab);
+  useEffect(() => { if (!mayView) setTab("modules"); }, [mayView]);
 
   return (
     <div className="py-5 space-y-5 max-w-[1500px]">
-      {/* Banner — the one dark surface, matching the other section headers */}
       <div className="rounded-lg bg-gradient-to-r from-navy-2 to-steel border border-gold/25 px-5 py-4 shadow-md">
         <div className="flex items-center gap-3">
           <Boxes className="w-5 h-5 text-gold-light shrink-0" />
@@ -64,17 +68,14 @@ export default function MineHubSection() {
             <h1 className="font-condensed font-bold text-[18px] tracking-wide text-white uppercase">
               MineHub Platform
             </h1>
-            <p className="text-white/60 text-[12px] mt-0.5">
-              {active?.hint ?? "Platform administration"}
-            </p>
+            <p className="text-white/60 text-[12px] mt-0.5">{active?.hint}</p>
           </div>
         </div>
       </div>
 
-      {/* Tabs */}
-      {visible.length > 1 && (
+      {mayView && (
         <div className="flex flex-wrap gap-1 border-b border-border">
-          {visible.map((t) => {
+          {TABS.map((t) => {
             const Icon = t.icon;
             const on = t.id === tab;
             return (
@@ -91,16 +92,35 @@ export default function MineHubSection() {
         </div>
       )}
 
-      {visible.length === 0 && (
+      {!mayView && (
         <p className="text-[13px] text-txt-muted py-10 text-center">
-          You do not have permission for any platform module.
+          You do not have permission to open the platform registry.
         </p>
       )}
 
-      {tab === "users" && can("access.users.view") && <UsersPanel />}
-      {tab === "roles" && can("access.users.view") && <RolesPanel />}
-      {tab === "audit" && can("access.users.view") && <AuditPanel />}
-      {tab === "equipment" && can("platform.registry.view") && <EquipmentPanel />}
+      {mayView && tab === "equipment" && <EquipmentPanel />}
+      {mayView && tab === "activity" && <ActivityPanel />}
+      {mayView && tab === "modules" && (
+        <Card>
+          <CardHeader title="Platform modules"
+            subtitle="Where the build actually stands. Each phase is usable on its own — nothing here exists only to enable the next." />
+          <div className="p-4 space-y-3">
+            {ROADMAP.map((r) => (
+              <div key={r.phase} className="flex flex-wrap items-start gap-3 py-2 border-b border-border-light last:border-0">
+                <span className={`px-2 py-0.5 rounded border text-[11px] font-semibold shrink-0 ${STATUS_STYLE[r.status]}`}>
+                  {r.status}
+                </span>
+                <div className="min-w-0">
+                  <div className="font-condensed font-bold text-[14px] uppercase tracking-wide text-navy">
+                    {r.phase}
+                  </div>
+                  <div className="text-[12px] text-txt-muted mt-0.5">{r.items.join(" · ")}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
     </div>
   );
 }

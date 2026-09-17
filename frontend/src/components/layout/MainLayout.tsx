@@ -6,6 +6,7 @@ import ElectricVehiclesSection from "@/components/sections/ElectricVehiclesSecti
 import OEESection              from "@/components/sections/OEESection";
 import IntelligenceSection     from "@/components/sections/IntelligenceSection";
 import MineHubSection          from "@/components/sections/MineHubSection";
+import AccessControlSection    from "@/components/sections/AccessControlSection";
 import { useAppPage }          from "@/contexts/useAppPage";
 import { useSidebar }          from "@/contexts/useSidebar";
 
@@ -36,6 +37,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           {page === "intelligence"     && <IntelligenceSection />}
           {page === "fuel-management"  && <FuelManagementSection />}
           {page === "ev-tracking"      && <ElectricVehiclesSection />}
+          {page === "access-control"   && <AccessControlSection />}
           {page === "minehub"          && <MineHubSection />}
         </div>
       </main>
