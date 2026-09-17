@@ -122,6 +122,9 @@ _PERMISSION_RULES: tuple[tuple[str, str], ...] = (
     ("/api/access",  "access.users.view"),   # finer checks are inside the router
     ("/api/roles",   "access.users.manage"),
     ("/api/minehub", "platform.registry.view"),
+    # Operator profiles hold dates of birth, medical expiry and photographs, so
+    # the view permission is deliberately not part of a dashboard role.
+    ("/api/operators", "platform.operators.view"),
 )
 
 # A page is reachable with the matching dashboard permission.
@@ -247,7 +250,7 @@ def health_check():
 
 
 # ── Routers ───────────────────────────────────────────────────
-from app.routers import production, stock, cob, plant, ob, despatch, equipment, dewatering, insights, live_tracking, fuel_management, ev_tracking, auth, oee, roles, minehub, access
+from app.routers import production, stock, cob, plant, ob, despatch, equipment, dewatering, insights, live_tracking, fuel_management, ev_tracking, auth, oee, roles, minehub, access, operators
 app.include_router(production.router,      prefix="/api/production",    tags=["Production"])
 app.include_router(stock.router,           prefix="/api/stock",         tags=["Stock"])
 app.include_router(cob.router,             prefix="/api/cob",           tags=["COB Plant"])
@@ -262,6 +265,7 @@ app.include_router(fuel_management.router)
 app.include_router(ev_tracking.router)
 app.include_router(auth.router)
 app.include_router(oee.router)
+app.include_router(operators.router)
 app.include_router(roles.router)
 app.include_router(minehub.router)
 app.include_router(access.router)
