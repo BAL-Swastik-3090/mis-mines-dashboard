@@ -17,6 +17,7 @@ import { Plus, Trash2, Check, Loader2, Info, ArrowLeft, Send, CheckCircle2, Undo
 import api from "@/lib/api";
 import { Alert, Button, Chip, type Tone } from "./ui";
 import Toast from "./Toast";
+import Dialog from "./Dialog";
 import RevisionPanel, { type Revision } from "./RevisionPanel";
 import Combobox from "./Combobox";
 
@@ -79,13 +80,25 @@ function Band({ title, hint, right }: { title: string; hint?: string; right?: Re
 }
 
 /** One label/value row of the sheet. */
-function Row({ label, required, hint, children, wide }: {
-  label: string; required?: boolean; hint?: string; children: React.ReactNode; wide?: boolean;
+/** Where each refused field lives on the page, for taking someone to it. */
+const FIELD_INPUT: Record<string, string> = {
+  fleet_code: "af-fleet", asset_type_id: "af-type", owner_party_id: "af-owner",
+};
+
+function Row({ label, required, hint, children, wide, invalid }: {
+  label: string; required?: boolean; hint?: string; children: React.ReactNode;
+  wide?: boolean;
+  /** Submission refused on this one — say so on the label as well as the field,
+   *  since a red outline alone is invisible to anyone who cannot see colour. */
+  invalid?: boolean;
 }) {
   return (
     <>
-      <div className="bg-bg-light px-3 py-2 flex items-center gap-1.5 border-b border-r border-border-light">
-        <span className="text-[12px] font-medium text-txt-secondary">{label}</span>
+      <div className={`px-3 py-2 flex items-center gap-1.5 border-b border-r border-border-light
+                       ${invalid ? "bg-rose-bg" : "bg-bg-light"}`}>
+        <span className={`text-[12px] font-medium ${invalid ? "text-rose font-semibold" : "text-txt-secondary"}`}>
+          {label}
+        </span>
         {required && <span className="text-rose text-[12px]">*</span>}
         {hint && (
           <span title={hint} className="text-txt-light hover:text-navy cursor-help">
@@ -93,7 +106,13 @@ function Row({ label, required, hint, children, wide }: {
           </span>
         )}
       </div>
-      <div className={`border-b border-border-light ${wide ? "col-span-3" : ""}`}>{children}</div>
+      <div className={`border-b border-border-light ${wide ? "col-span-3" : ""}
+                       ${invalid ? "bg-rose-bg/40 ring-1 ring-inset ring-rose-ring" : ""}`}>
+        {children}
+        {invalid && (
+          <p className="px-3 pb-1.5 -mt-0.5 text-[11px] font-semibold text-rose">Needed to submit</p>
+        )}
+      </div>
     </>
   );
 }
@@ -148,6 +167,14 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   const [loadingRev, setLoadingRev] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [showMissing, setShowMissing] = useState(false);
+  // The fields a submission would reject, marked after an attempt rather than
+  // while someone is still typing — a form that turns red as you fill it in is
+  // nagging, not helping.
+  const [invalid, setInvalid] = useState<Set<string>>(new Set());
+  // What was last written to the database. Anything different is unsaved work.
+  const [saved, setSaved] = useState("");
+  const [ask, setAsk] = useState<null | "discard" | "revert" | "leave" | "send-back">(null);
+  const [sendBackWhy, setSendBackWhy] = useState("");
 
   useEffect(() => {
     void (async () => {
@@ -206,7 +233,47 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
 
   useEffect(() => { void loadAsset(); void loadRevisions(); }, [loadAsset, loadRevisions]);
 
-  const set = (k: string, v: string) => setF((prev) => ({ ...prev, [k]: v }));
+  // A blank new form is not unsaved work, so the baseline is the untouched
+  // sheet. Prefill is deliberately NOT part of it: registering a machine from
+  // the telematics queue arrives with its code already filled, and that is
+  // exactly the work someone came to save — treating it as "no changes" would
+  // leave the save button dead on the one path that needs it most.
+  useEffect(() => {
+    if (assetId) return;
+    setSaved(JSON.stringify([
+      { fleet_code: "", ownership: "OWN", status: "ACTIVE", reading_uom: "HOURS", fuel_type: "DIESEL" },
+      [emptyDoc("INSURANCE"), emptyDoc("FITNESS"), emptyDoc("ROAD_TAX")],
+      [emptySched()],
+      [],
+    ]));
+    // Only on mount: after this the baseline moves when something is saved.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** One string standing for everything on the sheet, cheap to compare. */
+  const snapshot = useMemo(
+    () => JSON.stringify([f, docs, scheds, idents]), [f, docs, scheds, idents]);
+  const dirty = snapshot !== saved;
+
+  // The browser's own guard, for a closed tab or a typed URL — the in-app one
+  // cannot run then.
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+
+
+  const set = (k: string, v: string) => {
+    setF((prev) => ({ ...prev, [k]: v }));
+    // Correcting a field clears its mark; the message about it survives until
+    // the next attempt, which is when it can be true again.
+    setInvalid((prev) => {
+      if (!prev.has(k)) return prev;
+      const next = new Set(prev); next.delete(k); return next;
+    });
+  };
   const isElectric = f.fuel_type === "ELECTRIC" || f.fuel_type === "HYBRID";
   // The picker shows a name; the form stores the id it resolves to.
   const typeName = types.find((t) => String(t.asset_type_id) === f.asset_type_id)?.name ?? "";
@@ -262,22 +329,29 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
     // completeness. Saving a draft takes whatever has been typed so far — the
     // rest can be filled in after a walk to the machine.
     if (then === "submit") {
-      const missing = [
-        !f.fleet_code?.trim() && "a fleet code",
-        !f.asset_type_id && "an equipment type",
-        isHired && !f.owner_party_id && "the contractor that owns it",
-      ].filter(Boolean) as string[];
-      if (missing.length) {
-        raise(`Before this can go for approval it needs ${missing.join(", ")}. `
-            + "Save it as a draft meanwhile — nothing typed is lost.");
+      const needed: [string, string, boolean][] = [
+        ["fleet_code",     "a fleet code",                Boolean(f.fleet_code?.trim())],
+        ["asset_type_id",  "an equipment type",           Boolean(f.asset_type_id)],
+        ["owner_party_id", "the contractor that owns it", !isHired || Boolean(f.owner_party_id)],
+      ];
+      const short = needed.filter(([, , ok]) => !ok);
+      if (short.length) {
+        setInvalid(new Set(short.map(([k]) => k)));
+        raise(`Before this can go for approval it needs ${short.map(([, t]) => t).join(", ")}. `
+            + "They are marked below. Save it as a draft meanwhile — nothing typed is lost.");
+        // Take the person to the first one; a mark they cannot see helps nobody.
+        document.getElementById(FIELD_INPUT[short[0][0]])
+          ?.scrollIntoView({ behavior: "smooth", block: "center" });
         return;
       }
+      setInvalid(new Set());
     }
 
     setSaving(true); setError(null);
     try {
       if (editing) {
         const r = await api.put(`/minehub/assets/${id}`, f);
+        setSaved(snapshot);
         setNotice(r.data?.changed
           ? `Saved — ${r.data.changed} field${r.data.changed === 1 ? "" : "s"} changed, now v${r.data.version}.`
              + (r.data.approval_reset ? " Approval was reset, because what was approved is no longer what is on file." : "")
@@ -305,6 +379,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
       const newId = created.data?.asset_id as number | undefined;
       if (!newId) { onDone(); return; }      // nothing to stay on
       setCreatedId(newId);
+      setSaved(snapshot);
       onSaved?.();                           // the register behind is now stale
       if (then === "submit") {
         await api.post(`/minehub/assets/${newId}/submit`, {});
@@ -319,13 +394,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
     } finally { setSaving(false); }
   };
 
-  const act = async (what: "submit" | "approve" | "send-back") => {
-    let remarks: string | undefined;
-    if (what === "send-back") {
-      const said = window.prompt("What needs correcting?");
-      if (!said?.trim()) return;      // a bare rejection helps nobody
-      remarks = said.trim();
-    }
+  const act = async (what: "submit" | "approve" | "send-back", remarks?: string) => {
     setBusy(what); setError(null);
     try {
       await api.post(`/minehub/assets/${id}/${what}`, { remarks });
@@ -339,11 +408,11 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
     } finally { setBusy(null); }
   };
 
+  /** Going back, with whatever is unsaved accounted for. */
+  const leave = () => { if (dirty) setAsk("leave"); else onCancel(); };
+
   const discard = async () => {
-    const name = String(f.nickname || f.fleet_code || "this draft");
-    if (!window.confirm(
-      `Discard ${name}? Everything typed into it goes, and it cannot be brought back. `
-      + "The register will record that it was registered and discarded.")) return;
+    setAsk(null);
     setBusy("discard"); setError(null);
     try {
       await api.delete(`/minehub/assets/${id}`);
@@ -356,9 +425,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   };
 
   const revert = async () => {
-    if (!window.confirm(
-      "Put this machine back the way it was before the last change? "
-      + "The undo is itself recorded, so the trail keeps both.")) return;
+    setAsk(null);
     setBusy("revert"); setError(null);
     try {
       const r = await api.post(`/minehub/assets/${id}/revert`, {});
@@ -377,6 +444,50 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
     status === "APPROVED" ? "emerald" : status === "SUBMITTED" ? "amber"
     : status === "SENT_BACK" ? "rose" : "slate";
 
+  const name = String(f.nickname || f.fleet_code || "this draft");
+
+  const dialogs = (
+    <>
+      <Dialog open={ask === "discard"} tone="danger" title={`Discard ${name}?`}
+        confirmLabel="Discard it" cancelLabel="Keep it" busy={busy === "discard"}
+        onConfirm={discard} onCancel={() => setAsk(null)}>
+        Everything typed into it goes, and it cannot be brought back. The activity
+        log keeps the fact that this machine was registered and discarded, so the
+        register can still account for the fleet code.
+      </Dialog>
+
+      <Dialog open={ask === "revert"} tone="warning" title="Undo the last change?"
+        confirmLabel="Put it back" cancelLabel="Leave as is" busy={busy === "revert"}
+        onConfirm={revert} onCancel={() => setAsk(null)}>
+        The machine goes back to how it was before the most recent edit. The undo
+        is itself recorded, so the trail keeps both the change and its reversal.
+      </Dialog>
+
+      <Dialog open={ask === "send-back"} tone="warning" title="Send it back for correction"
+        confirmLabel="Send it back" cancelLabel="Cancel"
+        busy={busy === "send-back" || !sendBackWhy.trim()}
+        onConfirm={() => { const why = sendBackWhy.trim(); setAsk(null); setSendBackWhy("");
+                           void act("send-back", why); }}
+        onCancel={() => { setAsk(null); setSendBackWhy(""); }}>
+        Say what needs correcting. Whoever filled this in sees the reason in the
+        trail, and a bare rejection only sends the machine round again.
+        <textarea id="af-sendback" value={sendBackWhy} rows={3}
+          onChange={(e) => setSendBackWhy(e.target.value)}
+          placeholder="Chassis number does not match the plate on the machine"
+          className="mt-2.5 w-full bg-bg-base border border-border rounded-lg px-3 py-2
+                     text-[13px] text-txt-primary placeholder:text-txt-light
+                     focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/15" />
+      </Dialog>
+
+      <Dialog open={ask === "leave"} tone="warning" title="Leave without saving?"
+        confirmLabel="Leave, lose the changes" cancelLabel="Stay here"
+        onConfirm={() => { setAsk(null); onCancel(); }} onCancel={() => setAsk(null)}>
+        This sheet has changes that have not been saved. Saving as a draft keeps
+        them — nothing has to be complete for that.
+      </Dialog>
+    </>
+  );
+
   const messages = (
     <>
       <Toast tone="error" message={error} onClose={() => setError(null)} />
@@ -389,7 +500,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <button onClick={onCancel}
+          <button onClick={leave}
             className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-txt-muted
                        hover:text-navy transition-colors mb-2">
             <ArrowLeft className="w-4 h-4" /> Back to registry
@@ -413,9 +524,12 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
               {doneCount} of {checklist.length} filled
             </Chip>
           </button>
-          <Button size="sm" variant="primary" onClick={() => submit("stay")} disabled={saving}>
+          <Button size="sm" variant="primary" onClick={() => submit("stay")}
+            disabled={saving || !dirty}
+            title={dirty ? undefined : "Nothing has changed since the last save"}>
             {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
-                    : <><Check className="w-3.5 h-3.5" /> {editing ? "Save changes" : "Save as draft"}</>}
+                    : dirty ? <><Check className="w-3.5 h-3.5" /> {editing ? "Save changes" : "Save as draft"}</>
+                    : <><Check className="w-3.5 h-3.5" /> Saved</>}
           </Button>
           {editing && (status === "DRAFT" || status === "SENT_BACK") && (
             <Button size="sm" variant="accent" disabled={busy !== null} onClick={() => act("submit")}>
@@ -427,7 +541,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
               <Button size="sm" variant="primary" disabled={busy !== null} onClick={() => act("approve")}>
                 <CheckCircle2 className="w-3.5 h-3.5" /> Approve
               </Button>
-              <Button size="sm" variant="danger" disabled={busy !== null} onClick={() => act("send-back")}>
+              <Button size="sm" variant="danger" disabled={busy !== null} onClick={() => setAsk("send-back")}>
                 <Undo2 className="w-3.5 h-3.5" /> Send back
               </Button>
             </>
@@ -452,7 +566,8 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
       <div>
         <Band title="Identity" hint="The fleet code is the system key; the nickname is what the mine says out loud" />
         <Sheet>
-          <Row label="Fleet code" required hint="Unique. MAN-18, EX-04, DZ-02">
+          <Row label="Fleet code" required invalid={invalid.has("fleet_code")}
+               hint="Unique. MAN-18, EX-04, DZ-02">
             <input id="af-fleet" className={cellInput} value={f.fleet_code ?? ""}
               onChange={(e) => set("fleet_code", e.target.value)} placeholder="MAN-18" />
           </Row>
@@ -460,7 +575,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
             <input id="af-nick" className={cellInput} value={f.nickname ?? ""}
               onChange={(e) => set("nickname", e.target.value)} placeholder="Bada Tipper" />
           </Row>
-          <Row label="Equipment type" required
+          <Row label="Equipment type" required invalid={invalid.has("asset_type_id")}
                hint="Not on the list? Type it and add it — a near-enough type carries the wrong rated figures into every calculation">
             <div className="px-1.5 py-1">
               <Combobox id="af-type"
@@ -529,7 +644,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
           </Row>
           {isHired ? (
             <>
-              <Row label="Contractor" required>
+              <Row label="Contractor" required invalid={invalid.has("owner_party_id")}>
                 <select id="af-owner" className={cellInput} value={f.owner_party_id ?? ""}
                   onChange={(e) => set("owner_party_id", e.target.value)}>
                   <option value="">Select…</option>
@@ -900,28 +1015,31 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
 
       <div className="flex flex-wrap gap-2 pt-1 sticky bottom-0 bg-bg-base/95 backdrop-blur py-3 -mx-1 px-1
                       border-t border-border-light">
-        <Button variant="primary" size="lg" onClick={() => submit("stay")} disabled={saving}>
+        <Button variant="primary" size="lg" onClick={() => submit("stay")}
+          disabled={saving || !dirty}
+          title={dirty ? undefined : "Nothing has changed since the last save"}>
           {saving ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
-                  : <><Check className="w-4 h-4" /> {editing ? "Save changes" : "Save as draft"}</>}
+                  : dirty ? <><Check className="w-4 h-4" /> {editing ? "Save changes" : "Save as draft"}</>
+                  : <><Check className="w-4 h-4" /> Saved</>}
         </Button>
         {!editing && (
           <Button variant="accent" size="lg" onClick={() => submit("submit")} disabled={saving}>
             <Send className="w-4 h-4" /> Save and submit for approval
           </Button>
         )}
-        <Button variant="ghost" size="lg" onClick={onCancel}>
+        <Button variant="ghost" size="lg" onClick={leave}>
           {editing ? "Back to registry" : "Cancel"}
         </Button>
 
         {editing && (
           <span className="ml-auto flex flex-wrap gap-2">
             {revisions.length > 1 && (
-              <Button variant="secondary" size="lg" disabled={busy !== null} onClick={revert}>
+              <Button variant="secondary" size="lg" disabled={busy !== null} onClick={() => setAsk("revert")}>
                 <Undo2 className="w-4 h-4" /> Undo last change
               </Button>
             )}
             {(status === "DRAFT" || status === "SENT_BACK") && (
-              <Button variant="danger" size="lg" disabled={busy !== null} onClick={discard}>
+              <Button variant="danger" size="lg" disabled={busy !== null} onClick={() => setAsk("discard")}>
                 <Trash2 className="w-4 h-4" /> Discard draft
               </Button>
             )}
@@ -936,7 +1054,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
     </div>
   );
 
-  if (!editing) return <>{messages}{sheet}</>;
+  if (!editing) return <>{messages}{dialogs}{sheet}</>;
 
   // Editing shows the trail beside the sheet: the history is the reason to open
   // an existing machine at all, and putting it below would hide it under a long
@@ -944,6 +1062,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_340px] gap-5 items-start">
       {messages}
+      {dialogs}
       {sheet}
       <div className="xl:sticky xl:top-[86px]">
         <RevisionPanel revisions={revisions} loading={loadingRev} />
