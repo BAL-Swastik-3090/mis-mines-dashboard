@@ -419,6 +419,28 @@ export default function AssetForm({ assetId, prefill, onDone, onCancel }: {
                   ))}
                 </select>
               </Row>
+              <Row label="Contract no."
+                   hint="The contract this machine is engaged under">
+                <div className="px-1.5 py-1">
+                  <Combobox id="af-contract" category="CONTRACT" value={f.contract_no ?? ""}
+                    onChange={(v) => set("contract_no", v)} placeholder="Search or add…" />
+                </div>
+              </Row>
+              <Row label="Service PO no."
+                   hint="Work on this machine is billed against this PO — contractor billing reads it">
+                <div className="px-1.5 py-1">
+                  <Combobox id="af-po" category="SERVICE_PO" value={f.service_po_no ?? ""}
+                    onChange={(v) => set("service_po_no", v)} placeholder="Search or add…" />
+                </div>
+              </Row>
+              <Row label="PO valid from">
+                <input id="af-povf" type="date" className={cellInput} value={f.po_valid_from ?? ""}
+                  onChange={(e) => set("po_valid_from", e.target.value)} />
+              </Row>
+              <Row label="PO valid to" hint="Expiry is flagged alongside insurance and fitness">
+                <input id="af-povt" type="date" className={cellInput} value={f.po_valid_to ?? ""}
+                  onChange={(e) => set("po_valid_to", e.target.value)} />
+              </Row>
               <Row label="Hire rate (₹)">
                 <input id="af-hire" type="number" className={cellInput} value={f.hire_rate ?? ""}
                   onChange={(e) => set("hire_rate", e.target.value)} />
@@ -432,10 +454,12 @@ export default function AssetForm({ assetId, prefill, onDone, onCancel }: {
             </>
           ) : (
             <>
-              <Row label="SAP asset no." hint="Blank for hired machines — SAP is an identity, not the key">
+              <Row label="SAP equipment no."
+                   hint="What SAP calls this machine. A hired machine has a contract and a service PO instead">
                 <div className="px-1.5 py-1">
-                  <Combobox id="af-sap" category="SAP_ASSET" value={f.sap_asset_no ?? ""}
-                    onChange={(v) => set("sap_asset_no", v)} placeholder="Search or add…" />
+                  <Combobox id="af-sap" category="SAP_EQUIPMENT" value={f.sap_equipment_no ?? ""}
+                    onChange={(v) => set("sap_equipment_no", v)}
+                    placeholder="Type the number — it is added to the list" />
                 </div>
               </Row>
               <Row label="Purchase date">

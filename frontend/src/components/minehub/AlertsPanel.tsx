@@ -13,7 +13,7 @@ import { Alert, Card, CardHeader, Chip, EmptyRow, Td, Th, Tile, type Tone } from
 
 interface AlertRow {
   asset_id: number; fleet_code: string; nickname: string | null;
-  alert_kind: "COMPLIANCE" | "MAINTENANCE";
+  alert_kind: "COMPLIANCE" | "MAINTENANCE" | "COMMERCIAL";
   alert_type: string; due_on: string | null; days_left: number | null;
   severity: "EXPIRED" | "DUE" | "OK";
 }
@@ -58,6 +58,14 @@ export default function AlertsPanel({ onChanged }: { onChanged?: () => void }) {
     docs: rows.filter((r) => r.alert_kind === "COMPLIANCE").length,
     services: rows.filter((r) => r.alert_kind === "MAINTENANCE").length,
   }), [rows]);
+
+  /** What kind of date this is. A lapsed service PO is neither a document nor a
+   *  service — it stops the machine being billable, which is a different desk. */
+  const KIND: Record<string, { label: string; tone: Tone }> = {
+    COMPLIANCE: { label: "Document",  tone: "violet" },
+    MAINTENANCE: { label: "Service",  tone: "sky" },
+    COMMERCIAL: { label: "Contract",  tone: "amber" },
+  };
 
   if (loading) {
     return <div className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-gold" /></div>;
@@ -112,8 +120,8 @@ export default function AlertsPanel({ onChanged }: { onChanged?: () => void }) {
                     </Td>
                     <Td className="text-txt-primary">{LABEL[r.alert_type] ?? r.alert_type}</Td>
                     <Td>
-                      <Chip tone={r.alert_kind === "COMPLIANCE" ? "violet" : "sky"} dot={false}>
-                        {r.alert_kind === "COMPLIANCE" ? "Document" : "Service"}
+                      <Chip tone={KIND[r.alert_kind]?.tone ?? "slate"} dot={false}>
+                        {KIND[r.alert_kind]?.label ?? r.alert_kind}
                       </Chip>
                     </Td>
                     <Td className="tabular-nums">{r.due_on ?? "—"}</Td>

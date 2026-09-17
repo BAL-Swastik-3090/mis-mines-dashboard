@@ -37,7 +37,8 @@ SCHEDULE_TYPES = ("PREVENTIVE", "SERVICE", "OIL_CHANGE", "INSPECTION", "OVERHAUL
 ASSET_FIELDS = (
     "fleet_code", "nickname", "registration_no", "asset_type_id", "make", "model",
     "year_of_make", "chassis_no", "engine_no", "capacity", "capacity_uom",
-    "ownership", "owner_party_id", "sap_asset_no", "supplier_party_id",
+    "ownership", "owner_party_id", "supplier_party_id",
+    "sap_equipment_no", "contract_no", "service_po_no", "po_valid_from", "po_valid_to",
     "purchase_date", "purchase_cost", "hire_rate", "hire_rate_uom",
     "rated_output_per_hr", "rated_fuel_lph", "fuel_type", "tank_capacity_l",
     "battery_kwh", "range_km", "charging_type", "charge_time_hrs",

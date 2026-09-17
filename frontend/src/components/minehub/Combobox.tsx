@@ -184,7 +184,13 @@ export default function Combobox({
       })}
 
       {!loading && options.length === 0 && !canAdd && (
-        <div className="px-3 py-2.5 text-[12px] text-txt-light">Nothing yet — type to add one.</div>
+        <div className="px-3 py-3 text-[12px] text-txt-muted">
+          <span className="font-medium text-txt-secondary">No entries yet.</span>
+          <span className="block mt-0.5 text-txt-light">
+            Start typing and the value is added to the list, so the next person picks it
+            instead of retyping it.
+          </span>
+        </div>
       )}
 
       {canAdd && (
