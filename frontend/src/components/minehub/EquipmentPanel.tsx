@@ -52,8 +52,11 @@ const CATEGORY_TONE: Record<string, Tone> = {
   SUPPORT: "slate", LIGHTING: "amber", LMV: "slate", OTHER: "slate",
 };
 
-export default function EquipmentPanel({ addOpen, onAddOpenChange, onChanged }: {
-  addOpen?: boolean; onAddOpenChange?: (v: boolean) => void; onChanged?: () => void;
+export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenChange, onChanged }: {
+  addOpen?: boolean; onAddOpenChange?: (v: boolean) => void;
+  /** The registration sheet is on screen — editing counts, not just adding. */
+  onFormOpenChange?: (v: boolean) => void;
+  onChanged?: () => void;
 }) {
   const can = useAuth((s) => s.can);
   const mayManage = can("platform.registry.manage");
@@ -140,7 +143,10 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onChanged }: 
   // the unregistered list. Filling a long form beneath a dashboard made it
   // unclear what the screen was for, and left the save button a scroll away
   // from anything explaining it.
-  if (addOpen || editingId) {
+  const formOpen = Boolean(addOpen || editingId);
+  useEffect(() => { onFormOpenChange?.(formOpen); }, [formOpen, onFormOpenChange]);
+
+  if (formOpen) {
     return (
       <Card tone="gold">
         <div className="p-5">

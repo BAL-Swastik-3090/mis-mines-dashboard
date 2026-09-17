@@ -50,6 +50,9 @@ export default function MineHubSection() {
   const can = useAuth((s) => s.can);
   const [tab, setTab] = useState<TabId>("equipment");
   const [addOpen, setAddOpen] = useState(false);
+  // While the sheet is open, "Register machine" would start a second one over
+  // the top of what is being filled in.
+  const [formOpen, setFormOpen] = useState(false);
   const [alertCount, setAlertCount] = useState<number | null>(null);
 
   const mayView = can("platform.registry.view");
@@ -76,7 +79,7 @@ export default function MineHubSection() {
         subtitle={active?.hint}
         actions={
           <>
-            {tab === "equipment" && mayManage && (
+            {tab === "equipment" && mayManage && !formOpen && (
               <Button variant="primary" size="lg" onClick={() => setAddOpen(true)}>
                 <Plus className="w-4 h-4" /> Register machine
               </Button>
@@ -102,7 +105,8 @@ export default function MineHubSection() {
       )}
 
       {mayView && tab === "equipment" && (
-        <EquipmentPanel addOpen={addOpen} onAddOpenChange={setAddOpen} onChanged={loadAlerts} />
+        <EquipmentPanel addOpen={addOpen} onAddOpenChange={setAddOpen}
+          onFormOpenChange={setFormOpen} onChanged={loadAlerts} />
       )}
       {mayView && tab === "alerts" && <AlertsPanel onChanged={loadAlerts} />}
       {mayView && tab === "activity" && <ActivityPanel />}

@@ -219,9 +219,21 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   }, [f]);
 
   const submit = async (then: "stay" | "submit" = "stay") => {
-    if (!f.fleet_code?.trim()) { setError("Fleet code is required."); return; }
-    if (!f.asset_type_id) { setError("Choose an equipment type."); return; }
-    if (isHired && !f.owner_party_id) { setError("A hired machine must record its contractor."); return; }
+    // Only the path that puts this in front of someone else checks for
+    // completeness. Saving a draft takes whatever has been typed so far — the
+    // rest can be filled in after a walk to the machine.
+    if (then === "submit") {
+      const missing = [
+        !f.fleet_code?.trim() && "a fleet code",
+        !f.asset_type_id && "an equipment type",
+        isHired && !f.owner_party_id && "the contractor that owns it",
+      ].filter(Boolean) as string[];
+      if (missing.length) {
+        setError(`Before this can go for approval it needs ${missing.join(", ")}. `
+               + "Save it as a draft meanwhile — nothing typed is lost.");
+        return;
+      }
+    }
 
     setSaving(true); setError(null);
     try {
@@ -319,6 +331,10 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
           <Chip tone={filled > 70 ? "emerald" : filled > 35 ? "amber" : "slate"}>
             {filled}% filled
           </Chip>
+          <Button size="sm" variant="primary" onClick={() => submit("stay")} disabled={saving}>
+            {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
+                    : <><Check className="w-3.5 h-3.5" /> {editing ? "Save changes" : "Save as draft"}</>}
+          </Button>
           {editing && (status === "DRAFT" || status === "SENT_BACK") && (
             <Button size="sm" variant="accent" disabled={busy !== null} onClick={() => act("submit")}>
               <Send className="w-3.5 h-3.5" /> Submit for approval
@@ -580,14 +596,28 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
         <Band title="Deployment & meter"
           hint="The reading every handover and service interval counts from" />
         <Sheet>
-          <Row label="Home location">
-            <select id="af-loc" className={cellInput} value={f.home_location_id ?? ""}
-              onChange={(e) => set("home_location_id", e.target.value)}>
-              <option value="">Select…</option>
-              {locations.map((l) => (
-                <option key={l.location_id} value={l.location_id}>{l.name} · {l.location_type}</option>
-              ))}
-            </select>
+          <Row label="Home location"
+               hint="Add a pit, workshop or stockyard here if it is not on the list yet">
+            <div className="px-1.5 py-1">
+              <Combobox
+                id="af-loc"
+                options={locations.map((l) => ({ value: l.name, hint: l.location_type }))}
+                value={locations.find((l) => String(l.location_id) === f.home_location_id)?.name ?? ""}
+                placeholder="Kaliapani, a pit, the workshop…"
+                onChange={(name) => {
+                  const hit = locations.find((l) => l.name === name);
+                  set("home_location_id", hit ? String(hit.location_id) : "");
+                }}
+                onAddNew={async (name) => {
+                  const r = await api.post("/minehub/locations", { name, location_type: "PIT" });
+                  const made = { location_id: r.data.location_id, code: r.data.code,
+                                 name: r.data.name, location_type: r.data.location_type };
+                  setLocations((prev) => prev.some((l) => l.location_id === made.location_id)
+                    ? prev : [...prev, made]);
+                  set("home_location_id", String(made.location_id));
+                  return made.name;
+                }} />
+            </div>
           </Row>
           <Row label="Status">
             <select id="af-status" className={cellInput} value={f.status ?? "ACTIVE"}

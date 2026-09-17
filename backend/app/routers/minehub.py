@@ -14,6 +14,8 @@ Two registers are exposed here, and they are the ones everything else waits on:
 from __future__ import annotations
 
 import json
+import re
+from uuid import uuid4
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
@@ -52,6 +54,8 @@ NUMERIC_FIELDS = {"year_of_make", "capacity", "purchase_cost", "hire_rate",
                   "tyre_count", "seating_capacity", "asset_type_id",
                   "owner_party_id", "supplier_party_id", "home_location_id", "org_unit_id"}
 ASSET_STATUS = ("ACTIVE", "MAINTENANCE", "STANDBY", "IDLE", "DISPOSED")
+LOCATION_TYPES = ("SITE", "PIT", "BENCH", "PLANT", "WORKSHOP",
+                  "STOCKYARD", "WEIGHBRIDGE", "STORE", "OFFICE")
 OWNERSHIP = ("OWN", "HIRED")
 
 
@@ -239,22 +243,28 @@ def create_asset(request: Request, body: dict = Body(...),
     """
     data = _clean(body)
 
+    # A draft is someone's working note, so nothing here is required. What a
+    # machine must have is checked when it is submitted for approval, which is
+    # the point at which other people start relying on it. Refusing to save an
+    # incomplete draft only means the person who walked out to read the chassis
+    # plate comes back to an empty form.
     fleet_code = (data.get("fleet_code") or "").strip()
-    if not fleet_code:
-        raise HTTPException(400, "Fleet code is required.")
-    if not data.get("asset_type_id"):
-        raise HTTPException(400, "Equipment type is required.")
 
     ownership = (data.get("ownership") or "OWN").upper()
     if ownership not in OWNERSHIP:
         raise HTTPException(400, f"Ownership must be one of {OWNERSHIP}.")
-    if ownership == "HIRED" and not data.get("owner_party_id"):
-        raise HTTPException(400, "A hired machine must record which contractor owns it.")
     data["ownership"] = ownership
     data.setdefault("status", "ACTIVE")
 
-    if db.execute(text("SELECT 1 FROM asset WHERE fleet_code = :c"), {"c": fleet_code}).first():
+    if fleet_code and db.execute(
+            text("SELECT 1 FROM asset WHERE fleet_code = :c"), {"c": fleet_code}).first():
         raise HTTPException(409, f"Fleet code '{fleet_code}' is already registered.")
+
+    # The column is unique and cannot be empty, so an unnamed draft gets a
+    # placeholder it is easy to recognise and impossible to submit.
+    placeholder = not fleet_code
+    if placeholder:
+        data["fleet_code"] = f"DRAFT-{uuid4().hex[:8]}"
 
     cols = list(data.keys())
     placeholders = ", ".join(":" + c for c in cols)
@@ -262,6 +272,14 @@ def create_asset(request: Request, body: dict = Body(...),
         f"INSERT INTO asset ({', '.join(cols)}, created_by) "
         f"VALUES ({placeholders}, :by) RETURNING asset_id"
     ), {**data, "by": _actor(request)}).scalar()
+
+    if placeholder:
+        # Now that the row has an id, name it after that instead: DRAFT-7 is
+        # something a person can say out loud.
+        fleet_code = f"DRAFT-{asset_id}"
+        db.execute(text("UPDATE asset SET fleet_code = :c WHERE asset_id = :i"),
+                   {"c": fleet_code, "i": asset_id})
+        data["fleet_code"] = fleet_code
 
     _save_children(db, request, asset_id, body, data.get("current_reading"))
 
@@ -492,10 +510,27 @@ def submit_asset(asset_id: int, request: Request, body: dict = Body(default={}),
                  db: Session = Depends(get_minehub_db)) -> dict:
     """Put a machine forward for approval."""
     row = db.execute(text(
-        "SELECT approval_status, version, fleet_code FROM asset WHERE asset_id = :id"
+        "SELECT approval_status, version, fleet_code, asset_type_id, ownership, owner_party_id "
+        "FROM asset WHERE asset_id = :id"
     ), {"id": asset_id}).first()
     if not row:
         raise HTTPException(404, "Machine not found.")
+
+    # The rules a draft was excused from. Everything missing is named at once —
+    # being sent back three times for one field each is how a form earns its
+    # reputation.
+    missing = []
+    if not row[2] or row[2].startswith("DRAFT-"):
+        missing.append("a fleet code")
+    if not row[3]:
+        missing.append("an equipment type")
+    if row[4] == "HIRED" and not row[5]:
+        missing.append("the contractor that owns it")
+    if missing:
+        raise HTTPException(400, "Before this can go for approval it needs "
+                                 + ", ".join(missing[:-1]) + (" and " if len(missing) > 1 else "")
+                                 + missing[-1] + ".")
+
     if row[0] == "SUBMITTED":
         raise HTTPException(400, "This machine is already awaiting approval.")
     if row[0] == "APPROVED":
@@ -722,6 +757,43 @@ def list_locations(db: Session = Depends(get_minehub_db)) -> list[dict]:
         "FROM location WHERE status = 'ACTIVE' ORDER BY location_type, name"
     )).mappings().all()
     return [dict(r) for r in rows]
+
+
+@router.post("/locations")
+def create_location(request: Request, body: dict = Body(...),
+                    db: Session = Depends(get_minehub_db)) -> dict:
+    """Add a place, from wherever a place is being chosen.
+
+    The site was the only location on file, so every machine was "at the mine" —
+    true and useless. Pits, workshops and stockyards get added as people meet
+    them, rather than waiting for someone to prepare a list in advance, which is
+    the wait that sends people back to writing free text.
+    """
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "A location needs a name.")
+
+    kind = (body.get("location_type") or "PIT").upper()
+    if kind not in LOCATION_TYPES:
+        raise HTTPException(400, f"Location type must be one of {LOCATION_TYPES}.")
+
+    # A code people can read, derived from the name, kept unique by suffix.
+    base = re.sub(r"[^A-Z0-9]+", "_", name.upper()).strip("_")[:24] or "LOC"
+    code, n = base, 1
+    while db.execute(text("SELECT 1 FROM location WHERE code = :c"), {"c": code}).first():
+        n += 1
+        code = f"{base}_{n}"
+
+    row = db.execute(text(
+        "INSERT INTO location (code, name, location_type, parent_id, status, created_by) "
+        "VALUES (:code, :name, :kind, :parent, 'ACTIVE', :by) "
+        "RETURNING location_id, code, name, location_type"
+    ), {"code": code, "name": name, "kind": kind,
+        "parent": body.get("parent_id"), "by": _actor(request)}).mappings().first()
+
+    _activity(db, request, "LOCATION_ADDED", payload=dict(row))
+    db.commit()
+    return dict(row)
 
 
 # ------------------------------------------------------------------ lookups

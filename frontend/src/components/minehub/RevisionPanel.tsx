@@ -9,7 +9,7 @@
  */
 import React from "react";
 import {
-  FilePlus2, Pencil, Send, CheckCircle2, Undo2, Clock, Loader2,
+  FilePlus2, Pencil, Send, CheckCircle2, Undo2, Clock, Loader2, ChevronDown,
 } from "lucide-react";
 import { Chip, type Tone } from "./ui";
 
@@ -66,16 +66,38 @@ const show = (v: unknown) =>
 export default function RevisionPanel({ revisions, loading }: {
   revisions: Revision[]; loading?: boolean;
 }) {
+  // Open by default — the history is why an existing machine gets opened at
+  // all. On a narrow screen it sits above the form, where a long trail would
+  // push the fields off the screen, so it can be folded away.
+  const [open, setOpen] = React.useState(true);
+  // Which entries have had their full field list opened. Eight is enough to see
+  // what an edit was about; a registration touches everything and would
+  // otherwise fill the panel on its own.
+  const [shown, setShown] = React.useState<Set<number>>(new Set());
+  const toggleOne = (id: number) => setShown((prev) => {
+    const next = new Set(prev);
+    if (!next.delete(id)) next.add(id);
+    return next;
+  });
+
   return (
     <div className="bg-bg-base border border-border-light rounded-xl shadow-sm overflow-hidden">
-      <header className="px-4 py-3 border-b border-border-light flex items-center justify-between gap-2">
+      <button type="button" onClick={() => setOpen((v) => !v)}
+        aria-expanded={open} aria-controls="revision-list"
+        className="w-full px-4 py-3 border-b border-border-light flex items-center justify-between gap-2
+                   hover:bg-bg-light transition-colors text-left">
         <h3 className="font-condensed font-bold text-[12.5px] uppercase tracking-[.1em] text-navy
                        flex items-center gap-2">
           <Clock className="w-4 h-4 text-gold" /> Revision history
         </h3>
-        <Chip tone="slate" dot={false}>{revisions.length}</Chip>
-      </header>
+        <span className="flex items-center gap-2">
+          <Chip tone="slate" dot={false}>{revisions.length}</Chip>
+          <ChevronDown className={`w-4 h-4 text-txt-light transition-transform
+                                   ${open ? "" : "-rotate-90"}`} />
+        </span>
+      </button>
 
+      <div id="revision-list" hidden={!open}>
       {loading ? (
         <div className="flex justify-center py-10"><Loader2 className="w-5 h-5 animate-spin text-gold" /></div>
       ) : revisions.length === 0 ? (
@@ -87,7 +109,9 @@ export default function RevisionPanel({ revisions, loading }: {
           {revisions.map((r, i) => {
             const meta = ACTION[r.action] ?? { label: r.action, icon: Pencil, tone: "slate" as Tone };
             const Icon = meta.icon;
-            const changed = Object.entries(r.changes ?? {});
+            const all = Object.entries(r.changes ?? {});
+            const expanded = shown.has(r.revision_id);
+            const changed = expanded ? all : all.slice(0, 8);
             return (
               <li key={r.revision_id}
                   className="relative px-4 py-3 border-b border-border-light last:border-0">
@@ -118,10 +142,10 @@ export default function RevisionPanel({ revisions, loading }: {
                     {changed.length > 0 && (
                       <div className="mt-2 rounded-lg bg-bg-light border border-border-light px-2.5 py-2">
                         <div className="text-[10px] font-bold uppercase tracking-[.1em] text-txt-light mb-1.5">
-                          Changed ({changed.length})
+                          Changed ({all.length})
                         </div>
                         <ul className="space-y-0.5">
-                          {changed.slice(0, 8).map(([field, v]) => (
+                          {changed.map(([field, v]) => (
                             <li key={field} className="text-[11.5px] leading-snug">
                               <span className="text-txt-muted">{FIELD[field] ?? field}: </span>
                               <span className="text-rose line-through">{show(v.from)}</span>
@@ -129,9 +153,12 @@ export default function RevisionPanel({ revisions, loading }: {
                               <span className="text-emerald font-semibold">{show(v.to)}</span>
                             </li>
                           ))}
-                          {changed.length > 8 && (
-                            <li className="text-[11px] text-txt-light">
-                              and {changed.length - 8} more
+                          {all.length > 8 && (
+                            <li>
+                              <button type="button" onClick={() => toggleOne(r.revision_id)}
+                                className="text-[11px] font-semibold text-gold-dark hover:underline">
+                                {expanded ? "Show less" : `and ${all.length - 8} more`}
+                              </button>
                             </li>
                           )}
                         </ul>
@@ -144,6 +171,7 @@ export default function RevisionPanel({ revisions, loading }: {
           })}
         </ol>
       )}
+      </div>
     </div>
   );
 }
