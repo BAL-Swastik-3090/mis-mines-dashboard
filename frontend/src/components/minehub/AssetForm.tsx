@@ -22,7 +22,10 @@ import RevisionPanel, { type Revision } from "./RevisionPanel";
 import Combobox from "./Combobox";
 
 interface AssetType { asset_type_id: number; name: string; category: string }
-interface Party { party_id: number; display_name: string; legal_name: string }
+interface Party {
+  party_id: number; display_name: string; legal_name: string;
+  org_category?: string | null;
+}
 interface Plant { plant_id: number; code: string; name: string; is_default: boolean }
 interface OrgUnit { org_unit_id: number; code: string; name: string }
 interface Location { location_id: number; name: string; location_type: string }
@@ -317,6 +320,56 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   // The picker shows a name; the form stores the id it resolves to.
   const typeName = types.find((t) => String(t.asset_type_id) === f.asset_type_id)?.name ?? "";
   const isHired = f.ownership === "HIRED";
+
+  // The combobox speaks in names and the record stores an id, so the two are
+  // kept in step here rather than by making either of them pretend.
+  const contractorName = React.useMemo(() => {
+    const match = parties.find((p) => String(p.party_id) === String(f.owner_party_id ?? ""));
+    return match ? (match.display_name || match.legal_name) : "";
+  }, [parties, f.owner_party_id]);
+
+  const supplierName = React.useMemo(() => {
+    const match = parties.find(
+      (p) => String(p.party_id) === String(f.supplier_party_id ?? ""));
+    return match ? (match.display_name || match.legal_name) : "";
+  }, [parties, f.supplier_party_id]);
+
+  /** Register an organisation that is not on the list yet, without leaving the
+   *  form. Refusing would not stop the machine being hired or bought — it would
+   *  only mean somebody picks the nearest wrong name, which is how a register
+   *  quietly stops being able to answer what a contractor costs.
+   *
+   *  A name already on file is reused rather than added a second time, matched
+   *  without case. "Dashmesh" and "DASHMESH" being two companies is exactly the
+   *  fragmentation this field exists to prevent.
+   */
+  const addOrganisation = async (
+    name: string, category: string,
+    field: "owner_party_id" | "supplier_party_id",
+  ): Promise<string> => {
+    const clean = name.trim();
+    if (!clean) return "";
+
+    const existing = parties.find(
+      (p) => (p.display_name || p.legal_name).toLowerCase() === clean.toLowerCase());
+    if (existing) {
+      set(field, String(existing.party_id));
+      return existing.display_name || existing.legal_name;
+    }
+
+    const created = await api.post("/minehub/parties", {
+      legal_name: clean, display_name: clean,
+      party_type: "ORGANISATION", org_category: category,
+    });
+    const party: Party = {
+      party_id: created.data.party_id, display_name: clean, legal_name: clean,
+      org_category: category,
+    };
+    setParties((was) => [...was, party].sort((a, b) =>
+      (a.display_name || a.legal_name).localeCompare(b.display_name || b.legal_name)));
+    set(field, String(party.party_id));
+    return clean;
+  };
 
   /** What this particular machine still needs.
    *
@@ -706,13 +759,21 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
           {isHired ? (
             <>
               <Row label="Contractor" required invalid={invalid.has("owner_party_id")}>
-                <select id="af-owner" className={cellInput} value={f.owner_party_id ?? ""}
-                  onChange={(e) => set("owner_party_id", e.target.value)}>
-                  <option value="">Select…</option>
-                  {parties.map((p) => (
-                    <option key={p.party_id} value={p.party_id}>{p.display_name || p.legal_name}</option>
-                  ))}
-                </select>
+                <div className="px-1.5 py-1">
+                  <Combobox id="af-owner"
+                    options={parties.map((p) => ({
+                      value: p.display_name || p.legal_name,
+                      hint: p.org_category ?? undefined,
+                    }))}
+                    value={contractorName}
+                    onChange={(name) => {
+                      const match = parties.find(
+                        (p) => (p.display_name || p.legal_name) === name);
+                      set("owner_party_id", match ? String(match.party_id) : "");
+                    }}
+                    onAddNew={(name) => addOrganisation(name, "CONTRACTOR", "owner_party_id")}
+                    placeholder="Search or add…" />
+                </div>
               </Row>
               <Row label="Contract no."
                    hint="The contract this machine is engaged under">
@@ -765,14 +826,23 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
                 <input id="af-pcost" type="number" className={cellInput} value={f.purchase_cost ?? ""}
                   onChange={(e) => set("purchase_cost", e.target.value)} />
               </Row>
-              <Row label="Supplier">
-                <select id="af-supplier" className={cellInput} value={f.supplier_party_id ?? ""}
-                  onChange={(e) => set("supplier_party_id", e.target.value)}>
-                  <option value="">Select…</option>
-                  {parties.map((p) => (
-                    <option key={p.party_id} value={p.party_id}>{p.display_name || p.legal_name}</option>
-                  ))}
-                </select>
+              <Row label="Supplier" hint="Who it was bought from. Not listed? Type it">
+                <div className="px-1.5 py-1">
+                  <Combobox id="af-supplier"
+                    options={parties.map((p) => ({
+                      value: p.display_name || p.legal_name,
+                      hint: p.org_category ?? undefined,
+                    }))}
+                    value={supplierName}
+                    onChange={(name) => {
+                      const match = parties.find(
+                        (p) => (p.display_name || p.legal_name) === name);
+                      set("supplier_party_id", match ? String(match.party_id) : "");
+                    }}
+                    onAddNew={(name) => addOrganisation(name, "SUPPLIER",
+                                                        "supplier_party_id")}
+                    placeholder="Search or add…" />
+                </div>
               </Row>
             </>
           )}
