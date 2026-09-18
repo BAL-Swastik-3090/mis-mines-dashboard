@@ -26,10 +26,18 @@ class Settings(BaseSettings):
     secret_key: str = Field(default="change-this-secret")
     allowed_origins: str = Field(default="http://localhost:3000")
 
-    # LiteLLM / AI Insights
-    litellm_base_url: str = Field(default="")
-    litellm_api_key:  str = Field(default="")
-    litellm_model:    str = Field(default="claude-sonnet-4-6")
+    # BAL-AI (Qwen) / AI Insights.
+    #
+    # Replaces LiteLLM everywhere. The old gateway served no model this key was
+    # allowed to call, which is what produced the long-running 502: the key was
+    # valid and the host reachable, but /chat/completions rejected every model
+    # name. BAL-AI is on-premise, OpenAI-compatible and aliases any unknown model
+    # id to qwen3-32b, so a wrong name degrades instead of failing.
+    #
+    # base_url carries NO /v1 — callers append it, matching the LiteLLM shape.
+    qwen_base_url: str = Field(default="https://chat.balasorealloys.in")
+    qwen_api_key:  str = Field(default="")
+    qwen_model:    str = Field(default="qwen3-32b")
 
     class Config:
         env_file = str(_ENV_FILE)

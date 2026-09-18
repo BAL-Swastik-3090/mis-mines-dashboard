@@ -3,7 +3,7 @@ Insights service.
 
 Two responsibilities:
   1. compute_reality_check()  — pure SQL math, no LLM, fast.
-  2. generate_insights()      — fetches data, calls LiteLLM Claude, returns narrative.
+  2. generate_insights()      — fetches data, calls BAL-AI (Qwen), returns narrative.
 
 Enhancements active:
   #2  Exception alerting — CRITICAL/ON TRACK opening in narrative
@@ -650,10 +650,10 @@ def set_cached_insights(cache_key: str, data: dict, ttl_seconds: int = 86400) ->
         pass
 
 
-# ── public: generate insights via LiteLLM ─────────────────────
+# ── public: generate insights via BAL-AI (Qwen) ───────────────
 
 # ── LLM failure classification ───────────────────────────────────────────────
-# The section used to report every failure as "LiteLLM API may be unreachable",
+# The section used to report every failure as "LLM API may be unreachable",
 # which sends whoever reads it to check the network. On 2026-09-02 the real
 # cause was none of that: the gateway was alive, the key was valid, and
 # /v1/models listed two models for it — but /chat/completions rejected BOTH with
@@ -672,22 +672,22 @@ def classify_llm_error(e: Exception, model: str, base_url: str) -> str:
         return (
             f"The gateway at {base_url} does not serve a model named '{model}'. "
             f"The API key is valid and the gateway is up — the model is not "
-            f"registered on it. Ask whoever administers the LiteLLM proxy to "
+            f"registered on it. Ask whoever administers the BAL-AI gateway to "
             f"register that deployment, or to tell you the correct model name "
-            f"to put in LITELLM_MODEL."
+            f"to put in QWEN_MODEL."
         )
     if name in ("APIConnectionError", "APITimeoutError") or "Connection" in name:
         return (
-            f"Could not reach the LiteLLM gateway at {base_url}. "
+            f"Could not reach the BAL-AI gateway at {base_url}. "
             f"Check that the host is up and reachable from the backend."
         )
     if name == "AuthenticationError" or "Authentication Error" in msg:
         return (
-            f"The LiteLLM gateway rejected the API key. "
-            f"Check LITELLM_API_KEY."
+            f"The BAL-AI gateway rejected the API key. "
+            f"Check QWEN_API_KEY."
         )
     if name == "RateLimitError":
-        return "The LiteLLM gateway is rate-limiting this key. Try again shortly."
+        return "The BAL-AI gateway is rate-limiting this key. Try again shortly."
     return f"{name}: {msg}"
 
 
@@ -913,15 +913,15 @@ Format your response EXACTLY as:
 [2-3 sentences]
 """
 
-    # ── call LiteLLM ─────────────────────────────────────────
+    # ── call BAL-AI (Qwen) ────────────────────────────────────
     client = AsyncOpenAI(
-        base_url=settings.litellm_base_url + "/v1",
-        api_key=settings.litellm_api_key,
+        base_url=settings.qwen_base_url + "/v1",
+        api_key=settings.qwen_api_key,
         timeout=25.0,
     )
 
     response = await client.chat.completions.create(
-        model=settings.litellm_model,
+        model=settings.qwen_model,
         messages=[{"role": "user", "content": context}],
         temperature=0.3,
         max_tokens=2400,
@@ -947,7 +947,7 @@ Format your response EXACTLY as:
 
     result = InsightsResponse(
         generated_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
-        model_used=settings.litellm_model,
+        model_used=settings.qwen_model,
         reality_check_narrative=narrative or raw,
         dewatering_observations=dewatering,
         equipment_cob_status=equip_cob,
