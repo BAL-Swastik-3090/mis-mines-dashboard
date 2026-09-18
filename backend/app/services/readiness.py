@@ -200,6 +200,24 @@ def eligibility(db: Session, operator_id: int, asset_id: int) -> Readiness:
     if op["approval_status"] != "APPROVED":
         warnings.append("Operator profile has not been approved")
 
+    # Leave that was approved weeks ago blocks today just as firmly as a
+    # supervisor marking somebody absent this morning, and it is the one the
+    # supervisor has forgotten by now — which is exactly why it is checked here
+    # rather than left to whoever remembers the register.
+    granted = db.execute(text("""
+        SELECT lr.leave_ref, lr.to_date, lt.name AS type_name
+        FROM leave_request lr
+        JOIN leave_type lt ON lt.leave_type_id = lr.leave_type_id
+        WHERE lr.operator_id = :id AND lr.status = 'APPROVED'
+          AND lt.blocks_deployment
+          AND CURRENT_DATE BETWEEN lr.from_date AND lr.to_date
+        LIMIT 1
+    """), {"id": operator_id}).mappings().first()
+    if granted:
+        blockers.append(
+            f"On approved {granted['type_name'].lower()} until "
+            f"{granted['to_date']:%d %b} ({granted['leave_ref']})")
+
     docs = db.execute(text("""
         SELECT record_type, valid_upto, verification_status FROM operator_record
         WHERE operator_id = :id AND status = 'ACTIVE'
@@ -391,7 +409,22 @@ def fleet_readiness(db: Session, plant_id: int | None = None) -> list[dict]:
     op_holds: dict[int, list[str]] = {}
     op_docs: dict[int, dict] = {}
     op_comp: dict[tuple[int, int], dict] = {}
+    op_leave: dict[int, dict] = {}
     if operator_ids:
+        # Somebody on approved leave who is still shown on a machine is worth
+        # surfacing loudly: either the leave was granted after the deployment
+        # and nobody released it, or the person came in anyway. Both are things
+        # the shift board should say out loud rather than average away.
+        for row in db.execute(text("""
+            SELECT lr.operator_id, lr.leave_ref, lr.to_date, lt.name AS type_name
+            FROM leave_request lr
+            JOIN leave_type lt ON lt.leave_type_id = lr.leave_type_id
+            WHERE lr.operator_id = ANY(:ids) AND lr.status = 'APPROVED'
+              AND lt.blocks_deployment
+              AND CURRENT_DATE BETWEEN lr.from_date AND lr.to_date
+        """), {"ids": operator_ids}).mappings():
+            op_leave[row["operator_id"]] = dict(row)
+
         for row in db.execute(text("""
             SELECT operator_id, state FROM availability_event
             WHERE operator_id = ANY(:ids) AND ended_at IS NULL
@@ -470,6 +503,11 @@ def fleet_readiness(db: Session, plant_id: int | None = None) -> list[dict]:
             if deployment["operator_approval"] != "APPROVED":
                 warnings.append("Operator profile has not been approved")
             states = op_holds.get(operator_id, [])
+            granted = op_leave.get(operator_id)
+            if granted:
+                blockers.append(
+                    f"Operator on approved {granted['type_name'].lower()} "
+                    f"until {granted['to_date']:%d %b} ({granted['leave_ref']})")
             blocking = next((s for s in states if s in BLOCKING_OPERATOR_STATES), None)
             if blocking:
                 blockers.append(f"Operator {blocking.replace('_', ' ').lower()}")
