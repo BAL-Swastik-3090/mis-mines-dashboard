@@ -32,7 +32,7 @@ from __future__ import annotations
 import re
 import statistics
 from collections import Counter, defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -497,4 +497,236 @@ def compute_whywhy(db: Session, from_date: date | None, to_date: date | None) ->
         "watchlist": _watchlist(recs, t),
         "operators": _operators(recs),
         "completeness": _completeness(recs),
+    }
+
+
+# -- narrative ----------------------------------------------------------------
+# The model is handed FIGURES, never rows. Everything below exists to make that
+# true, and to make a wrong answer obvious when it happens.
+SYSTEM_PROMPT = (
+    "You are a reliability engineer reviewing breakdown data for a chrome ore "
+    "mine in Odisha, India. You are given figures that have already been "
+    "computed from the maintenance register.\n\n"
+    "RULES, in order of importance:\n"
+    "1. Use ONLY the figures given. Never invent, estimate or extrapolate a "
+    "number. If something is not in the figures, say it is not recorded.\n"
+    "2. Quote figures exactly as given, with their units. Never strengthen "
+    "a qualifier: 'mostly' is not 'all', and 'suggests' is not 'proves'.\n"
+    "3. Operator event counts are NOT a performance ranking. There is no "
+    "operator-hours denominator, so never rank, blame or compare operators.\n"
+    "4. Write for a general manager, not an engineer. Short sentences. No "
+    "jargon, no bullet padding, no restating the question.\n"
+    "5. Say what the data supports and stop. Where evidence is weak, say so."
+)
+
+NARRATIVE_SECTIONS = [
+    ("findings", "FINDINGS",
+     "The 3 most important things this data shows. Write each as a short "
+     "paragraph of 2-3 sentences that leads with the figure and then says what "
+     "it means. Do not number them and do not write them as a list."),
+    ("risks", "RISKS",
+     "The 3 biggest reliability risks implied. One sentence each, on its own "
+     "line. Do not number them."),
+    # A pipe-delimited line rather than prose: the UI splits on it to render a
+    # table, and a hyphen separator collides with hyphenated machine names. The
+    # worked example is there because the format alone was not enough - the
+    # model first returned the literal word "Action" as the opening field.
+    ("actions", "ACTIONS",
+     "4 specific actions, one per line, in exactly this format with two pipe "
+     "characters and nothing else:\n"
+     "<what to do> | <owner> | <what in the data triggers it>\n"
+     "Example: Pressure-test and reseal the hydraulic circuits on EX-7 and "
+     "EX-2 | Head Engineering | 47 hydraulic failures, the top mode on both "
+     "machines\n"
+     "Owner must be exactly one of: Head Engineering, Head Mines Operation, "
+     "MPICC. Do not number the lines and do not write the word Action."),
+    ("gaps", "GAPS",
+     "What the register still cannot answer, and what recording it would "
+     "unlock. 2-3 sentences."),
+]
+
+def _facts_block(d: dict) -> str:
+    """The computed figures, flattened to text. This is the model's entire world."""
+    h, w = d["headline"], d["window"]
+    L: list[str] = [
+        f"PERIOD {w['from']} to {w['to']} "
+        f"(register covers {w['extent_from']} to {w['extent_to']})",
+        f"BREAKDOWNS {h['breakdowns']} across {h['machines']} machines",
+        f"DOWNTIME {h['breakdown_hours']} hours lost, "
+        f"average {h['avg_hours']} hours per breakdown",
+        f"OPERATING HOURS {h['operating_hours']} (from GPS telematics)",
+        f"REPAIR COST Rs {h['repair_cost']:,.0f} recorded on "
+        f"{h['repair_cost_rows']} of {h['breakdowns']} breakdowns",
+        f"REPEAT FAILURES {h['repeat_events']} events ({h['repeat_pct']}%) are a "
+        f"machine failing the same way again",
+        "",
+        f"ROOT CAUSE (recorded on {d['root_causes']['recorded']} of {h['breakdowns']}):",
+    ]
+    for c in d["root_causes"]["categories"]:
+        L.append(
+            f"  {c['label']}: {c['count']} events ({c['pct']}%), {c['hours']} hrs, "
+            f"Rs {c['cost']:,.0f} total, Rs {c['cost_per_event']:,.0f} per event"
+        )
+
+    L += ["", f"FAILURE MODES ({d['failure_modes']['families_to_80pct']} families "
+              f"cover 80% of breakdowns):"]
+    for f in d["failure_modes"]["families"][:6]:
+        L.append(f"  {f['label']}: {f['count']} ({f['pct']}%), Rs {f['cost']:,.0f}")
+
+    L += ["", "WORST MACHINES by breakdowns per 100 operating hours:"]
+    for m in d["machines"][:6]:
+        rate = f"{m['per_100_hours']} per 100 hrs" if m["per_100_hours"] else "rate not available"
+        L.append(
+            f"  {m['machine']}: {m['breakdowns']} breakdowns, {rate}, "
+            f"{m['operating_hours']} operating hrs, mostly {m['top_failure']}"
+        )
+
+    L += ["", "MONTHLY:"]
+    for m in d["months"]:
+        L.append(f"  {m['month']}: {m['breakdowns']} breakdowns, {m['hours']} hrs, "
+                 f"Rs {m['cost']:,.0f}")
+
+    L += ["", "RECURRING DEFECTS (same machine, same failure):"]
+    for r in d["repeats"][:6]:
+        L.append(f"  {r['machine']} - {r['defect']}: {r['count']} times, {r['hours']} hrs")
+
+    if d["watchlist"]:
+        L += ["", "PATTERN PROJECTION (mean interval between past occurrences; "
+                  "a cadence, not a prediction):"]
+        for x in d["watchlist"][:5]:
+            L.append(
+                f"  {x['machine']} - {x['defect']}: {x['events']} events, every "
+                f"{x['mean_gap_days']}d +/-{x['sd_days']}d, last {x['last']}, "
+                f"status {x['state']}"
+            )
+
+    t = d["timing"]
+    L += ["", f"TIMING peak reporting hours {t['peak_hours']}; by shift " +
+              ", ".join(f"{s['label']} {s['count']}" for s in t["by_shift"])]
+
+    o = d["operators"]
+    L += ["", f"OPERATORS {o['named_events']} events name a person, "
+              f"{o['unnamed_events']} do not; {o['distinct']} distinct names, most "
+              f"for any one person is {o['max_events']}. "
+              f"{o['operator_error_events']} of the named events have cause "
+              f"'Operator Error'.",
+          f"  CAVEAT: {o['caveat']}"]
+
+    L += ["", "NOT RECORDED AT ALL:"] + [f"  {x}" for x in d["completeness"]["not_recorded"]]
+    L += ["", "FIELD COMPLETENESS: " +
+              ", ".join(f"{f['field']} {f['pct']}%" for f in d["completeness"]["fields"])]
+    return "\n".join(L)
+
+
+def build_prompt(d: dict) -> str:
+    spec = "\n".join(f"---{tag}---\n{desc}" for _, tag, desc in NARRATIVE_SECTIONS)
+    return (
+        f"{_facts_block(d)}\n\n"
+        "Write the following sections, each preceded by its marker exactly as "
+        "shown. Do not add any other text, headings or markers.\n\n"
+        f"{spec}\n---END---"
+    )
+
+
+def _split_sections(raw: str) -> dict[str, str]:
+    """Pull each marked section out, tolerating a model that drops one."""
+    tags = [t for _, t, _ in NARRATIVE_SECTIONS] + ["END"]
+    out: dict[str, str] = {}
+    for (key, tag, _), nxt in zip(NARRATIVE_SECTIONS, tags[1:]):
+        start = raw.find(f"---{tag}---")
+        if start == -1:
+            out[key] = ""
+            continue
+        start += len(tag) + 6
+        end = raw.find(f"---{nxt}---", start)
+        out[key] = (raw[start:end] if end != -1 else raw[start:]).strip()
+    return out
+
+
+_NUM_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def _numbers(text: str) -> set[str]:
+    """Numeric tokens, comma-stripped and trailing-zero-normalised."""
+    out = set()
+    for raw in _NUM_RE.findall(text or ""):
+        v = raw.replace(",", "")
+        try:
+            f = float(v)
+        except ValueError:
+            continue
+        out.add(str(int(f)) if f == int(f) else str(f))
+    return out
+
+
+def audit_numbers(narrative: str, facts_text: str) -> list[str]:
+    """Numbers in the prose that do not appear in the figures it was given.
+
+    The model is instructed to quote figures verbatim and mostly does, but not
+    always: asked about June it wrote "17 events" for operator error in one
+    section and "15" in another, the first correct. A reader cannot catch that
+    without the source numbers in front of them, so the drift is detected here
+    and returned with the response rather than left to be believed.
+
+    This flags, it does not correct. A figure listed here is unverified, not
+    necessarily wrong - a legitimately derived number (a count of items in a
+    list, a difference the model worked out) will also show up. It is a prompt
+    for a second look, and a signal worth watching if it grows.
+    """
+    allowed = _numbers(facts_text)
+    # Small integers are ordinals, list positions and section numbers far more
+    # often than they are claims, and flagging them buries the real drift.
+    return sorted(
+        n for n in _numbers(narrative) - allowed
+        if not (n.isdigit() and int(n) <= 12)
+    )
+
+async def generate_narrative(
+    db: Session, from_date: date | None, to_date: date | None
+) -> dict:
+    """Ask BAL-AI to interpret the computed figures. Never to compute them.
+
+    Returns the facts alongside the prose so the caller renders both from one
+    response, and so any claim in the narrative can be checked against the
+    numbers that produced it without a second request.
+    """
+    from openai import AsyncOpenAI
+
+    from app.config import get_settings
+
+    facts = compute_whywhy(db, from_date, to_date)
+    if facts["headline"] is None or facts["headline"]["breakdowns"] == 0:
+        return {
+            "facts": facts,
+            "sections": {k: "" for k, _, _ in NARRATIVE_SECTIONS},
+            "model": None, "tokens": None, "generated_at": None,
+            "unverified_numbers": [],
+            "error": "No breakdown records in this period.",
+        }
+
+    prompt = build_prompt(facts)
+    s = get_settings()
+    client = AsyncOpenAI(
+        base_url=s.qwen_base_url + "/v1", api_key=s.qwen_api_key, timeout=90.0
+    )
+    resp = await client.chat.completions.create(
+        model=s.qwen_model,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.2,          # interpretation, not invention
+        max_tokens=1600,          # thinking is off by default, so this is all answer
+    )
+    raw = resp.choices[0].message.content or ""
+    return {
+        "facts": facts,
+        "sections": _split_sections(raw),
+        # Every figure the prose states should have come from the block above.
+        # Anything here did not - see audit_numbers.
+        "unverified_numbers": audit_numbers(raw, prompt),
+        "model": resp.model,
+        "tokens": resp.usage.total_tokens if resp.usage else None,
+        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "error": None,
     }
