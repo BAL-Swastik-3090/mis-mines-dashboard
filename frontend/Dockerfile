@@ -10,6 +10,10 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
+# next.config.ts rewrites() is evaluated at BUILD time and baked into the
+# standalone output, so BACKEND_URL must be set here, not at runtime.
+ARG BACKEND_URL=http://backend:8989
+ENV BACKEND_URL=$BACKEND_URL
 RUN npm run build
 
 # ── Stage 3: Run ─────────────────────────────────────────────
@@ -18,6 +22,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3333
+# Next standalone binds to $HOSTNAME, which Docker sets to the container id —
+# that resolves to an address the published port cannot reach. Force 0.0.0.0.
+ENV HOSTNAME=0.0.0.0
 
 RUN addgroup --system --gid 1001 nodejs && \
     adduser  --system --uid 1001 nextjs

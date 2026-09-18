@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 from contextlib import asynccontextmanager
 import asyncio
 import logging
@@ -104,6 +105,85 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
+# ── Authentication gate ───────────────────────────────────────
+# Every /api route requires a valid intranet session except the handshake itself,
+# the health probe and the API docs. This is the only thing standing between the
+# data and anyone who can reach the host, so it is enforced here rather than per
+# router — a new router is protected the moment it is added.
+_AUTH_EXEMPT = ("/api/auth/", "/api/health", "/api/docs", "/api/redoc", "/api/openapi.json")
+
+# Minimum role per API path prefix. This is for routes that are not part of a
+# page — page access itself is data-driven from the Access Control screen (see
+# PREFIX_PAGE in services/auth.py), not listed here.
+_ROLE_RULES: tuple[tuple[str, str], ...] = (
+    ("/api/roles", "admin"),          # the Access Control screen's own endpoints
+)
+# Skip the session-touch write if it happened recently. One dashboard page load
+# fires ~15 API calls at once, and each touch is a round trip to a MySQL server
+# that is already refusing connections daily.
+_TOUCH_THROTTLE = timedelta(seconds=30)
+
+
+def _check_auth(sid: str | None, path: str) -> tuple[dict | None, str | None]:
+    """Blocking session + role check. Returns (session, required_role_if_denied)."""
+    from app.database import SessionLocal
+    from app.services import auth as auth_svc
+
+    with SessionLocal() as db:
+        s = auth_svc.get_session(db, sid)
+        if not s:
+            return None, None
+        last = s.get("last_active_at")
+        if last is None or datetime.now() - last > _TOUCH_THROTTLE:
+            auth_svc.touch(db, sid)
+        need = next((r for pre, r in _ROLE_RULES if path.startswith(pre)), None)
+        if need and not auth_svc.has_role(db, s["emp_id"], need):
+            return s, need
+
+        # Invite-only, checked on every request rather than only at login, so
+        # revoking someone takes effect at once instead of when their session
+        # eventually expires.
+        role = auth_svc.explicit_role(db, s["emp_id"])
+        if role is None:
+            return s, "revoked"
+
+        # Page access, configured from the Access Control screen. Enforced on the
+        # API prefix behind each page — hiding the sidebar entry alone would
+        # leave the data reachable to anyone who knows the URL.
+        page = auth_svc.page_for_path(path)
+        if page and not auth_svc.can_open_page(db, role, page):
+            return s, f"page:{page}"
+        return s, None
+
+
+@app.middleware("http")
+async def require_auth(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/api") and not any(path.startswith(e) for e in _AUTH_EXEMPT):
+        sid = request.cookies.get("mines_session")
+        # The check is blocking DB I/O over the WAN. Run it off the event loop so
+        # it cannot stall every other in-flight request behind it.
+        session, role_error = await run_in_threadpool(_check_auth, sid, path)
+        if not session:
+            return JSONResponse({"detail": "Not authenticated."}, status_code=401)
+        if role_error:
+            if role_error == "revoked":
+                detail = ("Your access to the Mines Dashboard has been removed. "
+                          "Please contact Mr. Sudip Hajra (PPIC) if this is unexpected.")
+            elif role_error.startswith("page:"):
+                detail = f"You do not have access to the {role_error[5:]} page."
+            else:
+                detail = f"Requires '{role_error}' access or higher."
+            # code lets the frontend distinguish "you have been removed" (sign
+            # out) from "you cannot open that page" (stay signed in).
+            body = {"detail": detail}
+            if role_error == "revoked":
+                body["code"] = "access_revoked"
+            return JSONResponse(body, status_code=403)
+        request.state.emp_id = session["emp_id"]
+    return await call_next(request)
+
+
 # ── Global exception handler (prevents raw tracebacks leaking) ──
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -131,7 +211,7 @@ def health_check():
 
 
 # ── Routers ───────────────────────────────────────────────────
-from app.routers import production, stock, cob, plant, ob, despatch, equipment, dewatering, insights, live_tracking, fuel_management, ev_tracking, auth, oee
+from app.routers import production, stock, cob, plant, ob, despatch, equipment, dewatering, insights, live_tracking, fuel_management, ev_tracking, auth, oee, roles
 app.include_router(production.router,      prefix="/api/production",    tags=["Production"])
 app.include_router(stock.router,           prefix="/api/stock",         tags=["Stock"])
 app.include_router(cob.router,             prefix="/api/cob",           tags=["COB Plant"])
@@ -146,3 +226,4 @@ app.include_router(fuel_management.router)
 app.include_router(ev_tracking.router)
 app.include_router(auth.router)
 app.include_router(oee.router)
+app.include_router(roles.router)

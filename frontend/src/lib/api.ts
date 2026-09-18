@@ -10,14 +10,10 @@ const api = axios.create({
   timeout: 60000,   // 60s global — covers cold-start + concurrent DB load
 });
 
-// ── Request interceptor: attach JWT if present ────────────────
-api.interceptors.request.use((config) => {
-  if (typeof window !== "undefined") {
-    const token = localStorage.getItem("access_token");
-    if (token) config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
+/** Fired when the API rejects us as unauthenticated, so AuthWrapper can show the
+ *  login screen. A plain DOM event rather than a direct store import: useAuth
+ *  imports this module, so calling into it from here would be a cycle. */
+export const AUTH_EXPIRED_EVENT = "mines:auth-expired";
 
 // ── Response interceptor: global error handling ───────────────
 api.interceptors.response.use(
@@ -27,6 +23,25 @@ api.interceptors.response.use(
     const status = err?.response?.status;
     const msg    = err?.response?.data?.detail ?? err?.response?.data ?? err.message;
     console.warn(`[API ${status ?? "NET"}]`, msg);
+
+    // A session that expires while the tab is open used to leave the dashboard
+    // sitting there with every panel showing "Request failed with status code
+    // 401" — which reads as the site being broken rather than as a logout. Tell
+    // the app instead, so it returns to the login screen.
+    // /auth/me is exempt: its 401 is the normal "not signed in" answer that
+    // AuthWrapper asks for on load, and reacting to it would loop.
+    const url = err?.config?.url ?? "";
+    const revoked = err?.response?.data?.code === "access_revoked";
+    const signedOut = (status === 401 && !url.includes("/auth/me")) || revoked;
+    if (signedOut && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT, {
+        detail: {
+          message: revoked
+            ? String(msg)
+            : "Your session timed out after 30 minutes of inactivity. Please sign in again.",
+        },
+      }));
+    }
     return Promise.reject(err);
   }
 );

@@ -1,8 +1,9 @@
 "use client";
-import { LayoutDashboard, Gauge, Zap, Activity, ClipboardList,
+import { LayoutDashboard, Gauge, Zap, Activity, ClipboardList, Sparkles, Shield,
          ChevronLeft, ChevronRight, LogOut, ExternalLink } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { useSidebar }               from "@/contexts/useSidebar";
+import { useAuth }                  from "@/contexts/useAuth";
 
 /** PR/PO Status is a separate application built by another IT team. It opens in
  *  its own tab rather than being embedded, so this dashboard stays alive behind
@@ -28,10 +29,17 @@ type NavItem =
 const NAV_ITEMS: NavItem[] = [
   { kind: "page", id: "mis",             label: "MIS Dashboard",              icon: LayoutDashboard },
   { kind: "page", id: "oee",             label: "OEE / LCM",                  icon: Activity        },
+  { kind: "page", id: "intelligence",    label: "Intelligence",               icon: Sparkles        },
   { kind: "page", id: "fuel-management", label: "Fuel Management",            icon: Gauge           },
   { kind: "page", id: "ev-tracking",     label: "Electric Vehicles Tracking", icon: Zap             },
   { kind: "link", href: PRPO_URL,        label: "PR/PO Status",               icon: ClipboardList   },
 ];
+
+/* Super-admin only, and deliberately not part of the role x page matrix — the
+   screen that grants access must not be something you can accidentally revoke
+   from yourself. Appended after the external link so it sits at the bottom. */
+const ADMIN_ITEM: NavItem =
+  { kind: "page", id: "access-control", label: "Access Control", icon: Shield };
 
 const ITEM_BASE =
   "w-full flex items-center gap-3 px-3 py-2.5 transition-colors duration-150 relative group";
@@ -39,6 +47,19 @@ const ITEM_BASE =
 export default function AppSidebar() {
   const { page, setPage }      = useAppPage();
   const { collapsed, toggle }  = useSidebar();
+  const user                   = useAuth((s) => s.user);
+
+  /* Only the pages this user may open. The same rule is enforced on the API, so
+     this hides entries that would 403 anyway rather than being the gate itself.
+     An empty allowed_pages (older session payload) shows everything rather than
+     presenting an empty sidebar. */
+  const allowed = user?.allowed_pages ?? [];
+  const items: NavItem[] = [
+    ...NAV_ITEMS.filter(
+      (i) => i.kind === "link" || allowed.length === 0 || allowed.includes(i.id),
+    ),
+    ...(user?.mines_role === "admin" ? [ADMIN_ITEM] : []),
+  ];
 
   return (
     <aside
@@ -64,7 +85,7 @@ export default function AppSidebar() {
 
       {/* Nav items */}
       <nav className="flex-1 overflow-y-auto overflow-x-hidden py-1 scrollbar-thin">
-        {NAV_ITEMS.map((item) => {
+        {items.map((item) => {
           const { label, icon: Icon } = item;
           const isLink = item.kind === "link";
 
@@ -139,9 +160,11 @@ export default function AppSidebar() {
       {/* Logout button */}
       <div className="border-t border-white/10 shrink-0">
         <button
-          onClick={() => {
-            localStorage.removeItem("auth_token");
-            localStorage.removeItem("auth_empid");
+          onClick={async () => {
+            // Ends the session row server-side (is_active=0, logout_at, end_reason)
+            // so it stops counting as a live session in the intranet activity
+            // tables. Clearing the browser alone would leave it open for 8 hours.
+            await useAuth.getState().logout();
             localStorage.removeItem("kaliapani-app-page");
             window.location.reload();
           }}

@@ -35,6 +35,10 @@ import api from "@/lib/api";
 
 interface LoginScreenProps {
   onLoginSuccess: () => void;
+  /** Why we are on this screen, when it was not a deliberate logout — a timeout
+   *  or a withdrawn access. Shown above the form; without it an ejection looks
+   *  random. */
+  notice?: string | null;
 }
 
 /** Field label: "01 / EMPLOYEE ID". The index is instrument-panel language and
@@ -53,12 +57,12 @@ function FieldLabel({ index, children, htmlFor }: {
   );
 }
 
-export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
+export default function LoginScreen({ onLoginSuccess, notice = null }: LoginScreenProps) {
   const [empid, setEmpid] = useState("");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(notice);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -77,8 +81,8 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       });
 
       if (res.data && res.data.status === "success") {
-        localStorage.setItem("auth_token", res.data.token);
-        localStorage.setItem("auth_empid", res.data.empid);
+        // Nothing is stored client-side. The server set an httpOnly session
+        // cookie, which the browser sends automatically and scripts cannot read.
         onLoginSuccess();
       } else {
         setError("Invalid response format from server.");

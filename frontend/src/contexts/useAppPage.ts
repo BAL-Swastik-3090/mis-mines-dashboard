@@ -1,7 +1,9 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-export type AppPage = "mis" | "fuel-management" | "ev-tracking" | "oee";
+// "access-control" is the super-admin screen; it is not part of the page-access
+// matrix, it is gated on the admin role itself.
+export type AppPage = "mis" | "fuel-management" | "ev-tracking" | "oee" | "intelligence" | "access-control";
 
 interface AppPageStore {
   page: AppPage;
