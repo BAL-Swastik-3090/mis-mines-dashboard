@@ -100,6 +100,10 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
       if (!perms.includes("platform.registry.view")) setPage(allowed[0] as typeof page);
       return;
     }
+    if (page === "operations") {
+      if (!perms.includes("ops.shift.view")) setPage(allowed[0] as typeof page);
+      return;
+    }
     if (!allowed.includes(page)) setPage(allowed[0] as typeof page);
   }, [user, page, setPage]);
 
