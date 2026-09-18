@@ -77,6 +77,30 @@ def why_why_analysis(
     return ww_svc.compute_whywhy(db, from_date, to_date)
 
 
+@router.get("/why-why/narrative", tags=["Insights"])
+async def why_why_narrative(
+    from_date: date = None,
+    to_date:   date = None,
+    db: Session = Depends(get_db),
+):
+    """BAL-AI's reading of the Why-Why figures, returned with the figures.
+
+    Deliberately a second request rather than part of /why-why: this one takes
+    ~9 seconds and depends on a gateway that can be down, while the charts must
+    render immediately and always. The facts travel back with the prose so any
+    claim can be checked against the numbers that produced it.
+    """
+    try:
+        return await ww_svc.generate_narrative(db, from_date, to_date)
+    except Exception as e:
+        from app.config import get_settings
+        cfg = get_settings()
+        raise HTTPException(
+            status_code=502,
+            detail=svc.classify_llm_error(e, cfg.qwen_model, cfg.qwen_base_url),
+        )
+
+
 @router.post("/cache/invalidate", tags=["Insights"])
 def invalidate_insights_cache(target_date: date = None):
     """Clear the cached insights for a given date (defaults to today)."""
