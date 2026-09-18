@@ -16,6 +16,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Radar, Cpu, ClipboardList, ArrowLeftRight, BarChart3, Play, Loader2, CalendarClock,
+  GitCompare,
 } from "lucide-react";
 import { useAuth } from "@/contexts/useAuth";
 import api from "@/lib/api";
@@ -23,9 +24,10 @@ import { Button, Card, Chip, PageHeader, Tabs, type Tone } from "@/components/mi
 import LiveFleet from "@/components/ops/LiveFleet";
 import ShiftBoard from "@/components/ops/ShiftBoard";
 import HotoCentre from "@/components/ops/HotoCentre";
+import Reconciliation from "@/components/ops/Reconciliation";
 import ShiftAnalysis from "@/components/ops/ShiftAnalysis";
 
-type TabId = "fleet" | "shift" | "hoto" | "analysis";
+type TabId = "fleet" | "shift" | "hoto" | "reconcile" | "analysis";
 
 const TABS: { id: TabId; label: string; icon: React.ElementType; tone: Tone; hint: string }[] = [
   { id: "fleet", label: "Live Fleet", icon: Cpu, tone: "sky",
@@ -34,6 +36,8 @@ const TABS: { id: TabId; label: string; icon: React.ElementType; tone: Tone; hin
     hint: "Attendance, shortages, deployments and what is blocking the shift" },
   { id: "hoto", label: "Handover", icon: ArrowLeftRight, tone: "amber",
     hint: "Transferring responsibility for a machine, with the inspection that goes with it" },
+  { id: "reconcile", label: "Reconcile", icon: GitCompare, tone: "rose",
+    hint: "What was planned, who was deployed, and what the machines actually did" },
   { id: "analysis", label: "Analysis", icon: BarChart3, tone: "emerald",
     hint: "Where the hours went, and what keeps stopping the work" },
 ];
@@ -198,6 +202,7 @@ export default function OperationsSection() {
         <HotoCentre openId={hotoToOpen} onOpened={() => setHotoToOpen(null)}
           rights={rights} onChanged={load} />
       )}
+      {tab === "reconcile" && <Reconciliation rights={rights} onChanged={load} />}
       {tab === "analysis" && <ShiftAnalysis />}
     </div>
   );

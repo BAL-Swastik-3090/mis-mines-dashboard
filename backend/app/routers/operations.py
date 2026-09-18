@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.minehub_db import get_minehub_db
-from app.services import people, readiness
+from app.services import people, readiness, telematics
 
 router = APIRouter(prefix="/api/ops", tags=["Operations"])
 
@@ -969,6 +969,197 @@ def resolve_exception(ops_exception_id: int, request: Request, body: dict = Body
         raise HTTPException(404, "Exception not found.")
     db.commit()
     return {"ok": True}
+
+
+# ── reconciliation ───────────────────────────────────────────────────────────
+@router.get("/reconcile")
+def reconcile(day: str | None = Query(None), plant_id: int | None = Query(None),
+              db: Session = Depends(get_minehub_db),
+              corp: Session = Depends(get_db)) -> dict:
+    """Plan against deployment against what the machines actually did.
+
+    The chain is only worth having if the end of it can be checked against the
+    start. This is that check: what was planned, who was deployed, what the
+    telematics saw, and where those three disagree.
+
+    Disagreement is the output, not a failure of it. A machine that ran for six
+    hours with nobody deployed on it is the most useful line on the screen —
+    somebody operated it, and the register does not know who.
+    """
+    on = day or date.today().isoformat()
+
+    machines = db.execute(text("""
+        SELECT a.asset_id, a.asset_ref, a.fleet_code, a.nickname, t.name AS asset_type,
+               pl.name AS plant
+        FROM asset a
+        LEFT JOIN asset_type t ON t.asset_type_id = a.asset_type_id
+        LEFT JOIN plant pl     ON pl.plant_id = a.plant_id
+        WHERE COALESCE(a.status, 'ACTIVE') <> 'DISPOSED'
+          AND (CAST(:plant AS bigint) IS NULL OR a.plant_id = CAST(:plant AS bigint))
+        ORDER BY a.fleet_code
+    """), {"plant": plant_id}).mappings().all()
+
+    planned: dict[int, list[dict]] = {}
+    for row in db.execute(text("""
+        SELECT sp.asset_id, sp.activity, sp.planned_hours, sc.code AS shift_code,
+               p.display_name AS planned_operator
+        FROM shift_plan sp
+        JOIN shift_instance si ON si.shift_instance_id = sp.shift_instance_id
+        JOIN shift_calendar sc ON sc.shift_id = si.shift_id
+        LEFT JOIN operator o   ON o.operator_id = sp.operator_id
+        LEFT JOIN party p      ON p.party_id = o.party_id
+        WHERE si.production_day = CAST(:on AS date) AND sp.asset_id IS NOT NULL
+    """), {"on": on}).mappings():
+        planned.setdefault(row["asset_id"], []).append(dict(row))
+
+    deployed: dict[int, list[dict]] = {}
+    for row in db.execute(text("""
+        SELECT d.asset_id, d.deployment_ref, d.status, d.started_at, d.ended_at,
+               d.start_reading, d.end_reading, d.override_reason, d.activity,
+               sc.code AS shift_code, p.display_name AS operator_name
+        FROM deployment d
+        JOIN shift_instance si ON si.shift_instance_id = d.shift_instance_id
+        JOIN shift_calendar sc ON sc.shift_id = si.shift_id
+        LEFT JOIN operator o   ON o.operator_id = d.operator_id
+        LEFT JOIN party p      ON p.party_id = o.party_id
+        WHERE si.production_day = CAST(:on AS date)
+        ORDER BY d.created_at
+    """), {"on": on}).mappings():
+        deployed.setdefault(row["asset_id"], []).append(dict(row))
+
+    holds: dict[int, list[dict]] = {}
+    for row in db.execute(text("""
+        SELECT asset_id, state, reason,
+               ROUND(EXTRACT(EPOCH FROM (COALESCE(ended_at, now()) - started_at)) / 3600.0, 2) AS hours
+        FROM availability_event
+        WHERE asset_id IS NOT NULL
+          AND started_at::date <= CAST(:on AS date)
+          AND (ended_at IS NULL OR ended_at::date >= CAST(:on AS date))
+    """), {"on": on}).mappings():
+        holds.setdefault(row["asset_id"], []).append(dict(row))
+
+    seen = telematics.readings_for(corp, on)
+    mapping = telematics.identity_map(db)
+    by_asset = {asset_id: seen[name] for name, asset_id in mapping.items() if name in seen}
+
+    rows: list[dict] = []
+    for m in machines:
+        asset_id = m["asset_id"]
+        deployments = deployed.get(asset_id, [])
+        reading = by_asset.get(asset_id)
+
+        deployed_hours = 0.0
+        for d in deployments:
+            if d["start_reading"] is not None and d["end_reading"] is not None:
+                deployed_hours += float(d["end_reading"]) - float(d["start_reading"])
+            elif d["started_at"]:
+                end = d["ended_at"] or datetime.now(d["started_at"].tzinfo)
+                deployed_hours += (end - d["started_at"]).total_seconds() / 3600.0
+
+        findings: list[dict] = []
+        if reading and reading["engine_hours"] > 0.25 and not deployments:
+            findings.append({
+                "kind": "RAN_WITHOUT_DEPLOYMENT", "severity": "HIGH",
+                "detail": f"Telematics saw {reading['engine_hours']:.1f} engine hours "
+                          "and nothing was deployed — somebody operated it and the "
+                          "register does not know who.",
+            })
+        if deployments and reading and reading["engine_hours"] < 0.25:
+            findings.append({
+                "kind": "DEPLOYED_BUT_IDLE", "severity": "MEDIUM",
+                "detail": "Deployed, but the telematics saw no engine time.",
+            })
+        if deployments and not reading and asset_id in mapping.values():
+            findings.append({
+                "kind": "TELEMATICS_SILENT", "severity": "MEDIUM",
+                "detail": "Deployed, and the box sent nothing for this day.",
+            })
+        if reading and deployed_hours > 0 and reading["engine_hours"] > 0:
+            gap = abs(deployed_hours - reading["engine_hours"])
+            if gap > max(1.5, reading["engine_hours"] * 0.3):
+                findings.append({
+                    "kind": "HOURS_DISAGREE", "severity": "LOW",
+                    "detail": f"Deployment says {deployed_hours:.1f} h, telematics "
+                              f"{reading['engine_hours']:.1f} h.",
+                })
+        if reading and reading["readings"] > 1:
+            findings.append({
+                "kind": "MULTIPLE_READINGS", "severity": "LOW",
+                "detail": f"{reading['readings']} readings today; the latest is shown.",
+            })
+        if reading and reading["engine_hours"] > 0 and reading["idle_hours"] > reading["engine_hours"] * 0.6:
+            findings.append({
+                "kind": "MOSTLY_IDLING", "severity": "LOW",
+                "detail": f"{reading['idle_hours']:.1f} of {reading['engine_hours']:.1f} "
+                          "engine hours were idling.",
+            })
+
+        rows.append({
+            **dict(m),
+            "linked": asset_id in by_asset or asset_id in mapping.values(),
+            "planned": planned.get(asset_id, []),
+            "deployments": deployments,
+            "deployed_hours": round(deployed_hours, 2),
+            "telematics": reading,
+            "holds": holds.get(asset_id, []),
+            "findings": findings,
+        })
+
+    # Machines transmitting under a name nobody has linked. Not guessed at:
+    # MAN18 and MAN-18 are the same machine, MAN18 and MAN81 are not, and
+    # nothing but a person knows which case this is.
+    unlinked = [v for name, v in seen.items() if name not in mapping]
+
+    totals = {
+        "machines": len(rows),
+        "deployed": len([r for r in rows if r["deployments"]]),
+        "transmitting": len([r for r in rows if r["telematics"]]),
+        "deployed_hours": round(sum(r["deployed_hours"] for r in rows), 1),
+        "engine_hours": round(sum((r["telematics"] or {}).get("engine_hours", 0) for r in rows), 1),
+        "idle_hours": round(sum((r["telematics"] or {}).get("idle_hours", 0) for r in rows), 1),
+        "fuel": round(sum((r["telematics"] or {}).get("fuel_consumed", 0) for r in rows), 1),
+        "findings": sum(len(r["findings"]) for r in rows),
+        "unlinked_feeds": len(unlinked),
+    }
+
+    return {"day": on, "totals": totals, "machines": rows,
+            "unlinked": sorted(unlinked, key=lambda x: -x["engine_hours"])}
+
+
+@router.post("/reconcile/raise")
+def raise_findings(request: Request, body: dict = Body(default={}),
+                   db: Session = Depends(get_minehub_db),
+                   corp: Session = Depends(get_db)) -> dict:
+    """Put the day's disagreements on the exception queue.
+
+    Deliberately a decision rather than a background job: a queue that fills
+    itself overnight is a queue nobody reads by Thursday. Somebody looks at the
+    reconciliation, decides these are worth chasing, and says so.
+    """
+    _require(request, MANAGE, "run the shift")
+    on = body.get("day") or date.today().isoformat()
+    found = reconcile(on, None, db, corp)
+
+    shift_instance_id = db.execute(text("""
+        SELECT shift_instance_id FROM shift_instance
+        WHERE production_day = CAST(:on AS date) ORDER BY shift_instance_id DESC LIMIT 1
+    """), {"on": on}).scalar()
+
+    raised = 0
+    for machine in found["machines"]:
+        for finding in machine["findings"]:
+            if finding["severity"] == "LOW":
+                continue                      # notes, not things to chase
+            _raise_exception(db, request, finding["kind"],
+                             f"{machine['fleet_code']}: {finding['detail']}",
+                             severity=finding["severity"],
+                             shift_instance_id=shift_instance_id,
+                             asset_id=machine["asset_id"],
+                             dedupe=f"{finding['kind']}:{machine['asset_id']}:{on}")
+            raised += 1
+
+    db.commit()
+    return {"ok": True, "raised": raised, "day": on}
 
 
 # ── analysis ─────────────────────────────────────────────────────────────────
