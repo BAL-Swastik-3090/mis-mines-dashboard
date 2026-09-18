@@ -1158,3 +1158,124 @@ export interface KamLossTreeResponse {
    *  page rather than assumed. */
   reconciles:     boolean;
 }
+
+/* ── Why-Why analysis (Intelligence) ─────────────────────────────────────────
+ * Two endpoints, deliberately separate. /why-why is pure DB computation and
+ * always answers; /why-why/narrative adds BAL-AI's reading on top and can fail.
+ * The section renders the charts from the first and treats the second as a
+ * bonus, so a gateway outage costs prose, not the whole section.            */
+
+export interface WhyWhyWindow {
+  from:           string | null;
+  to:             string | null;
+  extent_from:    string | null;
+  extent_to:      string | null;
+  requested_from?: string;
+  requested_to?:   string;
+  /** The global date filter overhung the register and was trimmed to fit. */
+  clamped:        boolean;
+  /** The filter missed the register entirely; the full extent is shown. */
+  fell_back:      boolean;
+  empty:          boolean;
+}
+
+export interface WhyWhyHeadline {
+  breakdowns:          number;
+  machines:            number;
+  breakdown_hours:     number;
+  avg_hours:           number | null;
+  repair_cost:         number;
+  repair_cost_rows:    number;
+  operating_hours:     number | null;
+  repeat_events:       number;
+  repeat_pct:          number | null;
+  cause_recorded_pct:  number | null;
+}
+
+export interface WhyWhyShare {
+  label: string;
+  count: number;
+  pct:   number | null;
+  cost?: number;
+  hours?: number;
+  cost_per_event?: number | null;
+}
+
+export interface WhyWhyMachine {
+  machine:         string;
+  breakdowns:      number;
+  hours:           number;
+  cost:            number;
+  operating_hours: number | null;
+  /** Null when the machine ran too few hours for a rate to mean anything. */
+  per_100_hours:   number | null;
+  top_failure:     string;
+}
+
+export interface WhyWhyWatch {
+  machine:        string;
+  defect:         string;
+  events:         number;
+  mean_gap_days:  number;
+  sd_days:        number;
+  last:           string;
+  days_since:     number;
+  due_in_days:    number;
+  state:          "due" | "soon" | "watch" | "held";
+}
+
+export interface WhyWhyResponse {
+  window:   WhyWhyWindow;
+  headline: WhyWhyHeadline | null;
+  months:   Array<{ month: string; breakdowns: number; hours: number; cost: number }>;
+  machines: WhyWhyMachine[];
+  failure_modes: {
+    families: WhyWhyShare[];
+    families_to_80pct: number;
+    top_defects: Array<{ label: string; count: number }>;
+  } | null;
+  root_causes: {
+    categories: WhyWhyShare[];
+    recorded: number;
+    missing: number;
+  } | null;
+  timing: {
+    by_shift:   WhyWhyShare[];
+    by_hour:    Array<{ hour: number; count: number }>;
+    peak_hours: number[];
+  } | null;
+  repeats: Array<{
+    machine: string; defect: string; count: number;
+    hours: number; cost: number; last: string;
+  }>;
+  watchlist: WhyWhyWatch[];
+  operators: {
+    named_events: number;
+    unnamed_events: number;
+    distinct: number;
+    max_events: number;
+    operator_error_events: number;
+    top: Array<{
+      operator: string; events: number; machines: string[];
+      causes: WhyWhyShare[]; cost: number;
+    }>;
+    /** Ships from the backend so the UI cannot quietly drop it. */
+    caveat: string;
+  } | null;
+  completeness: {
+    records: number;
+    fields: Array<{ field: string; pct: number }>;
+    not_recorded: string[];
+  } | null;
+}
+
+export interface WhyWhyNarrativeResponse {
+  facts:    WhyWhyResponse;
+  sections: { findings: string; risks: string; actions: string; gaps: string };
+  model:    string | null;
+  tokens:   number | null;
+  generated_at: string | null;
+  /** Figures in the prose absent from the figures the model was given. */
+  unverified_numbers: string[];
+  error:    string | null;
+}
