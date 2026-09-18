@@ -13,9 +13,11 @@ puts an unlicensed operator on a dozer.
 from __future__ import annotations
 
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from fastapi import (APIRouter, Body, Depends, File, HTTPException, Query,
+                     Request, UploadFile)
+from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -131,6 +133,54 @@ def update_pattern(pattern_id: int, request: Request, body: dict = Body(...),
         raise HTTPException(404, "That pattern no longer exists.")
     db.commit()
     return dict(row)
+
+
+@router.get("/patterns/suggestions")
+def pattern_suggestions(request: Request,
+                        db: Session = Depends(get_minehub_db)) -> list[dict]:
+    """Cycles this mine could adopt, built from its own shift calendar."""
+    _require(request, VIEW, "see the roster")
+    return roster.suggested_patterns(db)
+
+
+@router.post("/patterns/adopt")
+def adopt_patterns(request: Request, body: dict = Body(...),
+                   db: Session = Depends(get_minehub_db)) -> dict:
+    """Create the suggested patterns somebody picked.
+
+    Only ever creates what was named. A suggestion already on file is left
+    exactly as it is, because somebody may well have edited it since — an
+    adopt that quietly overwrote a mine's own changes would be the last time
+    anybody used this button.
+    """
+    _require(request, MANAGE, "manage the roster")
+    wanted = {str(c).upper() for c in (body.get("codes") or [])}
+    if not wanted:
+        raise HTTPException(400, "Nothing was chosen.")
+
+    created, skipped = [], []
+    for suggestion in roster.suggested_patterns(db):
+        if suggestion["code"].upper() not in wanted:
+            continue
+        if suggestion["exists"]:
+            skipped.append(suggestion["code"])
+            continue
+        db.execute(text("""
+            INSERT INTO roster_pattern (code, name, description, cycle_days, slots, created_by)
+            VALUES (:c, :n, :d, :days, CAST(:slots AS jsonb), :by)
+            ON CONFLICT (code) DO NOTHING
+        """), {"c": suggestion["code"], "n": suggestion["name"],
+               "d": suggestion["description"], "days": suggestion["cycle_days"],
+               "slots": json.dumps(suggestion["slots"]), "by": _actor(request)})
+        created.append(suggestion["code"])
+
+    _event(db, request, "ROSTER_PATTERNS_ADOPTED",
+           payload={"created": created, "already_there": skipped})
+    db.commit()
+    return {"ok": True, "created": created, "already_there": skipped,
+            "message": (f"{len(created)} pattern(s) created."
+                        + (f" {len(skipped)} were already defined and were left alone."
+                           if skipped else ""))}
 
 
 # ── who is on which pattern ──────────────────────────────────────────────────
@@ -529,7 +579,307 @@ def remove_holiday(holiday_id: int, request: Request,
     return {"ok": True}
 
 
-# ── one person's working life ────────────────────────────────────────────────
+# -- the schedule, as a spreadsheet -------------------------------------------
+# The mine keeps its roster in Excel today, and will keep a copy there for a
+# long time after this. Refusing to read or write that file would not stop the
+# spreadsheet existing -- it would only mean the two drift apart, which is
+# worse than either alone.
+
+# A day with no pattern behind it reads as a dash rather than a blank, so the
+# spreadsheet cannot be mistaken for one where somebody simply forgot to fill
+# a column in.
+EXPORT_STATE = {"REST": "REST", "LEAVE": "LEAVE", "HOLIDAY": "HOL"}
+EXPORT_UNKNOWN = "-"
+
+
+@router.get("/export")
+def export_roster(request: Request,
+                  from_date: str | None = Query(None),
+                  to_date: str | None = Query(None),
+                  plant_id: int | None = Query(None),
+                  db: Session = Depends(get_minehub_db)):
+    """The roster as a workbook: the grid to read, the assignments to edit.
+
+    Two sheets on purpose. The grid is what people want to look at and print,
+    one column per day with the shift letter in the cell. The assignments sheet
+    is the one that can be changed and brought back -- five columns, because a
+    roster is edited by saying who is on which pattern from when, not by
+    colouring in three hundred squares.
+    """
+    _require(request, VIEW, "see the roster")
+    from io import BytesIO
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    start = _day(from_date)
+    end = _day(to_date) if to_date else start + timedelta(days=30)
+    if (end - start).days > 366:
+        raise HTTPException(400, "Ask for at most a year at a time.")
+
+    people = [dict(r) for r in db.execute(text("""
+        SELECT o.operator_id, o.operator_ref, p.display_name, o.designation,
+               rp.code AS pattern_code, ra.anchor_date, ra.effective_from
+        FROM operator o
+        JOIN party p ON p.party_id = o.party_id
+        LEFT JOIN roster_assignment ra
+               ON ra.operator_id = o.operator_id AND ra.effective_to IS NULL
+        LEFT JOIN roster_pattern rp ON rp.pattern_id = ra.pattern_id
+        WHERE o.profile_status = 'ACTIVE'
+        ORDER BY rp.code NULLS LAST, p.display_name
+    """)).mappings()]
+
+    ids = [p["operator_id"] for p in people]
+    board = roster.duty(db, start, end, ids, plant_id)
+    days = [start + timedelta(days=i) for i in range((end - start).days + 1)]
+
+    wb = Workbook()
+    head = Font(bold=True, color="FFFFFF", size=10)
+    navy = PatternFill("solid", fgColor="16233C")
+    grey = PatternFill("solid", fgColor="EEF1F5")
+    amber = PatternFill("solid", fgColor="FDF1DC")
+    violet = PatternFill("solid", fgColor="EFE9FA")
+    centre = Alignment(horizontal="center", vertical="center")
+    edge = Side(style="thin", color="D8DEE8")
+    thin = Border(left=edge, right=edge, top=edge, bottom=edge)
+
+    grid = wb.active
+    grid.title = "Roster"
+    grid.append(["Operator", "Reference", "Role", "Pattern"]
+                + [d.strftime("%d %b") for d in days])
+    grid.append(["", "", "", ""] + [d.strftime("%a") for d in days])
+
+    for row in (1, 2):
+        for cell in grid[row]:
+            cell.font = head
+            cell.fill = navy
+            cell.alignment = centre
+            cell.border = thin
+
+    for person in people:
+        cells = []
+        for d in days:
+            cell = (board.get(person["operator_id"]) or {}).get(d.isoformat()) or {}
+            state = cell.get("state")
+            cells.append(cell.get("shift") if state == "ON"
+                         else EXPORT_STATE.get(state or "", EXPORT_UNKNOWN))
+        grid.append([person["display_name"], person["operator_ref"] or "",
+                     person["designation"] or "",
+                     person["pattern_code"] or "NOT ROSTERED"] + cells)
+
+    for r in range(3, 3 + len(people)):
+        for c in range(5, 5 + len(days)):
+            cell = grid.cell(row=r, column=c)
+            cell.alignment = centre
+            cell.border = thin
+            if cell.value == "REST":
+                cell.fill = grey
+            elif cell.value == "LEAVE":
+                cell.fill = amber
+            elif cell.value == "HOL":
+                cell.fill = violet
+
+    for col, width in zip("ABCD", (26, 15, 20, 14)):
+        grid.column_dimensions[col].width = width
+    for i in range(len(days)):
+        grid.column_dimensions[get_column_letter(5 + i)].width = 6
+    grid.freeze_panes = "E3"
+
+    # Sheet two: the editable one.
+    edit = wb.create_sheet("Assignments")
+    edit.append(["Operator reference", "Name", "Pattern code",
+                 "Effective from", "Anchor date"])
+    for cell in edit[1]:
+        cell.font = head
+        cell.fill = navy
+    for person in people:
+        edit.append([person["operator_ref"] or "", person["display_name"],
+                     person["pattern_code"] or "",
+                     person["effective_from"], person["anchor_date"]])
+    for col, width in zip("ABCDE", (22, 26, 18, 16, 16)):
+        edit.column_dimensions[col].width = width
+    edit.freeze_panes = "A2"
+
+    # Sheet three: what the codes mean, so the file explains itself once it is
+    # away from the application that made it.
+    key = wb.create_sheet("Key")
+    key.append(["This file", ""])
+    key.append(["Roster", "One column per day. A letter is the shift worked."])
+    key.append(["Assignments", "The editable sheet. Change the pattern code or "
+                               "the dates and import this file back."])
+    key.append(["", "Rows are matched on the operator reference, never the name."])
+    key.append([])
+    key.append(["Patterns defined", ""])
+    for r in db.execute(text(
+            "SELECT code, name, cycle_days FROM roster_pattern WHERE is_active "
+            "ORDER BY code")).mappings():
+        key.append([r["code"], f"{r['name']} - {r['cycle_days']}-day cycle"])
+    key.append([])
+    key.append(["Shifts this mine runs", ""])
+    for r in db.execute(text(
+            "SELECT code, name, start_time, end_time FROM shift_calendar "
+            "WHERE valid_to IS NULL OR valid_to >= CURRENT_DATE "
+            "ORDER BY start_time")).mappings():
+        key.append([r["code"], f"{r['name']} - {r['start_time']} to {r['end_time']}"])
+    key.column_dimensions["A"].width = 22
+    key.column_dimensions["B"].width = 64
+    for cell in key["A"]:
+        cell.font = Font(bold=True, size=10)
+
+    buffer = BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+
+    name = f"Kaliapani-roster-{start:%Y%m%d}-{end:%Y%m%d}.xlsx"
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )
+
+
+def _as_date(value, fallback):
+    """A date out of a spreadsheet cell, which could be anything."""
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if value in (None, ""):
+        return fallback
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return fallback
+
+
+@router.post("/import")
+async def import_roster(request: Request, file: UploadFile = File(...),
+                        dry_run: bool = Query(True),
+                        db: Session = Depends(get_minehub_db)) -> dict:
+    """Read an Assignments sheet back in.
+
+    A dry run by default, and the screen shows what would change before
+    anything does. An import that writes first and reports afterwards is one
+    nobody dares use on a file they are not certain about -- and nobody is ever
+    certain about a spreadsheet that has been round the office.
+
+    Rows are matched on the operator reference, never on the name. Two people
+    called Sahoo is not a hypothetical at a mine this size, and a name match
+    would put one of them on the other's roster.
+    """
+    _require(request, MANAGE, "manage the roster")
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    raw = await file.read()
+    if len(raw) > 10 * 1024 * 1024:
+        raise HTTPException(400, "That file is larger than 10 MB.")
+    try:
+        wb = load_workbook(BytesIO(raw), data_only=True)
+    except Exception:                                  # noqa: BLE001
+        raise HTTPException(400, "That does not open as an Excel workbook.")
+
+    sheet = wb["Assignments"] if "Assignments" in wb.sheetnames else wb.active
+
+    people = {}
+    for r in db.execute(text("""
+        SELECT o.operator_id, o.operator_ref, p.display_name
+        FROM operator o JOIN party p ON p.party_id = o.party_id
+        WHERE o.profile_status = 'ACTIVE' AND o.operator_ref IS NOT NULL
+    """)).mappings():
+        people[r["operator_ref"].strip().upper()] = dict(r)
+
+    patterns = {r["code"].upper(): r["pattern_id"] for r in db.execute(text(
+        "SELECT pattern_id, code FROM roster_pattern WHERE is_active")).mappings()}
+
+    current = {r["operator_id"]: dict(r) for r in db.execute(text("""
+        SELECT ra.operator_id, rp.code AS pattern_code, ra.effective_from, ra.anchor_date
+        FROM roster_assignment ra
+        JOIN roster_pattern rp ON rp.pattern_id = ra.pattern_id
+        WHERE ra.effective_to IS NULL
+    """)).mappings()}
+
+    today = date.today()
+    changes, problems, unchanged = [], [], 0
+
+    for line, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
+        if not row or not any(row):
+            continue
+        ref = str(row[0] or "").strip().upper()
+        pattern_code = str(row[2] or "").strip().upper() if len(row) > 2 else ""
+        if not ref:
+            continue
+
+        person = people.get(ref)
+        if not person:
+            problems.append({"row": line, "ref": ref,
+                             "why": "No active operator has that reference"})
+            continue
+        if not pattern_code:
+            continue                        # left blank on purpose: leave them alone
+        if pattern_code not in patterns:
+            problems.append({"row": line, "ref": ref,
+                             "why": f"There is no active pattern called {pattern_code}"})
+            continue
+
+        effective_from = _as_date(row[3] if len(row) > 3 else None, today)
+        anchor = _as_date(row[4] if len(row) > 4 else None, effective_from)
+
+        was = current.get(person["operator_id"])
+        if (was and was["pattern_code"].upper() == pattern_code
+                and was["effective_from"] == effective_from
+                and was["anchor_date"] == anchor):
+            unchanged += 1
+            continue
+
+        changes.append({
+            "row": line, "operator_id": person["operator_id"], "ref": ref,
+            "display_name": person["display_name"],
+            "from_pattern": was["pattern_code"] if was else None,
+            "to_pattern": pattern_code,
+            "effective_from": effective_from.isoformat(),
+            "anchor_date": anchor.isoformat(),
+        })
+
+    if not dry_run and changes:
+        for change in changes:
+            operator_id = change["operator_id"]
+            effective_from = date.fromisoformat(change["effective_from"])
+            db.execute(text("""
+                UPDATE roster_assignment SET effective_to = :yesterday
+                WHERE operator_id = :o AND effective_to IS NULL
+                  AND effective_from <= :yesterday
+            """), {"o": operator_id, "yesterday": effective_from - timedelta(days=1)})
+            db.execute(text("""
+                DELETE FROM roster_assignment
+                WHERE operator_id = :o AND effective_to IS NULL
+                  AND effective_from >= :from
+            """), {"o": operator_id, "from": effective_from})
+            db.execute(text("""
+                INSERT INTO roster_assignment (operator_id, pattern_id, anchor_date,
+                                               effective_from, remarks, created_by)
+                VALUES (:o, :p, :anchor, :from, :note, :by)
+            """), {"o": operator_id, "p": patterns[change["to_pattern"]],
+                   "anchor": date.fromisoformat(change["anchor_date"]),
+                   "from": effective_from,
+                   "note": f"Imported from {file.filename}", "by": _actor(request)})
+
+        _event(db, request, "ROSTER_IMPORTED",
+               payload={"file": file.filename, "applied": len(changes),
+                        "rejected": len(problems)})
+        db.commit()
+
+    return {
+        "dry_run": dry_run, "file": file.filename, "sheet": sheet.title,
+        "changes": changes, "problems": problems, "unchanged": unchanged,
+        "summary": {"would_change" if dry_run else "changed": len(changes),
+                    "rejected": len(problems), "already_right": unchanged},
+    }
+
+
+# -- one person's working life ------------------------------------------------
 @router.get("/operators/{operator_id}/worklife")
 def worklife(operator_id: int, request: Request,
              days: int = Query(90, ge=7, le=366),

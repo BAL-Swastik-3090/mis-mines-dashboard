@@ -19,13 +19,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CalendarRange, ChevronLeft, ChevronRight, Loader2, Users, UserPlus, Search,
-  CalendarOff, Plane, Sun,
+  CalendarOff, Plane, Sun, Download, Upload, Check, X, TriangleAlert,
 } from "lucide-react";
 import api from "@/lib/api";
 import {
-  Button, Card, CardHeader, Field, inputClass, Tile,
+  Button, Card, CardHeader, Chip, Field, inputClass, Tile,
 } from "@/components/minehub/ui";
 import Dialog from "@/components/minehub/Dialog";
+import StarterPatterns from "./StarterPatterns";
 import {
   DAY_STATE, UNROSTERED, dayLabel, isoDay, addDays, span, prettyDate,
   type DayCell,
@@ -50,6 +51,17 @@ interface Board {
   shifts: { code: string; name: string; start_time: string; end_time: string }[];
 }
 
+/** What an import would do, before it does any of it. */
+interface ImportReport {
+  dry_run: boolean; file: string; sheet: string;
+  changes: { row: number; ref: string; display_name: string;
+             from_pattern: string | null; to_pattern: string;
+             effective_from: string }[];
+  problems: { row: number; ref: string; why: string }[];
+  unchanged: number;
+  summary: Record<string, number>;
+}
+
 const WINDOWS = [
   { days: 13, label: "Fortnight" },
   { days: 29, label: "Month" },
@@ -71,6 +83,10 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [assigning, setAssigning] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [preview, setPreview] = useState<ImportReport | null>(null);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [form, setForm] = useState({ pattern_id: "", effective_from: isoDay(new Date()) });
 
   const end = useMemo(() => addDays(start, length), [start, length]);
@@ -154,6 +170,63 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
     } finally { setBusy(false); }
   };
 
+  /** The workbook, as the browser downloads anything: a blob and a click. */
+  const exportRoster = async () => {
+    setBusy(true);
+    try {
+      const r = await api.get("/workforce/export", {
+        params: { from_date: start, to_date: end },
+        responseType: "blob",
+      });
+      const url = URL.createObjectURL(new Blob([r.data]));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `Kaliapani-roster-${start}-${end}.xlsx`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      setError("The roster could not be exported.");
+    } finally { setBusy(false); }
+  };
+
+  /** Always read first. Nothing is written until somebody has seen what would
+   *  change — a spreadsheet that has been round the office is never something
+   *  anybody is certain about. */
+  const readFile = async (file: File) => {
+    setBusy(true);
+    setPendingFile(file);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const r = await api.post("/workforce/import?dry_run=true", form);
+      setPreview(r.data);
+      setImporting(true);
+    } catch (e: unknown) {
+      const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(typeof d === "string" ? d : "That file could not be read.");
+      setPendingFile(null);
+    } finally { setBusy(false); }
+  };
+
+  const applyImport = async () => {
+    if (!pendingFile) return;
+    setBusy(true);
+    try {
+      const form = new FormData();
+      form.append("file", pendingFile);
+      const r = await api.post("/workforce/import?dry_run=false", form);
+      setNotice(`${r.data.changes.length} roster change(s) applied from ${r.data.file}.`);
+      setImporting(false);
+      setPreview(null);
+      setPendingFile(null);
+      await load();
+      onChanged?.();
+    } catch (e: unknown) {
+      const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(typeof d === "string" ? d : "The import could not be applied.");
+    } finally { setBusy(false); }
+  };
+
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
@@ -205,6 +278,26 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
                   <ChevronRight className="w-3.5 h-3.5" />
                 </Button>
               </div>
+              <Button size="sm" variant="secondary" disabled={busy}
+                      onClick={() => void exportRoster()} title="Download this window as Excel">
+                <Download className="w-3.5 h-3.5" /> Excel
+              </Button>
+              {mayManage && (
+                <label className="inline-flex items-center gap-1.5 rounded-lg border
+                                  border-slate-200 bg-white px-2.5 py-1.5 text-[11px]
+                                  font-semibold text-txt-muted hover:bg-slate-50
+                                  cursor-pointer transition"
+                       title="Bring an edited Assignments sheet back">
+                  <Upload className="w-3.5 h-3.5" /> Import
+                  <input type="file" className="hidden"
+                         accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                         onChange={(e) => {
+                           const f = e.target.files?.[0];
+                           e.target.value = "";
+                           if (f) void readFile(f);
+                         }} />
+                </label>
+              )}
               {mayManage && (
                 <Button size="sm" variant="primary" disabled={picked.size === 0}
                         onClick={() => setAssigning(true)}>
@@ -219,6 +312,15 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
         {error && (
           <div className="px-5 py-3 text-[12px] text-rose bg-rose-bg border-b border-rose/20">
             {error}
+          </div>
+        )}
+        {notice && (
+          <div className="px-5 py-3 text-[12px] text-sky bg-sky-bg border-b border-sky/20
+                          flex items-start justify-between gap-3">
+            <span>{notice}</span>
+            <button onClick={() => setNotice(null)} className="shrink-0">
+              <X className="w-3.5 h-3.5" />
+            </button>
           </div>
         )}
 
@@ -366,11 +468,82 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
             </div>
           )}
           {patterns.length === 0 && (
-            <p className="text-[12px] text-amber">
-              No patterns have been defined yet. Create one under Patterns first.
-            </p>
+            <div className="rounded-lg border border-amber/30 bg-amber-bg/40 px-3 py-3">
+              <p className="text-[12.5px] text-txt-primary font-semibold mb-1">
+                No patterns exist yet, which is why the list above is empty.
+              </p>
+              <p className="text-[11.5px] text-txt-muted mb-3">
+                A pattern says which days somebody works and which they rest.
+                Here is how mines like this one usually work — take one and the
+                list fills in.
+              </p>
+              {mayManage && (
+                <StarterPatterns compact onAdopted={() => void load()} />
+              )}
+            </div>
           )}
         </div>
+      </Dialog>
+
+      <Dialog open={importing} tone="warning"
+        title={`Import ${preview?.changes.length ?? 0} roster change(s)`}
+        confirmLabel="Apply these changes" busy={busy}
+        onConfirm={() => void applyImport()}
+        onCancel={() => { setImporting(false); setPreview(null); setPendingFile(null); }}>
+        {preview && (
+          <div className="space-y-3">
+            <p className="text-[12px] text-txt-muted">
+              Read from <strong>{preview.sheet}</strong> in {preview.file}. Nothing
+              has been written yet. Rows are matched on the operator reference,
+              never the name — two people called Sahoo is not a hypothetical.
+            </p>
+
+            <div className="flex flex-wrap gap-2">
+              <Chip tone={preview.changes.length ? "emerald" : "slate"} dot={false}>
+                {preview.changes.length} would change
+              </Chip>
+              <Chip tone={preview.problems.length ? "rose" : "slate"} dot={false}>
+                {preview.problems.length} rejected
+              </Chip>
+              <Chip tone="slate" dot={false}>{preview.unchanged} already right</Chip>
+            </div>
+
+            {preview.changes.length > 0 && (
+              <div className="rounded-lg border border-slate-200 divide-y divide-slate-100
+                              max-h-48 overflow-auto">
+                {preview.changes.map((c) => (
+                  <div key={c.row} className="px-3 py-1.5 flex items-center gap-2 text-[12px]">
+                    <Check className="w-3.5 h-3.5 text-emerald shrink-0" />
+                    <span className="font-semibold text-navy">{c.display_name}</span>
+                    <span className="text-txt-light">
+                      {c.from_pattern || "not rostered"} → {c.to_pattern}
+                    </span>
+                    <span className="ml-auto text-[11px] text-txt-light">
+                      from {c.effective_from}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {preview.problems.length > 0 && (
+              <div className="rounded-lg border border-rose/30 bg-rose-bg/40 divide-y
+                              divide-rose/10 max-h-40 overflow-auto">
+                {preview.problems.map((p) => (
+                  <div key={p.row} className="px-3 py-1.5 flex items-start gap-2 text-[12px]">
+                    <TriangleAlert className="w-3.5 h-3.5 text-rose shrink-0 mt-0.5" />
+                    <span className="text-txt-light">row {p.row}</span>
+                    <span className="font-mono text-[11px] text-navy">{p.ref}</span>
+                    <span className="text-rose">{p.why}</span>
+                  </div>
+                ))}
+                <p className="px-3 py-1.5 text-[11px] text-txt-muted">
+                  Rejected rows are skipped. The rest still apply.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
       </Dialog>
     </div>
   );

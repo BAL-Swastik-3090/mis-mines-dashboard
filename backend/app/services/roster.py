@@ -287,3 +287,105 @@ def coverage(db: Session, day: date, plant_id: int | None = None) -> dict:
     return {"day": iso, "on_duty": on, "resting": off, "on_leave": away,
             "holiday": closed, "not_on_a_roster": unrostered,
             "by_shift": by_shift, "headcount": len(board)}
+
+
+# ── patterns the mine could adopt ────────────────────────────────────────────
+# Offered, never seeded. The same rule departments and leave types follow: a
+# platform that invents a mine's working pattern gets it subtly wrong, and
+# nobody notices until somebody is rostered onto a shift they do not work.
+#
+# What makes these safe to offer is that they are built from the shift codes
+# this mine actually runs, read out of its own shift calendar. A suggestion can
+# therefore never name a shift that does not exist — which is the one way a
+# starter pattern could do real damage.
+
+def _cycle(*runs: tuple[str, int]) -> list[str]:
+    """A cycle written the way people say it: six of A, one off, six of B…"""
+    out: list[str] = []
+    for code, count in runs:
+        out.extend([code] * count)
+    return out
+
+
+def suggested_patterns(db: Session) -> list[dict]:
+    """Ready-made cycles, built from this mine's own shifts.
+
+    Returned rather than created. Somebody picks the ones that match how the
+    mine actually works, and can edit any of them afterwards — the point is to
+    save typing, not to decide.
+    """
+    shifts = [r[0].upper() for r in db.execute(text("""
+        SELECT code FROM shift_calendar
+        WHERE valid_to IS NULL OR valid_to >= CURRENT_DATE
+        ORDER BY start_time
+    """)).all()]
+    if not shifts:
+        return []
+
+    existing = {r[0].upper() for r in db.execute(text("SELECT code FROM roster_pattern")).all()}
+
+    # The three rotating shifts, in the order the day runs. GENERAL and
+    # anything else the mine has defined are handled separately, because a
+    # day-shift pattern and a rotation are different working lives.
+    rotating = [c for c in shifts if c in ("A", "B", "C")]
+    day = next((c for c in shifts if c in ("GENERAL", "GEN", "G")), None)
+
+    out: list[dict] = []
+
+    if day:
+        out.append({
+            "code": f"{day}-6", "name": f"{day.title()} shift, six days on",
+            "description": "Day work with one rest day a week — the pattern most "
+                           "of the office and workshop follow.",
+            "slots": _cycle((day, 6), (REST, 1)),
+            "why": "Six working days in every seven, about 313 days a year.",
+        })
+
+    for code in rotating:
+        out.append({
+            "code": f"{code}-6", "name": f"{code} shift, six days on",
+            "description": f"Fixed {code} shift with one rest day a week. Nobody "
+                           f"rotates; the crew works the same hours every week.",
+            "slots": _cycle((code, 6), (REST, 1)),
+            "why": "Easiest to plan around, hardest on anybody permanently on nights.",
+        })
+
+    if len(rotating) == 3:
+        a, b, c = rotating
+        # Three crews, each a week behind the next. Three patterns rather than
+        # one, because each crew starts the same cycle at a different point and
+        # the anchor date is what separates them.
+        out.append({
+            "code": "ROT-21", "name": "Three-crew rotation, 21 days",
+            "description": f"Six days on {a}, a rest day, six on {b}, a rest day, "
+                           f"six on {c}, a rest day. One crew per starting point.",
+            "slots": _cycle((a, 6), (REST, 1), (b, 6), (REST, 1), (c, 6), (REST, 1)),
+            "why": "Everybody takes a turn on nights. Set each crew's anchor date "
+                   "a week apart and the three cover every shift, every day.",
+        })
+        out.append({
+            "code": "ROT-12", "name": "Faster rotation, 12 days",
+            "description": f"Four days on each of {a}, {b} and {c}, with a rest day "
+                           f"after each block.",
+            "slots": _cycle((a, 3), (REST, 1), (b, 3), (REST, 1), (c, 3), (REST, 1)),
+            "why": "Shorter runs of nights, at the cost of changing shift more often.",
+        })
+
+    if rotating:
+        out.append({
+            "code": "CONT-4-2", "name": "Four on, two off",
+            "description": f"Four days on {rotating[0]} then two days off, "
+                           "repeating — a continuous roster with longer breaks.",
+            "slots": _cycle((rotating[0], 4), (REST, 2)),
+            "why": "About 243 working days a year and two consecutive rest days, "
+                   "which one rest day a week never gives.",
+        })
+
+    # Anything already defined is shown as taken rather than hidden, so the
+    # list does not silently shrink and leave somebody hunting for the option
+    # they used last month.
+    for row in out:
+        row["exists"] = row["code"].upper() in existing
+        row["cycle_days"] = len(row["slots"])
+        row["working_days"] = len([s for s in row["slots"] if s != REST])
+    return out

@@ -12,6 +12,9 @@ passlib[bcrypt]==1.7.4
 httpx==0.28.1
 openai==1.59.3
 pandas==2.2.3
+# Roster import and export. The mine already keeps its shift schedule in
+# Excel, so the platform has to be able to read that file and hand one back.
+openpyxl==3.1.5
 numpy==2.2.0
 python-multipart==0.0.20
 pymssql==2.4.1

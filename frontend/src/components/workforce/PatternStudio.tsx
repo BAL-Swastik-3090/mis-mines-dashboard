@@ -13,12 +13,13 @@
  * rosters people onto nothing.
  */
 import React, { useCallback, useEffect, useState } from "react";
-import { Repeat, Plus, Loader2, Users, Minus, Check } from "lucide-react";
+import { Repeat, Plus, Loader2, Users, Minus, Check, Sparkles } from "lucide-react";
 import api from "@/lib/api";
 import {
   Button, Card, CardHeader, Chip, Field, inputClass,
 } from "@/components/minehub/ui";
 import { DAY_STATE, isoDay } from "./state";
+import StarterPatterns from "./StarterPatterns";
 
 interface Pattern {
   pattern_id: number; code: string; name: string; description: string | null;
@@ -209,11 +210,16 @@ export default function PatternStudio({ mayManage, onChanged }: {
             <Loader2 className="w-5 h-5 animate-spin mx-auto" />
           </div>
         ) : patterns.length === 0 ? (
-          <div className="px-5 py-12 text-center">
-            <p className="text-[13px] text-txt-muted">
+          <div className="px-5 py-6">
+            <p className="text-[13px] text-txt-muted mb-1">
               No patterns yet. A pattern says which days somebody works and which
               they rest, and nobody can be rostered until there is one.
             </p>
+            <p className="text-[12.5px] text-txt-light mb-4">
+              Here is how mines like this one usually work. Take whichever match,
+              or build your own above.
+            </p>
+            {mayManage && <StarterPatterns onAdopted={() => void load()} />}
           </div>
         ) : (
           <div className="divide-y divide-slate-100">
@@ -250,6 +256,16 @@ export default function PatternStudio({ mayManage, onChanged }: {
           </div>
         )}
       </Card>
+
+      {mayManage && patterns.length > 0 && (
+        <Card>
+          <CardHeader title="Other patterns you could add" icon={Sparkles} tone="gold"
+            subtitle="Built from this mine's own shifts. Nothing is created until you pick it." />
+          <div className="px-5 py-4">
+            <StarterPatterns onAdopted={() => void load()} />
+          </div>
+        </Card>
+      )}
     </div>
   );
 }
