@@ -1,7 +1,7 @@
 import json
 import redis
 from functools import wraps
-from typing import Any, Callable
+from typing import Callable
 from app.config import get_settings
 
 settings = get_settings()

@@ -3,7 +3,6 @@ Production service — all DB query logic for Ore, OB, COB KPIs.
 Queries are raw SQL via SQLAlchemy text() for performance & clarity.
 """
 from datetime import date, timedelta
-from decimal import Decimal
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 

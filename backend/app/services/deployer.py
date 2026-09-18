@@ -40,7 +40,7 @@ something the board would then refuse is an engine nobody uses twice.
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session

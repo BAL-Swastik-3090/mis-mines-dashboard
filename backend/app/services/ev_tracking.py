@@ -1,6 +1,6 @@
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from datetime import date, timedelta
+from datetime import date
 
 # Fallback rated battery capacity in kWh if not populated in DB
 BATTERY_CAPACITIES = {
