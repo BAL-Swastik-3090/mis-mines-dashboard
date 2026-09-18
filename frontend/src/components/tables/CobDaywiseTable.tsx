@@ -85,10 +85,10 @@ export default function CobDaywiseTable() {
               <th className="px-2 py-1.5 text-right border-l border-border-light">Plan</th>
               <th className="px-2 py-1.5 text-right">Act</th>
               <th className="px-2 py-1.5 text-right">Achieved %</th>
-              <th className="px-2 py-1.5 text-right border-l border-border-light">Act</th>
-              <th className="px-2 py-1.5 text-right">Plan</th>
-              <th className="px-2 py-1.5 text-right border-l border-border-light">Act</th>
-              <th className="px-2 py-1.5 text-right">Plan</th>
+              <th className="px-2 py-1.5 text-right border-l border-border-light">Plan</th>
+              <th className="px-2 py-1.5 text-right">Act</th>
+              <th className="px-2 py-1.5 text-right border-l border-border-light">Plan</th>
+              <th className="px-2 py-1.5 text-right">Act</th>
               <th className="px-2 py-1.5 text-right border-l border-border-light">Input</th>
               <th className="px-2 py-1.5 text-right">Output</th>
               <th className="px-2 py-1.5 text-right">Tail.</th>
@@ -131,18 +131,18 @@ export default function CobDaywiseTable() {
                     <td className="px-2 py-2 text-right font-mono text-navy"><Num v={r.cob_actual} /></td>
                     <td className="px-2 py-2 text-right"><PctPill pct={pctOf(r.cob_actual, r.cob_plan)} /></td>
                     {/* Tailings */}
-                    <td className="px-2 py-2 text-right font-mono text-navy border-l border-border-light">
-                      <Num v={r.tailings_actual} />
+                    <td className="px-2 py-2 text-right font-mono text-txt-muted border-l border-border-light">
+                      <Num v={r.tailings_plan} />
                     </td>
-                    <td className="px-2 py-2 text-right font-mono text-txt-muted"><Num v={r.tailings_plan} /></td>
+                    <td className="px-2 py-2 text-right font-mono text-navy"><Num v={r.tailings_actual} /></td>
                     {/* Yield */}
-                    <td className="px-2 py-2 text-right font-mono text-navy border-l border-border-light">
-                      <Num v={r.yield_pct} dec={1} />
-                      {r.yield_pct != null && <span className="text-txt-muted text-[10px]">%</span>}
-                    </td>
-                    <td className="px-2 py-2 text-right font-mono text-txt-muted">
+                    <td className="px-2 py-2 text-right font-mono text-txt-muted border-l border-border-light">
                       <Num v={r.yield_plan} dec={1} />
                       {r.yield_plan != null && <span className="text-[10px]">%</span>}
+                    </td>
+                    <td className="px-2 py-2 text-right font-mono text-navy">
+                      <Num v={r.yield_pct} dec={1} />
+                      {r.yield_pct != null && <span className="text-txt-muted text-[10px]">%</span>}
                     </td>
                     {/* Cr₂O₃ */}
                     <td className="px-2 py-2 text-right font-mono text-accent border-l border-border-light">
@@ -191,18 +191,18 @@ export default function CobDaywiseTable() {
                   <PctPill pct={pctOf(data.mtd_cob_actual, data.mtd_cob_plan)} />
                 </td>
                 {/* Tailings MTD */}
-                <td className="px-2 py-3 text-right font-mono font-bold text-white text-[12px] border-l border-white/10">
-                  {formatIndian(data.mtd_tailings_actual)}
-                </td>
-                <td className="px-2 py-3 text-right font-mono text-white/50 text-[12px]">
+                <td className="px-2 py-3 text-right font-mono text-white/50 text-[12px] border-l border-white/10">
                   {formatIndian(data.mtd_tailings_plan)}
                 </td>
-                {/* Yield MTD */}
-                <td className="px-2 py-3 text-right font-mono font-bold text-[#43a047] text-[12px] border-l border-white/10">
-                  {data.mtd_yield_pct != null ? `${data.mtd_yield_pct.toFixed(1)}%` : "—"}
+                <td className="px-2 py-3 text-right font-mono font-bold text-white text-[12px]">
+                  {formatIndian(data.mtd_tailings_actual)}
                 </td>
-                <td className="px-2 py-3 text-right font-mono text-white/50 text-[12px]">
+                {/* Yield MTD */}
+                <td className="px-2 py-3 text-right font-mono text-white/50 text-[12px] border-l border-white/10">
                   {data.mtd_yield_plan != null ? `${data.mtd_yield_plan.toFixed(1)}%` : "—"}
+                </td>
+                <td className="px-2 py-3 text-right font-mono font-bold text-[#43a047] text-[12px]">
+                  {data.mtd_yield_pct != null ? `${data.mtd_yield_pct.toFixed(1)}%` : "—"}
                 </td>
                 {/* Quality MTD averages */}
                 <td className="px-2 py-3 text-right font-mono text-accent text-[12px] border-l border-white/10">
