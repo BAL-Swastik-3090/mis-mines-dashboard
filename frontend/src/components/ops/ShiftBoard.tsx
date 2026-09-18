@@ -14,7 +14,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CalendarClock, Loader2, Play, Square, Users, Cpu, AlertTriangle, TriangleAlert,
-  ClipboardList, Check, X, Plus, ArrowLeftRight,
+  ClipboardList, Check, X, Plus, ArrowLeftRight, ScanFace, Download,
 } from "lucide-react";
 import api from "@/lib/api";
 import { Alert, Button, Card, CardHeader, Chip, EmptyRow, Td, Th, Tile, type Tone }
@@ -47,6 +47,18 @@ interface Op {
   designation: string | null; machines_competent: number;
 }
 
+/** What the gate readers saw, against who the register knows. */
+interface Preview {
+  configured: boolean; reachable?: boolean; trouble?: string | null; day: string;
+  matched?: number; unmatched_identity?: number;
+  operators: {
+    operator_id: number; display_name: string; designation: string | null;
+    emp_no: string | null; already: string | null;
+    punch: { name: string; first_in: string | null; last_out: string | null;
+             punches: number } | null;
+  }[];
+}
+
 export default function ShiftBoard({ shift, shifts, onShiftChange, rights, onChanged }: {
   shift: ShiftRow | null;
   shifts: ShiftRow[];
@@ -64,6 +76,8 @@ export default function ShiftBoard({ shift, shifts, onShiftChange, rights, onCha
   const [showAttendance, setShowAttendance] = useState(false);
   const [closing, setClosing] = useState(false);
   const [resolving, setResolving] = useState<Record<string, unknown> | null>(null);
+  const [preview, setPreview] = useState<Preview | null>(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
   const [resolution, setResolution] = useState("");
 
   const load = useCallback(async () => {
@@ -84,6 +98,37 @@ export default function ShiftBoard({ shift, shifts, onShiftChange, rights, onCha
   }, [shift]);
 
   useEffect(() => { void load(); }, [load]);
+
+  const loadPreview = useCallback(async () => {
+    if (!shift) return;
+    setLoadingPreview(true);
+    try {
+      const r = await api.get("/ops/attendance/preview",
+        { params: { day: shift.production_day } });
+      setPreview(r.data);
+    } catch { setPreview(null); }
+    finally { setLoadingPreview(false); }
+  }, [shift]);
+
+  useEffect(() => { if (showAttendance) void loadPreview(); }, [showAttendance, loadPreview]);
+
+  const syncFromReaders = async () => {
+    if (!shift) return;
+    setBusy("frs");
+    try {
+      const r = await api.post("/ops/attendance/sync", {
+        shift_instance_id: shift.shift_instance_id, day: shift.production_day,
+      });
+      setNotice(`${r.data.marked_present} marked present from the gate readers`
+        + (r.data.manual_kept ? `, ${r.data.manual_kept} left as marked by hand.` : ".")
+        + " Absence stays a supervisor's call — nobody is marked absent by silence.");
+      setShowAttendance(false);
+      await load(); onChanged?.();
+    } catch (e: unknown) {
+      const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(typeof d === "string" ? d : "Could not read the gate readers.");
+    } finally { setBusy(null); }
+  };
 
   const markAttendance = async () => {
     if (!shift) return;
@@ -313,10 +358,38 @@ export default function ShiftBoard({ shift, shifts, onShiftChange, rights, onCha
       <Dialog open={showAttendance} tone="info" title="Who came in"
         confirmLabel="Record attendance" cancelLabel="Cancel" busy={busy === "attendance"}
         onConfirm={() => void markAttendance()}
-        onCancel={() => { setShowAttendance(false); setAttendance({}); }}>
+        onCancel={() => { setShowAttendance(false); setAttendance({}); }}
+        secondary={preview?.configured && preview?.reachable
+          ? { label: `Take ${preview.matched ?? 0} from the gate readers`,
+              tone: "secondary", onClick: () => void syncFromReaders() }
+          : undefined}>
         Anyone left unmarked stays "not marked" rather than being assumed present —
         silence is not an answer, and a machine will say so when somebody tries to
         deploy them.
+
+        {loadingPreview ? (
+          <p className="mt-2 text-[12px] text-txt-light flex items-center gap-2">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Asking the gate readers…
+          </p>
+        ) : preview && !preview.configured ? (
+          <p className="mt-2 text-[12px] text-txt-light">
+            The gate readers are not configured on this server, so attendance is by
+            hand here.
+          </p>
+        ) : preview && preview.reachable === false ? (
+          <p className="mt-2 text-[12px] text-rose">
+            The gate readers could not be reached{preview.trouble ? ` — ${preview.trouble}` : ""}.
+            Marking by hand still works.
+          </p>
+        ) : preview ? (
+          <p className="mt-2 text-[12px] text-txt-muted">
+            The readers saw <span className="font-bold text-navy">{preview.matched}</span> of
+            these people today.
+            {preview.unmatched_identity
+              ? ` ${preview.unmatched_identity} have no employee number linked on their profile, so they cannot be matched.`
+              : ""}
+          </p>
+        ) : null}
         <ul className="mt-3 max-h-[320px] overflow-y-auto divide-y divide-border-light">
           {operators.map((o) => (
             <li key={o.operator_id} className="py-2 flex items-center justify-between gap-3">
@@ -326,6 +399,31 @@ export default function ShiftBoard({ shift, shifts, onShiftChange, rights, onCha
                   {o.designation || "role not set"}
                   {o.machines_competent ? ` · ${o.machines_competent} class` : ""}
                 </span>
+                {(() => {
+                  const seen = preview?.operators.find((x) => x.operator_id === o.operator_id);
+                  if (!seen) return null;
+                  if (seen.punch) {
+                    return (
+                      <span className="inline-flex items-center gap-1 mt-0.5 text-[11px] text-emerald">
+                        <ScanFace className="w-3 h-3" />
+                        gate {String(seen.punch.first_in ?? "").slice(11, 16)}
+                        {seen.punch.last_out ? `–${String(seen.punch.last_out).slice(11, 16)}` : ""}
+                      </span>
+                    );
+                  }
+                  if (!seen.emp_no) {
+                    return (
+                      <span className="block mt-0.5 text-[11px] text-amber">
+                        no employee number linked — cannot be matched to the readers
+                      </span>
+                    );
+                  }
+                  return (
+                    <span className="block mt-0.5 text-[11px] text-txt-light">
+                      no punch recorded today
+                    </span>
+                  );
+                })()}
               </span>
               <span className="flex gap-1.5 shrink-0">
                 <button onClick={() => setAttendance((p) => ({ ...p, [o.operator_id]: true }))}

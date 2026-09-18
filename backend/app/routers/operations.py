@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.minehub_db import get_minehub_db
+from app.services import attendance as frs
 from app.services import people, readiness, telematics
 
 router = APIRouter(prefix="/api/ops", tags=["Operations"])
@@ -497,6 +498,137 @@ def record_attendance(request: Request, body: dict = Body(...),
            payload={"shift_instance_id": body.get("shift_instance_id"), "marked": marked})
     db.commit()
     return {"ok": True, "marked": marked}
+
+
+@router.get("/attendance/preview")
+def attendance_preview(day: str | None = Query(None),
+                       db: Session = Depends(get_minehub_db)) -> dict:
+    """What the gate readers saw, against who the register knows.
+
+    Read-only and shown before anything is written: an import that silently
+    overwrites a supervisor's own marking is an import nobody trusts twice.
+    """
+    on = day or date.today().isoformat()
+
+    codes = frs.operator_codes(db)
+    people_rows = db.execute(text("""
+        SELECT o.operator_id, o.operator_ref, p.display_name, o.designation
+        FROM operator o JOIN party p ON p.party_id = o.party_id
+        WHERE o.profile_status = 'ACTIVE' ORDER BY p.display_name
+    """)).mappings().all()
+
+    if not frs.configured():
+        return {"configured": False, "day": on,
+                "reason": "The attendance readers have not been configured on this server.",
+                "operators": [{**dict(r), "emp_no": codes.get(r["operator_id"])}
+                              for r in people_rows]}
+
+    try:
+        seen = frs.punches_for(on, list(codes.values()))
+        reachable = True
+        trouble = None
+    except Exception as exc:                          # noqa: BLE001
+        seen, reachable = {}, False
+        trouble = str(exc).splitlines()[0][:160]
+
+    # What has already been said about today, so the preview can show what it
+    # would change rather than only what it found.
+    marked = {r["operator_id"]: r["state"] for r in db.execute(text("""
+        SELECT DISTINCT ON (operator_id) operator_id, state
+        FROM availability_event
+        WHERE operator_id IS NOT NULL AND ended_at IS NULL
+          AND state IN ('PRESENT', 'ABSENT')
+        ORDER BY operator_id, started_at DESC
+    """)).mappings()}
+
+    rows = []
+    for r in people_rows:
+        code = codes.get(r["operator_id"])
+        punch = seen.get(code) if code else None
+        rows.append({
+            **dict(r),
+            "emp_no": code,
+            "punch": punch,
+            "already": marked.get(r["operator_id"]),
+            # Silence is not absence. A mine has gates people walk through
+            # without punching, and somebody marked absent by silence is
+            # undeployable for a reason nobody can see.
+            "would_set": "PRESENT" if punch else None,
+        })
+
+    return {"configured": True, "reachable": reachable, "trouble": trouble, "day": on,
+            "matched": len([r for r in rows if r["punch"]]),
+            "unmatched_identity": len([r for r in rows if not r["emp_no"]]),
+            "operators": rows}
+
+
+@router.post("/attendance/sync")
+def attendance_sync(request: Request, body: dict = Body(default={}),
+                    db: Session = Depends(get_minehub_db)) -> dict:
+    """Take presence from the readers into this shift.
+
+    Only ever marks people PRESENT, and only those the readers actually saw.
+    Nobody is marked absent by silence — a supervisor marks absence, because a
+    supervisor knows the difference between somebody who did not come and
+    somebody who walked in behind a colleague.
+
+    A manual mark already on record is left alone unless the caller says
+    otherwise: the person standing in the pit beats the database.
+    """
+    _require(request, MANAGE, "run the shift")
+    if not frs.configured():
+        raise HTTPException(503, "The attendance readers are not configured on this server.")
+
+    on = body.get("day") or date.today().isoformat()
+    shift_instance_id = body.get("shift_instance_id")
+    overwrite = bool(body.get("overwrite"))
+
+    codes = frs.operator_codes(db)
+    try:
+        seen = frs.punches_for(on, list(codes.values()))
+    except Exception as exc:                          # noqa: BLE001
+        raise HTTPException(502, f"Could not read the attendance readers: "
+                                 f"{str(exc).splitlines()[0][:140]}")
+
+    marked = {r["operator_id"]: r["availability_event_id"] for r in db.execute(text("""
+        SELECT DISTINCT ON (operator_id) operator_id, availability_event_id
+        FROM availability_event
+        WHERE operator_id IS NOT NULL AND ended_at IS NULL
+          AND state IN ('PRESENT', 'ABSENT') AND source = 'MANUAL'
+        ORDER BY operator_id, started_at DESC
+    """)).mappings()}
+
+    added = kept = 0
+    for operator_id, code in codes.items():
+        punch = seen.get(code)
+        if not punch:
+            continue
+        if operator_id in marked and not overwrite:
+            kept += 1
+            continue
+
+        db.execute(text("""
+            UPDATE availability_event SET ended_at = now(), released_by = :by
+            WHERE operator_id = :o AND ended_at IS NULL AND state IN ('PRESENT', 'ABSENT')
+        """), {"o": operator_id, "by": _actor(request)})
+
+        db.execute(text("""
+            INSERT INTO availability_event (operator_id, state, reason, shift_instance_id,
+                                            source, recorded_by, started_at)
+            VALUES (:o, 'PRESENT', :r, :si, 'FRS', :by, COALESCE(:at, now()))
+        """), {"o": operator_id,
+               "r": f"Gate reader, first punch {punch['first_in']:%H:%M}"
+                    if punch["first_in"] else "Gate reader",
+               "si": shift_instance_id, "by": _actor(request),
+               "at": punch["first_in"]})
+        added += 1
+
+    _event(db, request, "ATTENDANCE_RECEIVED", shift_id=None,
+           payload={"day": on, "source": "FRS", "marked_present": added,
+                    "manual_kept": kept, "seen": len(seen)})
+    db.commit()
+    return {"ok": True, "day": on, "marked_present": added, "manual_kept": kept,
+            "seen_by_readers": len(seen), "operators_with_a_code": len(codes)}
 
 
 # ── the plan ─────────────────────────────────────────────────────────────────

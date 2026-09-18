@@ -42,6 +42,16 @@ class Settings(BaseSettings):
     # refused connection instead.
     pg_sslmode:  str = Field(default="prefer")
 
+    # Face-recognition attendance (SmartFace, MSSQL). A read-only source, like
+    # the MySQL above: the mine's attendance system owns these punches and this
+    # platform only reads them. Blank host means the integration is off, and the
+    # screens say so rather than failing.
+    frs_host:     str = Field(default="")
+    frs_port:     int = Field(default=1433)
+    frs_database: str = Field(default="SmartFace")
+    frs_user:     str = Field(default="")
+    frs_password: str = Field(default="")
+
     # LiteLLM / AI Insights
     litellm_base_url: str = Field(default="")
     litellm_api_key:  str = Field(default="")
