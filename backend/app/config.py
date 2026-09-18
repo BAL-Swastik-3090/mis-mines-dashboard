@@ -42,6 +42,21 @@ class Settings(BaseSettings):
     # refused connection instead.
     pg_sslmode:  str = Field(default="prefer")
 
+    # Where to try if the first address does not answer.
+    #
+    # This machine reaches the platform database two different ways depending on
+    # which network it is on, and neither works from the other. On the office
+    # wifi the server is directly reachable on the LAN. Over the VPN it is not:
+    # the server sees us as a foreign address, pg_hba there insists on an
+    # encrypted connection, and the server offers no TLS — so the VPN route runs
+    # through an SSH tunnel on localhost instead.
+    #
+    # Rather than making somebody edit .env every time they undock, both
+    # addresses are configured and whichever answers is used. A developer
+    # changing network should not have to know any of the above.
+    pg_fallback_host: str = Field(default="")
+    pg_fallback_port: int = Field(default=5432)
+
     # Face-recognition attendance (SmartFace, MSSQL). A read-only source, like
     # the MySQL above: the mine's attendance system owns these punches and this
     # platform only reads them. Blank host means the integration is off, and the
@@ -80,18 +95,30 @@ class Settings(BaseSettings):
     def minehub_enabled(self) -> bool:
         return bool(self.pg_host and self.pg_database and self.pg_user)
 
-    @property
-    def minehub_url(self):
+    def minehub_url_for(self, host: str, port: int):
         from sqlalchemy.engine import URL
         return URL.create(
             drivername="postgresql+psycopg",
             username=self.pg_user,
             password=self.pg_password,
-            host=self.pg_host,
-            port=self.pg_port,
+            host=host,
+            port=port,
             database=self.pg_database,
             query={"sslmode": self.pg_sslmode},
         )
+
+    @property
+    def minehub_url(self):
+        return self.minehub_url_for(self.pg_host, self.pg_port)
+
+    @property
+    def minehub_fallback_url(self):
+        """The second address to try, or None when only one is configured."""
+        if not self.pg_fallback_host:
+            return None
+        if (self.pg_fallback_host, self.pg_fallback_port) == (self.pg_host, self.pg_port):
+            return None
+        return self.minehub_url_for(self.pg_fallback_host, self.pg_fallback_port)
 
     @property
     def cors_origins(self) -> list[str]:

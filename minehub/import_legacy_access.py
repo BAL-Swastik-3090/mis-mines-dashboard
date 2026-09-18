@@ -5,7 +5,7 @@ Idempotent: re-running changes nothing that is already correct.
 The old role names map onto the new ones as follows. The mapping preserves
 access exactly — nobody gains or loses anything by running this:
 
-    superadmin -> PLATFORM_OWNER     full control, including the registry
+    superadmin -> SUPERADMIN         full control, including the registry
     admin      -> ACCESS_MANAGER     grants access, manages roles
     manager    -> DASHBOARD_VIEWER   'manager' carried no permission the viewer
                                      role lacked; it only looked like seniority,
@@ -29,7 +29,7 @@ from app.database import engine as mysql_engine  # noqa: E402
 from app.minehub_db import engine as pg_engine   # noqa: E402
 
 ROLE_MAP = {
-    "superadmin": "PLATFORM_OWNER",
+    "superadmin": "SUPERADMIN",
     "admin": "ACCESS_MANAGER",
     "manager": "DASHBOARD_VIEWER",
     "viewer": "DASHBOARD_VIEWER",

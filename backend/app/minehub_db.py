@@ -8,6 +8,13 @@ talks to the database the platform owns, where it is the only writer.
 The two engines have opposite tuning for that reason. The MySQL pool is kept
 deliberately tiny and reaped when idle because every connection held there is
 one denied to another application. This pool can behave normally.
+
+TWO WAYS IN. This machine reaches the server differently depending on which
+network it is on: directly on the office LAN, and through an SSH tunnel over
+the VPN, because the VPN address is one pg_hba will only admit encrypted and
+the server offers no TLS. Neither route works from the other network. So both
+are configured and whichever answers is used — a developer who undocks should
+not have to edit a config file and restart to keep working.
 """
 from __future__ import annotations
 
@@ -26,9 +33,47 @@ settings = get_settings()
 engine = None
 SessionLocal = None
 
+
+def _reachable(url) -> bool:
+    """Whether something is listening, without waiting out a TCP timeout.
+
+    A plain connection attempt to an address nothing answers on takes twenty
+    seconds to fail on Windows, which is twenty seconds of a dead application
+    at start-up. Two seconds is plenty for a host on the same LAN or a tunnel
+    on localhost, and anything slower than that is not the route to use anyway.
+    """
+    import socket
+    probe = socket.socket()
+    probe.settimeout(2)
+    try:
+        probe.connect((url.host, url.port or 5432))
+        return True
+    except OSError:
+        return False
+    finally:
+        probe.close()
+
+
+def _choose_url():
+    """The address that answers, preferring the one that was configured first."""
+    primary = settings.minehub_url
+    fallback = settings.minehub_fallback_url
+    if not fallback or _reachable(primary):
+        return primary
+    if _reachable(fallback):
+        logger.warning(
+            "MineHub database not answering on %s:%s — using %s:%s instead. "
+            "This is the LAN/VPN switch, not a fault.",
+            primary.host, primary.port, fallback.host, fallback.port)
+        return fallback
+    # Neither answers. Return the primary anyway so the error the application
+    # reports names the address somebody actually configured.
+    return primary
+
+
 if settings.minehub_enabled:
     engine = create_engine(
-        settings.minehub_url,
+        _choose_url(),
         pool_size=5,
         max_overflow=10,
         pool_pre_ping=True,      # revalidate on checkout; survives a network blip
@@ -91,7 +136,7 @@ def test_connection() -> dict:
         return {
             "status": "connected",
             "db": settings.pg_database,
-            "host": settings.pg_host,
+            "host": f"{engine.url.host}:{engine.url.port}",
             "schema": settings.pg_schema,
             "migrations_applied": applied,
             "latest_migration": latest,

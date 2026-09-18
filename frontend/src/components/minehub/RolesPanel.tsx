@@ -197,7 +197,7 @@ export default function RolesPanel() {
 
       {roles.map((r) => {
         const isEditing = editing === r.role_id;
-        const isOwner = r.code === "PLATFORM_OWNER";
+        const isSuperadmin = r.code === "SUPERADMIN";
         return (
           <Card key={r.role_id}>
             <CardHeader
@@ -213,7 +213,7 @@ export default function RolesPanel() {
                   <Chip tone="sky">
                     {r.user_count} {r.user_count === 1 ? "person" : "people"}
                   </Chip>
-                  {mayManage && !isOwner && (
+                  {mayManage && !isSuperadmin && (
                     <Button size="sm" variant="secondary"
                       onClick={() => { setEditing(isEditing ? null : r.role_id); setDraft(r.permissions); }}>
                       {isEditing ? "Close" : "Edit permissions"}
@@ -229,9 +229,9 @@ export default function RolesPanel() {
               }
             />
             <div className="p-4">
-              {isOwner ? (
+              {isSuperadmin ? (
                 <p className="text-[12.5px] text-txt-muted">
-                  The Platform Owner holds every permission, including ones added later.
+                  The Superadmin holds every permission, including ones added later.
                   That is what makes it the role that can always restore access.
                 </p>
               ) : isEditing ? (

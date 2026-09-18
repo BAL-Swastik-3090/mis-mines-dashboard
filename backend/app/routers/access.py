@@ -195,9 +195,9 @@ def update_role(role_id: int, request: Request, body: dict = Body(...),
         """), {"n": body.get("name"), "d": body.get("description"), "r": role_id})
 
     if "permissions" in body:
-        if code == access_svc.PLATFORM_OWNER:
+        if code == access_svc.SUPERADMIN:
             raise HTTPException(
-                400, "The Platform Owner holds every permission by definition and "
+                400, "The Superadmin holds every permission by definition and "
                      "cannot have them edited.")
         wanted = [str(c) for c in (body.get("permissions") or [])]
         mine = access_svc.permissions_for(db, _actor(request))

@@ -352,7 +352,7 @@ def list_leave(request: Request,
         JOIN leave_type lt ON lt.leave_type_id = lr.leave_type_id
         JOIN operator o    ON o.operator_id = lr.operator_id
         JOIN party p       ON p.party_id = o.party_id
-        WHERE (:status IS NULL OR lr.status = :status)
+        WHERE (CAST(:status AS text) IS NULL OR lr.status = CAST(:status AS text))
           AND (CAST(:op AS bigint) IS NULL OR lr.operator_id = CAST(:op AS bigint))
           AND (CAST(:from AS date) IS NULL OR lr.to_date   >= CAST(:from AS date))
           AND (CAST(:to   AS date) IS NULL OR lr.from_date <= CAST(:to   AS date))

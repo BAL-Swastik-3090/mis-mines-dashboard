@@ -68,7 +68,7 @@ def assignments(db: Session, from_date: date, to_date: date,
         FROM roster_assignment ra
         WHERE ra.effective_from <= :to
           AND (ra.effective_to IS NULL OR ra.effective_to >= :from)
-          AND (:ops::bigint[] IS NULL OR ra.operator_id = ANY(CAST(:ops AS bigint[])))
+          AND (CAST(:ops AS bigint[]) IS NULL OR ra.operator_id = ANY(CAST(:ops AS bigint[])))
         ORDER BY ra.operator_id, ra.effective_from DESC
     """), {"from": from_date, "to": to_date, "ops": operator_ids}).mappings().all()
 
@@ -95,7 +95,7 @@ def approved_leave(db: Session, from_date: date, to_date: date,
         JOIN leave_type lt ON lt.leave_type_id = lr.leave_type_id
         WHERE lr.status = 'APPROVED'
           AND lr.from_date <= :to AND lr.to_date >= :from
-          AND (:ops::bigint[] IS NULL OR lr.operator_id = ANY(CAST(:ops AS bigint[])))
+          AND (CAST(:ops AS bigint[]) IS NULL OR lr.operator_id = ANY(CAST(:ops AS bigint[])))
         ORDER BY lr.operator_id, lr.from_date
     """), {"from": from_date, "to": to_date, "ops": operator_ids}).mappings().all()
 
@@ -259,7 +259,12 @@ def coverage(db: Session, day: date, plant_id: int | None = None) -> dict:
     the reasons behind each one so the number is not something to be taken on
     trust.
     """
-    board = duty(db, day, day, plant_id=plant_id)
+    # Everybody active, not only those who already have a roster row — the
+    # whole point of the count is to find the people nobody has placed, and
+    # asking `duty` without a list returns only the people it already knows.
+    everyone = [r[0] for r in db.execute(text(
+        "SELECT operator_id FROM operator WHERE profile_status = 'ACTIVE'"))]
+    board = duty(db, day, day, everyone, plant_id)
     iso = day.isoformat()
     by_shift: dict[str, int] = {}
     on = off = away = closed = unrostered = 0

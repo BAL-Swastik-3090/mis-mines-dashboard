@@ -38,7 +38,11 @@ _cache_ok: bool = False     # have we ever loaded successfully?
 # The one role the code knows by name. It holds every permission including ones
 # added after it was created, so a new permission never needs a migration to
 # reach the people who administer the platform.
-PLATFORM_OWNER = "PLATFORM_OWNER"
+#
+# Called SUPERADMIN rather than "platform owner", because the platform is not
+# owned by whoever holds it — it belongs to the mine, and this role administers
+# it on the mine's behalf. Renamed in migration 029.
+SUPERADMIN = "SUPERADMIN"
 
 # Legacy fallback only — the mapping used if Postgres is unreachable and the
 # cache is cold. Mirrors minehub/import_legacy_access.py.
@@ -74,7 +78,7 @@ def _load() -> tuple[dict[str, set[str]], dict[str, list[dict]]]:
     perms: dict[str, set[str]] = {}
     roles: dict[str, list[dict]] = {}
     with SessionLocal() as db:
-        # Every permission of every role a person holds. The Platform Owner is
+        # Every permission of every role a person holds. The Superadmin is
         # unioned separately so it picks up permissions added later.
         rows = db.execute(text("""
             SELECT ua.emp_id, p.code
@@ -89,7 +93,7 @@ def _load() -> tuple[dict[str, set[str]], dict[str, list[dict]]]:
             JOIN role r ON r.role_id = ua.role_id AND r.code = :owner
             CROSS JOIN permission p
             WHERE ua.valid_to IS NULL
-        """), {"owner": PLATFORM_OWNER}).all()
+        """), {"owner": SUPERADMIN}).all()
         for emp_id, code in rows:
             perms.setdefault(emp_id, set()).add(code)
 
@@ -172,5 +176,5 @@ def has_access(db, emp_id: str) -> bool:
     return bool(permissions_for(db, emp_id))
 
 
-def is_platform_owner(db, emp_id: str) -> bool:
-    return any(r["code"] == PLATFORM_OWNER for r in roles_for(db, emp_id))
+def is_superadmin(db, emp_id: str) -> bool:
+    return any(r["code"] == SUPERADMIN for r in roles_for(db, emp_id))
