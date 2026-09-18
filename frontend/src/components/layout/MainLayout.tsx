@@ -7,6 +7,7 @@ import OEESection              from "@/components/sections/OEESection";
 import IntelligenceSection     from "@/components/sections/IntelligenceSection";
 import MineHubSection          from "@/components/sections/MineHubSection";
 import OperationsSection       from "@/components/sections/OperationsSection";
+import WorkforceSection        from "@/components/sections/WorkforceSection";
 import AccessControlSection    from "@/components/sections/AccessControlSection";
 import { useAppPage }          from "@/contexts/useAppPage";
 import { useSidebar }          from "@/contexts/useSidebar";
@@ -41,6 +42,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           {page === "access-control"   && <AccessControlSection />}
           {page === "minehub"          && <MineHubSection />}
           {page === "operations"       && <OperationsSection />}
+          {page === "workforce"        && <WorkforceSection />}
         </div>
       </main>
     </>

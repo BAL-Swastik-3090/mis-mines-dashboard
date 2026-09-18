@@ -1,7 +1,7 @@
 "use client";
 import {
   Radar, LayoutDashboard, Gauge, Zap, Activity, ClipboardList, Sparkles, Boxes, ShieldCheck,
-         ChevronLeft, ChevronRight, LogOut, ExternalLink } from "lucide-react";
+         ChevronLeft, ChevronRight, LogOut, ExternalLink, CalendarRange } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { useSidebar }               from "@/contexts/useSidebar";
 import { useAuth }                  from "@/contexts/useAuth";
@@ -52,6 +52,12 @@ const PLATFORM_ITEM: NavItem =
 const OPERATIONS_ITEM: NavItem =
   { kind: "page", id: "operations", label: "Shift Control", icon: Radar };
 
+/* The roster is planning rather than running: it deals in days nobody has
+   worked yet, which is why it is its own page and its own permission rather
+   than a sixth tab on the shift board. */
+const WORKFORCE_ITEM: NavItem =
+  { kind: "page", id: "workforce", label: "Workforce", icon: CalendarRange };
+
 const ITEM_BASE =
   "w-full flex items-center gap-3 px-3 py-2.5 transition-colors duration-150 relative group";
 
@@ -83,6 +89,7 @@ export default function AppSidebar() {
     // Permission, not role name — a role created in the UI reaches these entries
     // without any code change.
     ...(canAny("ops.shift.view") ? [OPERATIONS_ITEM] : []),
+    ...(canAny("ops.roster.view") ? [WORKFORCE_ITEM] : []),
     ...(canAny("access.users.view") ? [ACCESS_ITEM] : []),
     ...(canAny("platform.registry.view") ? [PLATFORM_ITEM] : []),
   ];

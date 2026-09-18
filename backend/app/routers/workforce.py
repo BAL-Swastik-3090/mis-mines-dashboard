@@ -265,6 +265,29 @@ def day_coverage(request: Request, day: str | None = Query(None),
     return roster.coverage(db, _day(day), plant_id)
 
 
+@router.get("/people")
+def list_people(request: Request, db: Session = Depends(get_minehub_db)) -> list[dict]:
+    """Everybody the roster can place, and where they currently sit.
+
+    Its own endpoint rather than the operator register's, because rostering
+    somebody does not require the right to read their medical record — and
+    borrowing the register's list would have quietly made it require that.
+    """
+    _require(request, VIEW, "see the roster")
+    return [dict(r) for r in db.execute(text("""
+        SELECT o.operator_id, o.operator_ref, o.designation, p.display_name,
+               rp.code AS pattern_code, rp.name AS pattern_name,
+               ra.effective_from
+        FROM operator o
+        JOIN party p ON p.party_id = o.party_id
+        LEFT JOIN roster_assignment ra
+               ON ra.operator_id = o.operator_id AND ra.effective_to IS NULL
+        LEFT JOIN roster_pattern rp ON rp.pattern_id = ra.pattern_id
+        WHERE o.profile_status = 'ACTIVE'
+        ORDER BY p.display_name
+    """)).mappings()]
+
+
 # ── leave ────────────────────────────────────────────────────────────────────
 @router.get("/leave-types")
 def list_leave_types(request: Request, db: Session = Depends(get_minehub_db)) -> list[dict]:
