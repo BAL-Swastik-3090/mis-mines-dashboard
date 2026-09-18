@@ -51,8 +51,10 @@ interface Plan {
   summary: Record<string, number>;
 }
 
-export default function AllocationEngine({ shiftInstanceId, mayDeploy, onChanged }: {
-  shiftInstanceId: number | null; mayDeploy: boolean; onChanged?: () => void;
+export default function AllocationEngine({ shiftInstanceId, mayDeploy, onChanged,
+                                          onOpenOperator }: {
+  shiftInstanceId: number | null; mayDeploy: boolean;
+  onChanged?: () => void; onOpenOperator?: (id: number) => void;
 }) {
   const [plan, setPlan] = useState<Plan | null>(null);
   const [loading, setLoading] = useState(false);
@@ -220,7 +222,11 @@ export default function AllocationEngine({ shiftInstanceId, mayDeploy, onChanged
                     <ChevronRight className="w-4 h-4 text-txt-light shrink-0" />
                     <Avatar name={p.display_name} />
                     <div className="min-w-[170px]">
-                      <p className="text-[13px] font-semibold text-navy">{p.display_name}</p>
+                      <button onClick={() => onOpenOperator?.(p.operator_id)}
+                        className="text-[13px] font-semibold text-navy hover:text-gold
+                                   hover:underline text-left">
+                        {p.display_name}
+                      </button>
                       <p className="text-[11px] text-txt-light">
                         {p.operator_ref || "—"} · {p.designation || "role not set"}
                       </p>

@@ -529,6 +529,137 @@ def remove_holiday(holiday_id: int, request: Request,
     return {"ok": True}
 
 
+# ── one person's working life ────────────────────────────────────────────────
+@router.get("/operators/{operator_id}/worklife")
+def worklife(operator_id: int, request: Request,
+             days: int = Query(90, ge=7, le=366),
+             db: Session = Depends(get_minehub_db)) -> dict:
+    """What this person has actually been doing, and what is planned for them.
+
+    The operator register answers who somebody is — their licence, their
+    assessments, their qualifications. This answers the other half: the shifts
+    they worked, the machines they ran, the leave they took and the roster ahead
+    of them. Kept apart deliberately, because rostering somebody should not
+    require the right to read their medical record.
+    """
+    _require(request, VIEW, "see the roster")
+    today = date.today()
+    since = today - timedelta(days=days)
+
+    person = db.execute(text("""
+        SELECT o.operator_id, o.operator_ref, o.designation, o.approval_status,
+               o.profile_status, o.joined_on, p.display_name, p.phone,
+               pl.name AS plant, ou.name AS department
+        FROM operator o
+        JOIN party p ON p.party_id = o.party_id
+        LEFT JOIN plant pl ON pl.plant_id = o.plant_id
+        LEFT JOIN org_unit ou ON ou.org_unit_id = o.org_unit_id
+        WHERE o.operator_id = :id
+    """), {"id": operator_id}).mappings().first()
+    if not person:
+        raise HTTPException(404, "That operator is not on the register.")
+
+    # The roster, a fortnight back and a fortnight forward: enough to see the
+    # pattern they are on without asking for a year of it.
+    board = roster.duty(db, today - timedelta(days=14), today + timedelta(days=14),
+                        [operator_id])
+    ahead = board.get(operator_id, {})
+
+    history = [dict(r) for r in db.execute(text("""
+        SELECT d.deployment_id, d.deployment_ref, d.status, d.started_at, d.ended_at,
+               d.start_reading, d.end_reading, d.activity,
+               a.fleet_code, a.asset_ref, t.name AS asset_type,
+               si.production_day, sc.code AS shift_code
+        FROM deployment d
+        JOIN asset a ON a.asset_id = d.asset_id
+        LEFT JOIN asset_type t ON t.asset_type_id = a.asset_type_id
+        LEFT JOIN shift_instance si ON si.shift_instance_id = d.shift_instance_id
+        LEFT JOIN shift_calendar sc ON sc.shift_id = si.shift_id
+        WHERE d.operator_id = :id AND COALESCE(si.production_day, d.started_at::date) >= :since
+        ORDER BY COALESCE(si.production_day, d.started_at::date) DESC, d.started_at DESC
+        LIMIT 200
+    """), {"id": operator_id, "since": since}).mappings()]
+
+    leave = [dict(r) for r in db.execute(text("""
+        SELECT lr.leave_request_id, lr.leave_ref, lr.from_date, lr.to_date, lr.days,
+               lr.status, lr.reason, lt.name AS type_name, lt.code AS type_code,
+               lt.is_paid, lt.annual_quota
+        FROM leave_request lr
+        JOIN leave_type lt ON lt.leave_type_id = lr.leave_type_id
+        WHERE lr.operator_id = :id
+          AND lr.from_date >= date_trunc('year', CURRENT_DATE)
+        ORDER BY lr.from_date DESC
+    """), {"id": operator_id}).mappings()]
+
+    # How many days of each kind have been used this year, against the quota the
+    # mine set — a balance for planning, never a payroll figure. SAP owns that.
+    used: dict[str, dict] = {}
+    for row in leave:
+        if row["status"] != "APPROVED":
+            continue
+        bucket = used.setdefault(row["type_code"], {
+            "name": row["type_name"], "quota": float(row["annual_quota"] or 0) or None,
+            "taken": 0.0})
+        bucket["taken"] += float(row["days"] or 0)
+
+    # What they can run, so the dashboard can say what to deploy them on without
+    # a second call to the register.
+    classes = [dict(r) for r in db.execute(text("""
+        SELECT c.asset_type_id, c.level, c.rating, c.valid_upto, c.next_assessment_due,
+               t.name AS asset_type,
+               (SELECT count(*) FROM asset a
+                 WHERE a.asset_type_id = c.asset_type_id
+                   AND COALESCE(a.status, 'ACTIVE') NOT IN ('DISPOSED', 'INACTIVE')) AS machines
+        FROM operator_competency c
+        JOIN asset_type t ON t.asset_type_id = c.asset_type_id
+        WHERE c.operator_id = :id AND c.dimension = 'OVERALL'
+          AND c.asset_id IS NULL AND c.status = 'ACTIVE'
+        ORDER BY c.level DESC NULLS LAST, t.name
+    """), {"id": operator_id}).mappings()]
+
+    live = db.execute(text("""
+        SELECT d.deployment_ref, d.status, d.started_at, a.fleet_code, t.name AS asset_type
+        FROM deployment d
+        JOIN asset a ON a.asset_id = d.asset_id
+        LEFT JOIN asset_type t ON t.asset_type_id = a.asset_type_id
+        WHERE d.operator_id = :id AND d.status IN ('READY', 'RUNNING', 'PAUSED')
+        ORDER BY d.started_at DESC LIMIT 1
+    """), {"id": operator_id}).mappings().first()
+
+    # Which machines they have actually spent time on, which is the question an
+    # appraisal asks and a list of deployments does not answer.
+    on_machines: dict[str, dict] = {}
+    for row in history:
+        code = row["fleet_code"]
+        seen = on_machines.setdefault(code, {"fleet_code": code,
+                                             "asset_type": row["asset_type"],
+                                             "shifts": 0, "last": None})
+        seen["shifts"] += 1
+        day = row["production_day"] or (row["started_at"].date() if row["started_at"] else None)
+        if day and (seen["last"] is None or day > seen["last"]):
+            seen["last"] = day
+
+    return {
+        "operator": dict(person),
+        "roster": ahead,
+        "today": ahead.get(today.isoformat()),
+        "on_machine_now": dict(live) if live else None,
+        "classes": classes,
+        "deployments": history,
+        "machines": sorted(on_machines.values(), key=lambda m: -m["shifts"]),
+        "leave": leave,
+        "leave_used": used,
+        "window_days": days,
+        "summary": {
+            "shifts_worked": len({r["production_day"] for r in history if r["production_day"]}),
+            "machines_run": len(on_machines),
+            "classes_competent": len([c for c in classes if (c["level"] or 0) >= 2]),
+            "leave_days_this_year": round(sum(b["taken"] for b in used.values()), 1),
+            "leave_waiting": len([r for r in leave if r["status"] == "SUBMITTED"]),
+        },
+    }
+
+
 # ── the allocation engine ────────────────────────────────────────────────────
 @router.get("/allocate/{shift_instance_id}")
 def propose_allocation(shift_instance_id: int, request: Request,

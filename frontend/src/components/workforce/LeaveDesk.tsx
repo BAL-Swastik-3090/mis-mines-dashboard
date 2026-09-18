@@ -49,8 +49,10 @@ const FILTERS = [
   { id: "", label: "Everything" },
 ];
 
-export default function LeaveDesk({ mayApply, mayApprove, mayManage, onChanged }: {
-  mayApply: boolean; mayApprove: boolean; mayManage: boolean; onChanged?: () => void;
+export default function LeaveDesk({ mayApply, mayApprove, mayManage, onChanged,
+                                   onOpenOperator }: {
+  mayApply: boolean; mayApprove: boolean; mayManage: boolean;
+  onChanged?: () => void; onOpenOperator?: (id: number) => void;
 }) {
   const [rows, setRows] = useState<Leave[]>([]);
   const [types, setTypes] = useState<LeaveType[]>([]);
@@ -258,7 +260,11 @@ export default function LeaveDesk({ mayApply, mayApprove, mayManage, onChanged }
                      className="px-5 py-3.5 flex flex-wrap items-center gap-3 hover:bg-slate-50/60">
                   <Avatar name={r.display_name} />
                   <div className="min-w-[190px]">
-                    <p className="text-[13px] font-semibold text-navy">{r.display_name}</p>
+                    <button onClick={() => onOpenOperator?.(r.operator_id)}
+                      className="text-[13px] font-semibold text-navy hover:text-gold
+                                 hover:underline text-left">
+                      {r.display_name}
+                    </button>
                     <p className="text-[11px] text-txt-light">
                       {r.operator_ref || "—"} · {r.designation || "role not set"}
                     </p>

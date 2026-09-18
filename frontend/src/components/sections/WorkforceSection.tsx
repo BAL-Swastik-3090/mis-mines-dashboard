@@ -25,6 +25,7 @@ import LeaveDesk from "@/components/workforce/LeaveDesk";
 import HolidayCalendar from "@/components/workforce/HolidayCalendar";
 import PatternStudio from "@/components/workforce/PatternStudio";
 import AllocationEngine from "@/components/workforce/AllocationEngine";
+import OperatorDashboard from "@/components/workforce/OperatorDashboard";
 
 type TabId = "roster" | "leave" | "calendar" | "patterns" | "allocate";
 
@@ -64,6 +65,7 @@ export default function WorkforceSection() {
   const [coverage, setCoverage] = useState<Coverage | null>(null);
   const [shifts, setShifts] = useState<ShiftRow[]>([]);
   const [shift, setShift] = useState<number | null>(null);
+  const [viewing, setViewing] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -181,16 +183,23 @@ export default function WorkforceSection() {
 
       <Tabs tabs={TABS} value={tab} onChange={(id) => setTab(id as TabId)} />
 
-      {tab === "roster" && <RosterBoard mayManage={mayManage} onChanged={load} />}
+      {tab === "roster" && (
+        <RosterBoard mayManage={mayManage} onChanged={load}
+                     onOpenOperator={setViewing} />
+      )}
       {tab === "allocate" && (
-        <AllocationEngine shiftInstanceId={shift} mayDeploy={mayDeploy} onChanged={load} />
+        <AllocationEngine shiftInstanceId={shift} mayDeploy={mayDeploy} onChanged={load}
+                          onOpenOperator={setViewing} />
       )}
       {tab === "leave" && (
-        <LeaveDesk mayApply={mayApply} mayApprove={mayApprove}
-                   mayManage={mayManage} onChanged={load} />
+        <LeaveDesk mayApply={mayApply} mayApprove={mayApprove} mayManage={mayManage}
+                   onChanged={load} onOpenOperator={setViewing} />
       )}
       {tab === "calendar" && <HolidayCalendar mayManage={mayManage} />}
       {tab === "patterns" && <PatternStudio mayManage={mayManage} onChanged={load} />}
+
+      <OperatorDashboard operatorId={viewing} mayApply={mayApply}
+                         onClose={() => setViewing(null)} onChanged={load} />
     </div>
   );
 }

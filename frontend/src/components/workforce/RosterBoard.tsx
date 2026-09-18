@@ -56,8 +56,8 @@ const WINDOWS = [
   { days: 6, label: "Week" },
 ];
 
-export default function RosterBoard({ mayManage, onChanged }: {
-  mayManage: boolean; onChanged?: () => void;
+export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
+  mayManage: boolean; onChanged?: () => void; onOpenOperator?: (id: number) => void;
 }) {
   const [start, setStart] = useState(() => isoDay(new Date()));
   const [length, setLength] = useState(13);
@@ -286,7 +286,11 @@ export default function RosterBoard({ mayManage, onChanged }: {
                                  className="w-3.5 h-3.5 rounded border-slate-300" />
                         )}
                         <span className="min-w-0">
-                          <span className="block text-[12.5px] font-semibold text-navy truncate">
+                          <span role="button" tabIndex={0}
+                            onClick={(e) => { e.preventDefault(); onOpenOperator?.(p.operator_id); }}
+                            onKeyDown={(e) => { if (e.key === "Enter") onOpenOperator?.(p.operator_id); }}
+                            className="block text-[12.5px] font-semibold text-navy truncate
+                                       hover:text-gold hover:underline cursor-pointer">
                             {p.display_name}
                           </span>
                           <span className="block text-[10.5px] text-txt-light truncate">
