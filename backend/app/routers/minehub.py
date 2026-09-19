@@ -14,12 +14,16 @@ Two registers are exposed here, and they are the ones everything else waits on:
 from __future__ import annotations
 
 import json
+import os
 import re
-from uuid import uuid4
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
+from uuid import uuid4
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from fastapi import (APIRouter, Body, Depends, File, HTTPException, Query,
+                     Request, UploadFile)
+from fastapi.responses import FileResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -62,6 +66,19 @@ OWNERSHIP = ("OWN", "HIRED")
 
 
 APPROVE_PERMISSION = "platform.registry.approve"
+MANAGE_PERMISSION = "platform.registry.manage"
+
+
+def _require_manage(request: Request, what: str) -> None:
+    """Reading the register and changing it are different rights.
+
+    The whole router already sits behind platform.registry.view, so this is the
+    second gate rather than the only one — it stops a reader attaching or
+    deleting files on a machine they can otherwise only look at.
+    """
+    if MANAGE_PERMISSION not in (getattr(request.state, "permissions", None) or set()):
+        raise HTTPException(403, f"You do not have permission to {what}. "
+                                 "An Access Manager can add it to your role.")
 
 
 def _may_approve(request: Request) -> bool:
@@ -502,9 +519,24 @@ def update_asset(asset_id: int, request: Request, body: dict = Body(...),
             continue
         changes[key] = {"from": _jsonable(old_value), "to": _jsonable(new_value)}
 
-    if not changes:
+    # Documents come with the same save. They were not being sent at all, so a
+    # renewed insurance date marked the form dirty, enabled the button, posted
+    # nothing, and was answered with "nothing changed" — the edit discarded and
+    # the message technically true.
+    doc_result = _save_documents(db, request, asset_id, body.get("documents"))
+
+    if not changes and not doc_result["touched"]:
         return {"ok": True, "asset_id": asset_id, "changed": 0,
-                "version": before["version"], "message": "Nothing changed."}
+                "version": before["version"], "message": "Nothing changed.",
+                "documents": doc_result}
+
+    if not changes:
+        # Only the papers moved. That is a real save and must not be reported as
+        # nothing, but it does not make a new version of the machine itself.
+        db.commit()
+        return {"ok": True, "asset_id": asset_id, "changed": 0,
+                "version": before["version"], "documents": doc_result,
+                "message": doc_result["message"]}
 
     cols = list(data.keys())
     # An approved record that is edited goes back to draft: the thing that was
@@ -524,8 +556,345 @@ def update_asset(asset_id: int, request: Request, body: dict = Body(...),
               payload={"version": version, "fields": sorted(changes.keys())})
     db.commit()
     return {"ok": True, "asset_id": asset_id, "version": version,
-            "changed": len(changes),
+            "changed": len(changes), "documents": doc_result,
             "approval_reset": reset_approval}
+
+
+# ── the papers themselves ────────────────────────────────────────────────────
+# Files on disk, metadata in a row. Exactly the arrangement operator_document
+# already uses — a scanned fitness certificate is not something to keep in a
+# column, and not something to lose on a redeploy.
+
+ASSET_DOCUMENT_ROOT = Path(os.environ.get(
+    "ASSET_DOCUMENT_ROOT",
+    Path(__file__).resolve().parents[2] / "storage" / "assets"))
+
+# What a browser may send. Anything else is refused rather than stored and
+# served back later, which is how an upload field becomes a way to host files.
+ASSET_FILE_TYPES = {
+    "application/pdf": ".pdf",
+    "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp",
+    "image/heic": ".heic",
+    "application/msword": ".doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.ms-excel": ".xls",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+}
+ASSET_MAX_UPLOAD = 15 * 1024 * 1024
+
+
+@router.get("/assets/{asset_id}/documents")
+def list_asset_documents(asset_id: int, db: Session = Depends(get_minehub_db)) -> list[dict]:
+    """The papers on file for this machine, newest first."""
+    return [dict(r) for r in db.execute(text("""
+        SELECT d.asset_document_id, d.asset_compliance_id, d.kind, d.title,
+               d.file_name, d.content_type, d.size_bytes, d.uploaded_by,
+               d.uploaded_at, c.document_type, c.valid_upto
+        FROM asset_document d
+        LEFT JOIN asset_compliance c
+               ON c.asset_compliance_id = d.asset_compliance_id
+        WHERE d.asset_id = :a AND d.status = 'ACTIVE'
+        ORDER BY d.uploaded_at DESC
+    """), {"a": asset_id}).mappings()]
+
+
+@router.post("/assets/{asset_id}/documents")
+async def upload_asset_document(asset_id: int, request: Request,
+                                file: UploadFile = File(...),
+                                kind: str = Query("OTHER"),
+                                title: str = Query(""),
+                                asset_compliance_id: int | None = Query(None),
+                                db: Session = Depends(get_minehub_db)) -> dict:
+    """Attach a certificate, invoice or permit.
+
+    Attached to a document version rather than to the machine where one is
+    given: last year's policy belongs on last year's row, which is what makes
+    the renewal history worth keeping.
+    """
+    _require_manage(request, "attach files to a machine")
+
+    if not db.execute(text("SELECT 1 FROM asset WHERE asset_id = :a"),
+                      {"a": asset_id}).first():
+        raise HTTPException(404, "Machine not found.")
+
+    suffix = ASSET_FILE_TYPES.get(file.content_type or "")
+    if not suffix:
+        raise HTTPException(400,
+            "That file type cannot be attached. PDFs, images, Word and Excel "
+            f"files can (this was {file.content_type or 'unrecognised'}).")
+
+    payload = await file.read()
+    if len(payload) > ASSET_MAX_UPLOAD:
+        raise HTTPException(400, "That file is larger than 15 MB.")
+    if not payload:
+        raise HTTPException(400, "That file is empty.")
+
+    ASSET_DOCUMENT_ROOT.mkdir(parents=True, exist_ok=True)
+    stored = f"{asset_id}-{uuid4().hex}{suffix}"
+    (ASSET_DOCUMENT_ROOT / stored).write_bytes(payload)
+
+    row = db.execute(text("""
+        INSERT INTO asset_document (asset_id, asset_compliance_id, kind, title,
+                                    file_name, stored_name, content_type,
+                                    size_bytes, uploaded_by)
+        VALUES (:a, :c, :k, :t, :fn, :sn, :ct, :sz, :by)
+        RETURNING asset_document_id, kind, title, file_name, content_type,
+                  size_bytes, uploaded_at
+    """), {"a": asset_id, "c": asset_compliance_id, "k": (kind or "OTHER").upper(),
+           "t": title.strip() or None, "fn": file.filename or stored,
+           "sn": stored, "ct": file.content_type, "sz": len(payload),
+           "by": _actor(request)}).mappings().first()
+
+    _activity(db, request, "ASSET_DOCUMENT_ATTACHED", asset_id=asset_id,
+              payload={"file": file.filename, "kind": kind,
+                       "bytes": len(payload)})
+    db.commit()
+    return dict(row)
+
+
+@router.get("/assets/{asset_id}/documents/{document_id}")
+def download_asset_document(asset_id: int, document_id: int,
+                            db: Session = Depends(get_minehub_db)):
+    """Hand the file back under the name it was uploaded with."""
+    row = db.execute(text("""
+        SELECT stored_name, file_name, content_type FROM asset_document
+        WHERE asset_document_id = :d AND asset_id = :a AND status = 'ACTIVE'
+    """), {"d": document_id, "a": asset_id}).mappings().first()
+    if not row:
+        raise HTTPException(404, "That file is no longer on file.")
+
+    path = ASSET_DOCUMENT_ROOT / row["stored_name"]
+    if not path.exists():
+        raise HTTPException(410, "The record is here but the file is missing "
+                                 "from storage. It may not have survived a move.")
+    return FileResponse(path, filename=row["file_name"],
+                        media_type=row["content_type"] or "application/octet-stream")
+
+
+@router.delete("/assets/{asset_id}/documents/{document_id}")
+def remove_asset_document(asset_id: int, document_id: int, request: Request,
+                          db: Session = Depends(get_minehub_db)) -> dict:
+    """Take a file off the record.
+
+    Marked rather than erased, and the bytes stay: a certificate removed by
+    mistake the week before an inspection is not something to discover is gone.
+    """
+    _require_manage(request, "remove a file from a machine")
+    res = db.execute(text("""
+        UPDATE asset_document SET status = 'REMOVED'
+        WHERE asset_document_id = :d AND asset_id = :a AND status = 'ACTIVE'
+    """), {"d": document_id, "a": asset_id})
+    if res.rowcount == 0:
+        raise HTTPException(404, "That file is no longer on file.")
+    _activity(db, request, "ASSET_DOCUMENT_REMOVED", asset_id=asset_id,
+              payload={"asset_document_id": document_id})
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/assets/{asset_id}/compliance-history")
+def compliance_history(asset_id: int,
+                       db: Session = Depends(get_minehub_db)) -> dict:
+    """Every version of every certificate, and every correction made to one.
+
+    The question this answers is "what was the insurance on the day of the
+    incident", which the current row cannot.
+    """
+    versions = [dict(r) for r in db.execute(text("""
+        SELECT c.asset_compliance_id, c.document_type, c.document_no, c.provider,
+               c.valid_from, c.valid_upto, c.amount, c.renewal_no,
+               c.superseded_at, c.renewed_from, c.created_by, c.created_at,
+               (SELECT count(*) FROM asset_document d
+                 WHERE d.asset_compliance_id = c.asset_compliance_id
+                   AND d.status = 'ACTIVE')                       AS files
+        FROM asset_compliance c
+        WHERE c.asset_id = :a
+        ORDER BY c.document_type, c.renewal_no DESC, c.created_at DESC
+    """), {"a": asset_id}).mappings()]
+
+    corrections = [dict(r) for r in db.execute(text("""
+        SELECT r.revision_id, r.asset_compliance_id, r.changes, r.reason,
+               r.changed_by, r.changed_at, c.document_type
+        FROM asset_compliance_revision r
+        JOIN asset_compliance c ON c.asset_compliance_id = r.asset_compliance_id
+        WHERE r.asset_id = :a
+        ORDER BY r.changed_at DESC
+    """), {"a": asset_id}).mappings()]
+
+    by_type: dict[str, list] = {}
+    for v in versions:
+        by_type.setdefault(v["document_type"], []).append(v)
+
+    return {"asset_id": asset_id, "by_type": by_type,
+            "current": [v for v in versions if v["superseded_at"] is None],
+            "corrections": corrections,
+            "renewals": len([v for v in versions if v["renewed_from"]])}
+
+
+# ── statutory documents ──────────────────────────────────────────────────────
+# A date on a certificate moves for two completely different reasons, and
+# collapsing them loses the only record that matters after an incident.
+#
+#   CORRECTION  the date was typed wrong. One truth; the old value never was.
+#               Edited in place, with a revision row saying what it used to be.
+#   RENEWAL     the certificate was renewed. Both values were true, each for
+#               its own period. Appended, with the old row superseded and
+#               kept — it is what proves the machine was covered last March.
+#
+# Which one it is, is the caller's to say. Guessing from the dates would get it
+# wrong exactly when it matters: a renewal backdated to fix an overlap looks
+# like a correction, and a correction that moves a date forward looks like a
+# renewal.
+
+DOC_FIELDS = ("document_no", "provider", "valid_from", "valid_upto", "amount",
+              "issuing_authority", "reminder_days", "remarks")
+
+
+def _save_documents(db, request: Request, asset_id: int, documents) -> dict:
+    """Persist the statutory rows that came with an asset save."""
+    if not documents:
+        return {"touched": 0, "renewed": [], "corrected": [], "added": [],
+                "message": "Nothing changed."}
+
+    current = {r["asset_compliance_id"]: dict(r) for r in db.execute(text("""
+        SELECT * FROM asset_compliance
+        WHERE asset_id = :a AND superseded_at IS NULL
+    """), {"a": asset_id}).mappings()}
+
+    renewed, corrected, added = [], [], []
+
+    for doc in documents:
+        if not isinstance(doc, dict):
+            continue
+        kind = (doc.get("document_type") or "").strip().upper()
+        if not kind:
+            continue
+
+        incoming = {k: doc.get(k) for k in DOC_FIELDS if k in doc}
+        existing_id = doc.get("asset_compliance_id")
+        existing = current.get(existing_id) if existing_id else None
+
+        # A renewal supersedes the row the form was holding, so the next save
+        # arrives quoting an id that is no longer current. Falling back to the
+        # current row of the same type is not a guess: there is exactly one, by
+        # construction. Without this, saving twice after a renewal silently
+        # creates a duplicate insurance record.
+        if existing is None:
+            existing = next((row for row in current.values()
+                             if row["document_type"] == kind), None)
+
+        if not existing:
+            row = db.execute(text("""
+                INSERT INTO asset_compliance
+                    (asset_id, document_type, document_no, provider, valid_from,
+                     valid_upto, amount, created_by)
+                VALUES (:a, :t, :no, :prov, CAST(:vf AS date), CAST(:vu AS date),
+                        CAST(:amt AS numeric), :by)
+                RETURNING asset_compliance_id
+            """), {"a": asset_id, "t": kind,
+                   "no": _blank(doc.get("document_no")),
+                   "prov": _blank(doc.get("provider")),
+                   "vf": _blank(doc.get("valid_from")),
+                   "vu": _blank(doc.get("valid_upto")),
+                   "amt": _blank(doc.get("amount")),
+                   "by": _actor(request)}).mappings().first()
+            added.append({"document_type": kind,
+                          "asset_compliance_id": row["asset_compliance_id"]})
+            continue
+
+        diff = {}
+        for field in DOC_FIELDS:
+            if field not in incoming:
+                continue
+            if not _same(existing.get(field), incoming[field]):
+                diff[field] = {"from": _jsonable(existing.get(field)),
+                               "to": _jsonable(incoming[field])}
+        if not diff:
+            continue
+
+        if str(doc.get("change_type") or "").upper() == "RENEWAL":
+            # The old row stops being current and keeps everything it had. The
+            # new one carries the new dates and points back at what it replaced.
+            new_row = db.execute(text("""
+                INSERT INTO asset_compliance
+                    (asset_id, document_type, document_no, provider, valid_from,
+                     valid_upto, amount, issuing_authority, reminder_days,
+                     renewed_from, renewal_no, created_by)
+                VALUES (:a, :t, :no, :prov, CAST(:vf AS date), CAST(:vu AS date),
+                        CAST(:amt AS numeric), :auth, :rem, :from_id, :n, :by)
+                RETURNING asset_compliance_id
+            """), {"a": asset_id, "t": kind,
+                   "no": _blank(doc.get("document_no")) or existing.get("document_no"),
+                   "prov": _blank(doc.get("provider")) or existing.get("provider"),
+                   "vf": _blank(doc.get("valid_from")),
+                   "vu": _blank(doc.get("valid_upto")),
+                   "amt": _blank(doc.get("amount")),
+                   "auth": _blank(doc.get("issuing_authority")),
+                   "rem": doc.get("reminder_days") or existing.get("reminder_days"),
+                   "from_id": existing["asset_compliance_id"],
+                   "n": (existing.get("renewal_no") or 1) + 1,
+                   "by": _actor(request)}).mappings().first()
+
+            db.execute(text("""
+                -- status is left alone on purpose. It says whether the
+                -- document was valid — ACTIVE, EXPIRED, NOT_APPLICABLE — and
+                -- superseded_at says which version this is. Writing
+                -- "SUPERSEDED" into status would conflate the two and lose the
+                -- fact that last year's policy was perfectly valid last year.
+                UPDATE asset_compliance
+                   SET superseded_at = now(), superseded_by = :new
+                 WHERE asset_compliance_id = :old
+            """), {"new": new_row["asset_compliance_id"],
+                   "old": existing["asset_compliance_id"]})
+
+            renewed.append({"document_type": kind,
+                            "from": _jsonable(existing.get("valid_upto")),
+                            "to": _jsonable(doc.get("valid_upto")),
+                            "asset_compliance_id": new_row["asset_compliance_id"]})
+        else:
+            sets = ", ".join(f"{k} = :{k}" for k in diff)
+            params = {k: _blank(incoming[k]) for k in diff}
+            db.execute(text(
+                f"UPDATE asset_compliance SET {sets}, updated_at = now() "
+                f"WHERE asset_compliance_id = :id"),
+                {**params, "id": existing["asset_compliance_id"]})
+
+            db.execute(text("""
+                INSERT INTO asset_compliance_revision
+                    (asset_compliance_id, asset_id, changes, reason, changed_by)
+                VALUES (:c, :a, CAST(:ch AS jsonb), :why, :by)
+            """), {"c": existing["asset_compliance_id"], "a": asset_id,
+                   "ch": json.dumps(diff, default=_jsonable),
+                   "why": _blank(doc.get("change_reason")), "by": _actor(request)})
+
+            corrected.append({"document_type": kind, "fields": sorted(diff)})
+
+    touched = len(renewed) + len(corrected) + len(added)
+    if touched:
+        _activity(db, request, "ASSET_DOCUMENTS_SAVED", asset_id=asset_id,
+                  payload={"renewed": renewed, "corrected": corrected,
+                           "added": [a["document_type"] for a in added]})
+
+    parts = []
+    if renewed:
+        parts.append(f"{len(renewed)} renewed")
+    if corrected:
+        parts.append(f"{len(corrected)} corrected")
+    if added:
+        parts.append(f"{len(added)} added")
+
+    return {"touched": touched, "renewed": renewed, "corrected": corrected,
+            "added": added,
+            "message": ("Documents: " + ", ".join(parts) + "."
+                        if parts else "Nothing changed.")}
+
+
+def _blank(value):
+    """Empty string means "not given", which in a date column is NULL."""
+    if value is None:
+        return None
+    text_value = str(value).strip()
+    return text_value or None
 
 
 def _same(a, b) -> bool:

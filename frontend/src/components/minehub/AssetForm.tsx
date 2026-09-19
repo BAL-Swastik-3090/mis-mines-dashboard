@@ -15,11 +15,13 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Plus, Trash2, Check, Loader2, Info, ArrowLeft, Send, CheckCircle2, Undo2, Copy } from "lucide-react";
 import api from "@/lib/api";
+import { useAuth } from "@/contexts/useAuth";
 import { Alert, Button, Chip, type Tone } from "./ui";
 import Toast from "./Toast";
 import Dialog from "./Dialog";
 import RevisionPanel, { type Revision } from "./RevisionPanel";
 import Combobox from "./Combobox";
+import AssetFiles, { Paperclip } from "./AssetFiles";
 
 interface AssetType { asset_type_id: number; name: string; category: string }
 interface Party {
@@ -33,6 +35,17 @@ interface Location { location_id: number; name: string; location_type: string }
 interface DocRow {
   document_type: string; document_no: string; provider: string;
   valid_from: string; valid_upto: string; amount: string;
+  /** Present once the row exists on file. Absent on a row being added. */
+  asset_compliance_id?: number;
+  /** What moving the date means. Asked for, never guessed: a renewal
+   *  backdated to close a gap looks exactly like a correction, and getting
+   *  it wrong either loses last year's cover or invents a renewal that
+   *  never happened. */
+  change_type?: "CORRECTION" | "RENEWAL";
+  change_reason?: string;
+  /** What it looked like when the form loaded, so the row can tell whether
+   *  it has actually been touched. */
+  original?: { valid_from: string; valid_upto: string; document_no: string };
 }
 interface SchedRow {
   schedule_type: string; name: string; interval_value: string; interval_uom: string;
@@ -186,6 +199,10 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   // Whether this person may accept entries onto the register. Asked rather than
   // assumed, so the button is absent instead of present and refused.
   const [mayApprove, setMayApprove] = useState(false);
+  // Read here rather than trusted from the parent: the form is only opened by
+  // someone who may manage, but an attach button that appears for a reader is
+  // a button that 403s, which reads as broken rather than as forbidden.
+  const mayManage = useAuth((state) => state.can)("platform.registry.manage");
 
   useEffect(() => {
     void (async () => {
@@ -248,12 +265,21 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
         asForm[k] = String(v);
       });
       setF(asForm);
-      setDocs((a.documents ?? []).map((d: Record<string, unknown>) => ({
-        document_type: String(d.document_type ?? "INSURANCE"),
-        document_no: String(d.document_no ?? ""), provider: String(d.provider ?? ""),
-        valid_from: String(d.valid_from ?? ""), valid_upto: String(d.valid_upto ?? ""),
-        amount: String(d.amount ?? ""),
-      })));
+      setDocs((a.documents ?? []).map((d: Record<string, unknown>) => {
+        const row = {
+          document_type: String(d.document_type ?? "INSURANCE"),
+          document_no: String(d.document_no ?? ""), provider: String(d.provider ?? ""),
+          valid_from: String(d.valid_from ?? ""), valid_upto: String(d.valid_upto ?? ""),
+          amount: String(d.amount ?? ""),
+          asset_compliance_id: d.asset_compliance_id
+            ? Number(d.asset_compliance_id) : undefined,
+        };
+        return {
+          ...row,
+          original: { valid_from: row.valid_from, valid_upto: row.valid_upto,
+                      document_no: row.document_no },
+        };
+      }));
       setScheds((a.schedules ?? []).map((x: Record<string, unknown>) => ({
         schedule_type: String(x.schedule_type ?? "SERVICE"), name: String(x.name ?? ""),
         interval_value: String(x.interval_value ?? ""), interval_uom: String(x.interval_uom ?? "HOURS"),
@@ -419,6 +445,23 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   const raise = (msg: string) => { setNotice(null); setError(msg); };
 
   const submit = async (then: "stay" | "submit" = "stay"): Promise<boolean> => {
+    // A moved date with no answer cannot be saved, because the two answers do
+    // different things to the record and neither is a safe default. Guessing
+    // would either lose last year's cover or invent a renewal nobody made.
+    const unanswered = docs.filter((d) => d.asset_compliance_id && d.original
+      && (d.valid_upto !== d.original.valid_upto
+          || d.valid_from !== d.original.valid_from
+          || d.document_no !== d.original.document_no)
+      && !d.change_type);
+    if (unanswered.length > 0) {
+      raise(`Say whether the ${unanswered.length === 1 ? "change" : "changes"} to `
+        + unanswered.map((d) => (DOC_TYPES.find(([v]) => v === d.document_type)?.[1]
+                                 ?? d.document_type).toLowerCase()).join(", ")
+        + ` ${unanswered.length === 1 ? "is" : "are"} a renewal or a correction. `
+        + "A renewal keeps the old dates on file; a correction replaces them.");
+      return false;
+    }
+
     // Only the path that puts this in front of someone else checks for
     // completeness. Saving a draft takes whatever has been typed so far — the
     // rest can be filled in after a walk to the machine.
@@ -446,12 +489,17 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
     setSaving(true); setError(null);
     try {
       if (editing) {
-        const r = await api.put(`/minehub/assets/${id}`, f);
+        // Documents go with the save. They were not being sent at all, so a
+        // renewed date enabled the button, posted nothing, and came back
+        // "nothing changed" — the edit lost and the message technically true.
+        const r = await api.put(`/minehub/assets/${id}`, { ...f, documents: docs });
         setSaved(snapshot);
+        const papers = r.data?.documents?.touched
+          ? " " + r.data.documents.message : "";
         setNotice(r.data?.changed
-          ? `Saved — ${r.data.changed} field${r.data.changed === 1 ? "" : "s"} changed, now v${r.data.version}.`
+          ? `Saved — ${r.data.changed} field${r.data.changed === 1 ? "" : "s"} changed, now v${r.data.version}.${papers}`
              + (r.data.approval_reset ? " Approval was reset, because what was approved is no longer what is on file." : "")
-          : "Nothing had changed.");
+          : papers.trim() || "Nothing had changed.");
         await loadAsset(); await loadRevisions();
         setSaving(false);
         return true;
@@ -1062,8 +1110,15 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
               </tr>
             </thead>
             <tbody>
-              {docs.map((d, i) => (
-                <tr key={i} className="border-b border-border-light last:border-0">
+              {docs.map((d, i) => {
+                const onFile = Boolean(d.asset_compliance_id);
+                const moved = onFile && d.original
+                  && (d.valid_upto !== d.original.valid_upto
+                      || d.valid_from !== d.original.valid_from
+                      || d.document_no !== d.original.document_no);
+                return (
+                <React.Fragment key={i}>
+                <tr className="border-b border-border-light last:border-0">
                   <td className="w-[180px]">
                     <select className={cellInput} value={d.document_type}
                       onChange={(e) => setDocs(docs.map((x, j) => j === i ? { ...x, document_type: e.target.value } : x))}>
@@ -1090,9 +1145,82 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
                     </button>
                   </td>
                 </tr>
-              ))}
+
+                {/* The question only appears once something has actually moved,
+                    and it has to be answered: overwriting on a renewal loses
+                    the record that the machine was covered last year, which is
+                    the answer an inspector asks for after an incident. */}
+                {moved && (
+                  <tr className="bg-amber-bg/40 border-b border-border-light">
+                    <td colSpan={7} className="px-3 py-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-[12px] font-semibold text-txt-primary">
+                          What kind of change is this?
+                        </span>
+                        <button type="button"
+                          onClick={() => setDocs(docs.map((x, j) => j === i
+                            ? { ...x, change_type: "RENEWAL" } : x))}
+                          className={`px-2.5 py-1 rounded-lg text-[11.5px] font-semibold border transition
+                            ${d.change_type === "RENEWAL"
+                              ? "bg-emerald/10 text-emerald border-emerald/40"
+                              : "bg-white text-txt-muted border-slate-200 hover:bg-slate-50"}`}>
+                          Renewed
+                        </button>
+                        <button type="button"
+                          onClick={() => setDocs(docs.map((x, j) => j === i
+                            ? { ...x, change_type: "CORRECTION" } : x))}
+                          className={`px-2.5 py-1 rounded-lg text-[11.5px] font-semibold border transition
+                            ${d.change_type === "CORRECTION"
+                              ? "bg-sky/10 text-sky border-sky/40"
+                              : "bg-white text-txt-muted border-slate-200 hover:bg-slate-50"}`}>
+                          Correcting a mistake
+                        </button>
+                        {d.change_type === "RENEWAL" && (
+                          <span className="text-[11.5px] text-txt-muted">
+                            The old certificate is kept, valid until{" "}
+                            {d.original?.valid_upto || "—"}.
+                          </span>
+                        )}
+                        {d.change_type === "CORRECTION" && (
+                          <input className="flex-1 min-w-[180px] rounded-lg border border-slate-200
+                                            px-2 py-1 text-[12px]"
+                            placeholder="What was wrong with it? (optional)"
+                            value={d.change_reason ?? ""}
+                            onChange={(e) => setDocs(docs.map((x, j) => j === i
+                              ? { ...x, change_reason: e.target.value } : x))} />
+                        )}
+                        {!d.change_type && (
+                          <span className="text-[11.5px] text-amber font-medium">
+                            Choose one — it decides whether the old dates are kept.
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </React.Fragment>
+                );
+              })}
             </tbody>
           </table>
+        </div>
+
+        {/* The papers, under the dates they prove. Separate band would have
+            put the certificate on a different screen from the expiry, which is
+            how a register ends up with dates nobody can evidence. */}
+        <div className="border border-t-0 border-border rounded-b-xl bg-bg-base">
+          <div className="px-3 pt-2 flex items-center gap-1.5">
+            <Paperclip className="w-3.5 h-3.5 text-txt-light" />
+            <span className="text-[10.5px] font-bold uppercase tracking-[.12em]
+                             text-txt-light font-condensed">Attached files</span>
+          </div>
+          <AssetFiles assetId={editing ? Number(id) : createdId}
+            mayManage={mayManage}
+            attachments={docs
+              .filter((d) => d.asset_compliance_id)
+              .map((d) => ({ asset_compliance_id: d.asset_compliance_id,
+                             document_type: d.document_type,
+                             valid_upto: d.valid_upto }))} />
         </div>
       </div>
 

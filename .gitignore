@@ -58,3 +58,8 @@ secrets/
 Claude Context backup/
 *.tsbuildinfo
 storage/
+
+# Attached certificates and scans. Files live on disk beside the app, never in
+# git: a scanned fitness certificate is not source, and some of them carry
+# personal data.
+backend/storage/
