@@ -277,6 +277,16 @@ def list_assets(q: str = Query(""), status: str = Query(""),
                a.rated_output_per_hr, a.rated_fuel_lph, a.commissioned_on,
                a.fuel_type, a.propulsion,
                a.nickname, a.version, a.approval_status,
+               -- When this machine was last touched, and by whom. A register
+               -- that cannot say how stale a row is asks people to trust every
+               -- row equally, and a tipper last edited in 2019 does not deserve
+               -- the same confidence as one edited this morning.
+               a.updated_at, a.created_at,
+               COALESCE(
+                   (SELECT r.changed_by FROM asset_revision r
+                     WHERE r.asset_id = a.asset_id
+                     ORDER BY r.changed_at DESC LIMIT 1),
+                   a.created_by)                                  AS last_changed_by,
                t.asset_type_id, t.name AS asset_type, t.category,
                o.display_name AS owner,
                COALESCE(ident.alias_count, 0) AS alias_count,

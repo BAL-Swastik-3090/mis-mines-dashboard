@@ -11,9 +11,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Search, Link2, Trash2, Check, Loader2, Radio, ChevronDown, ChevronRight,
-  Cpu, Fuel, Zap, Wrench, Plus, Building2,
+  Cpu, Fuel, Zap, Wrench, Plus, Building2, X,
 } from "lucide-react";
 import api from "@/lib/api";
+import ColumnFilter, { optionsFrom } from "./ColumnFilter";
 import CommentThread from "@/components/comments/CommentThread";
 import { useAuth } from "@/contexts/useAuth";
 import AssetForm from "./AssetForm";
@@ -32,6 +33,8 @@ interface Asset {
   propulsion?: string | null; fuel_type?: string | null;
   owner: string | null; alias_count: number; alias_systems: string | null;
   version?: number; approval_status?: string;
+  updated_at?: string | null; created_at?: string | null;
+  last_changed_by?: string | null;
 }
 interface Identity { asset_identity_id: number; system: string; external_code: string }
 interface Unmapped { vehicle_desc: string; feed: string; rows_: number; last_seen: string }
@@ -41,6 +44,21 @@ interface Unmapped { vehicle_desc: string; feed: string; rows_: number; last_see
 const APPROVAL_TONE: Record<string, Tone> = {
   DRAFT: "slate", SUBMITTED: "amber", SENT_BACK: "rose", APPROVED: "emerald",
 };
+
+/** When a row last moved, said the way somebody would say it. Anything older
+ *  than a fortnight gets the date instead: "47 days ago" is a number people
+ *  have to convert, and the date is what they were going to ask for. */
+function changedWhen(iso?: string | null): string {
+  if (!iso) return "never edited";
+  const then = new Date(iso);
+  if (Number.isNaN(then.getTime())) return "";
+  const days = Math.floor((Date.now() - then.getTime()) / 86_400_000);
+  if (days < 1) return "changed today";
+  if (days === 1) return "changed yesterday";
+  if (days < 14) return `changed ${days} days ago`;
+  return `changed ${then.toLocaleDateString("en-IN",
+    { day: "2-digit", month: "short", year: "numeric" })}`;
+}
 
 const STATUS_TONE: Record<string, Tone> = {
   ACTIVE: "emerald", MAINTENANCE: "amber", STANDBY: "sky", IDLE: "slate",
@@ -102,6 +120,16 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
   // registered is one click away, but a list that leads with four scrapped
   // lorries is a list people stop trusting to show them the fleet.
   const [stage, setStage] = useState("IN_SERVICE");
+  // Every column filters, and they narrow together: type Excavator and owner
+  // DASHMESH is a question somebody actually asks, and answering it with two
+  // separate screens is how people go back to the spreadsheet.
+  const [by, setBy] = useState({ type: "", owner: "", make: "", model: "",
+                                 linked: "" });
+  const set = (k: keyof typeof by) => (v: string) => setBy((b) => ({ ...b, [k]: v }));
+  const clearAll = () => {
+    setBy({ type: "", owner: "", make: "", model: "", linked: "" });
+    setStage("IN_SERVICE"); setPropulsion(""); setQuery("");
+  };
 
   // Hybrids count as electric here. A fleet that is going electric is asked
   // "how far along are we", and a machine that runs on a battery half the time
@@ -112,6 +140,31 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
     () => (stage === "IN_SERVICE"
       ? assets.filter((a) => !IN_SERVICE.includes(a.status)).length : 0),
     [assets, stage]);
+
+  // Built from the rows the other filters leave, so the menus never offer a
+  // value that would return nothing — picking a make and finding an empty
+  // table is the moment somebody decides the filter is broken.
+  const pool = React.useMemo(() => assets.filter((a) => {
+    if (stage === "IN_SERVICE" && !IN_SERVICE.includes(a.status)) return false;
+    if (stage && stage !== "IN_SERVICE" && a.status !== stage) return false;
+    return true;
+  }), [assets, stage]);
+
+  const menus = React.useMemo(() => ({
+    type: optionsFrom(pool, (a) => a.asset_type),
+    owner: optionsFrom(pool, (a) => a.owner),
+    make: optionsFrom(pool, (a) => a.make),
+    model: optionsFrom(pool, (a) => a.model),
+    linked: [
+      { value: "LINKED", label: "Linked to another system",
+        count: pool.filter((a) => a.alias_count).length },
+      { value: "NONE", label: "Not linked yet",
+        count: pool.filter((a) => !a.alias_count).length },
+    ],
+  }), [pool]);
+
+  const narrowed = Boolean(by.type || by.owner || by.make || by.model
+    || by.linked || propulsion || query.trim() || stage !== "IN_SERVICE");
 
   const evCount = React.useMemo(
     () => assets.filter((a) => a.propulsion === "EV" || a.propulsion === "HYBRID").length,
@@ -157,13 +210,19 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
     return assets.filter((a) => {
       if (stage === "IN_SERVICE" && !IN_SERVICE.includes(a.status)) return false;
       if (stage && stage !== "IN_SERVICE" && a.status !== stage) return false;
+      if (by.type && a.asset_type !== by.type) return false;
+      if (by.owner && (a.owner ?? "") !== by.owner) return false;
+      if (by.make && (a.make ?? "") !== by.make) return false;
+      if (by.model && (a.model ?? "") !== by.model) return false;
+      if (by.linked === "LINKED" && !a.alias_count) return false;
+      if (by.linked === "NONE" && a.alias_count) return false;
       if (propulsion === "EV" && a.propulsion !== "EV" && a.propulsion !== "HYBRID") return false;
       if (propulsion === "NON_EV" && a.propulsion === "EV") return false;
       if (!q) return true;
       return [a.fleet_code, a.nickname, a.registration_no, a.make, a.model, a.asset_type]
         .some((v) => (v ?? "").toLowerCase().includes(q));
     });
-  }, [assets, query, propulsion, stage]);
+  }, [assets, query, propulsion, stage, by]);
 
   const openIdentities = async (id: number) => {
     if (expanded === id) { setExpanded(null); return; }
@@ -255,12 +314,22 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
       {/* The register */}
       <Card tone="sky">
         <CardHeader title={`Fleet register · ${filtered.length}`} icon={Cpu} tone="sky"
-          subtitle={hidden > 0
-            ? `Showing ${filtered.length} in service — ${hidden} off road, scrapped or `
-              + `disposed are hidden. Change the Status heading to see them.`
-            : "Own and hired machines. Expand a row to link the names other systems use."}
+          subtitle={narrowed
+            ? `Showing ${filtered.length} of ${assets.length}`
+              + (hidden > 0 ? ` — ${hidden} off road, scrapped or disposed are hidden` : "")
+              + ". Any heading with an arrow filters the column."
+            : "Own and hired machines. Any heading with an arrow filters the column; "
+              + "expand a row to link the names other systems use."}
           actions={
             <>
+              {narrowed && (
+                <button type="button" onClick={clearAll}
+                  className="inline-flex items-center gap-1 rounded-lg border border-gold/40
+                             bg-gold/[0.07] px-2.5 py-1.5 text-[11px] font-semibold
+                             text-gold-dark hover:bg-gold/15 transition">
+                  <X className="w-3 h-3" /> Clear filters
+                </button>
+              )}
               <div className="relative">
                 <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-txt-light" />
                 <input id="eq-search" value={query} onChange={(e) => setQuery(e.target.value)}
@@ -279,29 +348,42 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
           <table className="w-full min-w-[720px]">
             <thead>
               <tr>
-                <Th className="w-8" /><Th>Machine</Th><Th>Type</Th>
-                <Th className="hidden md:table-cell">Make / model</Th>
-                <Th>Owner</Th><Th>Linked</Th>
-                <th className="text-right text-[10.5px] font-bold uppercase tracking-[.1em]
-                               text-txt-light px-3 py-2 border-b border-border-light">
-                  {/* The column is the filter. Somebody scanning the status
-                      column is already asking "show me the ones that are…",
-                      and making them look elsewhere for the control is the
-                      part that gets missed. */}
-                  <select value={stage} onChange={(e) => setStage(e.target.value)}
-                    title="Which machines to show"
-                    className="bg-transparent text-[10.5px] font-bold uppercase
-                               tracking-[.1em] text-txt-light text-right cursor-pointer
-                               focus:outline-none focus:text-navy hover:text-navy">
-                    {STATUS_VIEWS.map((v) => (
-                      <option key={v.id || "all"} value={v.id}>
-                        {v.id === "IN_SERVICE" ? "Status · in service"
-                          : v.id === "" ? "Status · all"
-                          : `Status · ${v.label.toLowerCase()}`}
-                      </option>
-                    ))}
-                  </select>
-                </th>
+                <Th className="w-8" /><Th>Machine</Th>
+                <Th><ColumnFilter label="Type" value={by.type}
+                      options={menus.type} onChange={set("type")} /></Th>
+                <Th className="hidden md:table-cell">
+                  <span className="inline-flex items-center gap-2">
+                    <ColumnFilter label="Make" value={by.make}
+                      options={menus.make} onChange={set("make")} />
+                    <span className="text-txt-light/40">/</span>
+                    <ColumnFilter label="Model" value={by.model}
+                      options={menus.model} onChange={set("model")} />
+                  </span>
+                </Th>
+                <Th><ColumnFilter label="Owner" value={by.owner}
+                      options={menus.owner} onChange={set("owner")} /></Th>
+                <Th><ColumnFilter label="Linked" value={by.linked}
+                      options={menus.linked} onChange={set("linked")}
+                      allLabel="Linked or not" /></Th>
+                {/* The column is the filter. Somebody scanning the status
+                    column is already asking "show me the ones that are…", and
+                    making them look elsewhere for the control is the part that
+                    gets missed. */}
+                <Th className="text-right">
+                  <ColumnFilter label="Status" value={stage === "IN_SERVICE" ? "" : stage}
+                    align="right" allLabel="In service (default)"
+                    options={[
+                      { value: "ALL", label: "All machines", count: assets.length },
+                      ...STATUS_VIEWS
+                        .filter((v) => v.id && v.id !== "IN_SERVICE")
+                        .map((v) => ({
+                          value: v.id, label: v.label,
+                          count: assets.filter((a) => a.status === v.id).length,
+                        }))
+                        .filter((o) => o.count > 0),
+                    ]}
+                    onChange={(v) => setStage(v === "" ? "IN_SERVICE" : v === "ALL" ? "" : v)} />
+                </Th>
               </tr>
             </thead>
             <tbody>
@@ -333,6 +415,15 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
                             <span className="text-violet font-bold">{a.asset_ref}</span>
                           )}
                           <span>{a.fleet_code}{a.registration_no ? ` · ${a.registration_no}` : ""}</span>
+                        </div>
+                        {/* How stale this row is. A register that cannot say
+                            when a machine was last touched asks people to
+                            trust every row equally, and a tipper last edited
+                            in 2019 has not earned the same confidence as one
+                            edited this morning. */}
+                        <div className="text-[10.5px] text-txt-light/80 mt-0.5">
+                          {changedWhen(a.updated_at ?? a.created_at)}
+                          {a.last_changed_by ? ` by ${a.last_changed_by}` : ""}
                         </div>
                       </button>
                     </Td>
