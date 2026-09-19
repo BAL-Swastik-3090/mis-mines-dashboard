@@ -10,6 +10,24 @@ const api = axios.create({
   timeout: 60000,   // 60s global — covers cold-start + concurrent DB load
 });
 
+// A file upload is not JSON, and the default above was being applied to it.
+//
+// Every upload in the application went out as multipart data wearing a JSON
+// content type, so the server could not find the boundary and answered 422 —
+// "That file could not be attached", with nothing in the log to say why. It
+// failed identically for operator licences, the roster spreadsheet import and
+// machine certificates, because they all share this client.
+//
+// Deleting the header lets the browser set it, which it must: only the browser
+// knows the multipart boundary it is about to generate. Requests that really
+// are JSON are untouched.
+api.interceptors.request.use((config) => {
+  if (typeof FormData !== "undefined" && config.data instanceof FormData) {
+    delete config.headers["Content-Type"];
+  }
+  return config;
+});
+
 /** Fired when the API rejects us as unauthenticated, so AuthWrapper can show the
  *  login screen. A plain DOM event rather than a direct store import: useAuth
  *  imports this module, so calling into it from here would be a cycle. */

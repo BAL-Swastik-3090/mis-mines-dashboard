@@ -22,6 +22,7 @@ import Dialog from "./Dialog";
 import RevisionPanel, { type Revision } from "./RevisionPanel";
 import Combobox from "./Combobox";
 import AssetFiles, { Paperclip } from "./AssetFiles";
+import ComplianceHistory from "./ComplianceHistory";
 import { ExpiryInput, NumberInput, Th, trimNumber, expiryOf } from "./cells";
 
 interface AssetType { asset_type_id: number; name: string; category: string }
@@ -1258,6 +1259,10 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
                              document_type: d.document_type,
                              valid_upto: d.valid_upto }))} />
         </div>
+
+        {/* What the certificates used to say. The renewal history was being
+            kept and shown nowhere, which is a history nobody trusts is there. */}
+        <ComplianceHistory assetId={editing ? Number(id) : createdId} />
       </div>
 
       {/* ── Maintenance ──────────────────────────────────────── */}
