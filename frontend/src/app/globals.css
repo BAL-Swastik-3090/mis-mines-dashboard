@@ -444,3 +444,77 @@ html, body {
   from { opacity: 0; transform: translate(-50%, -8px); }
   to   { opacity: 1; transform: translate(-50%, 0); }
 }
+
+/* ── Reading a record, not filling a form ────────────────────────────────────
+   A saved machine opens as a document. The values are the same elements that
+   accept typing in edit mode — swapping them for spans would mean maintaining
+   two renderings of every field and letting them drift — so the chrome is
+   taken off instead and the controls are genuinely disabled underneath.
+
+   What goes: borders, fills, focus rings, the select caret, the date picker
+   button, the number spinners, and the shadow on anything that had one. What
+   stays: the text, at full contrast. A disabled control greys its own text by
+   default, and a record rendered in grey reads as unavailable rather than as
+   settled. */
+[data-read="true"] input,
+[data-read="true"] select,
+[data-read="true"] textarea {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+  cursor: default;
+  opacity: 1 !important;
+  color: var(--color-txt-primary, #16233c) !important;
+  -webkit-text-fill-color: var(--color-txt-primary, #16233c);
+  resize: none;
+}
+
+/* The caret on a native select and the calendar button on a date input are
+   drawn by the browser, not by the class, so they need removing by name. */
+[data-read="true"] select {
+  background-image: none !important;
+  padding-right: 0.75rem;
+}
+[data-read="true"] input[type="date"]::-webkit-calendar-picker-indicator,
+[data-read="true"] input[type="date"]::-webkit-inner-spin-button,
+[data-read="true"] input[type="number"]::-webkit-outer-spin-button,
+[data-read="true"] input[type="number"]::-webkit-inner-spin-button {
+  display: none;
+  -webkit-appearance: none;
+}
+[data-read="true"] input[type="number"] { -moz-appearance: textfield; }
+
+/* The combobox is a div with its own border and chevron. Same treatment. */
+[data-read="true"] [data-combobox] {
+  border-color: transparent !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  cursor: default;
+}
+[data-read="true"] [data-combobox] svg { display: none; }
+
+/* An empty field in a record should say it is empty rather than show the hint
+   it would show while typing — "Insurer / RTO…" reads as a value nobody
+   entered, which is exactly what it is not. */
+[data-read="true"] input::placeholder,
+[data-read="true"] textarea::placeholder { color: transparent; }
+
+/* Nothing inside the record takes focus or a click. Buttons that do something
+   other than edit — copy the reference, open the history, download a file —
+   opt back in. */
+[data-read="true"] input,
+[data-read="true"] select,
+[data-read="true"] textarea,
+[data-read="true"] [data-combobox] {
+  pointer-events: none;
+}
+[data-read="true"] button,
+[data-read="true"] a { pointer-events: auto; }
+
+/* A record has nothing to remove. The row delete stays in the markup so edit
+   mode keeps working, and disappears while reading — a disabled bin icon on
+   every row is clutter that tells the reader nothing. */
+[data-read="true"] fieldset button[aria-label="Remove"] { display: none; }

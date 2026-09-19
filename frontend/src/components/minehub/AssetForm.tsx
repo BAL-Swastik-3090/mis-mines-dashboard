@@ -13,7 +13,7 @@
  * that typing is blocked.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, Trash2, Check, Loader2, Info, ArrowLeft, Send, CheckCircle2, Undo2, Copy } from "lucide-react";
+import { Plus, Trash2, Check, Loader2, Info, ArrowLeft, Send, CheckCircle2, Undo2, Copy, Pencil } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
 import { Alert, Button, Chip, type Tone } from "./ui";
@@ -177,6 +177,14 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   const [createdId, setCreatedId] = useState<number | null>(null);
   const id = assetId ?? createdId;
   const editing = Boolean(id);
+
+  // A machine that already exists opens as a record, not as a form. Landing in
+  // an editable sheet makes every visit look like a change in progress, and it
+  // is how a field gets nudged by a stray scroll over a number input and saved
+  // by somebody who never meant to touch it. A new machine still opens ready to
+  // type, because there is nothing to read yet.
+  const [mode, setMode] = useState<"view" | "edit">(assetId ? "view" : "edit");
+  const reading = mode === "view";
   const [types, setTypes] = useState<AssetType[]>([]);
   const [parties, setParties] = useState<Party[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
@@ -522,6 +530,9 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
           : papers.trim() || "Nothing had changed.");
         await loadAsset(); await loadRevisions();
         setSaving(false);
+        // Back to reading once it is saved. The sheet stops looking like work
+        // in progress the moment it stops being any.
+        setMode("view");
         return true;
       }
       const created = await api.post("/minehub/assets", {
@@ -680,7 +691,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   );
 
   const sheet = (
-    <div className="space-y-4">
+    <div className="space-y-4" data-read={reading ? "true" : undefined}>
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
@@ -708,9 +719,11 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
               : <>Register a <span className="text-gold-dark">machine</span></>}
           </h2>
           <p className="text-[12px] text-txt-muted mt-1.5">
-            {editing
-              ? "Every change is recorded with its old and new value. Editing an approved machine returns it to draft."
-              : "Only fleet code and type are required. What is left blank shows up under Alerts rather than blocking the registration."}
+            {!editing
+              ? "Only fleet code and type are required. What is left blank shows up under Alerts rather than blocking the registration."
+              : reading
+              ? "Read only. Press Edit to change anything — every change is recorded with its old and new value."
+              : "Every change is recorded with its old and new value. Editing an approved machine returns it to draft."}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -721,13 +734,20 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
               {doneCount} of {checklist.length} filled
             </Chip>
           </button>
-          <Button size="sm" variant="primary" onClick={() => submit("stay")}
-            disabled={saving || !dirty}
-            title={dirty ? undefined : "Nothing has changed since the last save"}>
-            {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
-                    : dirty ? <><Check className="w-3.5 h-3.5" /> {editing ? "Save changes" : "Save as draft"}</>
-                    : <><Check className="w-3.5 h-3.5" /> Saved</>}
-          </Button>
+          {reading ? (
+            <Button size="sm" variant="primary" onClick={() => setMode("edit")}
+              title="Make changes to this machine">
+              <Pencil className="w-3.5 h-3.5" /> Edit
+            </Button>
+          ) : (
+            <Button size="sm" variant="primary" onClick={() => submit("stay")}
+              disabled={saving || !dirty}
+              title={dirty ? undefined : "Nothing has changed since the last save"}>
+              {saving ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
+                      : dirty ? <><Check className="w-3.5 h-3.5" /> {editing ? "Save changes" : "Save as draft"}</>
+                      : <><Check className="w-3.5 h-3.5" /> Saved</>}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -743,6 +763,13 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
         </Alert>
       )}
 
+
+      {/* Disabled for real, not only by appearance. A fieldset turns off every
+          control inside it the way the platform expects — keyboard, screen
+          reader and autofill all agree the record is not being edited — and
+          the CSS above takes away the chrome so it reads as a document rather
+          than as a form somebody has greyed out. */}
+      <fieldset disabled={reading} className="contents">
 
       {/* ── Identity ─────────────────────────────────────────── */}
       <div>
@@ -1116,7 +1143,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
       <div>
         <Band title="Insurance, tax & statutory documents"
           hint="Expiry drives the alerts — an expired fitness certificate on a running machine is a statutory exposure"
-          right={<Button size="sm" variant="secondary" onClick={() => setDocs([...docs, emptyDoc("PERMIT")])}>
+          right={!reading && <Button size="sm" variant="secondary" onClick={() => setDocs([...docs, emptyDoc("PERMIT")])}>
             <Plus className="w-3.5 h-3.5" /> Add
           </Button>} />
         <div className="border border-t-0 border-border-light rounded-b-lg overflow-x-auto overflow-y-visible">
@@ -1242,9 +1269,17 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
           </table>
         </div>
 
-        {/* The papers, under the dates they prove. Separate band would have
-            put the certificate on a different screen from the expiry, which is
-            how a register ends up with dates nobody can evidence. */}
+      </div>
+
+      </fieldset>
+
+      {/* Files and history sit outside the disabled fieldset deliberately.
+          Everything that accepts typing is switched off while reading, but
+          downloading last year's certificate is the main reason to open a
+          record at all — and a disabled button cannot be clicked however its
+          cursor is styled. They render as their own bordered blocks, so they
+          still read as the foot of the documents band. */}
+      <div className="-mt-4">
         <div className="border border-t-0 border-border rounded-b-xl bg-bg-base">
           <div className="px-3 pt-2 flex items-center gap-1.5">
             <Paperclip className="w-3.5 h-3.5 text-txt-light" />
@@ -1252,7 +1287,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
                              text-txt-light font-condensed">Attached files</span>
           </div>
           <AssetFiles assetId={editing ? Number(id) : createdId}
-            mayManage={mayManage}
+            mayManage={mayManage && !reading}
             attachments={docs
               .filter((d) => d.asset_compliance_id)
               .map((d) => ({ asset_compliance_id: d.asset_compliance_id,
@@ -1265,11 +1300,13 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
         <ComplianceHistory assetId={editing ? Number(id) : createdId} />
       </div>
 
+      <fieldset disabled={reading} className="contents">
+
       {/* ── Maintenance ──────────────────────────────────────── */}
       <div>
         <Band title="Maintenance schedule"
           hint="Next due is calculated from the interval and the last one done"
-          right={<Button size="sm" variant="secondary" onClick={() => setScheds([...scheds, emptySched()])}>
+          right={!reading && <Button size="sm" variant="secondary" onClick={() => setScheds([...scheds, emptySched()])}>
             <Plus className="w-3.5 h-3.5" /> Add
           </Button>} />
         <div className="border border-t-0 border-border-light rounded-b-lg overflow-x-auto overflow-y-visible">
@@ -1335,7 +1372,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
       <div>
         <Band title="What other systems call it"
           hint="Telematics says MAN18 where the handover register says MAN-18 — link them and every query joins"
-          right={<Button size="sm" variant="secondary"
+          right={!reading && <Button size="sm" variant="secondary"
             onClick={() => setIdents([...idents, { system: "HOTO", external_code: "" }])}>
             <Plus className="w-3.5 h-3.5" /> Add
           </Button>} />
@@ -1378,15 +1415,32 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
         </div>
       </div>
 
+      </fieldset>
+
       <div className="flex flex-wrap gap-2 pt-1 sticky bottom-0 bg-bg-base/95 backdrop-blur py-3 -mx-1 px-1
                       border-t border-border-light">
-        <Button variant="primary" size="lg" onClick={() => submit("stay")}
-          disabled={saving || !dirty}
-          title={dirty ? undefined : "Nothing has changed since the last save"}>
-          {saving ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
-                  : dirty ? <><Check className="w-4 h-4" /> {editing ? "Save changes" : "Save as draft"}</>
-                  : <><Check className="w-4 h-4" /> Saved</>}
-        </Button>
+        {reading ? (
+          <Button variant="primary" size="lg" onClick={() => setMode("edit")}>
+            <Pencil className="w-4 h-4" /> Edit this machine
+          </Button>
+        ) : (
+          <Button variant="primary" size="lg" onClick={() => submit("stay")}
+            disabled={saving || !dirty}
+            title={dirty ? undefined : "Nothing has changed since the last save"}>
+            {saving ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
+                    : dirty ? <><Check className="w-4 h-4" /> {editing ? "Save changes" : "Save as draft"}</>
+                    : <><Check className="w-4 h-4" /> Saved</>}
+          </Button>
+        )}
+        {editing && !reading && (
+          <Button variant="ghost" size="lg" disabled={saving || dirty}
+            onClick={() => setMode("view")}
+            title={dirty
+              ? "Save the changes first — or leave the sheet to discard them"
+              : "Go back to reading this record"}>
+            Done editing
+          </Button>
+        )}
         {!editing && (
           <Button variant="accent" size="lg" onClick={() => submit("submit")} disabled={saving}>
             <Send className="w-4 h-4" /> Save and submit for approval

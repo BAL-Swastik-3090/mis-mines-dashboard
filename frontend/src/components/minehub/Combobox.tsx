@@ -209,7 +209,7 @@ export default function Combobox({
   ) : null;
 
   return (
-    <div ref={anchorRef} className="relative">
+    <div ref={anchorRef} data-combobox className="relative">
       <input
         id={id}
         disabled={disabled}
