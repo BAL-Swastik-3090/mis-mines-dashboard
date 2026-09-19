@@ -43,9 +43,34 @@ const APPROVAL_TONE: Record<string, Tone> = {
 };
 
 const STATUS_TONE: Record<string, Tone> = {
-  ACTIVE: "emerald", MAINTENANCE: "amber", STANDBY: "sky",
-  IDLE: "slate", DISPOSED: "rose",
+  ACTIVE: "emerald", MAINTENANCE: "amber", STANDBY: "sky", IDLE: "slate",
+  OFF_ROAD: "amber", CANNIBALISED: "violet", SCRAPPED: "rose", DISPOSED: "rose",
 };
+
+/** How each stage is said out loud. */
+const STAGE_LABEL: Record<string, string> = {
+  ACTIVE: "Working", MAINTENANCE: "In workshop", STANDBY: "Standby",
+  IDLE: "Idle", OFF_ROAD: "Off road", CANNIBALISED: "Cannibalised",
+  SCRAPPED: "Scrapped", DISPOSED: "Disposed",
+};
+
+/** Still part of the working fleet. A scrapped tipper is a record, not a
+ *  machine, and it should not be the first thing on the register — three of
+ *  them sat at the top of the list purely because their codes begin with A. */
+const IN_SERVICE = ["ACTIVE", "MAINTENANCE", "STANDBY", "IDLE"];
+
+const STATUS_VIEWS: { id: string; label: string }[] = [
+  { id: "IN_SERVICE", label: "In service" },
+  { id: "", label: "All machines" },
+  { id: "ACTIVE", label: "Working" },
+  { id: "MAINTENANCE", label: "In workshop" },
+  { id: "STANDBY", label: "Standby" },
+  { id: "IDLE", label: "Idle" },
+  { id: "OFF_ROAD", label: "Off road" },
+  { id: "CANNIBALISED", label: "Cannibalised" },
+  { id: "SCRAPPED", label: "Scrapped" },
+  { id: "DISPOSED", label: "Disposed" },
+];
 
 /** Equipment categories get their own hue so a long register stays scannable. */
 const CATEGORY_TONE: Record<string, Tone> = {
@@ -73,10 +98,21 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
 
   const [expanded, setExpanded] = useState<number | null>(null);
   const [propulsion, setPropulsion] = useState("");
+  // The register opens on the machines that still work. Everything ever
+  // registered is one click away, but a list that leads with four scrapped
+  // lorries is a list people stop trusting to show them the fleet.
+  const [stage, setStage] = useState("IN_SERVICE");
 
   // Hybrids count as electric here. A fleet that is going electric is asked
   // "how far along are we", and a machine that runs on a battery half the time
   // is part of the answer rather than neither.
+  // How many the current view is leaving out, so the count in the title is
+  // never quietly wrong about the size of the fleet.
+  const hidden = React.useMemo(
+    () => (stage === "IN_SERVICE"
+      ? assets.filter((a) => !IN_SERVICE.includes(a.status)).length : 0),
+    [assets, stage]);
+
   const evCount = React.useMemo(
     () => assets.filter((a) => a.propulsion === "EV" || a.propulsion === "HYBRID").length,
     [assets]);
@@ -119,13 +155,15 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return assets.filter((a) => {
+      if (stage === "IN_SERVICE" && !IN_SERVICE.includes(a.status)) return false;
+      if (stage && stage !== "IN_SERVICE" && a.status !== stage) return false;
       if (propulsion === "EV" && a.propulsion !== "EV" && a.propulsion !== "HYBRID") return false;
       if (propulsion === "NON_EV" && a.propulsion === "EV") return false;
       if (!q) return true;
       return [a.fleet_code, a.nickname, a.registration_no, a.make, a.model, a.asset_type]
         .some((v) => (v ?? "").toLowerCase().includes(q));
     });
-  }, [assets, query, propulsion]);
+  }, [assets, query, propulsion, stage]);
 
   const openIdentities = async (id: number) => {
     if (expanded === id) { setExpanded(null); return; }
@@ -217,7 +255,10 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
       {/* The register */}
       <Card tone="sky">
         <CardHeader title={`Fleet register · ${filtered.length}`} icon={Cpu} tone="sky"
-          subtitle="Own and hired machines. Expand a row to link the names other systems use."
+          subtitle={hidden > 0
+            ? `Showing ${filtered.length} in service — ${hidden} off road, scrapped or `
+              + `disposed are hidden. Change the Status heading to see them.`
+            : "Own and hired machines. Expand a row to link the names other systems use."}
           actions={
             <>
               <div className="relative">
@@ -240,7 +281,27 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
               <tr>
                 <Th className="w-8" /><Th>Machine</Th><Th>Type</Th>
                 <Th className="hidden md:table-cell">Make / model</Th>
-                <Th>Owner</Th><Th>Linked</Th><Th className="text-right">Status</Th>
+                <Th>Owner</Th><Th>Linked</Th>
+                <th className="text-right text-[10.5px] font-bold uppercase tracking-[.1em]
+                               text-txt-light px-3 py-2 border-b border-border-light">
+                  {/* The column is the filter. Somebody scanning the status
+                      column is already asking "show me the ones that are…",
+                      and making them look elsewhere for the control is the
+                      part that gets missed. */}
+                  <select value={stage} onChange={(e) => setStage(e.target.value)}
+                    title="Which machines to show"
+                    className="bg-transparent text-[10.5px] font-bold uppercase
+                               tracking-[.1em] text-txt-light text-right cursor-pointer
+                               focus:outline-none focus:text-navy hover:text-navy">
+                    {STATUS_VIEWS.map((v) => (
+                      <option key={v.id || "all"} value={v.id}>
+                        {v.id === "IN_SERVICE" ? "Status · in service"
+                          : v.id === "" ? "Status · all"
+                          : `Status · ${v.label.toLowerCase()}`}
+                      </option>
+                    ))}
+                  </select>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -309,7 +370,9 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
                           {a.approval_status.replace("_", " ").toLowerCase()}
                         </Chip>
                       )}
-                      <Chip tone={STATUS_TONE[a.status] ?? "slate"}>{a.status.toLowerCase()}</Chip>
+                      <Chip tone={STATUS_TONE[a.status] ?? "slate"}>
+                        {STAGE_LABEL[a.status] ?? a.status.toLowerCase()}
+                      </Chip>
                     </Td>
                   </tr>
 
