@@ -22,6 +22,7 @@ import Dialog from "./Dialog";
 import RevisionPanel, { type Revision } from "./RevisionPanel";
 import Combobox from "./Combobox";
 import AssetFiles, { Paperclip } from "./AssetFiles";
+import { ExpiryInput, NumberInput, Th, trimNumber, expiryOf } from "./cells";
 
 interface AssetType { asset_type_id: number; name: string; category: string }
 interface Party {
@@ -53,12 +54,25 @@ interface SchedRow {
 }
 interface IdentRow { system: string; external_code: string }
 
+// How the known codes are spelled for a person. Not the set of possibilities —
+// that lives in the lookup table and the mine adds to it. Anything not here is
+// shown as itself, which is why a new type works without touching this file.
 const DOC_TYPES: [string, string][] = [
   ["INSURANCE", "Insurance"], ["FITNESS", "Fitness certificate"], ["PUC", "PUC"],
   ["ROAD_TAX", "Road tax"], ["PERMIT", "Permit"], ["NATIONAL_PERMIT", "National permit"],
   ["STATUTORY_INSPECTION", "Statutory inspection"], ["EXPLOSIVE_LICENCE", "Explosive licence"],
-  ["POLLUTION_NOC", "Pollution NOC"], ["OTHER", "Other"],
+  ["POLLUTION_NOC", "Pollution NOC"],
 ];
+
+/** A stored code as a person would say it. Unknown codes read as themselves. */
+const docLabel = (code: string): string =>
+  DOC_TYPES.find(([v]) => v === code)?.[1]
+  ?? code.replace(/_/g, " ").toLowerCase().replace(/^./, (c) => c.toUpperCase());
+
+/** What the mine types back into a code the column can group by. */
+const docCode = (label: string): string =>
+  DOC_TYPES.find(([, l]) => l.toLowerCase() === label.trim().toLowerCase())?.[0]
+  ?? label.trim().toUpperCase().replace(/\s+/g, "_");
 const SCHED_TYPES: [string, string][] = [
   ["SERVICE", "Service"], ["PREVENTIVE", "Preventive"], ["OIL_CHANGE", "Oil change"],
   ["INSPECTION", "Inspection"], ["OVERHAUL", "Overhaul"], ["TYRE_ROTATION", "Tyre rotation"],
@@ -259,10 +273,16 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
       setLoaded(a);
       // Dates arrive as ISO and the inputs want yyyy-mm-dd; everything else
       // becomes a string because that is what a form field holds.
+      //
+      // Numbers go through trimNumber on the way in. capacity is
+      // numeric(10,3), so 280 comes back as "280.000" and the form showed the
+      // scale of the column instead of the value. The scale is right — a
+      // capacity can be 2.5 — so it is the display that had to change, here,
+      // once, for every numeric field rather than per input.
       const asForm: Record<string, string> = {};
       Object.entries(a).forEach(([k, v]) => {
         if (v === null || v === undefined || typeof v === "object") return;
-        asForm[k] = String(v);
+        asForm[k] = typeof v === "number" ? trimNumber(v) : trimNumber(String(v));
       });
       setF(asForm);
       setDocs((a.documents ?? []).map((d: Record<string, unknown>) => {
@@ -270,7 +290,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
           document_type: String(d.document_type ?? "INSURANCE"),
           document_no: String(d.document_no ?? ""), provider: String(d.provider ?? ""),
           valid_from: String(d.valid_from ?? ""), valid_upto: String(d.valid_upto ?? ""),
-          amount: String(d.amount ?? ""),
+          amount: trimNumber(d.amount ?? ""),
           asset_compliance_id: d.asset_compliance_id
             ? Number(d.asset_compliance_id) : undefined,
         };
@@ -455,8 +475,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
       && !d.change_type);
     if (unanswered.length > 0) {
       raise(`Say whether the ${unanswered.length === 1 ? "change" : "changes"} to `
-        + unanswered.map((d) => (DOC_TYPES.find(([v]) => v === d.document_type)?.[1]
-                                 ?? d.document_type).toLowerCase()).join(", ")
+        + unanswered.map((d) => docLabel(d.document_type).toLowerCase()).join(", ")
         + ` ${unanswered.length === 1 ? "is" : "are"} a renewal or a correction. `
         + "A renewal keeps the old dates on file; a correction replaces them.");
       return false;
@@ -1103,9 +1122,17 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
           <table className="w-full min-w-[820px]">
             <thead>
               <tr className="bg-bg-light">
-                {["Document", "Number", "Provider / office", "Valid from", "Valid upto", "Amount ₹", ""].map((h) => (
-                  <th key={h} className="text-left font-condensed text-[10.5px] font-bold uppercase
-                                         tracking-[.1em] text-txt-light px-3 py-2 border-b border-border-light">{h}</th>
+                {([
+                  ["Document", "Insurance, fitness…"],
+                  ["Number", "e.g. POL/2026/8841"],
+                  ["Provider / office", "e.g. New India / Jajpur RTO"],
+                  ["Valid from", "dd-mm-yyyy"],
+                  ["Valid upto", "dd-mm-yyyy · colour shows expiry"],
+                  ["Amount ₹", "e.g. 45000"],
+                  ["", ""],
+                ] as [string, string][]).map(([h, eg]) => (
+                  <Th key={h || "actions"} label={h} example={eg}
+                      className="font-condensed" />
                 ))}
               </tr>
             </thead>
@@ -1119,11 +1146,12 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
                 return (
                 <React.Fragment key={i}>
                 <tr className="border-b border-border-light last:border-0">
-                  <td className="w-[180px]">
-                    <select className={cellInput} value={d.document_type}
-                      onChange={(e) => setDocs(docs.map((x, j) => j === i ? { ...x, document_type: e.target.value } : x))}>
-                      {DOC_TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                    </select>
+                  <td className="w-[190px] px-1.5 py-1">
+                    <Combobox category="DOCUMENT_TYPE"
+                      value={docLabel(d.document_type)}
+                      placeholder="Insurance, fitness…"
+                      onChange={(v) => setDocs(docs.map((x, j) => j === i
+                        ? { ...x, document_type: docCode(v) } : x))} />
                   </td>
                   <td><input className={cellInput} value={d.document_no} placeholder="Policy / certificate no."
                     onChange={(e) => setDocs(docs.map((x, j) => j === i ? { ...x, document_no: e.target.value } : x))} /></td>
@@ -1134,10 +1162,18 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
                   </td>
                   <td className="w-[140px]"><input type="date" className={cellInput} value={d.valid_from}
                     onChange={(e) => setDocs(docs.map((x, j) => j === i ? { ...x, valid_from: e.target.value } : x))} /></td>
-                  <td className="w-[140px]"><input type="date" className={cellInput} value={d.valid_upto}
-                    onChange={(e) => setDocs(docs.map((x, j) => j === i ? { ...x, valid_upto: e.target.value } : x))} /></td>
-                  <td className="w-[110px]"><input type="number" className={cellInput} value={d.amount}
-                    onChange={(e) => setDocs(docs.map((x, j) => j === i ? { ...x, amount: e.target.value } : x))} /></td>
+                  {/* The one column people actually read. Red once it has
+                      passed, amber inside thirty days, green beyond. */}
+                  <td className="w-[150px] px-1.5 py-1">
+                    <ExpiryInput value={d.valid_upto}
+                      onChange={(v) => setDocs(docs.map((x, j) => j === i
+                        ? { ...x, valid_upto: v } : x))} />
+                  </td>
+                  <td className="w-[110px]">
+                    <NumberInput value={d.amount} placeholder="45000"
+                      onChange={(v) => setDocs(docs.map((x, j) => j === i
+                        ? { ...x, amount: v } : x))} />
+                  </td>
                   <td className="w-[46px] text-center">
                     <button onClick={() => setDocs(docs.filter((_, j) => j !== i))}
                       className="text-txt-light hover:text-rose" aria-label="Remove">

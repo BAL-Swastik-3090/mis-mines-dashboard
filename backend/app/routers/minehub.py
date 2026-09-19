@@ -766,9 +766,18 @@ def _save_documents(db, request: Request, asset_id: int, documents) -> dict:
     for doc in documents:
         if not isinstance(doc, dict):
             continue
-        kind = (doc.get("document_type") or "").strip().upper()
+        # Normalised the same way the form does, so a type typed here and a
+        # type typed there are the same type. Without this, "Road tax",
+        # "road tax" and "ROAD_TAX" become three kinds of document and every
+        # count that groups by type is quietly wrong.
+        kind = re.sub(r"\s+", "_", (doc.get("document_type") or "").strip().upper())
         if not kind:
             continue
+        if len(kind) > 40:
+            raise HTTPException(400,
+                f"'{kind[:30]}…' is too long for a document type. It is a "
+                "label the register groups by, not a description — put the "
+                "detail in the number or the remarks.")
 
         incoming = {k: doc.get(k) for k in DOC_FIELDS if k in doc}
         existing_id = doc.get("asset_compliance_id")
