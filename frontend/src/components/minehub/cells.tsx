@@ -20,17 +20,25 @@
  */
 import React from "react";
 
-/** 280.000 -> "280", 2.500 -> "2.5", 0 -> "0". Leaves anything non-numeric alone. */
+/** 280.000 -> "280", 2.500 -> "2.5". Leaves everything else exactly as it is.
+ *
+ *  Only the fractional part is touched, and only when there is one. An earlier
+ *  version ran the value through Number(), which also ate leading zeros — so a
+ *  SAP equipment number of 0700019 would have been shown as 700019, and an
+ *  operator looking for it would not have found it. A display helper that
+ *  quietly alters an identifier is worse than the trailing zeros it was
+ *  written to remove.
+ *
+ *  Nothing without a decimal point is changed at all, which is what makes it
+ *  safe to run over every field on a sheet rather than a chosen list.
+ */
 export function trimNumber(value: unknown): string {
   if (value === null || value === undefined) return "";
   const raw = String(value).trim();
-  if (!raw) return "";
-  // Anything that is not a plain number is somebody's text and not ours to
-  // reformat — a reading of "12,500 (est)" should survive being shown.
-  if (!/^-?\d+(\.\d+)?$/.test(raw)) return raw;
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return raw;
-  return String(n);
+  if (!raw.includes(".")) return raw;
+  // A number, and nothing else — "12.5 (est)" is somebody's text and survives.
+  if (!/^-?\d+\.\d+$/.test(raw)) return raw;
+  return raw.replace(/\.?0+$/, "") || "0";
 }
 
 export type ExpiryState = "EXPIRED" | "DUE" | "SOON" | "VALID" | "NONE";

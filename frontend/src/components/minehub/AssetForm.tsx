@@ -185,6 +185,25 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   // type, because there is nothing to read yet.
   const [mode, setMode] = useState<"view" | "edit">(assetId ? "view" : "edit");
   const reading = mode === "view";
+
+  // Mark the fields that are empty, so read mode can hide what the browser
+  // draws into them.
+  //
+  // A date input with no value renders "dd-mm-yyyy" as shadow-DOM text, not as
+  // a placeholder, and CSS cannot select it: an empty optional date is :valid,
+  // and there is no :empty for form controls. So the sheet says which are
+  // empty and the stylesheet hides those. One effect covers every input on the
+  // page, including any added later, which is why it is done here rather than
+  // per field.
+  const sheetRef = React.useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const root = sheetRef.current;
+    if (!root) return;
+    root.querySelectorAll("input").forEach((el) => {
+      if (el.value === "") el.setAttribute("data-empty", "true");
+      else el.removeAttribute("data-empty");
+    });
+  });
   const [types, setTypes] = useState<AssetType[]>([]);
   const [parties, setParties] = useState<Party[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
@@ -217,8 +236,26 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   const [invalid, setInvalid] = useState<Set<string>>(new Set());
   // What was last written to the database. Anything different is unsaved work.
   const [saved, setSaved] = useState("");
-  const [ask, setAsk] = useState<null | "discard" | "revert" | "leave" | "send-back">(null);
+  // The covering notes already live in the revision trail — SUBMITTED and
+  // APPROVED each carry their remark. Reading them from there rather than
+  // adding columns to asset keeps one account of what happened, and it is the
+  // account the history panel already shows.
+  const submittedNote = React.useMemo(
+    () => revisions.find((r) => r.action === "SUBMITTED" && r.remarks)?.remarks ?? "",
+    [revisions]);
+  const approvedNote = React.useMemo(
+    () => revisions.find((r) => r.action === "APPROVED" && r.remarks)?.remarks ?? "",
+    [revisions]);
+
+  const [ask, setAsk] = useState<
+    null | "discard" | "revert" | "leave" | "send-back" | "submit" | "approve">(null);
   const [sendBackWhy, setSendBackWhy] = useState("");
+  // What the submitter wants the approver to know, and what the approver wants
+  // on the record. Both optional: a machine registered from the plate needs no
+  // covering note, and demanding one would only teach people to type a full
+  // stop.
+  const [submitNote, setSubmitNote] = useState("");
+  const [approveNote, setApproveNote] = useState("");
   // Whether this person may accept entries onto the register. Asked rather than
   // assumed, so the button is absent instead of present and refused.
   const [mayApprove, setMayApprove] = useState(false);
@@ -669,6 +706,51 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
                      focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/15" />
       </Dialog>
 
+      <Dialog open={ask === "submit"} tone="info" title="Submit for approval"
+        confirmLabel="Submit it" cancelLabel="Not yet"
+        busy={busy === "submit"}
+        onConfirm={() => { setAsk(null); void act("submit", submitNote.trim() || undefined); }}
+        onCancel={() => { setAsk(null); setSubmitNote(""); }}>
+        Whoever approves this sees the note. Say anything they would otherwise
+        have to ask — where the papers came from, what is still missing and why,
+        which figures were taken from the plate rather than the invoice.
+        <textarea id="af-submitnote" value={submitNote} rows={3}
+          onChange={(e) => setSubmitNote(e.target.value)}
+          placeholder="Chassis and engine read off the machine; insurance copy to follow from the contractor"
+          className="mt-2.5 w-full bg-bg-base border border-border rounded-lg px-3 py-2
+                     text-[13px] text-txt-primary placeholder:text-txt-light
+                     focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/15" />
+        <span className="block mt-1 text-[11.5px] text-txt-light">
+          Optional — a machine registered from the plate needs no covering note.
+        </span>
+      </Dialog>
+
+      <Dialog open={ask === "approve"} tone="info" title="Accept onto the register"
+        confirmLabel="Approve it" cancelLabel="Cancel"
+        busy={busy === "approve"}
+        onConfirm={() => { setAsk(null); void act("approve", approveNote.trim() || undefined); }}
+        onCancel={() => { setAsk(null); setApproveNote(""); }}>
+        {submittedNote && (
+          <span className="block rounded-lg border border-gold/30 bg-gold/[0.06]
+                           px-3 py-2 mb-2.5 text-[12.5px] text-txt-primary">
+            <span className="block text-[10.5px] font-bold uppercase tracking-[.1em]
+                             text-gold-dark mb-1">They said</span>
+            “{submittedNote}”
+          </span>
+        )}
+        Once approved this is what contractor billing and statutory compliance
+        are read from. Anything worth knowing later goes on the record now.
+        <textarea id="af-approvenote" value={approveNote} rows={2}
+          onChange={(e) => setApproveNote(e.target.value)}
+          placeholder="Checked against the RC book and the hire agreement"
+          className="mt-2.5 w-full bg-bg-base border border-border rounded-lg px-3 py-2
+                     text-[13px] text-txt-primary placeholder:text-txt-light
+                     focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/15" />
+        <span className="block mt-1 text-[11.5px] text-txt-light">
+          Optional, and kept with the approval.
+        </span>
+      </Dialog>
+
       <Dialog open={ask === "leave"} tone="warning" title="Leave without saving?"
         confirmLabel={editing ? "Save and leave" : "Save as draft and leave"}
         cancelLabel="Stay here"
@@ -691,7 +773,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   );
 
   const sheet = (
-    <div className="space-y-4" data-read={reading ? "true" : undefined}>
+    <div className="space-y-4" ref={sheetRef} data-read={reading ? "true" : undefined}>
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
@@ -1508,9 +1590,36 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
 
             {(status === "DRAFT" || status === "SENT_BACK") && (
               <Button variant="accent" size="md" disabled={busy !== null}
-                className="w-full justify-center" onClick={() => void act("submit")}>
+                className="w-full justify-center" onClick={() => setAsk("submit")}>
                 <Send className="w-4 h-4" /> Submit for approval
               </Button>
+            )}
+
+            {/* The covering note, in front of the person deciding. Reading it
+                in the trail below means scrolling past it, and a note nobody
+                reads is a note nobody writes. */}
+            {status === "SUBMITTED" && submittedNote && (
+              <div className="rounded-lg border border-gold/30 bg-gold/[0.06] px-3 py-2">
+                <p className="text-[10.5px] font-bold uppercase tracking-[.1em]
+                              text-gold-dark mb-1">
+                  From whoever submitted it
+                </p>
+                <p className="text-[12.5px] text-txt-primary leading-relaxed">
+                  “{submittedNote}”
+                </p>
+              </div>
+            )}
+
+            {status === "APPROVED" && approvedNote && (
+              <div className="rounded-lg border border-emerald/25 bg-emerald/[0.06] px-3 py-2">
+                <p className="text-[10.5px] font-bold uppercase tracking-[.1em]
+                              text-emerald mb-1">
+                  Noted on approval
+                </p>
+                <p className="text-[12.5px] text-txt-primary leading-relaxed">
+                  “{approvedNote}”
+                </p>
+              </div>
             )}
 
             {status === "SUBMITTED" && !mayApprove && (
@@ -1523,7 +1632,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
             {status === "SUBMITTED" && mayApprove && (
               <div className="grid grid-cols-2 gap-2">
                 <Button variant="success" size="md" disabled={busy !== null}
-                  className="justify-center" onClick={() => void act("approve")}>
+                  className="justify-center" onClick={() => setAsk("approve")}>
                   <CheckCircle2 className="w-4 h-4" /> Approve
                 </Button>
                 <Button variant="danger" size="md" disabled={busy !== null}

@@ -497,10 +497,30 @@ html, body {
 [data-read="true"] [data-combobox] svg { display: none; }
 
 /* An empty field in a record should say it is empty rather than show the hint
-   it would show while typing — "Insurer / RTO…" reads as a value nobody
-   entered, which is exactly what it is not. */
+   it would show while typing — "Insurer / RTO…" and "e.g. 45000" read as
+   values somebody entered, which is exactly what they are not.
+   
+   -webkit-text-fill-color has to be set here as well as color. The rule above
+   sets it on the input to stop a disabled field greying its own text, and it
+   inherits into the placeholder pseudo-element where it beats `color`
+   outright — so the hints stayed fully visible and looked like data. That is
+   what put "45000" in every amount cell of an empty row. */
 [data-read="true"] input::placeholder,
-[data-read="true"] textarea::placeholder { color: transparent; }
+[data-read="true"] textarea::placeholder {
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+  opacity: 0 !important;
+}
+
+/* A date input with no value draws "dd-mm-yyyy" itself, as shadow-DOM field
+   text rather than as a placeholder, so hiding placeholders does not touch it
+   — and CSS cannot tell an empty date apart, because an empty optional date
+   is :valid. The sheet marks them instead (see markEmptyFields), and this
+   hides what it marked. An empty date in a record should be empty. */
+[data-read="true"] input[data-empty="true"] {
+  -webkit-text-fill-color: transparent !important;
+  color: transparent !important;
+}
 
 /* Nothing inside the record takes focus or a click. Buttons that do something
    other than edit — copy the reference, open the history, download a file —
