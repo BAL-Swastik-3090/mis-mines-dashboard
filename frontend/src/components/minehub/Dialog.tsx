@@ -44,17 +44,37 @@ export default function Dialog({
   secondary?: { label: string; onClick: () => void; tone?: "danger" | "secondary" };
 }) {
   const panel = useRef<HTMLDivElement>(null);
+  const onCancelRef = useRef(onCancel);
+  onCancelRef.current = onCancel;
 
-  // Escape cancels, and focus starts inside the dialog rather than wherever it
-  // was on the page behind.
+  // Escape cancels. The handler reads the callback through a ref so this
+  // listener does not have to be torn down and rebuilt on every render.
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onCancel(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onCancelRef.current(); };
     window.addEventListener("keydown", onKey);
-    const first = panel.current?.querySelector<HTMLElement>("button");
-    first?.focus();
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onCancel]);
+  }, [open]);
+
+  // Focus moves into the dialog once, when it opens — and only then.
+  //
+  // This used to depend on onCancel as well, which callers pass as an inline
+  // arrow and therefore hand over freshly on every render. Typing a character
+  // re-rendered the parent, produced a new onCancel, re-ran the effect and
+  // pulled focus out of the field and onto the first button in the panel: the
+  // close cross. One letter per attempt, and the next keystroke dismissed the
+  // dialog.
+  //
+  // It also prefers the first field over the first button. Somebody opening a
+  // dialog that asks for a note has come to type, and the cross is the last
+  // thing that should be waiting for their next key.
+  useEffect(() => {
+    if (!open) return;
+    const target = panel.current?.querySelector<HTMLElement>(
+      "textarea, input:not([type=hidden]), select")
+      ?? panel.current?.querySelector<HTMLElement>("button");
+    target?.focus();
+  }, [open]);
 
   if (!open || typeof document === "undefined") return null;
 
