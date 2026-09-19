@@ -15,6 +15,13 @@ pandas==2.2.3
 # Roster import and export. The mine already keeps its shift schedule in
 # Excel, so the platform has to be able to read that file and hand one back.
 openpyxl==3.1.5
+# The PostgreSQL driver. It was missing here for a fortnight without anything
+# failing, because the platform database was unconfigured on the server and
+# SQLAlchemy only imports the driver when an engine is actually created. The
+# moment production was pointed at Postgres the backend stopped booting. The
+# binary wheel is explicit so no build toolchain is needed in the image.
+psycopg==3.3.5
+psycopg-binary==3.3.5
 numpy==2.2.0
 python-multipart==0.0.20
 pymssql==2.4.1

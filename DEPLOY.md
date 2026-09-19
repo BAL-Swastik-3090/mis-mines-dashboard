@@ -78,15 +78,40 @@ publishing 80/443. Previous state backed up to
 
 New in the image: `openpyxl` 3.1.5, for the roster import and export.
 
-### ⚠ Still needed before MineHub works on production
+### Resolved same day — MineHub is now live on production
 
-The production `.env` has no Postgres block, so every MineHub screen — the
-registry, operators, workforce, notes, shift control — reports "not configured"
-and the read-only dashboards carry on unaffected. This was already true before
-this release; the new features simply make it more visible.
+The Postgres block was added to the server `.env` (mode 600, previous file kept
+as `.env.bak-<timestamp>`). Production points at the shared corporate database,
+`corpappdb`, schema `minehub` — the same database that holds `pems` and
+`cimcon`, one schema per application, which is the standing convention.
 
-The server can reach `192.168.10.27:5432` directly, so only configuration is
-missing:
+Pointing it there exposed a latent bug: **`psycopg` was never pinned in
+`requirements.txt`**. Nothing had failed for a fortnight because SQLAlchemy only
+imports the driver when an engine is actually created, and the platform database
+was unconfigured on the server, so no engine ever was. The moment production was
+pointed at Postgres the backend stopped booting. Pinned now, along with the
+binary wheel so the image needs no build toolchain. Roughly four minutes of API
+downtime between the two restarts.
+
+Confirmed from inside the production container: connected to `corpappdb` at
+192.168.10.27:5432, schema `minehub`, 60 tables, 10 roles, 30 users. The
+workforce, notes, registry and operator routes all answer.
+
+**Dev and production share one schema.** A migration applied while building is
+applied to live data, and a purge run locally empties the live register. That is
+the convention working as intended, but it is worth knowing before the next
+local experiment.
+
+### ⚠ Known gap, not urgent
+
+`schema_migration` records only 8 entries although 31 migrations exist and all
+60 tables are present. Migrations applied through `apply_migration.py` are not
+all being recorded there, so the table under-reports what has run. Harmless
+today — the schema is correct — but it means the migration log cannot be trusted
+to answer "what has been applied", and that should be reconciled before anybody
+relies on it.
+
+For reference, the block that was added:
 
 ```
 PG_HOST=192.168.10.27
