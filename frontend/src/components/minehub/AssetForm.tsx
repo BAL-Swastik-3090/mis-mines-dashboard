@@ -714,6 +714,39 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
             <input id="af-reg" className={cellInput} value={f.registration_no ?? ""}
               onChange={(e) => set("registration_no", e.target.value)} placeholder="OD04L0327" />
           </Row>
+          <Row label="Category" required
+               hint="How the fleet is counted and reported. Diesel, CNG and unpowered all sit under Not electric">
+            <div className="flex gap-1.5 px-1.5 py-1">
+              {[
+                { id: "NON_EV", label: "Not electric" },
+                { id: "EV", label: "Electric" },
+                { id: "HYBRID", label: "Hybrid" },
+              ].map((option) => {
+                const chosen = (f.propulsion ?? "NON_EV") === option.id;
+                return (
+                  <button key={option.id} type="button"
+                    onClick={() => {
+                      set("propulsion", option.id);
+                      // Fuel type follows the first time it is set, so the two
+                      // never start out contradicting each other — after that
+                      // each is edited on its own.
+                      if (option.id === "EV" && !f.fuel_type) set("fuel_type", "ELECTRIC");
+                      if (option.id === "HYBRID" && !f.fuel_type) set("fuel_type", "HYBRID");
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-[12px] font-semibold border transition
+                      ${chosen
+                        ? option.id === "EV"
+                          ? "bg-emerald/10 text-emerald border-emerald/40"
+                          : option.id === "HYBRID"
+                          ? "bg-sky/10 text-sky border-sky/40"
+                          : "bg-navy text-white border-navy"
+                        : "bg-white text-txt-muted border-slate-200 hover:bg-slate-50"}`}>
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
+          </Row>
           <Row label="Make">
             <div className="px-1.5 py-1">
               <Combobox id="af-make" category="MAKE" value={f.make ?? ""}

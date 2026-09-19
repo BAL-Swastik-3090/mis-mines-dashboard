@@ -29,6 +29,7 @@ interface Asset {
   asset_id: number; asset_ref?: string | null; fleet_code: string; nickname?: string | null;
   registration_no: string | null; make: string | null; model: string | null;
   ownership: string; status: string; asset_type: string; category: string;
+  propulsion?: string | null; fuel_type?: string | null;
   owner: string | null; alias_count: number; alias_systems: string | null;
   version?: number; approval_status?: string;
 }
@@ -71,6 +72,15 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
   const [notice, setNotice] = useState<string | null>(null);
 
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [propulsion, setPropulsion] = useState("");
+
+  // Hybrids count as electric here. A fleet that is going electric is asked
+  // "how far along are we", and a machine that runs on a battery half the time
+  // is part of the answer rather than neither.
+  const evCount = React.useMemo(
+    () => assets.filter((a) => a.propulsion === "EV" || a.propulsion === "HYBRID").length,
+    [assets]);
+
   const [identities, setIdentities] = useState<Identity[]>([]);
   const [prefill, setPrefill] = useState<{ fleet_code?: string; telematics_code?: string }>({});
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -108,10 +118,14 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return assets;
-    return assets.filter((a) => [a.fleet_code, a.nickname, a.registration_no, a.make, a.model, a.asset_type]
-      .some((v) => (v ?? "").toLowerCase().includes(q)));
-  }, [assets, query]);
+    return assets.filter((a) => {
+      if (propulsion === "EV" && a.propulsion !== "EV" && a.propulsion !== "HYBRID") return false;
+      if (propulsion === "NON_EV" && a.propulsion === "EV") return false;
+      if (!q) return true;
+      return [a.fleet_code, a.nickname, a.registration_no, a.make, a.model, a.asset_type]
+        .some((v) => (v ?? "").toLowerCase().includes(q));
+    });
+  }, [assets, query, propulsion]);
 
   const openIdentities = async (id: number) => {
     if (expanded === id) { setExpanded(null); return; }
@@ -184,6 +198,13 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Tile label="Machines" value={summary.assets} tone="sky" icon={Cpu}
                 hint={`${summary.assets_active} active`} />
+          <Tile label="Electric" value={evCount}
+                tone={evCount ? "emerald" : "slate"} icon={Zap}
+                hint={assets.length
+                  ? `${Math.round(100 * evCount / assets.length)}% of the register`
+                  : "Nothing registered yet"}
+                onClick={() => setPropulsion(propulsion === "EV" ? "" : "EV")}
+                active={propulsion === "EV"} />
           <Tile label="Identities linked" value={summary.aliases} tone="violet" icon={Link2}
                 hint="across all systems" />
           <Tile label="Unregistered" value={unmapped.length} tone={unmapped.length ? "amber" : "emerald"}
@@ -255,7 +276,19 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
                       </button>
                     </Td>
                     <Td>
-                      <Chip tone={CATEGORY_TONE[a.category] ?? "slate"} dot={false}>{a.asset_type}</Chip>
+                      <span className="inline-flex items-center gap-1.5">
+                        <Chip tone={CATEGORY_TONE[a.category] ?? "slate"} dot={false}>{a.asset_type}</Chip>
+                        {/* Only the electric ones are marked. Badging every
+                            diesel machine as "not electric" is noise on a fleet
+                            that is mostly diesel. */}
+                        {(a.propulsion === "EV" || a.propulsion === "HYBRID") && (
+                          <Chip tone={a.propulsion === "EV" ? "emerald" : "sky"} dot={false}
+                                title={a.propulsion === "EV" ? "Electric" : "Hybrid"}>
+                            <Zap className="w-3 h-3" />
+                            {a.propulsion === "EV" ? "EV" : "Hybrid"}
+                          </Chip>
+                        )}
+                      </span>
                     </Td>
                     <Td className="hidden md:table-cell text-txt-muted">
                       {[a.make, a.model].filter(Boolean).join(" ") || "—"}

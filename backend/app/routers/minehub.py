@@ -44,7 +44,7 @@ ASSET_FIELDS = (
     "plant_id", "ownership", "owner_party_id", "supplier_party_id",
     "sap_equipment_no", "contract_no", "service_po_no", "po_valid_from", "po_valid_to",
     "purchase_date", "purchase_cost", "hire_rate", "hire_rate_uom",
-    "rated_output_per_hr", "rated_fuel_lph", "fuel_type", "tank_capacity_l",
+    "rated_output_per_hr", "rated_fuel_lph", "fuel_type", "propulsion", "tank_capacity_l",
     "battery_kwh", "range_km", "charging_type", "charge_time_hrs",
     "reading_uom", "current_reading", "reading_as_on",
     "home_location_id", "org_unit_id", "commissioned_on", "status",
@@ -228,6 +228,7 @@ def update_asset_type(asset_type_id: int, request: Request, body: dict = Body(..
 @router.get("/assets")
 def list_assets(q: str = Query(""), status: str = Query(""),
                 asset_type_id: int | None = Query(None),
+                propulsion: str = Query(""),
                 db: Session = Depends(get_minehub_db)) -> list[dict]:
     where, params = ["1=1"], {}
     if q.strip():
@@ -241,12 +242,23 @@ def list_assets(q: str = Query(""), status: str = Query(""),
     if asset_type_id:
         where.append("a.asset_type_id = :atid")
         params["atid"] = asset_type_id
+    if propulsion:
+        # HYBRID answers to both sides of the question. A fleet report that
+        # counts it as neither is a report whose columns do not add up.
+        if propulsion.upper() == "EV":
+            where.append("a.propulsion IN ('EV', 'HYBRID')")
+        elif propulsion.upper() == "NON_EV":
+            where.append("(a.propulsion IN ('NON_EV', 'HYBRID') OR a.propulsion IS NULL)")
+        else:
+            where.append("a.propulsion = :prop")
+            params["prop"] = propulsion.upper()
 
     rows = db.execute(text(f"""
         SELECT a.asset_id, a.asset_ref, a.fleet_code, a.registration_no, a.make, a.model,
                pl.code AS plant_code, pl.name AS plant, ou.name AS department,
                a.capacity, a.capacity_uom, a.ownership, a.status,
                a.rated_output_per_hr, a.rated_fuel_lph, a.commissioned_on,
+               a.fuel_type, a.propulsion,
                a.nickname, a.version, a.approval_status,
                t.asset_type_id, t.name AS asset_type, t.category,
                o.display_name AS owner,

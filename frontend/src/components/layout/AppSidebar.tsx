@@ -88,10 +88,17 @@ export default function AppSidebar() {
     ),
     // Permission, not role name — a role created in the UI reaches these entries
     // without any code change.
+    //
+    // Ordered the way the work runs, not the way the features were built.
+    // MineHub is the register everything else refers to, so it comes first;
+    // then the shift being run today; then the roster that decides who runs the
+    // next one. Access Control is last because it is opened about twice a
+    // month, and a screen that rare sitting above daily work is a screen people
+    // learn to scroll past.
+    ...(canAny("platform.registry.view") ? [PLATFORM_ITEM] : []),
     ...(canAny("ops.shift.view") ? [OPERATIONS_ITEM] : []),
     ...(canAny("ops.roster.view") ? [WORKFORCE_ITEM] : []),
     ...(canAny("access.users.view") ? [ACCESS_ITEM] : []),
-    ...(canAny("platform.registry.view") ? [PLATFORM_ITEM] : []),
   ];
 
   return (
