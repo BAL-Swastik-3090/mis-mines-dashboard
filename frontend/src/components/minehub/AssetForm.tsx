@@ -1561,7 +1561,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   // an existing machine at all, and putting it below would hide it under a long
   // form.
   return (
-    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_340px] gap-5 items-start">
+    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_272px] gap-4 items-start">
       {messages}
       {dialogs}
       {sheet}
@@ -1569,16 +1569,16 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
         {/* Above the trail, because approving and reading the history are the
             same job: you look at what changed, then you decide. */}
         <div className="bg-bg-base border border-border-light rounded-xl shadow-sm overflow-hidden">
-          <header className="px-4 py-3 border-b border-border-light flex items-center justify-between gap-2">
-            <h3 className="font-condensed font-bold text-[12.5px] uppercase tracking-[.1em] text-navy
-                           flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-gold" /> Approval
+          <header className="px-3 py-2.5 border-b border-border-light flex items-center justify-between gap-2">
+            <h3 className="font-condensed font-bold text-[11.5px] uppercase tracking-[.09em] text-navy
+                           flex items-center gap-1.5">
+              <CheckCircle2 className="w-3.5 h-3.5 text-gold" /> Approval
             </h3>
             <Chip tone={statusTone}>{status.replace("_", " ").toLowerCase()}</Chip>
           </header>
 
-          <div className="p-4 space-y-2.5">
-            <p className="text-[12px] text-txt-muted leading-relaxed">
+          <div className="p-3 space-y-2">
+            <p className="text-[11.5px] text-txt-muted leading-relaxed">
               {status === "APPROVED"
                 ? "On the register. Editing it returns it to draft, since what was approved would no longer be what is on file."
                 : status === "SUBMITTED"

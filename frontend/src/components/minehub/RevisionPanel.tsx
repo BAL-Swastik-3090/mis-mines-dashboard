@@ -86,9 +86,9 @@ export default function RevisionPanel({ revisions, loading }: {
     <div className="bg-bg-base border border-border-light rounded-xl shadow-sm overflow-hidden">
       <button type="button" onClick={() => setOpen((v) => !v)}
         aria-expanded={open} aria-controls="revision-list"
-        className="w-full px-4 py-3 border-b border-border-light flex items-center justify-between gap-2
+        className="w-full px-3 py-2.5 border-b border-border-light flex items-center justify-between gap-2
                    hover:bg-bg-light transition-colors text-left">
-        <h3 className="font-condensed font-bold text-[12.5px] uppercase tracking-[.1em] text-navy
+        <h3 className="font-condensed font-bold text-[11.5px] uppercase tracking-[.09em] text-navy
                        flex items-center gap-2">
           <Clock className="w-4 h-4 text-gold" /> Revision history
         </h3>
@@ -103,7 +103,7 @@ export default function RevisionPanel({ revisions, loading }: {
       {loading ? (
         <div className="flex justify-center py-10"><Loader2 className="w-5 h-5 animate-spin text-gold" /></div>
       ) : revisions.length === 0 ? (
-        <p className="px-4 py-8 text-center text-[12.5px] text-txt-light">
+        <p className="px-3 py-6 text-center text-[12px] text-txt-light">
           No history yet.
         </p>
       ) : (
@@ -116,7 +116,7 @@ export default function RevisionPanel({ revisions, loading }: {
             const changed = expanded ? all : all.slice(0, 8);
             return (
               <li key={r.revision_id}
-                  className="relative px-4 py-3 border-b border-border-light last:border-0">
+                  className="relative px-3 py-2.5 border-b border-border-light last:border-0">
                 {/* The spine, drawn between entries rather than beside all of them */}
                 {i < revisions.length - 1 && (
                   <span className="absolute left-[25px] top-9 bottom-0 w-px bg-border" />
@@ -157,13 +157,21 @@ export default function RevisionPanel({ revisions, loading }: {
                         <div className="text-[10px] font-bold uppercase tracking-[.1em] text-txt-light mb-1.5">
                           Changed ({all.length})
                         </div>
-                        <ul className="space-y-0.5">
+                        <ul className="space-y-1.5">
                           {changed.map(([field, v]) => (
-                            <li key={field} className="text-[11.5px] leading-snug">
-                              <span className="text-txt-muted">{FIELD[field] ?? field}: </span>
-                              <span className="text-rose line-through">{show(v.from)}</span>
-                              <span className="text-txt-light mx-1">→</span>
-                              <span className="text-emerald font-semibold">{show(v.to)}</span>
+                            // The label sits above the change rather than
+                            // beside it. In a narrow rail a long value wrapped
+                            // under its own field name and the arrow ended up
+                            // on a line of its own, which read as two changes.
+                            <li key={field} className="text-[11px] leading-snug">
+                              <span className="block text-txt-light">
+                                {FIELD[field] ?? field}
+                              </span>
+                              <span className="block break-words">
+                                <span className="text-rose line-through">{show(v.from)}</span>
+                                <span className="text-txt-light mx-1">→</span>
+                                <span className="text-emerald font-semibold">{show(v.to)}</span>
+                              </span>
                             </li>
                           ))}
                           {all.length > 8 && (
