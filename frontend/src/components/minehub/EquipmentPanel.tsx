@@ -14,6 +14,7 @@ import {
   Cpu, Fuel, Zap, Wrench, Plus, Building2,
 } from "lucide-react";
 import api from "@/lib/api";
+import CommentThread from "@/components/comments/CommentThread";
 import { useAuth } from "@/contexts/useAuth";
 import AssetForm from "./AssetForm";
 import {
@@ -308,6 +309,13 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
                           </div>
                         )}
                         {mayManage && <AliasAdder onAdd={(s, c) => addAlias(a.asset_id, s, c)} />}
+
+                        {/* Notes live where the machine is, not on a screen
+                            somebody has to remember to open. */}
+                        <div className="mt-4">
+                          <CommentThread entityType="ASSET" entityId={a.asset_id}
+                            title={`Notes on ${a.fleet_code || a.asset_ref || "this machine"}`} />
+                        </div>
                       </Td>
                     </tr>
                   )}

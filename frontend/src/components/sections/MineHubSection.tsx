@@ -10,7 +10,7 @@
  * the Equipment Registry the whole point of the screen is to add machines.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Boxes, Cpu, Activity, LayoutGrid, Plus, AlertTriangle, Users } from "lucide-react";
+import { Boxes, Cpu, Activity, LayoutGrid, Plus, AlertTriangle, Users, MessageSquare } from "lucide-react";
 import { useAuth } from "@/contexts/useAuth";
 import EquipmentPanel from "@/components/minehub/EquipmentPanel";
 import OperatorPanel from "@/components/minehub/OperatorPanel";
@@ -18,14 +18,17 @@ import ActivityPanel from "@/components/minehub/ActivityPanel";
 import AlertsPanel from "@/components/minehub/AlertsPanel";
 import { Button, Card, CardHeader, Chip, PageHeader, Tabs, type Tone } from "@/components/minehub/ui";
 import api from "@/lib/api";
+import NotesFeed from "@/components/comments/NotesFeed";
 
-type TabId = "equipment" | "operators" | "alerts" | "activity" | "modules";
+type TabId = "equipment" | "operators" | "notes" | "alerts" | "activity" | "modules";
 
 const TABS: { id: TabId; label: string; icon: React.ElementType; tone: Tone; hint: string }[] = [
   { id: "equipment", label: "Equipment Registry", icon: Cpu, tone: "sky",
     hint: "One identity per machine, across telematics, handover, weighbridge and RFID" },
   { id: "operators", label: "Operators", icon: Users, tone: "emerald",
     hint: "Who may run each machine, what they are certified for, and what is about to lapse" },
+  { id: "notes", label: "Notes", icon: MessageSquare, tone: "gold",
+    hint: "What people have said about machines, crews and shifts — and what is still open" },
   { id: "alerts", label: "Alerts", icon: AlertTriangle, tone: "rose",
     hint: "Documents expiring and services falling due" },
   { id: "activity", label: "Activity", icon: Activity, tone: "violet",
@@ -135,6 +138,7 @@ export default function MineHubSection() {
         <EquipmentPanel addOpen={addOpen} onAddOpenChange={setAddOpen}
           onFormOpenChange={setFormOpen} onChanged={loadAlerts} />
       )}
+      {tab === "notes" && <NotesFeed />}
       {mayView && tab === "alerts" && <AlertsPanel onChanged={loadAlerts} />}
       {mayView && tab === "activity" && <ActivityPanel />}
       {mayView && tab === "modules" && (

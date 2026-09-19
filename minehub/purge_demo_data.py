@@ -122,6 +122,13 @@ def main(apply: bool) -> int:
             result = db.execute(text(sql), params)
             print(f"  {label:<12} {result.rowcount} removed")
 
+        # Notes address their subject by a type and an id rather than a foreign
+        # key, so nothing cascades them away. Pruning here is what makes that
+        # trade affordable — see migration 030.
+        orphans = db.execute(text("SELECT prune_orphan_comments()")).scalar()
+        if orphans:
+            print(f"  {'notes':<12} {orphans} orphaned removed")
+
         db.commit()
 
         print("\nWhat is left:")

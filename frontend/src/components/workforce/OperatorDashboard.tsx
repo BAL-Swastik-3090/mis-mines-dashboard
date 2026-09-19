@@ -29,6 +29,7 @@ import {
   Button, Card, CardHeader, Chip, Field, inputClass, Tile, Avatar, type Tone,
 } from "@/components/minehub/ui";
 import Dialog from "@/components/minehub/Dialog";
+import CommentThread from "@/components/comments/CommentThread";
 import { DAY_STATE, UNROSTERED, LEAVE_STATUS, prettyDate, shortDate, isoDay,
          type DayCell } from "./state";
 
@@ -330,6 +331,9 @@ export default function OperatorDashboard({ operatorId, onClose, mayApply, onCha
                   )}
                 </Card>
               </div>
+
+              <CommentThread entityType="OPERATOR" entityId={operatorId}
+                             title={`Notes on ${o?.display_name ?? "this person"}`} />
 
               {rusty.length > 0 && (
                 <Card tone="amber">
