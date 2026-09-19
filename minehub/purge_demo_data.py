@@ -97,14 +97,25 @@ def main(apply: bool) -> int:
             print("\nNothing was deleted. Add --apply to do it.")
             return 0
 
-        # Events first, and on their own. The table is append-only by design,
+        # THE ORDER MATTERS, and it is not the obvious one.
+        #
+        # Three tables reference a machine without a cascade — operator_competency
+        # (a machine-level assessment, from migration 022), hoto and deployment —
+        # so deleting machines first fails on a foreign key. Deliberately: none
+        # of those should ever be silently destroyed by removing a machine.
+        #
+        # Deleting the operator first resolves it, because operator_competency
+        # *does* cascade from the operator side. Then the machines are free, and
+        # the parties last, since a machine points at the contractor that owns it.
+        #
+        # Events go first and on their own. The table is append-only by design,
         # so emptying it is a decision somebody makes rather than something a
         # cascade does quietly on the way past.
         print()
         for label, sql, params in (
             ("events", "DELETE FROM event", {}),
-            ("machines", "DELETE FROM asset", {}),
             ("operators", "DELETE FROM operator", {}),
+            ("machines", "DELETE FROM asset", {}),
             ("parties", "DELETE FROM party WHERE display_name <> ALL(:keep)",
              {"keep": list(KEEP_PARTIES)}),
         ):
