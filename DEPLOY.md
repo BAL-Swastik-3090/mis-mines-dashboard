@@ -60,6 +60,55 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ---
 
+## Deployed — 2026-09-19: MineHub workforce, notes, Superadmin rename
+
+Released `minehub-workforce-release` (commit `776dd6d`) to mines.balasorealloys.in.
+
+Method: `git archive` of the release tag, extracted over `~/mines_dashboard`,
+then `docker compose build && docker compose up -d` from that directory. The
+default `docker-compose.yml` + `docker-compose.override.yml` pair, which is what
+the running stack was already using — confirmed from the container labels before
+touching anything, because the `prod` file does **not** auto-load the override
+and the bundled nginx would have taken host 80/443 from every other app.
+
+Verified after: site 200; the workforce, notes and ops routes answering; all 70
+other containers on the box holding the same ids, none restarted; nothing
+publishing 80/443. Previous state backed up to
+`~/mines_dashboard-backup-<timestamp>.tar.gz` on the server.
+
+New in the image: `openpyxl` 3.1.5, for the roster import and export.
+
+### ⚠ Still needed before MineHub works on production
+
+The production `.env` has no Postgres block, so every MineHub screen — the
+registry, operators, workforce, notes, shift control — reports "not configured"
+and the read-only dashboards carry on unaffected. This was already true before
+this release; the new features simply make it more visible.
+
+The server can reach `192.168.10.27:5432` directly, so only configuration is
+missing:
+
+```
+PG_HOST=192.168.10.27
+PG_PORT=5432
+PG_DATABASE=corpappdb
+PG_USER=postgres
+PG_PASSWORD=<held by IT, not in this repo>
+PG_SCHEMA=minehub
+PG_SSLMODE=prefer
+```
+
+Then `docker compose up -d backend` to pick it up.
+
+**A decision goes with it:** those settings point at the same database the
+development machine uses. One schema shared between dev and production means a
+migration applied while building is a migration applied to live data, and a
+purge run locally empties the production register. If the two should be
+separate, production needs its own database or its own schema, and migrations
+001–031 run against it once.
+
+---
+
 ## 🟡 Pending Deployment
 
 ### Session: 2026-09-12 — Access Control screen (super admin)
