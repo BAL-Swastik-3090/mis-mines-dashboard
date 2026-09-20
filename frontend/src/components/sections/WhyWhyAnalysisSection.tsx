@@ -3,12 +3,13 @@ import { useState } from "react";
 import dynamic from "next/dynamic";
 import {
   Wrench, AlertTriangle, Clock, Repeat, Users, Database,
-  Sparkles, RefreshCw, Info, ChevronRight, GraduationCap, Layers,
+  Sparkles, RefreshCw, Info, ChevronRight, GraduationCap, Layers, TrendingDown,
 } from "lucide-react";
 import { useWhyWhy, useWhyWhyNarrative, useWhyWhyTraining } from "@/hooks/useInsights";
 import { formatIndian } from "@/lib/utils";
 import type {
   WhyWhyShare, WhyWhyWatch, WhyWhyMachineDetail, WhyWhyOperatorIssues,
+  WhyWhyProductionLoss, WhyWhyLossSlice,
 } from "@/types";
 
 const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
@@ -40,6 +41,15 @@ const CAUSE_COLOURS: Record<string, string> = {
   "Electrical":          "#00897b",
 };
 const FALLBACK = "#8fa3c4";
+
+/** Rupees at mine scale — crore past a crore, lakh below it. A bare Indian
+ *  grouping of 47,74,21,308 is unreadable at a glance in a KPI. */
+function inrCr(v: number | null | undefined): string {
+  if (v == null) return "—";
+  if (Math.abs(v) >= 1e7) return `₹${(v / 1e7).toFixed(2)} Cr`;
+  if (Math.abs(v) >= 1e5) return `₹${(v / 1e5).toFixed(2)} L`;
+  return `₹${formatIndian(v)}`;
+}
 
 function num(v: number | null | undefined, dec = 0): string {
   if (v == null) return "—";
@@ -163,6 +173,94 @@ const WATCH_STYLE: Record<WhyWhyWatch["state"], { cls: string; label: (w: WhyWhy
   watch: { cls: "bg-navy/5 text-navy border-navy/15",           label: (w) => `In ${w.due_in_days}d` },
   held:  { cls: "bg-success/10 text-success border-success/25", label: () => "Appears held" },
 };
+
+// -- production loss ------------------------------------------
+/**
+ * What breakdowns cost in ore never mined, split by what broke.
+ *
+ * The rupee total is the LCM section's own figure, not a second calculation.
+ * Ore loss is scoped to the machines LCM prices it against and split within
+ * them by each failure's share of Why-Why breakdown hours, so the parts always
+ * foot to the whole whichever hour basis turns out to be authoritative.
+ */
+function LossSplit({ rows, title }: { rows: WhyWhyLossSlice[]; title: string }) {
+  if (!rows.length) return null;
+  const max = Math.max(...rows.map((r) => r.amount), 1);
+  return (
+    <div>
+      <div className="mb-1.5 font-condensed text-[10.5px] font-bold uppercase tracking-widest text-txt-muted">
+        {title}
+      </div>
+      <div className="space-y-2">
+        {rows.map((r) => (
+          <div key={r.label}>
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="truncate text-[12px] text-txt-secondary">
+                {r.label}
+                <span className="ml-1.5 text-[10.5px] text-txt-muted">{r.events} ev</span>
+              </span>
+              <span className="shrink-0 font-mono text-[12px] text-navy">
+                {inrCr(r.amount)}
+                <span className="ml-1.5 text-[11px] text-txt-muted">{r.share_pct}%</span>
+              </span>
+            </div>
+            <div className="mt-1 h-[6px] overflow-hidden rounded-full bg-bg-subtle">
+              <div className="h-full rounded-full bg-[#b3261e]"
+                   style={{ width: `${(r.amount / max) * 100}%` }} />
+            </div>
+            {r.tonnes != null ? (
+              <div className="mt-0.5 text-[10.5px] text-txt-muted">
+                {formatIndian(r.tonnes)} MT of ore not mined
+              </div>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ProductionLoss({ d }: { d: WhyWhyProductionLoss }) {
+  return (
+    <div className="space-y-4">
+      <div className="rounded-lg border border-danger/25 bg-danger/5 px-4 py-3">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <span className="font-mono text-[26px] font-bold leading-none text-[#b3261e]">
+            {inrCr(d.amount)}
+          </span>
+          <span className="text-[12.5px] text-txt-secondary">of ore never mined</span>
+          {d.times_repair_cost ? (
+            <span className="ml-auto rounded border border-danger/25 bg-white px-2 py-[3px] text-[12px] font-bold text-[#b3261e]">
+              {formatIndian(d.times_repair_cost)}× the repair bill
+            </span>
+          ) : null}
+        </div>
+        <p className="mt-2 text-[12px] leading-relaxed text-txt-secondary">
+          {d.tonnes != null ? <>{formatIndian(d.tonnes)} MT at ₹{formatIndian(d.rate_per_mt ?? 0)}/MT</> : null}
+          {d.loss_hours != null ? <> · {d.loss_hours} ore-loss hours</> : null}
+          {d.share_of_all_loss_pct != null ? (
+            <> · <b>{d.share_of_all_loss_pct}%</b> of every rupee the mine loses to any cause</>
+          ) : null}
+          {d.loss_type ? <> · {d.loss_type}</> : null}
+        </p>
+        <p className="mt-1 text-[11px] text-txt-muted">
+          Repair cost over the same period was ₹{formatIndian(d.repair_cost)}.
+        </p>
+      </div>
+
+      <div className="grid gap-5 md:grid-cols-3">
+        <LossSplit rows={d.allocation.by_machine} title="By machine" />
+        <LossSplit rows={d.allocation.by_mode} title="By failure mode" />
+        <LossSplit rows={d.allocation.by_cause} title="By root cause" />
+      </div>
+
+      <p className="border-t border-border-light pt-2 text-[11px] leading-relaxed text-txt-muted">
+        {d.basis} Ore loss sits with {d.ore_machines.join(" and ")} ({d.ore_machine_events} breakdowns
+        in the register){d.rate_source ? <> · rate: {d.rate_source}</> : null}.
+      </p>
+    </div>
+  );
+}
 
 // ── equipment-wise Pareto + RCA ──────────────────────────────
 /**
@@ -518,6 +616,15 @@ export default function WhyWhyAnalysisSection() {
                 sub={data.root_causes ? `${data.root_causes.missing} without` : undefined} />
         </div>
       </Card>
+
+      {/* ── production loss — the number the section exists to surface ── */}
+      {data.production_loss && (
+        <Card icon={<TrendingDown size={15} className="text-[#b3261e]" />}
+              title="What breakdowns cost in lost ore"
+              note="valued by the LCM section">
+          <ProductionLoss d={data.production_loss} />
+        </Card>
+      )}
 
       {/* ── cause + failure mode ── */}
       <div className="grid gap-4 lg:grid-cols-2">

@@ -1262,6 +1262,7 @@ export interface WhyWhyResponse {
     /** Ships from the backend so the UI cannot quietly drop it. */
     caveat: string;
   } | null;
+  production_loss: WhyWhyProductionLoss | null;
   machine_detail:  WhyWhyMachineDetail[];
   operator_issues: WhyWhyOperatorIssues | null;
   completeness: {
@@ -1332,4 +1333,40 @@ export interface WhyWhyTrainingResponse {
   generated_at: string | null;
   unverified_numbers: string[];
   error:    string | null;
+}
+
+/** Breakdown production loss, taken from the LCM section and split here.
+ *  Never recomputed — two rupee figures for the same thing on one dashboard
+ *  is worse than one figure in two places. */
+export interface WhyWhyLossSlice {
+  label:     string;
+  events:    number;
+  hours:     number;
+  share_pct: number;
+  amount:    number;
+  tonnes:    number | null;
+}
+
+export interface WhyWhyProductionLoss {
+  amount:                 number;
+  tonnes:                 number | null;
+  loss_hours:             number | null;
+  ob_volume_cum:          number | null;
+  share_of_all_loss_pct:  number | null;
+  loss_type:              string | null;
+  rate_per_mt:            number | null;
+  rate_source:            string | null;
+  lcm_total_loss:         number | null;
+  repair_cost:            number;
+  /** Production loss as a multiple of the repair bill. The headline. */
+  times_repair_cost:      number | null;
+  ore_machines:           string[];
+  ore_machine_events:     number;
+  ob_machine_events:      number;
+  allocation: {
+    by_machine: WhyWhyLossSlice[];
+    by_mode:    WhyWhyLossSlice[];
+    by_cause:   WhyWhyLossSlice[];
+  };
+  basis: string;
 }
