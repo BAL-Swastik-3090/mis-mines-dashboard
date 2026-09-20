@@ -11,15 +11,15 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Search, Link2, Trash2, Check, Loader2, Radio, ChevronDown, ChevronRight,
-  Cpu, Fuel, Zap, Wrench, Plus, Building2, X,
+  Cpu, Zap, Plus, Building2, X, Rows3, LayoutGrid, CircleSlash, Gauge,
 } from "lucide-react";
 import api from "@/lib/api";
-import ColumnFilter, { optionsFrom } from "./ColumnFilter";
+import ColumnFilter, { optionsFrom, SortHeader, type SortDir } from "./ColumnFilter";
 import CommentThread from "@/components/comments/CommentThread";
 import { useAuth } from "@/contexts/useAuth";
 import AssetForm from "./AssetForm";
 import {
-  Alert, Button, Card, CardHeader, Chip, EmptyRow, Td, Th, Tile, inputClass, type Tone,
+  Alert, Button, Card, CardHeader, Chip, EmptyRow, StatBar, Td, Th, inputClass, type Tone,
 } from "./ui";
 
 interface Summary {
@@ -77,6 +77,20 @@ const STAGE_LABEL: Record<string, string> = {
  *  them sat at the top of the list purely because their codes begin with A. */
 const IN_SERVICE = ["ACTIVE", "MAINTENANCE", "STANDBY", "IDLE"];
 
+/** Everything that is no longer part of the working fleet. The register opens
+ *  without these, and the count of them is the difference between "130
+ *  machines" and "123 on the list" — a gap that went unexplained until it was
+ *  given its own figure. */
+const RETIRED = ["OFF_ROAD", "CANNIBALISED", "SCRAPPED", "DISPOSED"];
+
+/** Sorting by status alphabetically puts Cannibalised above Working, which is
+ *  nobody's idea of order. The useful order is how far through its life a
+ *  machine is. */
+const STAGE_RANK: Record<string, number> = {
+  ACTIVE: 0, MAINTENANCE: 1, STANDBY: 2, IDLE: 3,
+  OFF_ROAD: 4, CANNIBALISED: 5, SCRAPPED: 6, DISPOSED: 7,
+};
+
 const STATUS_VIEWS: { id: string; label: string }[] = [
   { id: "IN_SERVICE", label: "In service" },
   { id: "", label: "All machines" },
@@ -95,6 +109,31 @@ const CATEGORY_TONE: Record<string, Tone> = {
   EXCAVATION: "violet", HAULAGE: "sky", DRILLING: "indigo", DOZING: "teal",
   GRADING: "emerald", LIFTING: "amber", WATER: "sky", PUMP: "teal",
   SUPPORT: "slate", LIGHTING: "amber", LMV: "slate", OTHER: "slate",
+};
+
+/** One place that knows what each stage selection means, because three
+ *  separate copies of the same two lines is how "retired" ends up filtering
+ *  the table and not the filter menus. */
+function atStage(a: { status: string }, stage: string): boolean {
+  if (stage === "IN_SERVICE") return IN_SERVICE.includes(a.status);
+  if (stage === "RETIRED") return RETIRED.includes(a.status);
+  if (stage) return a.status === stage;
+  return true;
+}
+
+type SortKey = "machine" | "type" | "makemodel" | "owner" | "linked"
+             | "changed" | "status";
+
+/** What each column sorts on, and what the two directions are called there.
+ *  "A to Z" on a date column is the reason people click sort twice. */
+const SORT_WORDS: Record<SortKey, [string, string]> = {
+  machine:   ["A to Z", "Z to A"],
+  type:      ["A to Z", "Z to A"],
+  makemodel: ["A to Z", "Z to A"],
+  owner:     ["A to Z", "Z to A"],
+  linked:    ["Fewest links first", "Most links first"],
+  changed:   ["Oldest first", "Changed most recently"],
+  status:    ["Working first", "Scrapped first"],
 };
 
 export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenChange, onChanged }: {
@@ -125,6 +164,18 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
   // separate screens is how people go back to the spreadsheet.
   const [by, setBy] = useState({ type: "", owner: "", make: "", model: "",
                                  linked: "" });
+  // The server hands the list over in fleet-code order, so that is what the
+  // table claims to be doing until somebody says otherwise.
+  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>(
+    { key: "machine", dir: "asc" });
+  const sortBy = (key: SortKey) => (dir: SortDir) => setSort({ key, dir });
+  // A table is the right shape for comparing a column down the page; cards are
+  // the right shape for reading one machine at a time, and for a phone, where
+  // eight columns become a horizontal scroll nobody performs.
+  const [view, setView] = useState<"table" | "cards">("table");
+  // Clicking the unregistered figure should take you to the unregistered list,
+  // not merely inform you that it exists.
+  const queue = React.useRef<HTMLDivElement>(null);
   const set = (k: keyof typeof by) => (v: string) => setBy((b) => ({ ...b, [k]: v }));
   const clearAll = () => {
     setBy({ type: "", owner: "", make: "", model: "", linked: "" });
@@ -141,14 +192,16 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
       ? assets.filter((a) => !IN_SERVICE.includes(a.status)).length : 0),
     [assets, stage]);
 
+  const inService = React.useMemo(
+    () => assets.filter((a) => IN_SERVICE.includes(a.status)).length, [assets]);
+  const retired = React.useMemo(
+    () => assets.filter((a) => RETIRED.includes(a.status)).length, [assets]);
+
   // Built from the rows the other filters leave, so the menus never offer a
   // value that would return nothing — picking a make and finding an empty
   // table is the moment somebody decides the filter is broken.
-  const pool = React.useMemo(() => assets.filter((a) => {
-    if (stage === "IN_SERVICE" && !IN_SERVICE.includes(a.status)) return false;
-    if (stage && stage !== "IN_SERVICE" && a.status !== stage) return false;
-    return true;
-  }), [assets, stage]);
+  const pool = React.useMemo(() => assets.filter((a) => atStage(a, stage)),
+    [assets, stage]);
 
   const menus = React.useMemo(() => ({
     type: optionsFrom(pool, (a) => a.asset_type),
@@ -208,8 +261,7 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return assets.filter((a) => {
-      if (stage === "IN_SERVICE" && !IN_SERVICE.includes(a.status)) return false;
-      if (stage && stage !== "IN_SERVICE" && a.status !== stage) return false;
+      if (!atStage(a, stage)) return false;
       if (by.type && a.asset_type !== by.type) return false;
       if (by.owner && (a.owner ?? "") !== by.owner) return false;
       if (by.make && (a.make ?? "") !== by.make) return false;
@@ -223,6 +275,58 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
         .some((v) => (v ?? "").toLowerCase().includes(q));
     });
   }, [assets, query, propulsion, stage, by]);
+
+  // Ordered after filtering, so the sort applies to what is on screen rather
+  // than to a list most of which is not.
+  const sorted = useMemo(() => {
+    const dir = sort.dir === "asc" ? 1 : -1;
+    const keyOf = (a: Asset): string | number => {
+      switch (sort.key) {
+        case "machine":   return (a.nickname || a.fleet_code || "").toLowerCase();
+        case "type":      return (a.asset_type ?? "").toLowerCase();
+        case "makemodel": return [a.make, a.model].filter(Boolean).join(" ").toLowerCase();
+        // Our own machines group under one heading rather than scattering
+        // through the contractors alphabetically.
+        case "owner":     return a.ownership === "HIRED"
+                                 ? (a.owner ?? "").toLowerCase() : "bal";
+        case "linked":    return a.alias_count ?? 0;
+        case "changed":   return new Date(a.updated_at ?? a.created_at ?? 0).getTime();
+        case "status":    return STAGE_RANK[a.status] ?? 99;
+      }
+    };
+    // A blank make is not the first make alphabetically, it is a gap in the
+    // record. Gaps go to the end whichever way the column is pointing.
+    const rank = (v: string | number) =>
+      typeof v === "string" && v === "" ? "￿" : v;
+    return [...filtered].sort((x, y) => {
+      const a = rank(keyOf(x)), b = rank(keyOf(y));
+      if (a === b) return (x.fleet_code || "").localeCompare(y.fleet_code || "");
+      const cmp = typeof a === "number" && typeof b === "number"
+        ? a - b : String(a).localeCompare(String(b));
+      return cmp * dir;
+    });
+  }, [filtered, sort]);
+
+  // What is currently narrowing the list, each one removable on its own. The
+  // filters live in the column headings, which is the right place to set them
+  // and a poor place to notice five of them at once.
+  const active: { label: string; clear: () => void }[] = [
+    ...(stage !== "IN_SERVICE" ? [{
+      label: stage === "" ? "All machines" : stage === "RETIRED" ? "Retired"
+             : (STAGE_LABEL[stage] ?? stage),
+      clear: () => setStage("IN_SERVICE") }] : []),
+    ...(propulsion ? [{ label: propulsion === "EV" ? "Electric" : "Not electric",
+                        clear: () => setPropulsion("") }] : []),
+    ...(by.type   ? [{ label: by.type,  clear: () => set("type")("") }] : []),
+    ...(by.make   ? [{ label: by.make,  clear: () => set("make")("") }] : []),
+    ...(by.model  ? [{ label: by.model, clear: () => set("model")("") }] : []),
+    ...(by.owner  ? [{ label: by.owner, clear: () => set("owner")("") }] : []),
+    ...(by.linked ? [{ label: by.linked === "LINKED" ? "Linked to another system"
+                              : "Not linked yet",
+                       clear: () => set("linked")("") }] : []),
+    ...(query.trim() ? [{ label: `matching “${query.trim()}”`,
+                          clear: () => setQuery("") }] : []),
+  ];
 
   const openIdentities = async (id: number) => {
     if (expanded === id) { setExpanded(null); return; }
@@ -290,46 +394,84 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
       )}
 
 
-      {/* Registry state */}
+      {/* Registry state. One band, six figures, and the ones that are also
+          controls say so by being clickable — the register's own numbers are
+          the most natural filter on it. */}
       {summary && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <Tile label="Machines" value={summary.assets} tone="sky" icon={Cpu}
-                hint={`${summary.assets_active} active`} />
-          <Tile label="Electric" value={evCount}
-                tone={evCount ? "emerald" : "slate"} icon={Zap}
-                hint={assets.length
-                  ? `${Math.round(100 * evCount / assets.length)}% of the register`
-                  : "Nothing registered yet"}
-                onClick={() => setPropulsion(propulsion === "EV" ? "" : "EV")}
-                active={propulsion === "EV"} />
-          <Tile label="Identities linked" value={summary.aliases} tone="violet" icon={Link2}
-                hint="across all systems" />
-          <Tile label="Unregistered" value={unmapped.length} tone={unmapped.length ? "amber" : "emerald"}
-                icon={Radio} hint="transmitting telematics" />
-          <Tile label="Contractors" value={summary.organisations} tone="teal" icon={Building2}
-                hint="owning hired machines" />
-        </div>
+        <StatBar items={[
+          { label: "Machines", value: assets.length, tone: "sky", icon: Cpu,
+            hint: summary.organisations
+              ? `${summary.organisations} contractors own hired ones`
+              : "all owned by BAL" },
+          { label: "In service", value: inService, tone: "emerald", icon: Check,
+            hint: "working, in workshop, standby or idle",
+            title: "Show only the machines still in service",
+            onClick: () => setStage("IN_SERVICE"), active: stage === "IN_SERVICE" },
+          // The figure that explains why the register says 130 and the list
+          // says 123. It was the difference nobody could account for.
+          { label: "Retired", value: retired,
+            tone: retired ? "slate" : "emerald", icon: CircleSlash,
+            hint: "off road, cannibalised or scrapped",
+            title: retired ? "Show the machines that have left service" : undefined,
+            onClick: retired
+              ? () => setStage(stage === "RETIRED" ? "IN_SERVICE" : "RETIRED")
+              : undefined,
+            active: stage === "RETIRED" },
+          { label: "Electric", value: evCount,
+            tone: evCount ? "emerald" : "slate", icon: Zap,
+            hint: assets.length
+              ? `${Math.round(100 * evCount / assets.length)}% of the register`
+              : "nothing registered yet",
+            title: evCount ? "Show only battery and hybrid machines" : undefined,
+            onClick: evCount
+              ? () => setPropulsion(propulsion === "EV" ? "" : "EV") : undefined,
+            active: propulsion === "EV" },
+          { label: "Identities linked", value: summary.aliases,
+            tone: summary.aliases ? "violet" : "amber", icon: Link2,
+            hint: summary.aliases
+              ? "names other systems use"
+              : "nothing joins to telematics yet",
+            title: "Show the machines no other system can be joined to",
+            onClick: () => set("linked")(by.linked === "NONE" ? "" : "NONE"),
+            active: by.linked === "NONE" },
+          { label: "Unregistered", value: unmapped.length,
+            tone: unmapped.length ? "amber" : "emerald", icon: Radio,
+            hint: "transmitting under unknown names",
+            title: unmapped.length ? "Go to the unregistered list" : undefined,
+            onClick: unmapped.length
+              ? () => queue.current?.scrollIntoView({ behavior: "smooth", block: "start" })
+              : undefined },
+        ]} />
       )}
 
       {/* The register */}
       <Card tone="sky">
         <CardHeader title={`Fleet register · ${filtered.length}`} icon={Cpu} tone="sky"
           subtitle={narrowed
-            ? `Showing ${filtered.length} of ${assets.length}`
-              + (hidden > 0 ? ` — ${hidden} off road, scrapped or disposed are hidden` : "")
-              + ". Any heading with an arrow filters the column."
-            : "Own and hired machines. Any heading with an arrow filters the column; "
-              + "expand a row to link the names other systems use."}
+            ? `${filtered.length} of ${assets.length} machines`
+              + (hidden > 0 ? `, and ${hidden} retired ones are hidden` : "")
+            : "Own and hired machines. Every heading both orders the list and "
+              + "filters it; expand a row to link the names other systems use."}
           actions={
             <>
-              {narrowed && (
-                <button type="button" onClick={clearAll}
-                  className="inline-flex items-center gap-1 rounded-lg border border-gold/40
-                             bg-gold/[0.07] px-2.5 py-1.5 text-[11px] font-semibold
-                             text-gold-dark hover:bg-gold/15 transition">
-                  <X className="w-3 h-3" /> Clear filters
-                </button>
-              )}
+              {/* Two shapes for the same rows. The choice sits beside the
+                  search rather than in a menu, because it is the kind of
+                  thing people flip back and forth. */}
+              <div className="inline-flex rounded-lg border border-border bg-bg-light p-0.5">
+                {([["table", Rows3, "One row each, for comparing a column"],
+                   ["cards", LayoutGrid, "One card each, for reading a machine"]] as const)
+                  .map(([id, Icon, why]) => (
+                  <button key={id} type="button" onClick={() => setView(id)}
+                    title={why} aria-pressed={view === id}
+                    className={`inline-flex items-center justify-center rounded-[6px] px-2 py-1
+                                transition-colors
+                                ${view === id
+                                  ? "bg-bg-base text-navy shadow-sm ring-1 ring-border-light"
+                                  : "text-txt-light hover:text-navy"}`}>
+                    <Icon className="w-3.5 h-3.5" />
+                  </button>
+                ))}
+              </div>
               <div className="relative">
                 <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-txt-light" />
                 <input id="eq-search" value={query} onChange={(e) => setQuery(e.target.value)}
@@ -344,36 +486,87 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
               )}
             </>
           } />
+        {/* Set in the column headings, shown together here. Five filters you
+            can only see by opening five menus is five filters somebody
+            forgets is on, and then reports the register as missing rows. */}
+        {active.length > 0 && (
+          <div className="px-5 py-2.5 border-b border-border-light bg-bg-light/60
+                          flex flex-wrap items-center gap-1.5">
+            <span className="font-condensed text-[9.5px] font-bold uppercase
+                             tracking-[.13em] text-txt-light mr-0.5">
+              Showing only
+            </span>
+            {active.map((c) => (
+              <button key={c.label} type="button" onClick={c.clear}
+                title={`Stop filtering by ${c.label}`}
+                className="group inline-flex items-center gap-1.5 rounded-full border
+                           border-gold/40 bg-gold/[0.07] pl-2.5 pr-1.5 py-1
+                           text-[11px] font-semibold text-gold-dark
+                           hover:bg-gold/15 transition">
+                {c.label}
+                <X className="w-3 h-3 opacity-60 group-hover:opacity-100" />
+              </button>
+            ))}
+            <button type="button" onClick={clearAll}
+              className="ml-1 text-[11px] font-semibold text-txt-muted
+                         hover:text-navy underline underline-offset-2">
+              Clear all
+            </button>
+          </div>
+        )}
+
+        {view === "cards" ? (
+          <CardGrid rows={sorted} onOpen={setEditingId} empty={assets.length === 0} />
+        ) : (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[720px]">
             <thead>
               <tr>
-                <Th className="w-8" /><Th>Machine</Th>
+                <Th className="w-8" />
+                <Th><SortHeader label="Machine" sort={sort.key === "machine" ? sort.dir : null}
+                      onSort={sortBy("machine")} sortLabels={SORT_WORDS.machine} /></Th>
                 <Th><ColumnFilter label="Type" value={by.type}
-                      options={menus.type} onChange={set("type")} /></Th>
+                      options={menus.type} onChange={set("type")}
+                      sort={sort.key === "type" ? sort.dir : null}
+                      onSort={sortBy("type")} sortLabels={SORT_WORDS.type} /></Th>
                 <Th className="hidden md:table-cell">
                   <span className="inline-flex items-center gap-2">
                     <ColumnFilter label="Make" value={by.make}
-                      options={menus.make} onChange={set("make")} />
+                      options={menus.make} onChange={set("make")}
+                      sort={sort.key === "makemodel" ? sort.dir : null}
+                      onSort={sortBy("makemodel")} sortLabels={SORT_WORDS.makemodel} />
                     <span className="text-txt-light/40">/</span>
                     <ColumnFilter label="Model" value={by.model}
                       options={menus.model} onChange={set("model")} />
                   </span>
                 </Th>
                 <Th><ColumnFilter label="Owner" value={by.owner}
-                      options={menus.owner} onChange={set("owner")} /></Th>
+                      options={menus.owner} onChange={set("owner")}
+                      sort={sort.key === "owner" ? sort.dir : null}
+                      onSort={sortBy("owner")} sortLabels={SORT_WORDS.owner} /></Th>
                 <Th><ColumnFilter label="Linked" value={by.linked}
                       options={menus.linked} onChange={set("linked")}
-                      allLabel="Linked or not" /></Th>
-                {/* The column is the filter. Somebody scanning the status
+                      allLabel="Linked or not"
+                      sort={sort.key === "linked" ? sort.dir : null}
+                      onSort={sortBy("linked")} sortLabels={SORT_WORDS.linked} /></Th>
+                <Th className="hidden lg:table-cell">
+                  <SortHeader label="Changed" sort={sort.key === "changed" ? sort.dir : null}
+                    onSort={sortBy("changed")} sortLabels={SORT_WORDS.changed} /></Th>
+                {/* The column is the control. Somebody scanning the status
                     column is already asking "show me the ones that are…", and
                     making them look elsewhere for the control is the part that
                     gets missed. */}
                 <Th className="text-right">
                   <ColumnFilter label="Status" value={stage === "IN_SERVICE" ? "" : stage}
                     align="right" allLabel="In service (default)"
+                    sort={sort.key === "status" ? sort.dir : null}
+                    onSort={sortBy("status")} sortLabels={SORT_WORDS.status}
                     options={[
                       { value: "ALL", label: "All machines", count: assets.length },
+                      ...(retired
+                        ? [{ value: "RETIRED", label: "Retired — any stage",
+                             count: retired }]
+                        : []),
                       ...STATUS_VIEWS
                         .filter((v) => v.id && v.id !== "IN_SERVICE")
                         .map((v) => ({
@@ -382,19 +575,20 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
                         }))
                         .filter((o) => o.count > 0),
                     ]}
-                    onChange={(v) => setStage(v === "" ? "IN_SERVICE" : v === "ALL" ? "" : v)} />
+                    onChange={(v) => setStage(
+                      v === "" ? "IN_SERVICE" : v === "ALL" ? "" : v)} />
                 </Th>
               </tr>
             </thead>
             <tbody>
-              {filtered.length === 0 && (
-                <EmptyRow colSpan={7}>
+              {sorted.length === 0 && (
+                <EmptyRow colSpan={8}>
                   {assets.length === 0
                     ? "No machine registered yet — start from the list above, those are transmitting already."
                     : "No machine matches that search."}
                 </EmptyRow>
               )}
-              {filtered.map((a) => (
+              {sorted.map((a) => (
                 <React.Fragment key={a.asset_id}>
                   <tr className="hover:bg-bg-light transition-colors">
                     <Td className="pr-0">
@@ -486,7 +680,7 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
 
                   {expanded === a.asset_id && (
                     <tr className="bg-bg-light">
-                      <Td /><Td colSpan={6} className="pb-4">
+                      <Td /><Td colSpan={7} className="pb-4">
                         <div className="text-[10.5px] font-bold uppercase tracking-[.12em] text-txt-light mb-2 font-condensed">
                           What other systems call this machine
                         </div>
@@ -528,9 +722,11 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
             </tbody>
           </table>
         </div>
+        )}
       </Card>
       {/* The queue: telematics with nothing to attribute it to */}
       {unmapped.length > 0 && (
+        <div ref={queue}>
         <Card tone="amber">
           <CardHeader title={`${unmapped.length} machines transmitting but unregistered`}
             icon={Radio} tone="amber"
@@ -573,9 +769,101 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
             </button>
           )}
         </Card>
+        </div>
       )}
 
 
+    </div>
+  );
+}
+
+/**
+ * The same register as cards.
+ *
+ * A table is for reading one column down a hundred rows; this is for reading
+ * one machine. It is also what survives a phone, where eight columns become a
+ * sideways scroll that nobody performs — so the same list is available in a
+ * shape that wraps.
+ *
+ * Every card carries the same facts in the same places, so the eye can move
+ * between them without re-reading: name and reference at the top, what it is
+ * and what it runs on in the middle, who owns it and when it last moved along
+ * the bottom.
+ */
+function CardGrid({ rows, onOpen, empty }: {
+  rows: Asset[]; onOpen: (id: number) => void; empty: boolean;
+}) {
+  if (rows.length === 0) {
+    return (
+      <p className="px-5 py-12 text-center text-[13px] text-txt-light">
+        {empty
+          ? "No machine registered yet — start from the unregistered list below, those are transmitting already."
+          : "No machine matches that search."}
+      </p>
+    );
+  }
+  return (
+    <div className="p-4 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+      {rows.map((a) => (
+        <button key={a.asset_id} type="button" onClick={() => onOpen(a.asset_id)}
+          className="text-left rounded-xl border border-border-light bg-bg-base p-3.5
+                     shadow-sm hover:border-gold hover:shadow-md hover:-translate-y-px
+                     focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/40
+                     transition-all flex flex-col gap-2.5">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="font-semibold text-navy text-[13.5px] truncate">
+                {a.nickname || a.fleet_code}
+              </div>
+              <div className="text-[11px] font-mono text-txt-light truncate">
+                {a.asset_ref && <span className="text-violet font-bold">{a.asset_ref}</span>}
+                {a.asset_ref && " · "}{a.fleet_code}
+              </div>
+            </div>
+            <span className="shrink-0 flex flex-col items-end gap-1">
+              <Chip tone={STATUS_TONE[a.status] ?? "slate"}>
+                {STAGE_LABEL[a.status] ?? a.status.toLowerCase()}
+              </Chip>
+              {a.approval_status && a.approval_status !== "APPROVED" && (
+                <Chip tone={APPROVAL_TONE[a.approval_status] ?? "slate"}>
+                  {a.approval_status.replace("_", " ").toLowerCase()}
+                </Chip>
+              )}
+            </span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Chip tone={CATEGORY_TONE[a.category] ?? "slate"} dot={false}>{a.asset_type}</Chip>
+            {(a.propulsion === "EV" || a.propulsion === "HYBRID") && (
+              <Chip tone={a.propulsion === "EV" ? "emerald" : "sky"} dot={false}>
+                <Zap className="w-3 h-3" />{a.propulsion === "EV" ? "EV" : "Hybrid"}
+              </Chip>
+            )}
+            {a.ownership === "HIRED"
+              ? <Chip tone="amber" dot={false}>{a.owner ?? "Hired"}</Chip>
+              : <Chip tone="slate" dot={false}>BAL</Chip>}
+          </div>
+
+          {/* A dash rather than nothing: a card with a missing line reads as a
+              card with a different shape, and the grid stops being scannable. */}
+          <div className="text-[11.5px] text-txt-muted truncate">
+            <Gauge className="w-3 h-3 inline-block mr-1.5 -mt-px text-txt-light" />
+            {[a.make, a.model].filter(Boolean).join(" ") || "make and model not recorded"}
+          </div>
+
+          <div className="mt-auto pt-2 border-t border-border-light
+                          flex items-center justify-between gap-2 text-[11px]">
+            <span className="text-txt-light truncate">
+              {changedWhen(a.updated_at ?? a.created_at)}
+              {a.last_changed_by ? ` by ${a.last_changed_by}` : ""}
+            </span>
+            <span className="shrink-0 inline-flex items-center gap-1 text-txt-light font-mono">
+              <Link2 className="w-3 h-3" />
+              {a.alias_count ? a.alias_systems : "none"}
+            </span>
+          </div>
+        </button>
+      ))}
     </div>
   );
 }

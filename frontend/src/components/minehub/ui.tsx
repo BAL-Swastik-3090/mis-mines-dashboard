@@ -200,6 +200,72 @@ export function Tile({ label, value, hint, tone = "navy", icon: Icon, onClick, a
   );
 }
 
+/* ── Stat bar ────────────────────────────────────────────────────────────── */
+/**
+ * The same figures a row of Tiles carried, in one band instead of five cards.
+ *
+ * Five tiles in a four-column grid left one stranded on a second row and spent
+ * about four hundred pixels before a single machine was visible — on a screen
+ * whose entire job is the list underneath. Five numbers do not need five cards,
+ * a shadow each and a gap between them; they need to be legible and to say
+ * which of them you can click.
+ *
+ * Hairlines come from a one-pixel gap over a coloured ground, so they stay
+ * true however the grid wraps — `divide-x` draws in DOM order and puts a stray
+ * rule down the left of the second row.
+ */
+export interface Stat {
+  label: string;
+  value: React.ReactNode;
+  hint?: string;
+  tone?: Tone;
+  icon?: React.ElementType;
+  /** Given, the figure is a control: clicking it narrows the list below. */
+  onClick?: () => void;
+  active?: boolean;
+  /** What clicking does, for the tooltip. */
+  title?: string;
+}
+
+export function StatBar({ items }: { items: Stat[] }) {
+  return (
+    <div className="rounded-xl border border-border-light shadow-sm overflow-hidden
+                    bg-border-light grid gap-px
+                    grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">
+      {items.map((s) => {
+        const t = TONE[s.tone ?? "navy"];
+        const Tag = s.onClick ? "button" : "div";
+        const Icon = s.icon;
+        return (
+          <Tag key={s.label} onClick={s.onClick} title={s.title}
+            className={`relative text-left w-full bg-bg-base px-3.5 py-3 transition-colors
+                        ${s.onClick ? "hover:bg-gold/[0.05] cursor-pointer" : ""}
+                        ${s.active ? "bg-gold/[0.08]" : ""}`}>
+            {/* The marker for "this one is filtering" is a rule along the top
+                edge rather than a ring, which inside a gapless band would
+                fight the hairlines either side of it. */}
+            {s.active && <span className="absolute inset-x-0 top-0 h-[3px] bg-gold" />}
+            <div className="flex items-center justify-between gap-2">
+              <span className={`font-condensed font-extrabold text-[26px] leading-none
+                                tabular-nums ${t.text}`}>
+                {s.value}
+              </span>
+              {Icon && <Icon className={`w-4 h-4 shrink-0 ${t.text} opacity-50`} />}
+            </div>
+            <div className="font-condensed text-[9.5px] font-bold uppercase tracking-[.13em]
+                            text-txt-light mt-2">
+              {s.label}
+            </div>
+            {s.hint && (
+              <div className="text-[11px] text-txt-muted mt-0.5 leading-snug">{s.hint}</div>
+            )}
+          </Tag>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ── Inputs ──────────────────────────────────────────────────────────────── */
 export const inputClass =
   "w-full bg-bg-base border border-border rounded-lg px-3 py-2 text-[13px] text-txt-primary " +

@@ -17,7 +17,7 @@
  */
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Check, ChevronDown, X } from "lucide-react";
 
 export interface FilterOption {
   value: string;
@@ -25,8 +25,11 @@ export interface FilterOption {
   count?: number;
 }
 
+export type SortDir = "asc" | "desc";
+
 export default function ColumnFilter({
   label, value, options, onChange, align = "left", allLabel = "All",
+  sort = null, onSort, sortLabels = ["A to Z", "Z to A"],
 }: {
   /** The column heading. Shown when nothing is selected. */
   label: string;
@@ -35,6 +38,17 @@ export default function ColumnFilter({
   onChange: (v: string) => void;
   align?: "left" | "right";
   allLabel?: string;
+  /** Which way this column is currently sorting, if it is the sorted one. */
+  sort?: SortDir | null;
+  /** Given, the menu offers to sort by this column as well as filter by it.
+   *  Both belong to the column, so both live in the column rather than in a
+   *  toolbar somewhere above that says "sort by" and lists the headings
+   *  again. */
+  onSort?: (dir: SortDir) => void;
+  /** What the two directions mean HERE. "A to Z" is wrong for a date column
+   *  and wrong for a count, and a menu that says it anyway is a menu people
+   *  have to try twice. */
+  sortLabels?: [string, string];
 }) {
   const [open, setOpen] = useState(false);
   const [rect, setRect] = useState<{ top: number; left: number } | null>(null);
@@ -73,6 +87,9 @@ export default function ColumnFilter({
 
   const chosen = options.find((o) => o.value === value);
   const active = Boolean(value);
+  // A sorted column says so in its heading, because the alternative is a table
+  // in an order nobody can account for.
+  const Mark = sort === "asc" ? ArrowUp : sort === "desc" ? ArrowDown : ChevronDown;
 
   return (
     <>
@@ -82,8 +99,10 @@ export default function ColumnFilter({
                     px-1 -mx-1 py-0.5 transition-colors
                     ${align === "right" ? "flex-row-reverse" : ""}
                     ${active ? "text-gold-dark" : "text-txt-light hover:text-navy"}`}>
-        <ChevronDown className={`w-3 h-3 shrink-0 transition ${open ? "rotate-180" : ""}
-                                 ${active ? "" : "opacity-0 group-hover:opacity-100"}`} />
+        <Mark className={`w-3 h-3 shrink-0 transition
+                          ${open && !sort ? "rotate-180" : ""}
+                          ${sort ? "text-navy" : ""}
+                          ${active || sort ? "" : "opacity-0 group-hover:opacity-100"}`} />
         <span className="truncate text-[10.5px] font-bold uppercase tracking-[.1em]">
           {active ? chosen?.label ?? value : label}
         </span>
@@ -100,6 +119,25 @@ export default function ColumnFilter({
         <div ref={menu} style={{ top: rect.top, left: rect.left }}
           className="fixed z-[60] w-56 max-h-72 overflow-y-auto rounded-xl border
                      border-slate-200 bg-white shadow-xl py-1">
+          {onSort && (
+            <>
+              <Heading>Order the list by this</Heading>
+              {(["asc", "desc"] as SortDir[]).map((dir, i) => (
+                <button key={dir} type="button"
+                  onClick={() => { onSort(dir); setOpen(false); }}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-left
+                              text-[12.5px] hover:bg-gold/[0.07]
+                              ${sort === dir ? "font-semibold text-navy" : "text-txt-muted"}`}>
+                  {sort === dir
+                    ? <Check className="w-3.5 h-3.5 shrink-0 text-gold" />
+                    : <ArrowUpDown className="w-3.5 h-3.5 shrink-0 text-txt-light/50" />}
+                  {sortLabels[i]}
+                </button>
+              ))}
+              <div className="my-1 border-t border-slate-100" />
+              <Heading>Show only</Heading>
+            </>
+          )}
           <button type="button"
             onClick={() => { onChange(""); setOpen(false); }}
             className={`w-full flex items-center gap-2 px-3 py-1.5 text-left
@@ -127,6 +165,41 @@ export default function ColumnFilter({
           ))}
         </div>, document.body)}
     </>
+  );
+}
+
+/** A quiet label above a group of menu items, so a menu that now does two
+ *  jobs still reads as two jobs. */
+function Heading({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="px-3 pt-1.5 pb-1 font-condensed text-[9.5px] font-bold uppercase
+                    tracking-[.13em] text-txt-light/80">
+      {children}
+    </div>
+  );
+}
+
+/** A heading that only sorts. Some columns have nothing worth filtering by —
+ *  every machine has its own code — but every column is worth ordering by. */
+export function SortHeader({ label, sort = null, onSort, align = "left",
+                             sortLabels = ["A to Z", "Z to A"] }: {
+  label: string;
+  sort?: SortDir | null;
+  onSort: (dir: SortDir) => void;
+  align?: "left" | "right";
+  sortLabels?: [string, string];
+}) {
+  const Mark = sort === "asc" ? ArrowUp : sort === "desc" ? ArrowDown : ArrowUpDown;
+  const next: SortDir = sort === "asc" ? "desc" : "asc";
+  return (
+    <button type="button" onClick={() => onSort(next)}
+      title={`Order by ${label.toLowerCase()} — ${sortLabels[next === "asc" ? 0 : 1].toLowerCase()}`}
+      className={`group inline-flex items-center gap-1 max-w-full rounded px-1 -mx-1 py-0.5
+                  transition-colors ${align === "right" ? "flex-row-reverse" : ""}
+                  ${sort ? "text-navy" : "text-txt-light hover:text-navy"}`}>
+      <Mark className={`w-3 h-3 shrink-0 ${sort ? "" : "opacity-0 group-hover:opacity-100"}`} />
+      <span className="truncate text-[10.5px] font-bold uppercase tracking-[.1em]">{label}</span>
+    </button>
   );
 }
 
