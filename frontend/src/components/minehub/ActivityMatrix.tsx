@@ -29,6 +29,13 @@ import ColumnFilter, { optionsFrom, matches } from "./ColumnFilter";
 import HoverCard, { CardBody, CardHead, CardNote, Fact } from "./HoverCard";
 import { toDisplay } from "./DateField";
 import { Button, Card, CardHeader, Chip, StatBar, type Tone } from "./ui";
+
+/** The text colour for a tone, for the few places that want a figure in a
+ *  colour without a Chip around it. */
+const TONE_TEXT: Record<string, string> = {
+  emerald: "text-emerald", amber: "text-amber", slate: "text-slate",
+  violet: "text-violet", rose: "text-rose", sky: "text-sky",
+};
 import { toCsv, download } from "./spreadsheet";
 
 export interface Row {
@@ -56,7 +63,11 @@ const CELL: Record<Row["state"], { short: string; cls: string; label: string }> 
 };
 
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const PAGE_SIZES = [10, 20, 50, 100];
+// 0 means every row. Offered because with 211 workers "all of them" is a
+// reasonable thing to want on screen at once, and scrolling one long table
+// beats clicking through three.
+const PAGE_SIZES = [10, 20, 50, 100, 0];
+const sizeLabel = (n: number) => (n === 0 ? "All" : String(n));
 
 /** Today is half a day. Everyone on shift is still inside and has not punched
  *  out, so it looks like a quiet day with a broken reader — and it is neither.
@@ -228,12 +239,31 @@ export default function ActivityMatrix({ rows, days }: { rows: Row[]; days: stri
       : a.name.localeCompare(b.name));
   }, [people, by, query, order]);
 
-  const pages = Math.max(1, Math.ceil(filtered.length / perPage));
-  const shown = filtered.slice(page * perPage, (page + 1) * perPage);
+  const all = perPage === 0;
+  const pages = all ? 1 : Math.max(1, Math.ceil(filtered.length / perPage));
+  const shown = all ? filtered : filtered.slice(page * perPage, (page + 1) * perPage);
   const narrowed = Object.values(by).some(Boolean) || Boolean(query.trim());
 
   const totals = (s: Row["state"]) => rows.filter((r) => r.state === s).length;
   const workingDays = days.filter((d) => !quiet.has(d)).length;
+
+  // The summary follows the filters, because a total that ignores them is a
+  // total answering a question nobody asked.
+  const shownTotals = useMemo(() => {
+    const complete = filtered.reduce((n, p) => n + p.complete, 0);
+    const single = filtered.reduce((n, p) => n + p.single, 0);
+    const none = filtered.reduce((n, p) => n + p.none, 0);
+    return {
+      complete, single, none,
+      avg: filtered.length
+        ? Math.round(((complete + single) / filtered.length) * 10) / 10 : 0,
+    };
+  }, [filtered]);
+
+  const worstSingle = useMemo(
+    () => [...filtered].filter((p) => p.single > 0)
+      .sort((a, b) => b.single - a.single).slice(0, 6),
+    [filtered]);
 
   const exportMatrix = () => {
     download(toCsv(
@@ -484,6 +514,7 @@ export default function ActivityMatrix({ rows, days }: { rows: Row[]; days: stri
           <span className="flex flex-wrap items-center gap-3 text-[11.5px] text-txt-muted">
             <span>
               {filtered.length === 0 ? "Nobody to show"
+                : all ? `All ${filtered.length}`
                 : `${page * perPage + 1}\u2013${Math.min((page + 1) * perPage, filtered.length)} of ${filtered.length}`}
             </span>
             <label className="inline-flex items-center gap-1.5">
@@ -493,7 +524,9 @@ export default function ActivityMatrix({ rows, days }: { rows: Row[]; days: stri
                 className="bg-bg-base border border-border rounded-lg px-2 py-1
                            text-[11.5px] font-semibold text-txt-secondary
                            focus:outline-none focus:border-gold">
-                {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
+                {PAGE_SIZES.map((n) => (
+                  <option key={n} value={n}>{sizeLabel(n)}</option>
+                ))}
               </select>
               at a time
             </label>
@@ -514,6 +547,62 @@ export default function ActivityMatrix({ rows, days }: { rows: Row[]; days: stri
             </span>
           )}
         </div>
+      </Card>
+
+      {/* The same figures as the band, restated under the table. With 211 rows
+          on one page the top of the screen is a long way back, and the answer
+          to "so what does this month look like" should be where you finish
+          reading rather than where you started. */}
+      <Card tone="slate">
+        <CardHeader title="Summary for this period" icon={ArrowDownUp} tone="slate"
+          subtitle={`${filtered.length} worker${filtered.length === 1 ? "" : "s"} over `
+            + `${days.length} day${days.length === 1 ? "" : "s"}`
+            + (narrowed ? ", after the filters above" : "")} />
+        <div className="p-4 grid grid-cols-2 lg:grid-cols-4 gap-4">
+          {([["Both punches", shownTotals.complete, "emerald",
+              "a clean day at the gate"],
+             ["Single punch", shownTotals.single, shownTotals.single ? "amber" : "emerald",
+              "in without out, or out without in"],
+             ["No punch", shownTotals.none, "slate",
+              "rest days included — not absence"],
+             ["Days each, on average", shownTotals.avg, "violet",
+              "with at least one punch"]] as const).map(([label, value, tone, sub_]) => (
+            <span key={label} className="block">
+              <span className={`block font-condensed font-extrabold text-[26px] leading-none
+                                tabular-nums ${TONE_TEXT[tone]}`}>
+                {value}
+              </span>
+              <span className="block text-[12.5px] font-semibold text-txt-secondary mt-1.5">
+                {label}
+              </span>
+              <span className="block text-[11px] text-txt-muted mt-0.5">{sub_}</span>
+            </span>
+          ))}
+        </div>
+
+        {worstSingle.length > 0 && (
+          <div className="px-4 py-3 border-t border-border-light">
+            <span className="block text-[10.5px] font-bold uppercase tracking-[.12em]
+                             text-txt-light mb-2">
+              Most single punches
+            </span>
+            <span className="flex flex-wrap gap-2">
+              {worstSingle.map((w) => (
+                <span key={w.emp_no}
+                  className="inline-flex items-center gap-2 rounded-lg bg-bg-base
+                             ring-1 ring-border px-2.5 py-1">
+                  <span className="font-mono text-[11px] font-bold text-violet">{w.emp_no}</span>
+                  <span className="text-[12px] text-navy font-semibold">{w.name}</span>
+                  <span className="text-[11px] text-amber font-bold">{w.single}</span>
+                </span>
+              ))}
+            </span>
+            <span className="block text-[11px] text-txt-muted mt-2">
+              Worth a look, but check the reader-trouble days above first — a
+              single punch on a day the gate failed is not about the person.
+            </span>
+          </div>
+        )}
       </Card>
 
       {/* One cell, opened. */}

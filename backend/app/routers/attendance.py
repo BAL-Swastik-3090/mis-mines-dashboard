@@ -29,9 +29,13 @@ from app.services import attendance as frs
 
 router = APIRouter(prefix="/api/attendance", tags=["Attendance"])
 
-# A month at a time. The query is one round trip whatever the span, but a year
-# of rows is a table nobody reads and a payload nobody needs.
-MAX_DAYS = 62
+# The platform's own date filter offers This Quarter and Last 90 Days, so the
+# cap has to clear those rather than refuse them. A year does not: 211 people
+# over 365 days is seventy thousand rows, which is a payload nobody reads and
+# a browser that stops responding while it renders them. Beyond the cap the
+# range is trimmed to its most recent days and the screen says so, because a
+# clamped answer is more use than an error.
+MAX_DAYS = 100
 
 
 def _minutes(first_in, last_out) -> int | None:
@@ -64,10 +68,13 @@ def register(
         raise HTTPException(400, "Dates are yyyy-mm-dd.")
     if to < frm:
         frm, to = to, frm
-    if (to - frm).days + 1 > MAX_DAYS:
-        raise HTTPException(
-            400, f"That is {(to - frm).days + 1} days; this reads at most {MAX_DAYS} "
-                 "at a time. Narrow the range.")
+    asked = (to - frm).days + 1
+    trimmed = None
+    if asked > MAX_DAYS:
+        frm = to - timedelta(days=MAX_DAYS - 1)
+        trimmed = (f"That range is {asked} days. Showing the most recent "
+                   f"{MAX_DAYS}, from {frm.isoformat()} — more than that is "
+                   "tens of thousands of rows and a screen nobody can read.")
 
     people = frs.register(db)
     if not people:
@@ -123,7 +130,8 @@ def register(
                 "running": on == today and state == "IN_ONLY",
             })
 
-    return {"configured": True, "days": days, "people": len(people), "rows": rows}
+    return {"configured": True, "days": days, "people": len(people),
+            "rows": rows, "trimmed": trimmed}
 
 
 @router.get("/punches")

@@ -23,6 +23,7 @@ import {
   LogIn, LogOut, Rows3, Search, Users, X,
 } from "lucide-react";
 import api from "@/lib/api";
+import { useDateFilter } from "@/contexts/useDateFilter";
 import ColumnFilter, { optionsFrom, matches, SortHeader, type SortDir } from "./ColumnFilter";
 import ActivityMatrix from "./ActivityMatrix";
 import HoverCard, { CardBody, CardHead, CardNote, Fact } from "./HoverCard";
@@ -82,13 +83,17 @@ export default function AttendancePanel() {
   // date"; the matrix answers "what does this person's month look like", which
   // is a different question and a different shape.
   const [view, setView] = useState<"log" | "matrix">("log");
-  const [from, setFrom] = useState(today);
-  const [to, setTo] = useState(today);
+  // The range comes from the platform's own date filter in the page header —
+  // the one every other screen already obeys, which opens on month-to-date.
+  // This screen had its own From and To underneath it, which is two calendars
+  // disagreeing about what "the period" means.
+  const { apiFrom: from, apiTo: to, label: rangeLabel, periodLabel } = useDateFilter();
   const [rows, setRows] = useState<Row[]>([]);
   const [days, setDays] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [trimmed, setTrimmed] = useState<string | null>(null);
 
   const [query, setQuery] = useState("");
   const [by, setBy] = useState({ trade: "", group: "", employer: "", department: "", state: "" });
@@ -112,6 +117,7 @@ export default function AttendancePanel() {
       });
       setRows(r.data?.rows ?? []);
       setDays(r.data?.days ?? []);
+      setTrimmed(r.data?.trimmed ?? null);
       if (r.data?.note) setNote(r.data.note);
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
@@ -207,83 +213,44 @@ export default function AttendancePanel() {
       `attendance-${from}${from === to ? "" : `-to-${to}`}.csv`);
   };
 
-  const jump = (by_: number) => {
-    const shift = (d: string) => {
-      const x = new Date(d); x.setDate(x.getDate() + by_);
-      return x.toISOString().slice(0, 10);
-    };
-    setFrom(shift(from)); setTo(shift(to));
-  };
   const spanDays = days.length || 1;
 
   return (
     <div className="space-y-4">
-      {/* The range, and the shortcuts people actually use. */}
-      <Card tone="sky">
-        <div className="px-4 py-3 flex flex-wrap items-end gap-3">
-          <label className="block">
-            <span className="block text-[11px] font-semibold text-txt-secondary mb-1">From</span>
-            <DateField id="at-from" value={from} onChange={(v) => { if (v) setFrom(v); }}
-              max={today()}
-              className="w-[150px] bg-bg-base border border-border rounded-lg" />
-          </label>
-          <label className="block">
-            <span className="block text-[11px] font-semibold text-txt-secondary mb-1">To</span>
-            <DateField id="at-to" value={to} onChange={(v) => { if (v) setTo(v); }}
-              min={from} max={today()}
-              className="w-[150px] bg-bg-base border border-border rounded-lg" />
-          </label>
-
-          <span className="flex items-center gap-1">
-            <Button size="sm" variant="secondary" onClick={() => jump(-spanDays)}
-              title="The same length of time, just before this">&larr;</Button>
-            <Button size="sm" variant="secondary" onClick={() => jump(spanDays)}
-              disabled={to >= today()}>&rarr;</Button>
+      {/* The range comes from the page header. This says what it resolved to
+          and offers the two shapes; it does not offer a second calendar. */}
+      <div className="flex flex-wrap items-center gap-3 px-1">
+        <span className="inline-flex items-center gap-2 text-[12.5px] text-txt-secondary">
+          <CalendarDays className="w-4 h-4 text-txt-light" />
+          <span className="font-semibold text-navy">{rangeLabel}</span>
+          <Chip tone="slate" dot={false}>{periodLabel}</Chip>
+          <span className="text-txt-light">
+            {spanDays} day{spanDays === 1 ? "" : "s"}
           </span>
-
-          <span className="flex flex-wrap items-center gap-1.5">
-            {([["Today", 0], ["Yesterday", 1], ["Last 7 days", 6], ["Last 30 days", 29]] as const)
-              .map(([label, back]) => (
-              <button key={label} type="button"
-                onClick={() => {
-                  const d = new Date(); d.setDate(d.getDate() - back);
-                  const iso = d.toISOString().slice(0, 10);
-                  if (label === "Yesterday") { setFrom(iso); setTo(iso); }
-                  else if (back === 0) { setFrom(iso); setTo(iso); }
-                  else { setFrom(iso); setTo(today()); }
-                }}
-                className="rounded-lg border border-border bg-bg-base px-2.5 py-1.5
-                           text-[11.5px] font-semibold text-txt-secondary
-                           hover:border-gold hover:text-navy transition-colors">
-                {label}
-              </button>
-            ))}
-          </span>
-
-          <span className="flex-1" />
-          <span className="text-[11.5px] text-txt-muted">
-            {spanDays === 1 ? toDisplay(from) : `${toDisplay(from)} to ${toDisplay(to)} · ${spanDays} days`}
-          </span>
-
-          <span className="inline-flex rounded-lg border border-border bg-bg-light p-0.5">
-            {([["log", Rows3, "One row per worker per day"],
-               ["matrix", Grid3x3, "One row per worker, one column per day"]] as const)
-              .map(([id, Icon, why]) => (
-              <button key={id} type="button" onClick={() => setView(id)}
-                title={why} aria-pressed={view === id}
-                className={`inline-flex items-center justify-center rounded-[6px] px-2 py-1
-                            transition-colors ${view === id
-                              ? "bg-bg-base text-navy shadow-sm ring-1 ring-border-light"
-                              : "text-txt-light hover:text-navy"}`}>
-                <Icon className="w-3.5 h-3.5" />
-              </button>
-            ))}
-          </span>
-        </div>
-      </Card>
+        </span>
+        <span className="text-[11.5px] text-txt-light">
+          Change it in the date filter at the top of the page.
+        </span>
+        <span className="flex-1" />
+        <span className="inline-flex rounded-lg border border-border bg-bg-light p-0.5">
+          {([["log", Rows3, "One row per worker per day"],
+             ["matrix", Grid3x3, "One row per worker, one column per day"]] as const)
+            .map(([id, Icon, why]) => (
+            <button key={id} type="button" onClick={() => setView(id)}
+              title={why} aria-pressed={view === id}
+              className={`inline-flex items-center justify-center rounded-[6px] px-2 py-1
+                          transition-colors ${view === id
+                            ? "bg-bg-base text-navy shadow-sm ring-1 ring-border-light"
+                            : "text-txt-light hover:text-navy"}`}>
+              <Icon className="w-3.5 h-3.5" />
+            </button>
+          ))}
+        </span>
+      </div>
 
       {error && <Alert tone="error">{error}</Alert>}
       {note && <Alert tone="warning">{note}</Alert>}
+      {trimmed && <Alert tone="warning">{trimmed}</Alert>}
 
       {loading ? (
         <div className="flex flex-col items-center gap-2 py-16">
