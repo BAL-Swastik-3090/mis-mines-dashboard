@@ -27,12 +27,19 @@
 import type { AppPage } from "./useAppPage";
 
 /** What each platform screen needs. The dashboards are not here — they come
- *  from the server as allowed_pages. */
-export const PAGE_PERMISSION: Partial<Record<AppPage, string>> = {
-  "minehub": "platform.registry.view",
-  "operations": "ops.shift.view",
-  "workforce": "ops.roster.view",
-  "access-control": "access.users.view",
+ *  from the server as allowed_pages.
+ *
+ *  A page listing more than one permission opens with any of them. MineHub
+ *  holds two registers that are different jobs: machines for the equipment
+ *  registrar, people for the operator registrar. Requiring the machine
+ *  permission to reach the page meant an operator registrar had to be given
+ *  the machine register to do their own work, which is how a permission
+ *  becomes meaningless. Each tab inside still states what it needs. */
+export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
+  "minehub": ["platform.registry.browse", "platform.operators.view"],
+  "operations": ["ops.shift.view"],
+  "workforce": ["ops.roster.view"],
+  "access-control": ["access.users.view"],
 };
 
 /** The order somebody should be sent to when the page they are on is not
@@ -52,7 +59,10 @@ export function canOpen(user: AccessLike | null | undefined, page: AppPage): boo
   if (!user) return false;
 
   const needed = PAGE_PERMISSION[page];
-  if (needed) return (user.permissions ?? []).includes(needed);
+  if (needed) {
+    const held = user.permissions ?? [];
+    return needed.some((code) => held.includes(code));
+  }
 
   // A dashboard. Absent means an old session and is tolerated; an empty list
   // is an answer, and the answer is no.

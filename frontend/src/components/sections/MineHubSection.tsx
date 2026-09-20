@@ -61,10 +61,44 @@ export default function MineHubSection() {
   const [formOpen, setFormOpen] = useState(false);
   const [alertCount, setAlertCount] = useState<number | null>(null);
 
-  const mayView = can("platform.registry.view");
+  // Browsing the register is its own right (migration 038). Reading the
+  // machine vocabulary — what an operator is assessed on — is not, and stays
+  // with platform.registry.view where the operator form needs it.
+  const mayBrowse = can("platform.registry.browse");
   const mayManage = can("platform.registry.manage");
   const mayOperators = can("platform.operators.manage");
   const mayOperatorsView = can("platform.operators.view");
+
+  // Machines and people are different registers and different jobs. An
+  // operator registrar keeps profiles, licences and assessments; they have no
+  // business in the machine register, and showing it to them is how a screen
+  // full of things you must not touch becomes a screen nobody reads carefully.
+  //
+  // So every tab states what it needs, and the strip only offers what this
+  // person can actually open. Notes are deliberately open to anyone who can
+  // open the page at all — a note is a sentence about work, not a record.
+  const TAB_PERMISSION: Record<TabId, boolean> = {
+    equipment: mayBrowse,
+    operators: mayOperatorsView,
+    notes: true,
+    alerts: mayBrowse,        // the alerts are document expiry on machines
+    activity: mayBrowse,
+    modules: true,
+  };
+  const openTabs = useMemo(
+    () => TABS.filter((t) => TAB_PERMISSION[t.id]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [mayBrowse, mayOperatorsView]);
+
+  // Land on the first tab this person can open rather than always Equipment,
+  // which for an operator registrar was a permission error as a welcome
+  // screen.
+  useEffect(() => {
+    if (openTabs.length && !openTabs.some((t) => t.id === tab)) {
+      setTab(openTabs[0].id);
+    }
+  }, [openTabs, tab]);
+
   const active = useMemo(() => TABS.find((t) => t.id === tab), [tab]);
 
   const loadAlerts = useCallback(async () => {
@@ -74,10 +108,9 @@ export default function MineHubSection() {
     } catch { setAlertCount(null); }
   }, []);
 
-  useEffect(() => { if (mayView) void loadAlerts(); }, [mayView, loadAlerts]);
-  useEffect(() => { if (!mayView) setTab("modules"); }, [mayView]);
+  useEffect(() => { if (mayBrowse) void loadAlerts(); }, [mayBrowse, loadAlerts]);
 
-  const tabsWithCount = TABS.map((t) =>
+  const tabsWithCount = openTabs.map((t) =>
     t.id === "alerts" && alertCount ? { ...t, label: `Alerts · ${alertCount}` } : t);
 
   // With the sheet open, the platform banner and the tab strip are a hundred
@@ -111,37 +144,31 @@ export default function MineHubSection() {
         }
       />}
 
-      {mayView && !formOpen && (
+      {!formOpen && openTabs.length > 0 && (
         <Tabs tabs={tabsWithCount} value={tab} onChange={(id) => setTab(id as TabId)} />
       )}
 
-      {!mayView && (
+      {openTabs.length === 0 && (
         <Card><div className="px-5 py-12 text-center text-[13px] text-txt-muted">
-          You do not have permission to open the platform registry.
+          You do not have permission to open either register. An Access Manager
+          grants <code>platform.registry.browse</code> for machines or{" "}
+          <code>platform.operators.view</code> for people.
         </div></Card>
       )}
 
-      {tab === "operators" && (
-        mayOperatorsView ? (
-          <OperatorPanel addOpen={addOpen} onAddOpenChange={setAddOpen}
-            onFormOpenChange={setFormOpen} onChanged={loadAlerts} />
-        ) : (
-          <Card><div className="px-5 py-12 text-center text-[13px] text-txt-muted">
-            Operator profiles hold dates of birth, medical expiry and photographs, so
-            they sit behind their own permission. An Access Manager can add
-            platform.operators.view to your role.
-          </div></Card>
-        )
+      {mayOperatorsView && tab === "operators" && (
+        <OperatorPanel addOpen={addOpen} onAddOpenChange={setAddOpen}
+          onFormOpenChange={setFormOpen} onChanged={loadAlerts} />
       )}
 
-      {mayView && tab === "equipment" && (
+      {mayBrowse && tab === "equipment" && (
         <EquipmentPanel addOpen={addOpen} onAddOpenChange={setAddOpen}
           onFormOpenChange={setFormOpen} onChanged={loadAlerts} />
       )}
       {tab === "notes" && <NotesFeed />}
-      {mayView && tab === "alerts" && <AlertsPanel onChanged={loadAlerts} />}
-      {mayView && tab === "activity" && <ActivityPanel />}
-      {mayView && tab === "modules" && (
+      {mayBrowse && tab === "alerts" && <AlertsPanel onChanged={loadAlerts} />}
+      {mayBrowse && tab === "activity" && <ActivityPanel />}
+      {tab === "modules" && (
         <Card tone="teal">
           <CardHeader title="Platform modules" icon={LayoutGrid} tone="teal"
             subtitle="Where the build actually stands. Each phase is usable on its own — nothing here exists only to enable the next." />
