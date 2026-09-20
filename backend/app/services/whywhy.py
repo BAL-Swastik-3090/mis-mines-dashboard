@@ -596,6 +596,121 @@ def _operator_issues(recs: list[dict], limit: int = 40) -> dict:
         "issues": rows,
     }
 
+
+# -- production loss ----------------------------------------------------------
+# The LCM section already values breakdown downtime as lost ore at the IBM
+# plan-weighted rate, and that number is the mine's own. Recomputing it here
+# with a different method would put two different rupee figures for the same
+# thing on the same dashboard, so this reuses LCM's and only SPLITS it.
+#
+# Scope matters and is the reason this is not a naive allocation. LCM values ore
+# loss against two machines only - TATA-470(7) and TATA-470(2), which the
+# Why-Why register calls EX- 7 and EX-2 - and OB loss against three others. The
+# rest of the fleet moves no ore, so breakdowns on them carry no ore loss no
+# matter how long they last. Spreading the ore figure across all 38 machines
+# would be arithmetically tidy and completely wrong.
+#
+# Within a scope the split is by SHARE of Why-Why breakdown hours, never by
+# absolute hours. LCM's hours come from SAP and the register's come from the
+# maintenance team, and the two disagree - 14,101 against 7,181 fleet-wide over
+# the same notifications. Using shares means the parts always foot to LCM's
+# total whichever hour basis is authoritative, which is still an open question
+# for the mine to settle.
+ORE_LOSS_MACHINES = {"EX- 7", "EX-2"}
+OB_LOSS_MACHINES = {"EX- 5", "EX- 4", "EX- 8"}
+
+
+def _allocate(recs: list[dict], amount: float | None, tonnes: float | None) -> dict:
+    """Split one loss figure across the machines' failure modes and causes."""
+    total_h = sum(_f(r["breakdown_duration_hr"]) for r in recs)
+    if not recs or total_h <= 0 or amount is None:
+        return {"by_machine": [], "by_mode": [], "by_cause": []}
+
+    def group(key) -> list[dict]:
+        acc: dict[str, dict] = defaultdict(lambda: {"hours": 0.0, "events": 0})
+        for r in recs:
+            k = key(r)
+            if k is None:
+                continue
+            acc[k]["hours"] += _f(r["breakdown_duration_hr"])
+            acc[k]["events"] += 1
+        out = []
+        for k, v in acc.items():
+            share = v["hours"] / total_h
+            out.append({
+                "label": k,
+                "events": v["events"],
+                "hours": round(v["hours"], 1),
+                "share_pct": round(share * 100, 1),
+                "amount": round(amount * share, 0),
+                "tonnes": round(tonnes * share, 1) if tonnes is not None else None,
+            })
+        out.sort(key=lambda x: -x["amount"])
+        return out
+
+    return {
+        "by_machine": group(lambda r: _machine_key(r["equipment_desc"])),
+        "by_mode": group(lambda r: family_of(r["breakdown_description"])),
+        # "Not recorded" rather than dropped: a breakdown with no cause still
+        # cost ore, and skipping it made the cause split miss its own total by
+        # Rs 4.87 crore. An unattributable loss is a finding, not a rounding.
+        "by_cause": group(lambda r: r["rca_category"] or "Not recorded"),
+    }
+
+
+def _production_loss(db: Session, f: date, t: date, recs: list[dict]) -> dict | None:
+    """Breakdown production loss, taken from LCM and split by failure detail.
+
+    Returns None rather than a zero if LCM cannot price the period - a missing
+    IBM rate makes the whole column null there, and a zero here would read as
+    "no loss" when it means "not priced".
+    """
+    try:
+        from app.services import lcm as lcm_svc
+
+        res = lcm_svc.get_lcm(db, f, t)
+    except Exception:
+        return None
+
+    head = next((r for r in res.get("rows", [])
+                 if "breakdown" in (r.get("loss_description") or "").lower()
+                 and "preventive" not in (r.get("loss_description") or "").lower()), None)
+    if head is None or head.get("loss_amount") is None:
+        return None
+
+    costing = res.get("costing") or {}
+    totals = res.get("totals") or {}
+    ore_recs = [r for r in recs if _machine_key(r["equipment_desc"]) in ORE_LOSS_MACHINES]
+    ob_recs = [r for r in recs if _machine_key(r["equipment_desc"]) in OB_LOSS_MACHINES]
+    repair = sum(_f(r["total_cost"]) for r in recs)
+
+    return {
+        "amount": head["loss_amount"],
+        "tonnes": head.get("planned_ore_loss"),
+        "loss_hours": head.get("ore_hours"),
+        "ob_volume_cum": head.get("planned_ob_loss"),
+        "share_of_all_loss_pct": head.get("loss_share_pct"),
+        "loss_type": head.get("loss_type"),
+        "rate_per_mt": costing.get("weighted_rate"),
+        "rate_source": costing.get("source"),
+        "lcm_total_loss": totals.get("loss_amount"),
+        "repair_cost": round(repair, 0),
+        # The comparison the whole section exists to make: what the breakdown
+        # cost to fix against what it cost in ore never mined.
+        "times_repair_cost": round(head["loss_amount"] / repair, 0) if repair > 0 else None,
+        "ore_machines": sorted(ORE_LOSS_MACHINES),
+        "ore_machine_events": len(ore_recs),
+        "ob_machine_events": len(ob_recs),
+        "allocation": _allocate(ore_recs, head["loss_amount"], head.get("planned_ore_loss")),
+        "basis": (
+            "Valued by the LCM section at the IBM plan-weighted rate, not "
+            "recomputed here, so the two pages cannot disagree. Ore loss is "
+            "scoped to the machines LCM prices it against - the rest of the "
+            "fleet moves no ore - and split within them by each failure's share "
+            "of Why-Why breakdown hours."
+        ),
+    }
+
 # -- public -------------------------------------------------------------------
 def compute_whywhy(db: Session, from_date: date | None, to_date: date | None) -> dict:
     """Every analysis point for the window, ready to chart and ready to narrate."""
@@ -605,6 +720,7 @@ def compute_whywhy(db: Session, from_date: date | None, to_date: date | None) ->
             "window": win, "headline": None, "months": [], "machines": [],
             "failure_modes": None, "root_causes": None, "timing": None,
             "repeats": [], "watchlist": [], "operators": None,
+            "production_loss": None,
             "machine_detail": [], "operator_issues": None, "completeness": None,
         }
 
@@ -628,6 +744,7 @@ def compute_whywhy(db: Session, from_date: date | None, to_date: date | None) ->
         "repeats": _repeats(recs),
         "watchlist": _watchlist(recs, t),
         "operators": _operators(recs),
+        "production_loss": _production_loss(db, f, t, recs),
         "machine_detail": _machine_breakdown(recs),
         "operator_issues": _operator_issues(recs),
         "completeness": _completeness(recs),
@@ -693,6 +810,28 @@ def _facts_block(d: dict) -> str:
         f"{h['repair_cost_rows']} of {h['breakdowns']} breakdowns",
         f"REPEAT FAILURES {h['repeat_events']} events ({h['repeat_pct']}%) are a "
         f"machine failing the same way again",
+    ]
+    pl = d.get("production_loss")
+    if pl:
+        L += [
+            "",
+            f"PRODUCTION LOSS FROM BREAKDOWN Rs {pl['amount']:,.0f} "
+            f"({pl['tonnes']} MT of ore not mined, valued at Rs "
+            f"{pl['rate_per_mt']:,.0f} per MT), which is "
+            f"{pl['share_of_all_loss_pct']}% of ALL production loss at the mine "
+            f"and {pl['times_repair_cost']} times the Rs {pl['repair_cost']:,.0f} "
+            f"repair bill. Ore loss is carried by "
+            f"{', '.join(pl['ore_machines'])} only - no other machine moves ore.",
+        ]
+        if pl["allocation"]["by_mode"]:
+            L += ["  split by failure mode:"]
+            L += [f"    {x['label']}: Rs {x['amount']:,.0f} ({x['share_pct']}%, "
+                  f"{x['events']} events)" for x in pl["allocation"]["by_mode"][:5]]
+        if pl["allocation"]["by_cause"]:
+            L += ["  split by root cause:"]
+            L += [f"    {x['label']}: Rs {x['amount']:,.0f} ({x['share_pct']}%)"
+                  for x in pl["allocation"]["by_cause"]]
+    L += [
         "",
         f"ROOT CAUSE (recorded on {d['root_causes']['recorded']} of {h['breakdowns']}):",
     ]
