@@ -122,6 +122,11 @@ _PERMISSION_RULES: tuple[tuple[str, str], ...] = (
     ("/api/access",  "access.users.view"),   # finer checks are inside the router
     ("/api/roles",   "access.users.manage"),
     ("/api/minehub", "platform.registry.view"),
+    # The competency dimensions and handover checks. Reading them is reading
+    # the platform's vocabulary, which migration 038 established every register
+    # needs — an operator registrar cannot assess anybody without it. Changing
+    # them is gated per kind inside the router.
+    ("/api/checklists", "platform.registry.view"),
     # Operator profiles hold dates of birth, medical expiry and photographs, so
     # the view permission is deliberately not part of a dashboard role.
     ("/api/operators", "platform.operators.view"),
@@ -258,7 +263,7 @@ def health_check():
 
 
 # ── Routers ───────────────────────────────────────────────────
-from app.routers import operators_analytics
+from app.routers import checklists, operators_analytics
 from app.routers import production, stock, cob, plant, ob, despatch, equipment, dewatering, insights, live_tracking, fuel_management, ev_tracking, auth, oee, roles, minehub, access, operators, operations, workforce, comments
 app.include_router(production.router,      prefix="/api/production",    tags=["Production"])
 app.include_router(stock.router,           prefix="/api/stock",         tags=["Stock"])
@@ -276,6 +281,7 @@ app.include_router(auth.router)
 app.include_router(oee.router)
 # Before operators.router, whose "/{operator_id}" would otherwise match
 # "/analytics" and fail trying to read it as a number.
+app.include_router(checklists.router)
 app.include_router(operators_analytics.router)
 app.include_router(operators.router)
 app.include_router(operations.router)

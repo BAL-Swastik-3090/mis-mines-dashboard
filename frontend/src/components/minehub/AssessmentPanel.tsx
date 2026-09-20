@@ -26,12 +26,13 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle, CalendarClock, CheckCircle2, Download, Loader2, Search,
-  ShieldCheck, ShieldX, X,
+  Settings2, ShieldCheck, ShieldX, X,
 } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
 import ColumnFilter, { optionsFrom, matches, SortHeader, type SortDir } from "./ColumnFilter";
 import AssessmentSheet from "./AssessmentSheet";
+import ChecklistsPanel from "./ChecklistsPanel";
 import {
   Alert, Button, Card, CardHeader, Chip, EmptyRow, StatBar, Td, Th,
   type Stat, type Tone,
@@ -107,6 +108,9 @@ export default function AssessmentPanel({ onChanged }: { onChanged?: () => void 
     { key: "name", dir: "asc" });
   const sortBy = (key: SortKey) => (dir: SortDir) => setSort({ key, dir });
   const [editingId, setEditingId] = useState<number | null>(null);
+  // The fields themselves. Reached from the sheet, because the moment you want
+  // a new one is the moment you are looking at the list that lacks it.
+  const [fields, setFields] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -200,12 +204,17 @@ export default function AssessmentPanel({ onChanged }: { onChanged?: () => void 
       `assessment-${queue}-${new Date().toISOString().slice(0, 10)}.csv`);
   };
 
+  if (fields) {
+    return <ChecklistsPanel kind="COMPETENCY" onBack={() => setFields(false)} />;
+  }
+
   // The focused sheet, not the ten-tab profile. Assessing is one job and the
   // screen for it should offer one job.
   if (editingId) {
     return (
       <AssessmentSheet operatorId={editingId}
         onSaved={() => onChanged?.()}
+        onManageFields={() => setFields(true)}
         onDone={() => { setEditingId(null); void load(); onChanged?.(); }} />
     );
   }
@@ -247,6 +256,12 @@ export default function AssessmentPanel({ onChanged }: { onChanged?: () => void 
           subtitle={q.hint}
           actions={
             <>
+              {mayAssess && (
+                <Button size="sm" variant="secondary" onClick={() => setFields(true)}
+                  title="Add, reword or reorder what an assessment judges">
+                  <Settings2 className="w-3.5 h-3.5" /> Fields
+                </Button>
+              )}
               <Button size="sm" variant="secondary" onClick={exportQueue}
                 disabled={sorted.length === 0}
                 title="Download this queue — some of this gets done on paper in the workshop">
