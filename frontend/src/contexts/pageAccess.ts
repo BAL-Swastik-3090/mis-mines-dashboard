@@ -43,13 +43,38 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   "access-control": ["access.users.view"],
 };
 
-/** The order somebody should be sent to when the page they are on is not
- *  theirs. Dashboards first because most people have one; the register next,
- *  because the people who have no dashboard are usually there to use it. */
-const LANDING_ORDER: AppPage[] = [
-  "mis", "oee", "intelligence", "fuel-management", "ev-tracking",
-  "minehub", "operations", "workforce", "access-control",
-];
+/**
+ * Every page, in the order to offer it.
+ *
+ * A Record rather than an array, and deliberately: an array lets a page be
+ * added to AppPage and to PAGE_PERMISSION without being given a position here,
+ * and the result is silent. canOpen() says yes, so the sidebar draws the tab;
+ * openablePages() filters this list, so the app concludes the person can open
+ * nothing and shows them "No access yet" beside a menu containing the very
+ * screen they have permission for.
+ *
+ * That is exactly what happened to an operator registrar when Manpower was
+ * split out. As a Record, TypeScript refuses to compile until a new page has a
+ * position, so the omission cannot be made again.
+ *
+ * Dashboards first because most people have one; the registers next, because
+ * the people who have no dashboard are usually there to use one.
+ */
+const LANDING_RANK: Record<AppPage, number> = {
+  "mis": 10,
+  "oee": 20,
+  "intelligence": 30,
+  "fuel-management": 40,
+  "ev-tracking": 50,
+  "minehub": 60,
+  "manpower": 65,
+  "operations": 70,
+  "workforce": 80,
+  "access-control": 90,
+};
+
+const LANDING_ORDER = (Object.keys(LANDING_RANK) as AppPage[])
+  .sort((a, b) => LANDING_RANK[a] - LANDING_RANK[b]);
 
 export interface AccessLike {
   allowed_pages?: string[];
