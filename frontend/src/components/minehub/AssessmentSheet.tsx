@@ -186,68 +186,56 @@ export default function AssessmentSheet({ operatorId, onDone, onSaved }: {
       <Toast tone="error" message={error} onClose={() => setError(null)} />
       <Toast tone="success" message={error ? null : notice} onClose={() => setNotice(null)} />
 
-      <Button variant="secondary" onClick={onDone}>
-        <ArrowLeft className="w-4 h-4 text-gold-dark" /> Back to the list
-      </Button>
-
-      {/* WHO. Shown, not editable: you need to know you have the right person,
-          and you do not need to change anything about them to decide that. */}
+      {/* WHO, and WHAT/HOW/WHEN, in one band. Two stacked cards spent a third
+          of the screen restating who you had already clicked on; the sooner
+          the fifteen levels are visible, the fewer of them are below the
+          fold. Identifying details are shown and not editable — you need to
+          know you have the right person, not to change them. */}
       <Card tone="emerald">
-        <div className="p-5 flex flex-wrap items-start justify-between gap-4">
-          <div className="flex items-start gap-4 min-w-0">
-            <span className="shrink-0 w-12 h-12 rounded-xl bg-emerald-bg ring-1 ring-emerald-ring
-                             flex items-center justify-center">
-              <User className="w-6 h-6 text-emerald" />
-            </span>
-            <div className="min-w-0">
-              <h2 className="font-condensed font-extrabold text-[24px] leading-none text-navy">
-                {p.display_name}
-              </h2>
-              <div className="flex flex-wrap items-center gap-2 mt-2.5">
-                {attendanceId && (
-                  <Chip tone="violet" dot={false}>
-                    <span className="font-mono font-bold">{attendanceId}</span>
-                  </Chip>
-                )}
-                {p.operator_ref && (
-                  <span className="font-mono text-[11.5px] text-txt-light">{p.operator_ref}</span>
-                )}
-                {p.trade && <Chip tone="sky" dot={false}>{p.trade}</Chip>}
-                {p.employer && <Chip tone="amber" dot={false}>{p.employer}</Chip>}
-              </div>
-              <p className="text-[12px] text-txt-muted mt-2">
-                {[p.department, p.plant].filter(Boolean).join(" · ")}
-                {p.joined_on ? ` · joined ${String(p.joined_on).slice(0, 10)}` : ""}
-              </p>
-            </div>
+        <div className="px-4 py-3 flex flex-wrap items-center gap-x-4 gap-y-2
+                        border-b border-border-light">
+          <button type="button" onClick={onDone}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border
+                       bg-bg-base px-2.5 py-1.5 text-[12px] font-semibold text-navy
+                       hover:border-gold transition-colors shrink-0">
+            <ArrowLeft className="w-3.5 h-3.5 text-gold-dark" /> Back
+          </button>
+          <span className="shrink-0 w-9 h-9 rounded-lg bg-emerald-bg ring-1 ring-emerald-ring
+                           flex items-center justify-center">
+            <User className="w-4.5 h-4.5 text-emerald" />
+          </span>
+          <div className="min-w-0">
+            <h2 className="font-condensed font-extrabold text-[19px] leading-none text-navy">
+              {p.display_name}
+            </h2>
+            <p className="text-[11px] text-txt-light mt-1 truncate">
+              {[p.operator_ref, p.department, p.plant].filter(Boolean).join(" · ")}
+              {p.joined_on ? ` · joined ${String(p.joined_on).slice(0, 10)}` : ""}
+            </p>
           </div>
-
-          {/* Where they stand right now, in one line. */}
-          <div className="text-right shrink-0">
-            <div className="font-condensed text-[9.5px] font-bold uppercase tracking-[.13em]
-                            text-txt-light mb-1.5">Currently</div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {attendanceId && (
+              <Chip tone="violet" dot={false}>
+                <span className="font-mono font-bold">{attendanceId}</span>
+              </Chip>
+            )}
+            {p.trade && <Chip tone="sky" dot={false}>{p.trade}</Chip>}
+            {p.employer && <Chip tone="amber" dot={false}>{p.employer}</Chip>}
+          </div>
+          <span className="flex-1" />
+          <div className="shrink-0" title={overall ? exactly(overall.assessed_on) : undefined}>
             {overall ? (
               <>
-                <Chip tone={LEVEL_TONE[overall.level ?? 0]}>
-                  {LEVELS[overall.level ?? 0]}
-                </Chip>
-                <p className="text-[11.5px] text-txt-muted mt-1.5"
-                   title={exactly(overall.assessed_on)}>
-                  assessed {ago(overall.assessed_on)}
-                </p>
+                <Chip tone={LEVEL_TONE[overall.level ?? 0]}>{LEVELS[overall.level ?? 0]}</Chip>
+                <span className="text-[11px] text-txt-light ml-2">
+                  {ago(overall.assessed_on)}
+                </span>
               </>
-            ) : (
-              <Chip tone="rose">never assessed on this machine</Chip>
-            )}
+            ) : <Chip tone="rose">never assessed on this machine</Chip>}
           </div>
         </div>
-      </Card>
 
-      {/* WHAT, HOW, WHEN. Three answers, then the assessment itself. */}
-      <Card tone="violet">
-        <CardHeader title="This assessment" icon={ClipboardCheck} tone="violet"
-          subtitle="Set these once. Every level below is recorded against them, and each one is written the moment you click it — there is no Save." />
-        <div className="p-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="p-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
           <label className="block">
             <span className="block text-[11px] font-semibold text-txt-secondary mb-1.5">
               Machine class <span className="text-rose">*</span>
@@ -298,9 +286,9 @@ export default function AssessmentSheet({ operatorId, onDone, onSaved }: {
             </span>
           </label>
 
-          <label className="block md:col-span-3">
+          <label className="block">
             <span className="block text-[11px] font-semibold text-txt-secondary mb-1.5">
-              Note (kept with every level set below)
+              Note, kept with every level
             </span>
             <input id="as-note" value={note} onChange={(e) => setNote(e.target.value)}
               placeholder="Confident on the bench; slow on the ramp, to be re-checked in a month"
@@ -324,7 +312,7 @@ export default function AssessmentSheet({ operatorId, onDone, onSaved }: {
           <CardHeader
             title={`${chosenType?.name ?? "Machine"} · ${doneCount} of ${DIMENSIONS.length} judged`}
             icon={Cpu} tone={cleared ? "emerald" : "amber"}
-            subtitle="Overall decides whether this person may be crewed onto the machine. The rest say what they actually understand about it, and are what a re-assessment is compared against."
+            subtitle="Overall decides whether this person may be crewed. Hover a row for what it covers."
             actions={
               <Chip tone={cleared ? "emerald" : "amber"}>
                 {cleared ? "cleared to work" : "not cleared"}
@@ -338,18 +326,20 @@ export default function AssessmentSheet({ operatorId, onDone, onSaved }: {
               const isOverall = d.id === "OVERALL";
               return (
                 <div key={d.id}
-                  className={`px-4 py-3 ${isOverall ? "bg-gold/[0.05]" : ""}`}>
+                  className={`px-3 py-1.5 ${isOverall ? "bg-gold/[0.05]" : ""}`}>
                   <div className="flex flex-wrap items-center gap-3">
-                    <div className="min-w-[210px] flex-1">
-                      <div className="flex items-center gap-2">
+                    {/* The explanation is a tooltip rather than a second line.
+                        Fifteen rows of two lines is half a screen of prose an
+                        assessor reads once and then scrolls past forever. */}
+                    <div className="min-w-[190px] flex-1" title={d.why}>
+                      <span className="flex items-center gap-1.5">
                         {isOverall && <ShieldCheck className="w-3.5 h-3.5 text-gold-dark shrink-0" />}
-                        <span className={`text-[13px] ${isOverall
+                        <span className={`text-[12.5px] ${isOverall
                           ? "font-bold text-navy" : "font-semibold text-txt-secondary"}`}>
                           {d.label}
                         </span>
                         {busy === d.id && <Loader2 className="w-3 h-3 animate-spin text-gold" />}
-                      </div>
-                      <p className="text-[11px] text-txt-light mt-0.5">{d.why}</p>
+                      </span>
                     </div>
 
                     {/* Five buttons rather than a dropdown: the whole scale is
@@ -361,7 +351,7 @@ export default function AssessmentSheet({ operatorId, onDone, onSaved }: {
                           onClick={() => setLevel(d.id, n, d.label)}
                           title={`${LEVELS[n]}${n >= 2 && isOverall ? " — cleared to work" : ""}`}
                           aria-pressed={lvl === n}
-                          className={`w-8 h-8 rounded-lg text-[12px] font-bold transition-all
+                          className={`w-7 h-7 rounded-md text-[12px] font-bold transition-all
                             disabled:opacity-40 disabled:cursor-not-allowed
                             ${lvl === n
                               ? "bg-navy text-white shadow-sm ring-2 ring-gold/40"
@@ -371,7 +361,7 @@ export default function AssessmentSheet({ operatorId, onDone, onSaved }: {
                       ))}
                     </div>
 
-                    <span className="w-[150px] text-right">
+                    <span className="w-[142px] text-right">
                       <Chip tone={LEVEL_TONE[lvl]} dot={false}>{LEVELS[lvl]}</Chip>
                     </span>
                   </div>
@@ -379,7 +369,7 @@ export default function AssessmentSheet({ operatorId, onDone, onSaved }: {
                   {/* Whether it moved. The point of assessing again is the
                       trend, so a level that fell is said out loud. */}
                   {row?.previous_level != null && row.previous_level !== row.level && (
-                    <p className={`text-[11px] mt-1.5 ml-1 font-semibold ${
+                    <p className={`text-[11px] mt-0.5 ml-1 font-semibold ${
                       (row.level ?? 0) > row.previous_level ? "text-emerald" : "text-rose"}`}>
                       {(row.level ?? 0) > row.previous_level ? "Improved" : "Declined"} from{" "}
                       {LEVELS[row.previous_level].toLowerCase()}
@@ -466,7 +456,7 @@ export default function AssessmentSheet({ operatorId, onDone, onSaved }: {
           <Check className="w-4 h-4" /> Done
         </Button>
         <span className="text-[12px] text-txt-muted">
-          Everything above is already saved. There is nothing waiting.
+          Already saved — nothing is waiting.
         </span>
       </div>
     </div>

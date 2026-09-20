@@ -22,16 +22,38 @@ from app.minehub_db import get_minehub_db
 
 router = APIRouter(prefix="/api/operators", tags=["Operators"])
 
-# Every cut is filtered the same way, and the cast is explicit because an
+# Every cut is filtered the same way, and every cast is explicit because an
 # untyped bind in a NULL comparison is a thing PostgreSQL refuses to guess at.
-WHERE = "WHERE (CAST(:plant AS bigint) IS NULL OR o.plant_id = CAST(:plant AS bigint))"
+#
+# The filters narrow the whole screen at once rather than each card separately:
+# "the Automobile workshop's headcount, age and coverage" is one question, and
+# answering it three times in three places is how two of the three end up
+# showing something else.
+WHERE = """WHERE (CAST(:plant AS bigint) IS NULL OR o.plant_id = CAST(:plant AS bigint))
+             AND (CAST(:employer AS bigint) IS NULL OR o.employer_party_id = CAST(:employer AS bigint))
+             AND (CAST(:org AS bigint) IS NULL OR o.org_unit_id = CAST(:org AS bigint))
+             AND (CAST(:grp AS text) IS NULL OR t.trade_group = CAST(:grp AS text))
+             AND (CAST(:approval AS text) IS NULL OR o.approval_status = CAST(:approval AS text))
+             AND (CAST(:operators AS boolean) IS NULL
+                  OR COALESCE(t.operates_equipment, FALSE) = CAST(:operators AS boolean))"""
+
+# Cuts that do not join trade themselves still need it, because the group and
+# operator filters live on it.
+TRADE_JOIN = "LEFT JOIN trade t ON t.trade_id = o.trade_id"
 
 
 @router.get("/analytics")
 def analytics(plant_id: int | None = Query(None),
+              employer_party_id: int | None = Query(None),
+              org_unit_id: int | None = Query(None),
+              trade_group: str = Query(""),
+              approval_status: str = Query(""),
+              operators_only: bool | None = Query(None),
               db: Session = Depends(get_minehub_db)) -> dict:
     """Headcount, composition, coverage and the gaps, in the cuts people ask for."""
-    p = {"plant": plant_id}
+    p = {"plant": plant_id, "employer": employer_party_id, "org": org_unit_id,
+         "grp": trade_group or None, "approval": approval_status or None,
+         "operators": operators_only}
 
     def rows(sql: str) -> list[dict]:
         return [dict(r) for r in db.execute(text(sql), p).mappings()]
@@ -88,11 +110,13 @@ def analytics(plant_id: int | None = Query(None),
         "by_employer": rows(f"""
             SELECT COALESCE(e.display_name, 'Not recorded') AS label, count(*) AS people
               FROM operator o LEFT JOIN party e ON e.party_id = o.employer_party_id
+              {TRADE_JOIN}
               {WHERE} GROUP BY 1 ORDER BY people DESC"""),
 
         "by_department": rows(f"""
             SELECT COALESCE(ou.name, 'Not posted') AS label, count(*) AS people
               FROM operator o LEFT JOIN org_unit ou ON ou.org_unit_id = o.org_unit_id
+              {TRADE_JOIN}
               {WHERE} GROUP BY 1 ORDER BY people DESC"""),
 
         "by_skill": rows(f"""
@@ -112,6 +136,7 @@ def analytics(plant_id: int | None = Query(None),
                     WHEN age(p2.date_of_birth) < interval '55 years'     THEN '45 to 54'
                     ELSE '55 and over' END AS band
                   FROM operator o JOIN party p2 ON p2.party_id = o.party_id
+                  {TRADE_JOIN}
                   {WHERE}) x
             GROUP BY 1 ORDER BY 1"""),
 
@@ -124,13 +149,13 @@ def analytics(plant_id: int | None = Query(None),
                     WHEN o.joined_on > now() - interval '5 years'       THEN '3 to 5 years'
                     WHEN o.joined_on > now() - interval '10 years'      THEN '5 to 10 years'
                     ELSE 'Over 10 years' END AS band
-                  FROM operator o {WHERE}) x
+                  FROM operator o {TRADE_JOIN} {WHERE}) x
             GROUP BY 1 ORDER BY 1"""),
 
         # Who can run what, against how many machines of that class the mine
         # actually has in service. A class with machines and nobody cleared to
         # run them is the finding worth surfacing; so is the reverse.
-        "coverage": rows("""
+        "coverage": rows(f"""
             SELECT ta.name AS label,
                    count(DISTINCT o.operator_id) AS trained_for,
                    (SELECT count(*) FROM asset a
@@ -144,6 +169,10 @@ def analytics(plant_id: int | None = Query(None),
               LEFT JOIN operator o ON o.trade_id = t.trade_id
                    AND (CAST(:plant AS bigint) IS NULL
                         OR o.plant_id = CAST(:plant AS bigint))
+                   AND (CAST(:employer AS bigint) IS NULL
+                        OR o.employer_party_id = CAST(:employer AS bigint))
+                   AND (CAST(:org AS bigint) IS NULL
+                        OR o.org_unit_id = CAST(:org AS bigint))
              GROUP BY ta.asset_type_id, ta.name
              HAVING count(DISTINCT o.operator_id) > 0
                  OR (SELECT count(*) FROM asset a
@@ -156,4 +185,22 @@ def analytics(plant_id: int | None = Query(None),
         "documents": rows("""
             SELECT severity AS label, count(*) AS people
               FROM operator_alert GROUP BY 1 ORDER BY 1"""),
+
+        # What the filters may be set to, counted against the current
+        # selection so the menus never offer a choice that returns nothing.
+        "choices": {
+            "employer": rows(f"""
+                SELECT e.party_id AS id, e.display_name AS label, count(*) AS people
+                  FROM operator o JOIN party e ON e.party_id = o.employer_party_id
+                  {TRADE_JOIN} {WHERE} GROUP BY 1,2 ORDER BY people DESC"""),
+            "department": rows(f"""
+                SELECT ou.org_unit_id AS id, ou.name AS label, count(*) AS people
+                  FROM operator o JOIN org_unit ou ON ou.org_unit_id = o.org_unit_id
+                  {TRADE_JOIN} {WHERE} GROUP BY 1,2 ORDER BY people DESC"""),
+            "trade_group": rows(f"""
+                SELECT t.trade_group AS label, count(*) AS people
+                  FROM operator o {TRADE_JOIN} {WHERE}
+                   AND t.trade_group IS NOT NULL
+                 GROUP BY 1 ORDER BY people DESC"""),
+        },
     }

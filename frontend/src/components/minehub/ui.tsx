@@ -43,9 +43,14 @@ export const TONE_DOT: Record<Tone, string> =
 
 /* ── Page header ─────────────────────────────────────────────────────────── */
 /** Two-tone title, subtitle, and the page's primary actions on the right. */
-export function PageHeader({ lead, rest, subtitle, tone = "gold", actions, icon: Icon }: {
+export function PageHeader({ lead, rest, subtitle, tone = "gold", actions, icon: Icon,
+                             joined = false }: {
   lead: string; rest?: string; subtitle?: string; tone?: Tone;
   actions?: React.ReactNode; icon?: React.ElementType;
+  /** The two halves are one word. "MineHub Platform" is two and wants the
+   *  gap; "Manpower" is one, and rendering it as "Man power" makes the
+   *  heading look like a mistake. */
+  joined?: boolean;
 }) {
   const t = TONE[tone];
   return (
@@ -59,7 +64,7 @@ export function PageHeader({ lead, rest, subtitle, tone = "gold", actions, icon:
         )}
         <div className="min-w-0">
           <h1 className="font-condensed font-extrabold text-[30px] leading-none tracking-tight text-navy">
-            {lead}{rest && <span className={`ml-2 ${t.text}`}>{rest}</span>}
+            {lead}{rest && <span className={`${joined ? "" : "ml-2"} ${t.text}`}>{rest}</span>}
           </h1>
           {subtitle && <p className="text-[13px] text-txt-muted mt-1.5 max-w-[68ch]">{subtitle}</p>}
         </div>
@@ -311,11 +316,22 @@ export function Alert({ tone, children }: {
 }
 
 /* ── Table ───────────────────────────────────────────────────────────────── */
+/** A table heading.
+ *
+ *  It was Barlow Condensed at 10.5px, uppercase, with .12em of tracking. On a
+ *  four-column table that reads as a considered caption. On a ten-column one
+ *  the tracking makes every word too wide for its column, so the register's
+ *  headings truncated to ATTENDANC…, EMPLOYM…, DEPARTM…, SER…, CAN … — which
+ *  is a table whose columns are unlabelled.
+ *
+ *  Sentence case in the body face, at a size meant to be read: the same
+ *  decision already taken for the figures in StatBar, for the same reason. */
 export const Th = ({ children, className = "", colSpan }: {
   children?: React.ReactNode; className?: string; colSpan?: number;
 }) => (
-  <th colSpan={colSpan} className={`text-left font-condensed text-[10.5px] font-bold uppercase tracking-[.12em]
-                  text-txt-light px-4 py-2.5 bg-bg-light border-b border-border ${className}`}>
+  <th colSpan={colSpan} className={`text-left text-[11.5px] font-semibold
+                  text-txt-secondary px-3 py-2.5 bg-bg-light border-b border-border
+                  whitespace-nowrap ${className}`}>
     {children}
   </th>
 );
@@ -324,7 +340,8 @@ export const Td = ({ children, className = "", colSpan }: {
   children?: React.ReactNode; className?: string; colSpan?: number;
 }) => (
   <td colSpan={colSpan}
-      className={`px-4 py-3 border-b border-border-light text-[12.5px] text-txt-secondary align-middle ${className}`}>
+      className={`px-3 py-2 border-b border-border-light text-[12.5px]
+                  text-txt-secondary align-middle ${className}`}>
     {children}
   </td>
 );

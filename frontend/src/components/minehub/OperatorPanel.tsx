@@ -11,12 +11,12 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Users, Search, Plus, Loader2, HardHat, ShieldCheck, AlertTriangle,
   ClipboardList, Pencil, Grid3x3, Award, CalendarClock, Settings2, Check,
-  GraduationCap, TrendingUp, TrendingDown, Star, Download, X,
+  GraduationCap, TrendingUp, TrendingDown, Star, Download, X, CheckSquare,
 } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
 import {
-  Alert, Button, Card, CardHeader, Chip, EmptyRow, Td, Th, Tile, type Tone,
+  Alert, Button, Card, CardHeader, Chip, EmptyRow, StatBar, Td, Th, Tile, type Tone,
 } from "./ui";
 import OperatorForm from "./OperatorForm";
 import ColumnFilter, {
@@ -127,7 +127,10 @@ function years(months: number | null): string {
   return y ? `${y}y${m ? ` ${m}m` : ""}` : `${m}m`;
 }
 
-export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChange, onChanged }: {
+export default function OperatorPanel({ view: viewProp = "register", addOpen,
+                                        onAddOpenChange, onFormOpenChange, onChanged }: {
+  /** Which of the section's two register tabs is showing. */
+  view?: "register" | "capability";
   addOpen?: boolean;
   onAddOpenChange?: (v: boolean) => void;
   onFormOpenChange?: (v: boolean) => void;
@@ -153,7 +156,10 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
   const [allWaiting, setAllWaiting] = useState(false);
   const [plants, setPlants] = useState<Plant[]>([]);
   const [plantId, setPlantId] = useState<string>("");
-  const [view, setView] = useState<"register" | "capability">("register");
+  // Which of the section's two register tabs is showing. It used to be local
+  // state with its own switcher directly under the section's tab strip — two
+  // tab bars, both starting with the word Register, one inside the other.
+  const view = viewProp;
   // Every column both filters and orders, as the machine register does. With
   // 211 people the difference between "find the excavator operators in
   // Automobile" and "scroll" is the difference between a register and a list.
@@ -163,6 +169,9 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
   const [sort, setSort] = useState<{ key: OpSortKey; dir: SortDir }>(
     { key: "name", dir: "asc" });
   const sortBy = (key: OpSortKey) => (dir: SortDir) => setSort({ key, dir });
+  // Ids rather than rows, so a selection survives re-sorting and reloading.
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const anchor = React.useRef<number | null>(null);
   const [matrix, setMatrix] = useState<Matrix | null>(null);
   const [coverage, setCoverage] = useState<Coverage[]>([]);
   const [due, setDue] = useState<Due[]>([]);
@@ -262,7 +271,7 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
         case "classes":    return o.machines_competent;
       }
     };
-    const rank = (v: string | number) => (typeof v === "string" && v === "" ? "￿" : v);
+    const rank = (v: string | number) => (typeof v === "string" && v === "" ? "\uffff" : v);
     return [...filtered].sort((x, y) => {
       const a = rank(keyOf(x)), b = rank(keyOf(y));
       if (a === b) return x.display_name.localeCompare(y.display_name);
@@ -297,13 +306,51 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
     setQuery("");
   };
 
-  const exportRegister = () => {
+  const pickedHere = useMemo(
+    () => sorted.filter((o) => picked.has(o.operator_id)), [sorted, picked]);
+  const allPicked = sorted.length > 0 && pickedHere.length === sorted.length;
+
+  const pick = (o: Operator, shift: boolean) => {
+    setPicked((was) => {
+      const next = new Set(was);
+      const at = sorted.findIndex((r) => r.operator_id === o.operator_id);
+      const from = anchor.current === null
+        ? at : sorted.findIndex((r) => r.operator_id === anchor.current);
+      const span = shift && from >= 0 && at >= 0
+        ? sorted.slice(Math.min(from, at), Math.max(from, at) + 1)
+        : [o];
+      const turningOn = !was.has(o.operator_id);
+      for (const r of span) {
+        if (turningOn) next.add(r.operator_id); else next.delete(r.operator_id);
+      }
+      return next;
+    });
+    anchor.current = o.operator_id;
+  };
+
+  const pickAll = () => {
+    setPicked(allPicked ? new Set() : new Set(sorted.map((o) => o.operator_id)));
+    anchor.current = null;
+  };
+
+  // Acting on people who have scrolled out of the filter is the bug that makes
+  // bulk actions frightening, so narrowing the list drops whoever fell out.
+  useEffect(() => {
+    setPicked((was) => {
+      if (was.size === 0) return was;
+      const here = new Set(sorted.map((o) => o.operator_id));
+      const kept = [...was].filter((id) => here.has(id));
+      return kept.length === was.size ? was : new Set(kept);
+    });
+  }, [sorted]);
+
+  const exportRegister = (rows: Operator[] = sorted) => {
     download(toCsv(
       ["Attendance ID", "Reference", "Name", "Trade", "Group", "Designation",
        "Machine", "Skill class", "Employment", "Employer", "Department",
        "Plant", "Joined", "Years served", "Age", "Classes cleared",
        "Last assessed", "Next due", "Approval"],
-      sorted.map((o) => [
+      rows.map((o) => [
         o.attendance_id ?? "", o.operator_ref ?? "", o.display_name,
         o.trade ?? "", o.trade_group ?? "", o.designation ?? "",
         o.trade_machine ?? "", o.skill_class ?? "", o.employment_type ?? "",
@@ -347,19 +394,7 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
     <div className="space-y-4">
       {error && <Alert tone="error">{error}</Alert>}
 
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex gap-1.5 p-1 bg-bg-section rounded-xl w-fit">
-          {([["register", "Register", Users], ["capability", "Capability", Grid3x3]] as const)
-            .map(([key, label, Icon]) => (
-            <button key={key} onClick={() => setView(key)}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-[12.5px] font-semibold
-                          transition-colors
-                          ${view === key ? "bg-bg-base text-navy shadow-sm" : "text-txt-muted hover:text-navy"}`}>
-              <Icon className="w-4 h-4" /> {label}
-            </button>
-          ))}
-        </div>
-
+      <div className="flex flex-wrap items-center justify-end gap-2">
         <label className="flex items-center gap-2 text-[12px] text-txt-muted">
           Plant
           <select value={plantId} onChange={(e) => setPlantId(e.target.value)}
@@ -396,76 +431,33 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
         </>
       )}
 
+      {/* The register's own figures. Competency counts moved to Assessment,
+          which is the tab that is about them. */}
       {view === "register" && summary && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <Tile label="Operators" value={summary.operators ?? 0} tone="sky" icon={Users}
-                hint={`${summary.approved ?? 0} approved`} />
-          <Tile label="Awaiting approval" value={summary.awaiting ?? 0}
-                tone={summary.awaiting ? "amber" : "emerald"} icon={ClipboardList}
-                hint="submitted profiles" />
-          <Tile label="Competencies" value={summary.competencies ?? 0} tone="violet" icon={ShieldCheck}
-                hint={summary.avg_rating
-                  ? `${summary.avg_rating} of 5 average expertise`
-                  : "machine classes people can run"} />
-          <Tile label="Needs action" value={needs.filter((n) => n.urgency === "NOW").length}
-                tone={needs.some((n) => n.urgency === "NOW") ? "rose" : "emerald"}
-                icon={GraduationCap} onClick={() => setView("capability")}
-                hint={summary.declined
-                  ? `${summary.declined} fell at last assessment`
-                  : `${(summary.expired ?? 0) + (summary.due ?? 0)} documents expiring`} />
-        </div>
-      )}
-
-      {view === "register" && due.length > 0 && (
-        <Card tone="amber">
-          <CardHeader title={`${due.length} assessment${due.length === 1 ? "" : "s"} due`}
-            icon={CalendarClock} tone="amber"
-            subtitle="Overdue first. The register says who is on the books; this says what has to happen this month." />
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px]">
-              <thead>
-                <tr><Th>Operator</Th><Th>On</Th><Th>Last assessed</Th>
-                    <Th>Due</Th><Th className="text-right">Action</Th></tr>
-              </thead>
-              <tbody>
-                {due.map((d) => (
-                  <tr key={`${d.operator_id}-${d.asset_type}-${d.fleet_code ?? ""}`}
-                      className="hover:bg-bg-light transition-colors">
-                    <Td>
-                      <span className="font-semibold text-navy">{d.display_name}</span>
-                      {d.operator_ref && (
-                        <span className="block font-mono text-[11px] text-violet">{d.operator_ref}</span>
-                      )}
-                    </Td>
-                    <Td className="text-txt-secondary">
-                      {d.fleet_code ?? d.asset_type ?? "—"}
-                      {d.level !== null && (
-                        <span className="text-[11px] text-txt-light ml-1.5">L{d.level}</span>
-                      )}
-                    </Td>
-                    <Td>
-                      <span className="tabular-nums text-[12.5px]">{d.assessed_on ?? "—"}</span>
-                      {d.last_assessed_by_name && (
-                        <span className="block text-[11px] text-txt-light">
-                          by {d.last_assessed_by_name}
-                        </span>
-                      )}
-                    </Td>
-                    <Td>{dueChip(d.next_assessment_due)}</Td>
-                    <Td className="text-right">
-                      {mayAssess && (
-                        <Button size="sm" variant="primary"
-                          onClick={() => { setOpenAt("competency"); setEditingId(d.operator_id); }}>
-                          <ShieldCheck className="w-3.5 h-3.5" /> Assess now
-                        </Button>
-                      )}
-                    </Td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
+        <StatBar items={[
+          { label: "On strength", value: operators.length, tone: "sky", icon: Users,
+            hint: `${new Set(operators.map((o) => o.employer ?? "BAL")).size} employer(s)` },
+          { label: "Approved", value: summary.approved ?? 0,
+            tone: (summary.approved ?? 0) ? "emerald" : "amber", icon: Check,
+            hint: `${operators.length - (summary.approved ?? 0)} still draft`,
+            title: "Show only the approved records",
+            onClick: () => setF("approval")(by.approval === "APPROVED" ? "" : "APPROVED"),
+            active: by.approval === "APPROVED" },
+          { label: "Awaiting approval", value: summary.awaiting ?? 0,
+            tone: (summary.awaiting ?? 0) ? "amber" : "emerald", icon: ClipboardList,
+            hint: "submitted, waiting on somebody",
+            title: "Show only the submitted records",
+            onClick: () => setF("approval")(by.approval === "SUBMITTED" ? "" : "SUBMITTED"),
+            active: by.approval === "SUBMITTED" },
+          { label: "Machine operators", value: operators.filter((o) => o.operates_equipment).length,
+            tone: "emerald", icon: HardHat,
+            hint: "the rest are trades and support" },
+          { label: "Trades", value: new Set(operators.map((o) => o.trade).filter(Boolean)).size,
+            tone: "violet", icon: Grid3x3, hint: "distinct jobs on the register" },
+          { label: "Showing", value: sorted.length,
+            tone: narrowed ? "gold" : "slate", icon: Search,
+            hint: narrowed ? "after filters" : "no filters applied" },
+        ]} />
       )}
 
       {view === "register" && (<>
@@ -482,7 +474,7 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
                              text-txt-primary placeholder:text-txt-light focus:outline-none
                              focus:border-gold w-[190px]" />
               </div>
-              <Button size="sm" variant="secondary" onClick={exportRegister}
+              <Button size="sm" variant="secondary" onClick={() => exportRegister()}
                 disabled={sorted.length === 0}
                 title="Download this list as a spreadsheet, filters and order and all">
                 <Download className="w-3.5 h-3.5" /> Export
@@ -494,6 +486,33 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
               )}
             </>
           } />
+
+        {picked.size > 0 && (
+          <div className="px-5 py-2.5 border-b border-border-light bg-navy/[0.04]
+                          flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 text-[12.5px]
+                             font-semibold text-navy">
+              <CheckSquare className="w-3.5 h-3.5 text-gold-dark" />
+              {picked.size} selected
+            </span>
+            {!allPicked && (
+              <button type="button" onClick={pickAll}
+                className="text-[11.5px] font-semibold text-gold-dark hover:underline
+                           underline-offset-2">Select all {sorted.length}</button>
+            )}
+            <span className="flex-1" />
+            <Button size="sm" variant="secondary"
+              onClick={() => exportRegister(pickedHere)}>
+              <Download className="w-3.5 h-3.5" /> Export these
+            </Button>
+            <button type="button"
+              onClick={() => { setPicked(new Set()); anchor.current = null; }}
+              className="inline-flex items-center gap-1 text-[11.5px] font-semibold
+                         text-txt-muted hover:text-navy">
+              <X className="w-3 h-3" /> Clear
+            </button>
+          </div>
+        )}
 
         {activeFilters.length > 0 && (
           <div className="px-5 py-2.5 border-b border-border-light bg-bg-light/60
@@ -521,163 +540,125 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
                 {/* First, because it is the number the gate, the muster and
                     the face reader all know this person by, and looking
                     somebody up by it is the commonest reason to open this. */}
-                <Th className="w-[104px]">
-                  <SortHeader label="Attendance ID"
+                <Th className="w-9 pr-0">
+                  <input type="checkbox" aria-label="Select everyone in this list"
+                    title={allPicked ? "Clear the selection" : "Select all in this list"}
+                    checked={allPicked} onChange={pickAll}
+                    className="accent-gold w-3.5 h-3.5 align-middle cursor-pointer" />
+                </Th>
+                <Th className="w-[86px]">
+                  <SortHeader label="ID"
                     sort={sort.key === "attendance" ? sort.dir : null}
                     onSort={sortBy("attendance")} sortLabels={OP_SORT_WORDS.attendance} /></Th>
                 <Th><SortHeader label="Person" sort={sort.key === "name" ? sort.dir : null}
                       onSort={sortBy("name")} sortLabels={OP_SORT_WORDS.name} /></Th>
+                <Th className="hidden lg:table-cell w-[118px]">Mobile</Th>
+                {/* Trade carries its group underneath rather than taking a
+                    column of its own; the group filter still lives here. */}
                 <Th><ColumnFilter label="Trade" value={by.trade} options={menus.trade}
                       onChange={setF("trade")} sort={sort.key === "trade" ? sort.dir : null}
                       onSort={sortBy("trade")} sortLabels={OP_SORT_WORDS.trade} /></Th>
                 <Th className="hidden xl:table-cell">
                   <ColumnFilter label="Group" value={by.group} options={menus.group}
                     onChange={setF("group")} /></Th>
-                <Th><ColumnFilter label="Employment" value={by.employment}
-                      options={menus.employment} onChange={setF("employment")} /></Th>
-                <Th className="hidden lg:table-cell">
+                <Th className="hidden md:table-cell">
                   <ColumnFilter label="Department" value={by.department}
                     options={menus.department} onChange={setF("department")}
                     sort={sort.key === "department" ? sort.dir : null}
                     onSort={sortBy("department")} sortLabels={OP_SORT_WORDS.department} /></Th>
-                <Th className="hidden xl:table-cell text-right">
+                <Th><ColumnFilter label="Employer" value={by.employer}
+                      options={menus.employer} onChange={setF("employer")}
+                      sort={sort.key === "employer" ? sort.dir : null}
+                      onSort={sortBy("employer")} sortLabels={OP_SORT_WORDS.employer} /></Th>
+                <Th className="hidden xl:table-cell text-right w-[76px]">
                   <SortHeader label="Served" align="right"
                     sort={sort.key === "service" ? sort.dir : null}
                     onSort={sortBy("service")} sortLabels={OP_SORT_WORDS.service} /></Th>
-                <Th><SortHeader label="Can run" sort={sort.key === "classes" ? sort.dir : null}
-                      onSort={sortBy("classes")} sortLabels={OP_SORT_WORDS.classes} /></Th>
-                <Th className="hidden lg:table-cell">
-                  <SortHeader label="Last assessed"
-                    sort={sort.key === "assessed" ? sort.dir : null}
-                    onSort={sortBy("assessed")} sortLabels={OP_SORT_WORDS.assessed} /></Th>
-                <Th className="hidden lg:table-cell">Next due</Th>
-                <Th className="text-right">
+                {/* Assessment lives on its own tab now. A register that leads
+                    with three "not assessed" columns is a register arguing
+                    about something else. */}
+                <Th className="text-right w-[92px]">
                   <ColumnFilter label="Status" value={by.approval} align="right"
                     options={menus.approval} onChange={setF("approval")} /></Th>
-                <Th className="text-right">Action</Th>
+                <Th className="text-right w-[52px]" />
               </tr>
             </thead>
             <tbody>
               {sorted.length === 0 ? (
-                <EmptyRow colSpan={12}>
+                <EmptyRow colSpan={11}>
                   {operators.length === 0
                     ? "Nobody registered yet — start from the list below, those names are already in mine records."
                     : narrowed ? "Nobody matches that." : "Nobody on the register."}
                 </EmptyRow>
               ) : sorted.map((o) => (
                 <tr key={o.operator_id} className="hover:bg-bg-light transition-colors">
+                  <Td className="pr-0">
+                    <input type="checkbox" checked={picked.has(o.operator_id)}
+                      aria-label={`Select ${o.display_name}`}
+                      onChange={() => undefined}
+                      onClick={(e) => pick(o, e.shiftKey)}
+                      className="accent-gold w-3.5 h-3.5 align-middle cursor-pointer" />
+                  </Td>
                   <Td className="font-mono text-[12px] font-bold text-violet">
                     {o.attendance_id
-                      ?? <span className="text-txt-light font-normal text-[11.5px]">not linked</span>}
+                      ?? <span className="text-txt-light font-normal text-[11px]">—</span>}
                   </Td>
                   <Td>
                     <button onClick={() => setEditingId(o.operator_id)} className="text-left group">
-                      <div className="font-semibold text-navy text-[13px] group-hover:text-gold-dark
-                                      group-hover:underline underline-offset-2 transition-colors">
+                      <div className="font-semibold text-navy text-[12.5px] leading-tight
+                                      group-hover:text-gold-dark group-hover:underline
+                                      underline-offset-2 transition-colors">
                         {o.display_name}
                       </div>
-                      <div className="text-[11px] font-mono text-txt-light flex flex-wrap items-center gap-1.5">
-                        {o.operator_ref && <span className="text-violet font-bold">{o.operator_ref}</span>}
-                        {o.age ? <span>{o.age} yrs</span> : null}
+                      <div className="text-[10.5px] font-mono text-txt-light leading-tight mt-0.5">
+                        {o.operator_ref}{o.age ? ` · ${o.age} yrs` : ""}
                       </div>
                     </button>
                   </Td>
-                  {/* The classified job, with what the employer actually wrote
-                      underneath: the second is evidence about their paperwork
-                      and the first is the thing anything hangs off. */}
+                  <Td className="hidden lg:table-cell font-mono text-[12px] text-txt-secondary">
+                    {o.phone || <span className="text-txt-light">—</span>}
+                  </Td>
+                  {/* The trade chip carried the employer's own words beneath
+                      it, which on a Tipper Driver read "DRIVER-TIPPER" — the
+                      same fact twice. It is on the profile, where it belongs
+                      as evidence rather than as a second label. */}
                   <Td>
                     <Chip tone={o.operates_equipment ? "emerald" : "sky"} dot={false}>
                       {o.trade ?? "no trade"}
                     </Chip>
-                    {o.designation && o.designation.toUpperCase() !== (o.trade ?? "").toUpperCase() && (
-                      <span className="block text-[10.5px] font-mono text-txt-light mt-0.5
-                                       truncate max-w-[20ch]" title={o.designation}>
-                        {o.designation}
-                      </span>
-                    )}
                   </Td>
-                  <Td className="hidden xl:table-cell text-txt-muted">{o.trade_group ?? "—"}</Td>
-                  <Td>
-                    <Chip tone={EMPLOYMENT_TONE[o.employment_type ?? "OTHER"] ?? "slate"} dot={false}>
-                      {(o.employment_type ?? "—").toLowerCase()}
-                    </Chip>
-                    {o.employer && (
-                      <span className="block text-[11.5px] text-txt-muted mt-0.5">{o.employer}</span>
-                    )}
+                  <Td className="hidden xl:table-cell text-txt-muted whitespace-nowrap">
+                    {o.trade_group ?? "—"}
                   </Td>
-                  <Td className="hidden lg:table-cell text-txt-muted">{o.department ?? "—"}</Td>
-                  <Td className="hidden xl:table-cell text-right tabular-nums text-txt-muted">
-                    {o.years_served != null ? `${o.years_served} yr` : "—"}
-                  </Td>
-                  <Td>
-                    {o.machines_competent > 0 ? (
-                      <Chip tone="violet" dot={false}>
-                        {o.machines_competent} class{o.machines_competent === 1 ? "" : "es"}
-                      </Chip>
-                    ) : <span className="text-[12px] text-txt-light">not assessed</span>}
-                    {o.assigned_to && (
-                      <span className="block font-mono text-[11px] text-txt-light mt-0.5">
-                        on {o.assigned_to}
-                      </span>
-                    )}
-                  </Td>
-                  <Td>
-                    {o.last_assessed ? (
-                      <>
-                        <span className="text-[12.5px] tabular-nums text-txt-secondary">
-                          {o.last_assessed}
-                        </span>
-                        {(o.declined_count > 0 || o.improved_count > 0) && (
-                          <span className="inline-flex items-center gap-1 ml-1.5 align-middle">
-                            {o.declined_count > 0 && (
-                              <span title={`${o.declined_count} level(s) fell at the last assessment`}
-                                className="inline-flex items-center gap-0.5 text-[11px] font-bold text-rose">
-                                <TrendingDown className="w-3 h-3" />{o.declined_count}
-                              </span>
-                            )}
-                            {o.improved_count > 0 && (
-                              <span title={`${o.improved_count} level(s) rose at the last assessment`}
-                                className="inline-flex items-center gap-0.5 text-[11px] font-bold text-emerald">
-                                <TrendingUp className="w-3 h-3" />{o.improved_count}
-                              </span>
-                            )}
-                          </span>
-                        )}
-                        {o.avg_rating && (
-                          <span title="Average expertise rating"
-                            className="inline-flex items-center gap-0.5 ml-1.5 text-[11px] font-bold text-gold-dark">
-                            <Star className="w-3 h-3 fill-current" />{o.avg_rating}
-                          </span>
-                        )}
-                        {o.last_assessed_by && (
-                          <span className="block text-[11px] text-txt-light">
-                            by {o.last_assessed_by}
-                          </span>
-                        )}
-                      </>
-                    ) : <span className="text-[12px] text-txt-light">never</span>}
-                  </Td>
-                  <Td>{dueChip(o.next_due)}</Td>
-                  <Td className="text-right">
-                    <span className="inline-flex items-center gap-1.5 justify-end flex-wrap">
-                      {o.expired_documents > 0 && (
-                        <Chip tone="rose">{o.expired_documents} expired</Chip>
-                      )}
-                      <Chip tone={APPROVAL_TONE[o.approval_status] ?? "slate"}>
-                        {o.approval_status.replace("_", " ").toLowerCase()}
-                      </Chip>
+                  <Td className="hidden md:table-cell text-txt-muted">
+                    <span className="block truncate max-w-[16ch]" title={o.department ?? ""}>
+                      {o.department ?? "—"}
                     </span>
                   </Td>
-                  <Td className="text-right whitespace-nowrap">
-                    {mayAssess && (
-                      <Button size="sm" variant="secondary"
-                        onClick={() => { setOpenAt("competency"); setEditingId(o.operator_id); }}>
-                        <ShieldCheck className="w-3.5 h-3.5" /> Assess
-                      </Button>
+                  <Td>
+                    <Chip tone="amber" dot={false}>{o.employer ?? "BAL"}</Chip>
+                    <span className="block text-[10.5px] text-txt-light mt-0.5">
+                      {(o.employment_type ?? "").toLowerCase()}
+                    </span>
+                  </Td>
+                  <Td className="hidden xl:table-cell text-right tabular-nums text-txt-muted
+                                 whitespace-nowrap">
+                    {o.years_served != null ? `${o.years_served} yr` : "—"}
+                  </Td>
+                  <Td className="text-right">
+                    <Chip tone={APPROVAL_TONE[o.approval_status] ?? "slate"}>
+                      {o.approval_status.replace("_", " ").toLowerCase()}
+                    </Chip>
+                    {o.expired_documents > 0 && (
+                      <span className="block text-[10.5px] text-rose font-semibold mt-0.5">
+                        {o.expired_documents} expired
+                      </span>
                     )}
+                  </Td>
+                  <Td className="text-right whitespace-nowrap">
                     <button onClick={() => { setOpenAt(undefined); setEditingId(o.operator_id); }}
                       aria-label={`Open ${o.display_name}`}
-                      className="ml-1.5 p-1 text-txt-light hover:text-gold-dark transition-colors">
+                      className="p-1 text-txt-light hover:text-gold-dark transition-colors">
                       <Pencil className="w-3.5 h-3.5" />
                     </button>
                   </Td>

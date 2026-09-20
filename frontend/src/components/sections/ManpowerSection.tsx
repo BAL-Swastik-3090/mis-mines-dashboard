@@ -20,7 +20,7 @@
  *   ANALYTICS   the shape of the workforce, and the gaps in it.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { HardHat, Plus, ShieldCheck, Users, BarChart3 } from "lucide-react";
+import { BarChart3, Grid3x3, HardHat, Plus, ShieldCheck, Users } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
 import { Button, Card, PageHeader, Tabs, type Tone } from "@/components/minehub/ui";
@@ -28,11 +28,16 @@ import OperatorPanel from "@/components/minehub/OperatorPanel";
 import AssessmentPanel from "@/components/minehub/AssessmentPanel";
 import ManpowerAnalytics from "@/components/minehub/ManpowerAnalytics";
 
-type TabId = "register" | "assessment" | "analytics";
+type TabId = "register" | "capability" | "assessment" | "analytics";
 
 const TABS: { id: TabId; label: string; icon: React.ElementType; tone: Tone; hint: string }[] = [
   { id: "register", label: "Register", icon: Users, tone: "emerald",
     hint: "Everyone on strength at the mine, whatever they do — operators, trades, supervision and support." },
+  // Lifted out of the register, which had its own Register/Capability switcher
+  // directly beneath this strip — two tab bars, both starting with the word
+  // Register, one inside the other.
+  { id: "capability", label: "Capability", icon: Grid3x3, tone: "indigo",
+    hint: "The grid: every person against every machine class, and the level they hold on each." },
   { id: "assessment", label: "Assessment", icon: ShieldCheck, tone: "violet",
     hint: "Who is cleared to run what, who is overdue, and who has never been assessed at all." },
   { id: "analytics", label: "Analytics", icon: BarChart3, tone: "sky",
@@ -72,7 +77,7 @@ export default function ManpowerSection() {
     <div className={`py-6 space-y-5 ${formOpen ? "max-w-[1600px]" : "max-w-[1500px]"}`}>
       {!formOpen && (
         <PageHeader
-          lead="Man" rest="power" tone="emerald" icon={HardHat}
+          lead="Man" rest="power" joined tone="emerald" icon={HardHat}
           subtitle={active?.hint}
           actions={
             tab === "register" && mayManage ? (
@@ -87,8 +92,8 @@ export default function ManpowerSection() {
         <Tabs tabs={tabs} value={tab} onChange={(id) => setTab(id as TabId)} />
       )}
 
-      {tab === "register" && (
-        <OperatorPanel addOpen={addOpen} onAddOpenChange={setAddOpen}
+      {(tab === "register" || tab === "capability") && (
+        <OperatorPanel view={tab} addOpen={addOpen} onAddOpenChange={setAddOpen}
           onFormOpenChange={setFormOpen}
           onChanged={() => setChanged((n) => n + 1)} />
       )}

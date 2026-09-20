@@ -396,7 +396,7 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
     // A blank make is not the first make alphabetically, it is a gap in the
     // record. Gaps go to the end whichever way the column is pointing.
     const rank = (v: string | number) =>
-      typeof v === "string" && v === "" ? "￿" : v;
+      typeof v === "string" && v === "" ? "\uffff" : v;
     return [...filtered].sort((x, y) => {
       const a = rank(keyOf(x)), b = rank(keyOf(y));
       if (a === b) return (x.fleet_code || "").localeCompare(y.fleet_code || "");

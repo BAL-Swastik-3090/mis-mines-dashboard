@@ -19,8 +19,9 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
   AlertTriangle, BarChart3, Building2, CalendarClock, Download, HardHat,
-  Loader2, RefreshCw, ShieldCheck, TrendingUp, Users,
+  Loader2, RefreshCw, ShieldCheck, SlidersHorizontal, TrendingUp, Users, X,
 } from "lucide-react";
+import ColumnFilter from "./ColumnFilter";
 import api from "@/lib/api";
 import {
   Alert, Button, Card, CardHeader, Chip, StatBar, TONE_DOT, type Tone,
@@ -35,7 +36,9 @@ interface TradeRow extends Slice {
 interface CoverageRow {
   label: string; trained_for: number; machines: number; assessed: number;
 }
+interface Choice { id?: number; label: string; people: number }
 interface Analytics {
+  choices: { employer: Choice[]; department: Choice[]; trade_group: Choice[] };
   headline: Record<string, number | null>;
   by_group: Slice[]; by_trade: TradeRow[]; by_employer: Slice[];
   by_department: Slice[]; by_skill: Slice[]; by_age: Slice[]; by_service: Slice[];
@@ -95,16 +98,29 @@ export default function ManpowerAnalytics() {
   const [data, setData] = useState<Analytics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // One set of filters for the whole screen. "The Automobile workshop's
+  // headcount, age and coverage" is one question; answering it separately on
+  // each card is how two of the three end up showing something else.
+  const [f, setF] = useState({ employer: "", department: "", group: "", operators: "" });
+  const set = (k: keyof typeof f) => (v: string) => setF((x) => ({ ...x, [k]: v }));
+  const narrowed = Object.values(f).some(Boolean);
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      setData((await api.get("/operators/analytics")).data);
+      setData((await api.get("/operators/analytics", {
+        params: {
+          employer_party_id: f.employer || undefined,
+          org_unit_id: f.department || undefined,
+          trade_group: f.group || undefined,
+          operators_only: f.operators || undefined,
+        },
+      })).data);
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(d ?? "Could not read the workforce figures.");
     } finally { setLoading(false); }
-  }, []);
+  }, [f]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -133,8 +149,48 @@ export default function ManpowerAnalytics() {
       `manpower-by-trade-${new Date().toISOString().slice(0, 10)}.csv`);
   };
 
+  // Built from the unfiltered shape where a filter is not itself set, so
+  // narrowing on one dimension never empties the menus for the others.
+  const pick = (label: string, value: string, onChange: (v: string) => void,
+                options: { value: string; label: string; count?: number }[]) => (
+    <ColumnFilter variant="control" label={label} allLabel={`Any ${label.toLowerCase()}`}
+      value={value} options={options} onChange={onChange} />
+  );
+
   return (
     <div className="space-y-4">
+      {/* The filters, above everything they narrow. */}
+      <div className="bg-bg-base rounded-xl border border-border-light shadow-sm
+                      px-4 py-2.5 flex flex-wrap items-center gap-2">
+        <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold
+                         text-txt-light mr-0.5">
+          <SlidersHorizontal className="w-3.5 h-3.5" /> Narrow the whole screen
+        </span>
+        {data.choices.employer.length > 1 && pick("Employer", f.employer, set("employer"),
+          data.choices.employer.map((c) => ({ value: String(c.id), label: c.label, count: c.people })))}
+        {data.choices.department.length > 1 && pick("Department", f.department, set("department"),
+          data.choices.department.map((c) => ({ value: String(c.id), label: c.label, count: c.people })))}
+        {data.choices.trade_group.length > 1 && pick("Trade group", f.group, set("group"),
+          data.choices.trade_group.map((c) => ({ value: c.label, label: c.label, count: c.people })))}
+        {pick("Role", f.operators, set("operators"), [
+          { value: "true", label: "Machine operators only" },
+          { value: "false", label: "Trades and support only" },
+        ])}
+        {narrowed && (
+          <button type="button"
+            onClick={() => setF({ employer: "", department: "", group: "", operators: "" })}
+            className="inline-flex items-center gap-1 text-[11.5px] font-semibold
+                       text-gold-dark hover:underline underline-offset-2">
+            <X className="w-3 h-3" /> Clear
+          </button>
+        )}
+        <span className="flex-1" />
+        <span className="text-[11.5px] text-txt-muted tabular-nums">
+          {n("people")} {n("people") === 1 ? "person" : "people"}
+          {narrowed ? " match" : " on strength"}
+        </span>
+      </div>
+
       <StatBar items={[
         { label: "On strength", value: n("people"), tone: "sky", icon: Users,
           hint: `${n("employers")} employer${n("employers") === 1 ? "" : "s"}, ${n("contract")} on contract` },
