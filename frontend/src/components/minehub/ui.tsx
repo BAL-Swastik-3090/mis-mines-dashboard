@@ -34,6 +34,13 @@ const TONE: Record<Tone, { text: string; bg: string; ring: string; solid: string
   slate:   { text: "text-slate",      bg: "bg-slate-bg",    ring: "ring-slate-ring",    solid: "bg-slate",      dot: "bg-slate-light" },
 };
 
+/** The solid swatch for a tone, for callers that want a colour without a
+ *  whole Chip around it — a group heading's marker, for instance. */
+export const TONE_DOT: Record<Tone, string> =
+  Object.fromEntries(
+    (Object.keys(TONE) as Tone[]).map((k) => [k, TONE[k].solid]),
+  ) as Record<Tone, string>;
+
 /* ── Page header ─────────────────────────────────────────────────────────── */
 /** Two-tone title, subtitle, and the page's primary actions on the right. */
 export function PageHeader({ lead, rest, subtitle, tone = "gold", actions, icon: Icon }: {
@@ -252,12 +259,16 @@ export function StatBar({ items }: { items: Stat[] }) {
               </span>
               {Icon && <Icon className={`w-4 h-4 shrink-0 ${t.text} opacity-50`} />}
             </div>
-            <div className="font-condensed text-[9.5px] font-bold uppercase tracking-[.13em]
-                            text-txt-light mt-2">
+            {/* Barlow Condensed at 9.5px with .13em of tracking is the house
+                style for a table heading, where the word is one of eight and
+                you already know what it says. Here it is the only name the
+                figure has, so it is set the way the tabs above are set — IBM
+                Plex, sentence case, actually readable at a glance. */}
+            <div className="text-[12.5px] font-semibold text-txt-secondary mt-2 leading-tight">
               {s.label}
             </div>
             {s.hint && (
-              <div className="text-[11px] text-txt-muted mt-0.5 leading-snug">{s.hint}</div>
+              <div className="text-[11.5px] text-txt-muted mt-1 leading-snug">{s.hint}</div>
             )}
           </Tag>
         );

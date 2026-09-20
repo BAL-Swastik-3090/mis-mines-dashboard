@@ -12,6 +12,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Search, Link2, Trash2, Check, Loader2, Radio, ChevronDown, ChevronRight,
   Cpu, Zap, Plus, Building2, X, Rows3, LayoutGrid, CircleSlash, Gauge,
+  SlidersHorizontal, Layers,
 } from "lucide-react";
 import api from "@/lib/api";
 import ColumnFilter, { optionsFrom, SortHeader, type SortDir } from "./ColumnFilter";
@@ -19,7 +20,8 @@ import CommentThread from "@/components/comments/CommentThread";
 import { useAuth } from "@/contexts/useAuth";
 import AssetForm from "./AssetForm";
 import {
-  Alert, Button, Card, CardHeader, Chip, EmptyRow, StatBar, Td, Th, inputClass, type Tone,
+  Alert, Button, Card, CardHeader, Chip, EmptyRow, StatBar, Td, Th, TONE_DOT,
+  inputClass, type Tone,
 } from "./ui";
 
 interface Summary {
@@ -124,6 +126,64 @@ function atStage(a: { status: string }, stage: string): boolean {
 type SortKey = "machine" | "type" | "makemodel" | "owner" | "linked"
              | "changed" | "status";
 
+/** SCREAMING_SNAKE is how the database says it and not how anybody reads it. */
+function titleCase(v: string): string {
+  return v.replace(/_/g, " ").toLowerCase().replace(/^./, (c) => c.toUpperCase());
+}
+
+interface Section { key: string; label: string; tone: Tone; rows: Asset[] }
+
+type GroupKey = "" | "category" | "asset_type" | "status" | "owner" | "make"
+              | "propulsion" | "approval_status";
+
+const GROUPS: { id: GroupKey; label: string }[] = [
+  { id: "category",       label: "Category" },
+  { id: "asset_type",     label: "Type" },
+  { id: "status",         label: "Stage" },
+  { id: "owner",          label: "Owner" },
+  { id: "make",           label: "Make" },
+  { id: "propulsion",     label: "Electric or not" },
+  { id: "approval_status", label: "Approval" },
+];
+
+/** A stable hue per value, so the same contractor is the same colour every
+ *  time the page is opened and a grouped list stays scannable. Categories and
+ *  stages have meanings attached to their colours already and keep them. */
+const HUES: Tone[] = ["violet", "indigo", "teal", "sky", "amber", "emerald", "rose"];
+function hueFor(value: string): Tone {
+  const h = [...value].reduce((a, c) => a + c.charCodeAt(0), 0);
+  return HUES[h % HUES.length];
+}
+
+/** Which heading a machine falls under, said the way a person would say it. */
+function groupOf(a: Asset, key: GroupKey): { value: string; tone: Tone } {
+  switch (key) {
+    case "category":
+      return { value: titleCase(a.category || "Uncategorised"),
+               tone: CATEGORY_TONE[a.category] ?? "slate" };
+    case "asset_type":
+      return { value: a.asset_type || "No type set", tone: hueFor(a.asset_type || "") };
+    case "status":
+      return { value: STAGE_LABEL[a.status] ?? titleCase(a.status),
+               tone: STATUS_TONE[a.status] ?? "slate" };
+    case "owner": {
+      const v = a.ownership === "HIRED" ? (a.owner || "Hired, owner not recorded") : "BAL";
+      return { value: v, tone: v === "BAL" ? "slate" : hueFor(v) };
+    }
+    case "make":
+      return { value: a.make || "Make not recorded", tone: hueFor(a.make || "") };
+    case "propulsion":
+      return a.propulsion === "EV" ? { value: "Electric", tone: "emerald" }
+           : a.propulsion === "HYBRID" ? { value: "Hybrid", tone: "sky" }
+           : { value: "Diesel and the rest", tone: "slate" };
+    case "approval_status":
+      return { value: titleCase(a.approval_status || "Unknown"),
+               tone: APPROVAL_TONE[a.approval_status ?? ""] ?? "slate" };
+    default:
+      return { value: "", tone: "slate" };
+  }
+}
+
 /** What each column sorts on, and what the two directions are called there.
  *  "A to Z" on a date column is the reason people click sort twice. */
 const SORT_WORDS: Record<SortKey, [string, string]> = {
@@ -162,8 +222,12 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
   // Every column filters, and they narrow together: type Excavator and owner
   // DASHMESH is a question somebody actually asks, and answering it with two
   // separate screens is how people go back to the spreadsheet.
+  // Category, fuel and approval have no column of their own — eight columns
+  // is already a wide table — but they are three of the questions people
+  // actually arrive with: what haulage have we got, what still runs on
+  // diesel, what is sitting in draft. They get a toolbar instead.
   const [by, setBy] = useState({ type: "", owner: "", make: "", model: "",
-                                 linked: "" });
+                                 linked: "", category: "", fuel: "", approval: "" });
   // The server hands the list over in fleet-code order, so that is what the
   // table claims to be doing until somebody says otherwise.
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>(
@@ -178,9 +242,14 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
   const queue = React.useRef<HTMLDivElement>(null);
   const set = (k: keyof typeof by) => (v: string) => setBy((b) => ({ ...b, [k]: v }));
   const clearAll = () => {
-    setBy({ type: "", owner: "", make: "", model: "", linked: "" });
+    setBy({ type: "", owner: "", make: "", model: "", linked: "",
+            category: "", fuel: "", approval: "" });
     setStage("IN_SERVICE"); setPropulsion(""); setQuery("");
   };
+
+  // What the list is cut into. Separate from sorting: sorting decides the
+  // order of 123 rows, grouping decides how many lists there are.
+  const [group, setGroup] = useState<GroupKey>("");
 
   // Hybrids count as electric here. A fleet that is going electric is asked
   // "how far along are we", and a machine that runs on a battery half the time
@@ -205,6 +274,9 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
 
   const menus = React.useMemo(() => ({
     type: optionsFrom(pool, (a) => a.asset_type),
+    category: optionsFrom(pool, (a) => a.category, titleCase),
+    fuel: optionsFrom(pool, (a) => a.fuel_type, titleCase),
+    approval: optionsFrom(pool, (a) => a.approval_status, titleCase),
     owner: optionsFrom(pool, (a) => a.owner),
     make: optionsFrom(pool, (a) => a.make),
     model: optionsFrom(pool, (a) => a.model),
@@ -217,7 +289,8 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
   }), [pool]);
 
   const narrowed = Boolean(by.type || by.owner || by.make || by.model
-    || by.linked || propulsion || query.trim() || stage !== "IN_SERVICE");
+    || by.linked || by.category || by.fuel || by.approval
+    || propulsion || query.trim() || stage !== "IN_SERVICE");
 
   const evCount = React.useMemo(
     () => assets.filter((a) => a.propulsion === "EV" || a.propulsion === "HYBRID").length,
@@ -263,6 +336,9 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
     return assets.filter((a) => {
       if (!atStage(a, stage)) return false;
       if (by.type && a.asset_type !== by.type) return false;
+      if (by.category && (a.category ?? "") !== by.category) return false;
+      if (by.fuel && (a.fuel_type ?? "") !== by.fuel) return false;
+      if (by.approval && (a.approval_status ?? "") !== by.approval) return false;
       if (by.owner && (a.owner ?? "") !== by.owner) return false;
       if (by.make && (a.make ?? "") !== by.make) return false;
       if (by.model && (a.model ?? "") !== by.model) return false;
@@ -307,6 +383,34 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
     });
   }, [filtered, sort]);
 
+  // The ordered rows, cut into headed sections. Ungrouped is one section with
+  // no heading, so the table below has a single shape to render rather than
+  // two.
+  const sections = useMemo(() => {
+    if (!group) return [{ key: "", label: "", tone: "slate" as Tone, rows: sorted }];
+    const seen = new Map<string, { key: string; label: string; tone: Tone; rows: Asset[] }>();
+    for (const a of sorted) {
+      const { value, tone } = groupOf(a, group);
+      let s = seen.get(value);
+      if (!s) { s = { key: value, label: value, tone, rows: [] }; seen.set(value, s); }
+      s.rows.push(a);
+    }
+    const out = [...seen.values()];
+    // Stages run in life order; everything else leads with the biggest group,
+    // because "which category do we have most of" is the question grouping by
+    // category was asked in order to answer.
+    if (group === "status") {
+      const rank = (l: string) => {
+        const code = Object.keys(STAGE_LABEL).find((k) => STAGE_LABEL[k] === l);
+        return STAGE_RANK[code ?? ""] ?? 99;
+      };
+      out.sort((x, y) => rank(x.label) - rank(y.label));
+    } else {
+      out.sort((x, y) => y.rows.length - x.rows.length || x.label.localeCompare(y.label));
+    }
+    return out;
+  }, [sorted, group]);
+
   // What is currently narrowing the list, each one removable on its own. The
   // filters live in the column headings, which is the right place to set them
   // and a poor place to notice five of them at once.
@@ -317,7 +421,12 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
       clear: () => setStage("IN_SERVICE") }] : []),
     ...(propulsion ? [{ label: propulsion === "EV" ? "Electric" : "Not electric",
                         clear: () => setPropulsion("") }] : []),
+    ...(by.category ? [{ label: titleCase(by.category),
+                         clear: () => set("category")("") }] : []),
     ...(by.type   ? [{ label: by.type,  clear: () => set("type")("") }] : []),
+    ...(by.fuel   ? [{ label: titleCase(by.fuel), clear: () => set("fuel")("") }] : []),
+    ...(by.approval ? [{ label: titleCase(by.approval),
+                         clear: () => set("approval")("") }] : []),
     ...(by.make   ? [{ label: by.make,  clear: () => set("make")("") }] : []),
     ...(by.model  ? [{ label: by.model, clear: () => set("model")("") }] : []),
     ...(by.owner  ? [{ label: by.owner, clear: () => set("owner")("") }] : []),
@@ -402,11 +511,22 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
           { label: "Machines", value: assets.length, tone: "sky", icon: Cpu,
             hint: summary.organisations
               ? `${summary.organisations} contractors own hired ones`
-              : "all owned by BAL" },
+              : "all owned by BAL",
+            title: "Show every machine, whatever its stage",
+            onClick: () => setStage(""), active: stage === "" },
           { label: "In service", value: inService, tone: "emerald", icon: Check,
-            hint: "working, in workshop, standby or idle",
-            title: "Show only the machines still in service",
-            onClick: () => setStage("IN_SERVICE"), active: stage === "IN_SERVICE" },
+            hint: stage === "IN_SERVICE"
+              ? "working, in workshop, standby or idle — click to show all"
+              : "working, in workshop, standby or idle",
+            title: stage === "IN_SERVICE"
+              ? "Stop filtering — show every machine on the register"
+              : "Show only the machines still in service",
+            // Every figure in this band is a toggle, including the one that
+            // happens to be on when the screen opens. A control that does
+            // nothing when you click it reads as a broken control, and the
+            // way back to all 130 machines was buried in a column menu.
+            onClick: () => setStage(stage === "IN_SERVICE" ? "" : "IN_SERVICE"),
+            active: stage === "IN_SERVICE" },
           // The figure that explains why the register says 130 and the list
           // says 123. It was the difference nobody could account for.
           { label: "Retired", value: retired,
@@ -414,7 +534,7 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
             hint: "off road, cannibalised or scrapped",
             title: retired ? "Show the machines that have left service" : undefined,
             onClick: retired
-              ? () => setStage(stage === "RETIRED" ? "IN_SERVICE" : "RETIRED")
+              ? () => setStage(stage === "RETIRED" ? "" : "RETIRED")
               : undefined,
             active: stage === "RETIRED" },
           { label: "Electric", value: evCount,
@@ -486,6 +606,57 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
               )}
             </>
           } />
+        {/* The questions that have no column of their own, plus the control
+            that decides how many lists this is. Kept on one line above the
+            table rather than folded into a "Filters" drawer: a filter nobody
+            can see is a filter nobody uses. */}
+        <div className="px-5 py-2.5 border-b border-border-light
+                        flex flex-wrap items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold
+                           text-txt-light mr-0.5">
+            <SlidersHorizontal className="w-3.5 h-3.5" /> Narrow by
+          </span>
+          {/* A control for a column that is empty in every row would open on
+              "Nothing to filter by", which is a control that wasted a click. */}
+          {menus.category.length > 1 && (
+            <ColumnFilter variant="control" label="Category" allLabel="Any category"
+              value={by.category} options={menus.category} onChange={set("category")} />
+          )}
+          {menus.fuel.length > 1 && (
+            <ColumnFilter variant="control" label="Fuel" allLabel="Any fuel"
+              value={by.fuel} options={menus.fuel} onChange={set("fuel")} />
+          )}
+          {menus.approval.length > 1 && (
+            <ColumnFilter variant="control" label="Approval" allLabel="Any approval"
+              value={by.approval} options={menus.approval} onChange={set("approval")} />
+          )}
+
+          <span className="w-px self-stretch bg-border-light mx-1" />
+
+          {/* Grouping is not a filter — nothing is hidden by it — so it sits
+              apart from the three that are. Same control, though: choosing
+              nothing is the way back to one flat list, which is exactly what
+              clearing a filter means. */}
+          <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold
+                           text-txt-light">
+            <Layers className="w-3.5 h-3.5" /> Group by
+          </span>
+          <ColumnFilter variant="control" label="" allLabel="Nothing"
+            value={group} onChange={(v) => setGroup(v as GroupKey)}
+            options={GROUPS.filter((g) => g.id).map((g) => ({
+              value: g.id, label: g.label,
+              // How many headings this would make. "Category: 9" tells you
+              // whether you are about to get a useful outline or a list of
+              // one-row groups.
+              count: new Set(pool.map((a) => groupOf(a, g.id).value)).size,
+            }))} />
+          {group && (
+            <span className="text-[11px] text-txt-muted tabular-nums">
+              {sections.length} {sections.length === 1 ? "group" : "groups"}
+            </span>
+          )}
+        </div>
+
         {/* Set in the column headings, shown together here. Five filters you
             can only see by opening five menus is five filters somebody
             forgets is on, and then reports the register as missing rows. */}
@@ -516,7 +687,8 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
         )}
 
         {view === "cards" ? (
-          <CardGrid rows={sorted} onOpen={setEditingId} empty={assets.length === 0} />
+          <CardGrid sections={sections} grouped={Boolean(group)}
+            onOpen={setEditingId} empty={assets.length === 0} />
         ) : (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[720px]">
@@ -588,7 +760,22 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
                     : "No machine matches that search."}
                 </EmptyRow>
               )}
-              {sorted.map((a) => (
+              {sections.map((sec) => (
+                <React.Fragment key={sec.key || "_all"}>
+                {group && (
+                  <tr>
+                    <td colSpan={8} className="px-4 py-2 bg-bg-light border-y border-border">
+                      <span className="inline-flex items-center gap-2">
+                        <span className={`w-2.5 h-2.5 rounded-sm ${TONE_DOT[sec.tone]}`} />
+                        <span className="font-semibold text-[12.5px] text-navy">{sec.label}</span>
+                        <span className="text-[11px] text-txt-light tabular-nums">
+                          {sec.rows.length}
+                        </span>
+                      </span>
+                    </td>
+                  </tr>
+                )}
+                {sec.rows.map((a) => (
                 <React.Fragment key={a.asset_id}>
                   <tr className="hover:bg-bg-light transition-colors">
                     <Td className="pr-0">
@@ -718,6 +905,8 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
                     </tr>
                   )}
                 </React.Fragment>
+                ))}
+                </React.Fragment>
               ))}
             </tbody>
           </table>
@@ -790,10 +979,11 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
  * and what it runs on in the middle, who owns it and when it last moved along
  * the bottom.
  */
-function CardGrid({ rows, onOpen, empty }: {
-  rows: Asset[]; onOpen: (id: number) => void; empty: boolean;
+function CardGrid({ sections, grouped, onOpen, empty }: {
+  sections: Section[]; grouped: boolean;
+  onOpen: (id: number) => void; empty: boolean;
 }) {
-  if (rows.length === 0) {
+  if (sections.every((s) => s.rows.length === 0)) {
     return (
       <p className="px-5 py-12 text-center text-[13px] text-txt-light">
         {empty
@@ -803,8 +993,19 @@ function CardGrid({ rows, onOpen, empty }: {
     );
   }
   return (
-    <div className="p-4 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-      {rows.map((a) => (
+    <div className="p-4 space-y-5">
+      {sections.map((sec) => (
+        <section key={sec.key || "_all"}>
+          {grouped && (
+            <h3 className="flex items-center gap-2 mb-2.5">
+              <span className={`w-2.5 h-2.5 rounded-sm ${TONE_DOT[sec.tone]}`} />
+              <span className="font-semibold text-[12.5px] text-navy">{sec.label}</span>
+              <span className="text-[11px] text-txt-light tabular-nums">{sec.rows.length}</span>
+              <span className="flex-1 h-px bg-border-light" />
+            </h3>
+          )}
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+      {sec.rows.map((a) => (
         <button key={a.asset_id} type="button" onClick={() => onOpen(a.asset_id)}
           className="text-left rounded-xl border border-border-light bg-bg-base p-3.5
                      shadow-sm hover:border-gold hover:shadow-md hover:-translate-y-px
@@ -863,6 +1064,9 @@ function CardGrid({ rows, onOpen, empty }: {
             </span>
           </div>
         </button>
+      ))}
+          </div>
+        </section>
       ))}
     </div>
   );

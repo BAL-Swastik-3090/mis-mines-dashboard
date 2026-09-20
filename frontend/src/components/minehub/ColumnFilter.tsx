@@ -29,7 +29,7 @@ export type SortDir = "asc" | "desc";
 
 export default function ColumnFilter({
   label, value, options, onChange, align = "left", allLabel = "All",
-  sort = null, onSort, sortLabels = ["A to Z", "Z to A"],
+  sort = null, onSort, sortLabels = ["A to Z", "Z to A"], variant = "heading",
 }: {
   /** The column heading. Shown when nothing is selected. */
   label: string;
@@ -49,6 +49,10 @@ export default function ColumnFilter({
    *  and wrong for a count, and a menu that says it anyway is a menu people
    *  have to try twice. */
   sortLabels?: [string, string];
+  /** "heading" is the tiny lettering that belongs inside a table head.
+   *  "control" is a legible pill for a toolbar, where the same menu is
+   *  offered for something that has no column of its own. */
+  variant?: "heading" | "control";
 }) {
   const [open, setOpen] = useState(false);
   const [rect, setRect] = useState<{ top: number; left: number } | null>(null);
@@ -91,26 +95,39 @@ export default function ColumnFilter({
   // in an order nobody can account for.
   const Mark = sort === "asc" ? ArrowUp : sort === "desc" ? ArrowDown : ChevronDown;
 
+  const control = variant === "control";
+
   return (
     <>
       <button ref={anchor} type="button" onClick={() => setOpen((v) => !v)}
         title={`Filter by ${label.toLowerCase()}`}
-        className={`group inline-flex items-center gap-1 max-w-full rounded
-                    px-1 -mx-1 py-0.5 transition-colors
-                    ${align === "right" ? "flex-row-reverse" : ""}
-                    ${active ? "text-gold-dark" : "text-txt-light hover:text-navy"}`}>
+        className={control
+          ? `inline-flex items-center gap-1.5 max-w-full rounded-lg border px-2.5 py-1.5
+             text-[12px] font-semibold transition-colors
+             ${active ? "border-gold/50 bg-gold/[0.07] text-gold-dark"
+                      : "border-border bg-bg-base text-txt-secondary hover:border-gold/40 hover:text-navy"}`
+          : `group inline-flex items-center gap-1 max-w-full rounded
+             px-1 -mx-1 py-0.5 transition-colors
+             ${align === "right" ? "flex-row-reverse" : ""}
+             ${active ? "text-gold-dark" : "text-txt-light hover:text-navy"}`}>
+        {control && label && (
+          <span className="text-txt-light font-normal shrink-0">{label}</span>
+        )}
         <Mark className={`w-3 h-3 shrink-0 transition
                           ${open && !sort ? "rotate-180" : ""}
                           ${sort ? "text-navy" : ""}
-                          ${active || sort ? "" : "opacity-0 group-hover:opacity-100"}`} />
-        <span className="truncate text-[10.5px] font-bold uppercase tracking-[.1em]">
-          {active ? chosen?.label ?? value : label}
+                          ${control ? "order-last text-txt-light"
+                                    : active || sort ? "" : "opacity-0 group-hover:opacity-100"}`} />
+        <span className={control
+          ? "truncate"
+          : "truncate text-[10.5px] font-bold uppercase tracking-[.1em]"}>
+          {active ? chosen?.label ?? value : control ? allLabel : label}
         </span>
         {active && (
           <span role="button" tabIndex={-1}
             onClick={(e) => { e.stopPropagation(); onChange(""); }}
             className="shrink-0 rounded-full p-0.5 hover:bg-rose-bg hover:text-rose">
-            <X className="w-2.5 h-2.5" />
+            <X className={control ? "w-3 h-3" : "w-2.5 h-2.5"} />
           </span>
         )}
       </button>
