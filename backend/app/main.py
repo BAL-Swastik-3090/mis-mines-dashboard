@@ -127,6 +127,10 @@ _PERMISSION_RULES: tuple[tuple[str, str], ...] = (
     # needs — an operator registrar cannot assess anybody without it. Changing
     # them is gated per kind inside the router.
     ("/api/checklists", "platform.registry.view"),
+    # The attendance register reads the gate readers and joins them to the
+    # manpower register, so it needs what the manpower register needs. Nothing
+    # here writes anything.
+    ("/api/attendance", "platform.operators.view"),
     # Operator profiles hold dates of birth, medical expiry and photographs, so
     # the view permission is deliberately not part of a dashboard role.
     ("/api/operators", "platform.operators.view"),
@@ -263,6 +267,7 @@ def health_check():
 
 
 # ── Routers ───────────────────────────────────────────────────
+from app.routers import attendance as attendance_router
 from app.routers import checklists, operators_analytics
 from app.routers import production, stock, cob, plant, ob, despatch, equipment, dewatering, insights, live_tracking, fuel_management, ev_tracking, auth, oee, roles, minehub, access, operators, operations, workforce, comments
 app.include_router(production.router,      prefix="/api/production",    tags=["Production"])
@@ -281,6 +286,7 @@ app.include_router(auth.router)
 app.include_router(oee.router)
 # Before operators.router, whose "/{operator_id}" would otherwise match
 # "/analytics" and fail trying to read it as a number.
+app.include_router(attendance_router.router)
 app.include_router(checklists.router)
 app.include_router(operators_analytics.router)
 app.include_router(operators.router)

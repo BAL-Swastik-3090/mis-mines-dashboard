@@ -20,15 +20,16 @@
  *   ANALYTICS   the shape of the workforce, and the gaps in it.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { BarChart3, Grid3x3, HardHat, Plus, ShieldCheck, Users } from "lucide-react";
+import { BarChart3, CalendarCheck, Grid3x3, HardHat, Plus, ShieldCheck, Users } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
 import { Button, Card, PageHeader, Tabs, type Tone } from "@/components/minehub/ui";
 import OperatorPanel from "@/components/minehub/OperatorPanel";
 import AssessmentPanel from "@/components/minehub/AssessmentPanel";
 import ManpowerAnalytics from "@/components/minehub/ManpowerAnalytics";
+import AttendancePanel from "@/components/minehub/AttendancePanel";
 
-type TabId = "register" | "capability" | "assessment" | "analytics";
+type TabId = "register" | "capability" | "attendance" | "assessment" | "analytics";
 
 const TABS: { id: TabId; label: string; icon: React.ElementType; tone: Tone; hint: string }[] = [
   { id: "register", label: "Register", icon: Users, tone: "emerald",
@@ -38,6 +39,11 @@ const TABS: { id: TabId; label: string; icon: React.ElementType; tone: Tone; hin
   // Register, one inside the other.
   { id: "capability", label: "Capability", icon: Grid3x3, tone: "indigo",
     hint: "The grid: every person against every machine class, and the level they hold on each." },
+  // Read-only for now: it shows what the gate readers recorded and stores
+  // nothing, because how much history to hold and what a missing punch means
+  // are decisions the mine has not taken yet.
+  { id: "attendance", label: "Attendance", icon: CalendarCheck, tone: "sky",
+    hint: "What the gate readers recorded, day by day — first punch in, last punch out, and every punch behind them." },
   { id: "assessment", label: "Assessment", icon: ShieldCheck, tone: "violet",
     hint: "Who is cleared to run what, who is overdue, and who has never been assessed at all." },
   { id: "analytics", label: "Analytics", icon: BarChart3, tone: "sky",
@@ -101,6 +107,8 @@ export default function ManpowerSection() {
       {tab === "assessment" && (
         <AssessmentPanel key={changed} onChanged={() => setChanged((n) => n + 1)} />
       )}
+
+      {tab === "attendance" && <AttendancePanel />}
 
       {tab === "analytics" && <ManpowerAnalytics key={changed} />}
 
