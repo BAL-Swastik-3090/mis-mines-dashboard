@@ -1262,6 +1262,8 @@ export interface WhyWhyResponse {
     /** Ships from the backend so the UI cannot quietly drop it. */
     caveat: string;
   } | null;
+  machine_detail:  WhyWhyMachineDetail[];
+  operator_issues: WhyWhyOperatorIssues | null;
   completeness: {
     records: number;
     fields: Array<{ field: string; pct: number }>;
@@ -1276,6 +1278,58 @@ export interface WhyWhyNarrativeResponse {
   tokens:   number | null;
   generated_at: string | null;
   /** Figures in the prose absent from the figures the model was given. */
+  unverified_numbers: string[];
+  error:    string | null;
+}
+
+/** One machine's own failure Pareto and cause split — the fleet view averages
+ *  away the fact that tippers fail on tyres and excavators fail hydraulically. */
+export interface WhyWhyMachineDetail {
+  machine:         string;
+  breakdowns:      number;
+  hours:           number;
+  cost:            number;
+  modes:           WhyWhyShare[];
+  causes:          WhyWhyShare[];
+  causes_recorded: number;
+  modes_to_80pct:  number;
+  /** Two modes or fewer cover 80% — a fixable pattern rather than scatter. */
+  concentrated:    boolean;
+}
+
+export interface WhyWhyOperatorIssue {
+  machine:           string;
+  date:              string | null;
+  shift:             string | null;
+  defect:            string;
+  family:            string;
+  sub_category:      string | null;
+  /** Present where recorded. Records who was there, not who is at fault. */
+  operator:          string | null;
+  problem_statement: string;
+  why_chain:         string[];
+  hours:             number;
+  cost:              number;
+}
+
+export interface WhyWhyOperatorIssues {
+  events:          number;
+  named_events:    number;
+  hours:           number;
+  cost:            number;
+  by_family:       WhyWhyShare[];
+  with_why_chain:  number;
+  issues:          WhyWhyOperatorIssue[];
+}
+
+export interface WhyWhyTrainingResponse {
+  period:   WhyWhyWindow;
+  summary:  Omit<WhyWhyOperatorIssues, "issues"> | null;
+  incidents?: WhyWhyOperatorIssue[];
+  sections: { topics?: string; priority?: string };
+  model:    string | null;
+  tokens:   number | null;
+  generated_at: string | null;
   unverified_numbers: string[];
   error:    string | null;
 }

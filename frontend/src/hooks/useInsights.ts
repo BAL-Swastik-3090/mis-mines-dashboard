@@ -3,7 +3,8 @@ import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import api from "@/lib/api";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import type { RealityCheckResponse, InsightsResponse,
-              WhyWhyResponse, WhyWhyNarrativeResponse } from "@/types";
+              WhyWhyResponse, WhyWhyNarrativeResponse,
+              WhyWhyTrainingResponse } from "@/types";
 
 // ── Reality Check (pure computation, polls every 5 min) ───────
 export function useRealityCheck() {
@@ -71,6 +72,28 @@ export function useWhyWhyNarrative(enabled: boolean) {
       const res = await api.get("/insights/why-why/narrative", {
         params:  { from_date: apiFrom, to_date: apiTo },
         timeout: 120000,   // backend allows the model 90s; leave headroom
+      });
+      return res.data;
+    },
+    staleTime:       30 * 60_000,
+    refetchInterval: false,
+    placeholderData: keepPreviousData,
+    enabled:         enabled && Boolean(apiFrom && apiTo),
+    retry:           1,
+  });
+}
+
+// ── Why-Why: training topics from the operating-error breakdowns ──
+// Slower than the narrative (~18s) because the incident text goes in the
+// prompt. On demand only, and its failure is contained to its own card.
+export function useWhyWhyTraining(enabled: boolean) {
+  const { apiFrom, apiTo } = useDateFilter();
+  return useQuery<WhyWhyTrainingResponse>({
+    queryKey: ["insights", "why-why", "training", apiFrom, apiTo],
+    queryFn: async () => {
+      const res = await api.get("/insights/why-why/training", {
+        params:  { from_date: apiFrom, to_date: apiTo },
+        timeout: 150000,
       });
       return res.data;
     },
