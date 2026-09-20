@@ -20,7 +20,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle, CalendarDays, CheckCircle2, Clock, Download, Grid3x3, Loader2,
-  LogIn, LogOut, Rows3, Search, Users, X,
+  LogIn, LogOut, Rows3, Search, SlidersHorizontal, Users, X,
 } from "lucide-react";
 import api from "@/lib/api";
 import { useDateFilter } from "@/contexts/useDateFilter";
@@ -36,7 +36,7 @@ import { toCsv, download } from "./spreadsheet";
 interface Row {
   operator_id: number; operator_ref: string | null; name: string; emp_no: string;
   trade: string | null; trade_group: string | null; employer: string | null;
-  department: string | null; designation: string | null;
+  department: string | null; designation: string | null; plant: string | null;
   on_date: string; first_in: string | null; last_out: string | null;
   minutes: number | null; punches: number; devices: number;
   in_gate: string | null; out_gate: string | null;
@@ -96,7 +96,15 @@ export default function AttendancePanel() {
   const [trimmed, setTrimmed] = useState<string | null>(null);
 
   const [query, setQuery] = useState("");
-  const [by, setBy] = useState({ trade: "", group: "", employer: "", department: "", state: "" });
+  // One set of filters for the screen, not one per view. Plant, contractor,
+  // department and trade sit in the bar at the top and narrow both shapes;
+  // state is the day log's own because a matrix cell already shows it.
+  //
+  // The column headings in the day log write to this same object, so filtering
+  // from a heading and filtering from the bar are two doors to one room rather
+  // than two filters that can disagree.
+  const [by, setBy] = useState({ plant: "", trade: "", group: "", employer: "",
+                                 department: "", state: "" });
   const set = (k: keyof typeof by) => (v: string) => setBy((b) => ({ ...b, [k]: v }));
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>(
     { key: "name", dir: "asc" });
@@ -140,6 +148,7 @@ export default function AttendancePanel() {
   };
 
   const menus = useMemo(() => ({
+    plant: optionsFrom(rows, (r) => r.plant, (v) => v, null),
     trade: optionsFrom(rows, (r) => r.trade, (v) => v, "No trade set"),
     group: optionsFrom(rows, (r) => r.trade_group, (v) => v, null),
     employer: optionsFrom(rows, (r) => r.employer, (v) => v, "Not recorded"),
@@ -153,6 +162,7 @@ export default function AttendancePanel() {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return rows.filter((r) => {
+      if (!matches(r.plant, by.plant)) return false;
       if (!matches(r.trade, by.trade)) return false;
       if (!matches(r.trade_group, by.group)) return false;
       if (!matches(r.employer, by.employer)) return false;
@@ -228,9 +238,35 @@ export default function AttendancePanel() {
             {spanDays} day{spanDays === 1 ? "" : "s"}
           </span>
         </span>
-        <span className="text-[11.5px] text-txt-light">
-          Change it in the date filter at the top of the page.
+        <span className="w-px self-stretch bg-border-light mx-1" />
+
+        {/* The filters, in the space the range bar was not using. They narrow
+            whichever view is showing, because "the Automobile workshop this
+            month" is one question and having to ask it twice is how the two
+            answers drift apart. */}
+        <span className="flex flex-wrap items-center gap-1.5">
+          <SlidersHorizontal className="w-3.5 h-3.5 text-txt-light" />
+          {menus.plant.length > 1 && (
+            <ColumnFilter variant="control" label="Plant" allLabel="All plants"
+              value={by.plant} options={menus.plant} onChange={set("plant")} />
+          )}
+          <ColumnFilter variant="control" label="Contractor" allLabel="All contractors"
+            value={by.employer} options={menus.employer} onChange={set("employer")} />
+          <ColumnFilter variant="control" label="Department" allLabel="All departments"
+            value={by.department} options={menus.department} onChange={set("department")} />
+          <ColumnFilter variant="control" label="Trade" allLabel="All trades"
+            value={by.trade} options={menus.trade} onChange={set("trade")} />
+          {(by.plant || by.employer || by.department || by.trade) && (
+            <button type="button"
+              onClick={() => setBy((b) => ({ ...b, plant: "", employer: "",
+                                             department: "", trade: "" }))}
+              className="inline-flex items-center gap-1 text-[11.5px] font-semibold
+                         text-gold-dark hover:underline underline-offset-2">
+              <X className="w-3 h-3" /> Clear
+            </button>
+          )}
         </span>
+
         <span className="flex-1" />
         <span className="inline-flex rounded-lg border border-border bg-bg-light p-0.5">
           {([["log", Rows3, "One row per worker per day"],
@@ -260,7 +296,7 @@ export default function AttendancePanel() {
           </p>
         </div>
       ) : view === "matrix" ? (
-        <ActivityMatrix rows={rows} days={days} />
+        <ActivityMatrix rows={filtered} days={days} narrowed={narrowed} />
       ) : (
         <>
           <StatBar items={[
@@ -316,7 +352,8 @@ export default function AttendancePanel() {
                   {filtered.length} of {rows.length} rows
                 </span>
                 <button type="button"
-                  onClick={() => { setBy({ trade: "", group: "", employer: "", department: "", state: "" });
+                  onClick={() => { setBy({ plant: "", trade: "", group: "", employer: "",
+                                           department: "", state: "" });
                                    setQuery(""); }}
                   className="inline-flex items-center gap-1 font-semibold text-gold-dark
                              hover:underline underline-offset-2">

@@ -116,6 +116,7 @@ def register(
                 "trade_group": p["trade_group"],
                 "employer": p["employer"],
                 "department": p["department"],
+                "plant": p["plant"],
                 "designation": p["designation"],
                 "on_date": on,
                 "first_in": first_in.isoformat() if first_in else None,

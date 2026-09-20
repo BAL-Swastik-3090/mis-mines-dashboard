@@ -25,7 +25,6 @@ import {
   AlertTriangle, ArrowDownUp, CalendarDays, ChevronLeft, ChevronRight,
   Download, Search, TrendingDown, X,
 } from "lucide-react";
-import ColumnFilter, { optionsFrom, matches } from "./ColumnFilter";
 import HoverCard, { CardBody, CardHead, CardNote, Fact } from "./HoverCard";
 import { toDisplay } from "./DateField";
 import { Button, Card, CardHeader, Chip, StatBar, type Tone } from "./ui";
@@ -162,10 +161,14 @@ function DayCard({ row, on, person, quiet }: {
   );
 }
 
-export default function ActivityMatrix({ rows, days }: { rows: Row[]; days: string[] }) {
+export default function ActivityMatrix({ rows, days, narrowed: narrowedAbove }: {
+  /** Already narrowed by the screen's own filter bar: plant, contractor,
+   *  department and trade are decided once above and apply to both views. */
+  rows: Row[];
+  days: string[];
+  narrowed?: boolean;
+}) {
   const [query, setQuery] = useState("");
-  const [by, setBy] = useState({ trade: "", employer: "", department: "" });
-  const set = (k: keyof typeof by) => (v: string) => setBy((b) => ({ ...b, [k]: v }));
   const [order, setOrder] = useState<"name" | "irregular" | "quiet">("name");
   const [page, setPage] = useState(0);
   const [perPage, setPerPage] = useState(20);
@@ -218,18 +221,9 @@ export default function ActivityMatrix({ rows, days }: { rows: Row[]; days: stri
     return new Set(done.filter((_, i) => single[i] >= Math.max(8, median * 4)));
   }, [rows, days]);
 
-  const menus = useMemo(() => ({
-    trade: optionsFrom(people, (p) => p.trade, (v) => v, "No trade set"),
-    employer: optionsFrom(people, (p) => p.employer, (v) => v, null),
-    department: optionsFrom(people, (p) => p.department, (v) => v, "Not posted"),
-  }), [people]);
-
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     const out = people.filter((p) => {
-      if (!matches(p.trade, by.trade)) return false;
-      if (!matches(p.employer, by.employer)) return false;
-      if (!matches(p.department, by.department)) return false;
       if (!q) return true;
       return [p.name, p.emp_no, p.trade].some((v) => (v ?? "").toLowerCase().includes(q));
     });
@@ -237,12 +231,12 @@ export default function ActivityMatrix({ rows, days }: { rows: Row[]; days: stri
       order === "irregular" ? b.single - a.single || a.name.localeCompare(b.name)
       : order === "quiet" ? b.none - a.none || a.name.localeCompare(b.name)
       : a.name.localeCompare(b.name));
-  }, [people, by, query, order]);
+  }, [people, query, order]);
 
   const all = perPage === 0;
   const pages = all ? 1 : Math.max(1, Math.ceil(filtered.length / perPage));
   const shown = all ? filtered : filtered.slice(page * perPage, (page + 1) * perPage);
-  const narrowed = Object.values(by).some(Boolean) || Boolean(query.trim());
+  const narrowed = Boolean(narrowedAbove) || Boolean(query.trim());
 
   const totals = (s: Row["state"]) => rows.filter((r) => r.state === s).length;
   const workingDays = days.filter((d) => !quiet.has(d)).length;
@@ -362,22 +356,9 @@ export default function ActivityMatrix({ rows, days }: { rows: Row[]; days: stri
             </span>
           </span>
           <span className="flex-1" />
-          <span className="flex flex-wrap items-center gap-2">
-            <ColumnFilter variant="control" label="Trade" allLabel="Any trade"
-              value={by.trade} options={menus.trade} onChange={(v) => { set("trade")(v); setPage(0); }} />
-            {menus.department.length > 1 && (
-              <ColumnFilter variant="control" label="Department" allLabel="Any department"
-                value={by.department} options={menus.department}
-                onChange={(v) => { set("department")(v); setPage(0); }} />
-            )}
-            {narrowed && (
-              <button type="button"
-                onClick={() => { setBy({ trade: "", employer: "", department: "" }); setQuery(""); }}
-                className="inline-flex items-center gap-1 text-[11.5px] font-semibold
-                           text-gold-dark hover:underline">
-                <X className="w-3 h-3" /> Clear
-              </button>
-            )}
+          <span className="text-[11px] text-txt-light">
+            Plant, contractor, department and trade are set above, and apply to
+            both views.
           </span>
         </div>
 
