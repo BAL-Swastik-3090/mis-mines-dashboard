@@ -12,13 +12,17 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Search, Link2, Trash2, Check, Loader2, Radio, ChevronDown, ChevronRight,
   Cpu, Zap, Plus, Building2, X, Rows3, LayoutGrid, CircleSlash, Gauge,
-  SlidersHorizontal, Layers,
+  SlidersHorizontal, Layers, Download, Upload, CheckSquare,
 } from "lucide-react";
 import api from "@/lib/api";
-import ColumnFilter, { optionsFrom, SortHeader, type SortDir } from "./ColumnFilter";
+import ColumnFilter, {
+  optionsFrom, matches, SortHeader, type SortDir,
+} from "./ColumnFilter";
 import CommentThread from "@/components/comments/CommentThread";
 import { useAuth } from "@/contexts/useAuth";
 import AssetForm from "./AssetForm";
+import ImportDialog from "./ImportDialog";
+import { toCsv, download } from "./spreadsheet";
 import {
   Alert, Button, Card, CardHeader, Chip, EmptyRow, StatBar, Td, Th, TONE_DOT,
   inputClass, type Tone,
@@ -126,6 +130,26 @@ function atStage(a: { status: string }, stage: string): boolean {
 type SortKey = "machine" | "type" | "makemodel" | "owner" | "linked"
              | "changed" | "status";
 
+/**
+ * Who owns a machine, decided once.
+ *
+ * The cell used to read `a.owner ?? "Hired"`, so a hired machine whose owner
+ * was never recorded displayed a confident "Hired" — a word that repeats the
+ * Ownership column and answers nothing. Worse, the Owner filter was built
+ * from the raw owner field, which is null on every machine BAL owns: the menu
+ * listed three contractors totalling 17 rows out of 123 and offered no way to
+ * ask for our own machines at all.
+ *
+ * Cell, filter menu, sort and grouping now all read this, so the thing you can
+ * see is the thing you can filter to.
+ */
+function ownerOf(a: Asset): { value: string; missing: boolean } {
+  if (a.ownership !== "HIRED") return { value: "BAL", missing: false };
+  const name = (a.owner ?? "").trim();
+  return name ? { value: name, missing: false }
+              : { value: "Hired, owner not recorded", missing: true };
+}
+
 /** SCREAMING_SNAKE is how the database says it and not how anybody reads it. */
 function titleCase(v: string): string {
   return v.replace(/_/g, " ").toLowerCase().replace(/^./, (c) => c.toUpperCase());
@@ -167,8 +191,9 @@ function groupOf(a: Asset, key: GroupKey): { value: string; tone: Tone } {
       return { value: STAGE_LABEL[a.status] ?? titleCase(a.status),
                tone: STATUS_TONE[a.status] ?? "slate" };
     case "owner": {
-      const v = a.ownership === "HIRED" ? (a.owner || "Hired, owner not recorded") : "BAL";
-      return { value: v, tone: v === "BAL" ? "slate" : hueFor(v) };
+      const { value, missing } = ownerOf(a);
+      return { value,
+               tone: missing ? "rose" : value === "BAL" ? "slate" : hueFor(value) };
     }
     case "make":
       return { value: a.make || "Make not recorded", tone: hueFor(a.make || "") };
@@ -240,6 +265,13 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
   // Clicking the unregistered figure should take you to the unregistered list,
   // not merely inform you that it exists.
   const queue = React.useRef<HTMLDivElement>(null);
+  // Which machines are picked out. Kept as ids rather than as rows, so a
+  // selection survives the list being re-sorted, re-filtered or reloaded.
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  // Where the last click landed, so shift-click can mean "and everything
+  // between", which is what anybody who has used a list expects it to mean.
+  const anchor = React.useRef<number | null>(null);
+  const [importing, setImporting] = useState(false);
   const set = (k: keyof typeof by) => (v: string) => setBy((b) => ({ ...b, [k]: v }));
   const clearAll = () => {
     setBy({ type: "", owner: "", make: "", model: "", linked: "",
@@ -273,11 +305,13 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
     [assets, stage]);
 
   const menus = React.useMemo(() => ({
-    type: optionsFrom(pool, (a) => a.asset_type),
-    category: optionsFrom(pool, (a) => a.category, titleCase),
-    fuel: optionsFrom(pool, (a) => a.fuel_type, titleCase),
-    approval: optionsFrom(pool, (a) => a.approval_status, titleCase),
-    owner: optionsFrom(pool, (a) => a.owner),
+    type: optionsFrom(pool, (a) => a.asset_type, (v) => v, "No type set"),
+    category: optionsFrom(pool, (a) => a.category, titleCase, "Uncategorised"),
+    fuel: optionsFrom(pool, (a) => a.fuel_type, titleCase, "Not recorded"),
+    approval: optionsFrom(pool, (a) => a.approval_status, titleCase, null),
+    // Derived, not raw: every machine has an owner in the sense people mean,
+    // and the ones whose contractor is missing are worth being able to list.
+    owner: optionsFrom(pool, (a) => ownerOf(a).value, (v) => v, null),
     make: optionsFrom(pool, (a) => a.make),
     model: optionsFrom(pool, (a) => a.model),
     linked: [
@@ -335,13 +369,13 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
     const q = query.trim().toLowerCase();
     return assets.filter((a) => {
       if (!atStage(a, stage)) return false;
-      if (by.type && a.asset_type !== by.type) return false;
-      if (by.category && (a.category ?? "") !== by.category) return false;
-      if (by.fuel && (a.fuel_type ?? "") !== by.fuel) return false;
-      if (by.approval && (a.approval_status ?? "") !== by.approval) return false;
-      if (by.owner && (a.owner ?? "") !== by.owner) return false;
-      if (by.make && (a.make ?? "") !== by.make) return false;
-      if (by.model && (a.model ?? "") !== by.model) return false;
+      if (!matches(a.asset_type, by.type)) return false;
+      if (!matches(a.category, by.category)) return false;
+      if (!matches(a.fuel_type, by.fuel)) return false;
+      if (!matches(a.approval_status, by.approval)) return false;
+      if (by.owner && ownerOf(a).value !== by.owner) return false;
+      if (!matches(a.make, by.make)) return false;
+      if (!matches(a.model, by.model)) return false;
       if (by.linked === "LINKED" && !a.alias_count) return false;
       if (by.linked === "NONE" && a.alias_count) return false;
       if (propulsion === "EV" && a.propulsion !== "EV" && a.propulsion !== "HYBRID") return false;
@@ -363,8 +397,7 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
         case "makemodel": return [a.make, a.model].filter(Boolean).join(" ").toLowerCase();
         // Our own machines group under one heading rather than scattering
         // through the contractors alphabetically.
-        case "owner":     return a.ownership === "HIRED"
-                                 ? (a.owner ?? "").toLowerCase() : "bal";
+        case "owner":     return ownerOf(a).value.toLowerCase();
         case "linked":    return a.alias_count ?? 0;
         case "changed":   return new Date(a.updated_at ?? a.created_at ?? 0).getTime();
         case "status":    return STAGE_RANK[a.status] ?? 99;
@@ -411,6 +444,81 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
     return out;
   }, [sorted, group]);
 
+  // ── picking machines out ──────────────────────────────────────────────
+  // A selection only ever means rows you can see. Filtering the list down and
+  // then acting on something scrolled out of existence is the bug this avoids.
+  const visible = useMemo(() => sections.flatMap((x) => x.rows), [sections]);
+  const pickedHere = useMemo(
+    () => visible.filter((a) => picked.has(a.asset_id)), [visible, picked]);
+  const allPicked = visible.length > 0 && pickedHere.length === visible.length;
+
+  const pick = (a: Asset, shift: boolean) => {
+    setPicked((was) => {
+      const next = new Set(was);
+      const at = visible.findIndex((r) => r.asset_id === a.asset_id);
+      const from = anchor.current === null
+        ? at : visible.findIndex((r) => r.asset_id === anchor.current);
+      // Shift extends from the last one clicked, and the whole range takes
+      // the state the clicked row is moving to — so dragging back over a
+      // range you just picked un-picks it.
+      const span = shift && from >= 0 && at >= 0
+        ? visible.slice(Math.min(from, at), Math.max(from, at) + 1)
+        : [a];
+      const turningOn = !was.has(a.asset_id);
+      for (const r of span) {
+        if (turningOn) next.add(r.asset_id); else next.delete(r.asset_id);
+      }
+      return next;
+    });
+    anchor.current = a.asset_id;
+  };
+
+  const pickAll = () => {
+    setPicked(allPicked ? new Set() : new Set(visible.map((a) => a.asset_id)));
+    anchor.current = null;
+  };
+
+  // A selection of rows that are no longer on screen would act on things the
+  // person cannot see, so narrowing the list drops whatever fell out of it.
+  useEffect(() => {
+    setPicked((was) => {
+      if (was.size === 0) return was;
+      const here = new Set(visible.map((a) => a.asset_id));
+      const kept = [...was].filter((id) => here.has(id));
+      return kept.length === was.size ? was : new Set(kept);
+    });
+  }, [visible]);
+
+  // ── out to a spreadsheet ──────────────────────────────────────────────
+  // The headings the importer reads back, so a register exported, corrected in
+  // Excel and sent straight back needs nobody to map anything.
+  const exportRows = (rows: Asset[]) => {
+    const headings = ["Machine", "Reference", "Name", "Registration", "Type",
+                      "Category", "Make", "Model", "Owner", "Ownership",
+                      "Status", "Approval", "Propulsion", "Fuel",
+                      "Linked systems", "Changed", "Changed by"];
+    download(toCsv(headings, rows.map((a) => [
+      a.fleet_code, a.asset_ref ?? "", a.nickname ?? "", a.registration_no ?? "",
+      a.asset_type ?? "", a.category ?? "", a.make ?? "", a.model ?? "",
+      ownerOf(a).missing ? "" : ownerOf(a).value,
+      a.ownership === "HIRED" ? "Hired" : "Own",
+      STAGE_LABEL[a.status] ?? a.status,
+      titleCase(a.approval_status ?? ""),
+      a.propulsion === "EV" ? "Electric" : a.propulsion === "HYBRID" ? "Hybrid" : "",
+      a.fuel_type ?? "", a.alias_systems ?? "",
+      // The date rather than "changed today", because a spreadsheet outlives
+      // the day it was taken on.
+      (a.updated_at ?? a.created_at ?? "").slice(0, 10),
+      a.last_changed_by ?? "",
+    ])), `fleet-register-${new Date().toISOString().slice(0, 10)}.csv`);
+    setNotice(`${rows.length} machine${rows.length === 1 ? "" : "s"} exported.`);
+  };
+
+  // A filter set to BLANK is the NUL character, which renders as nothing at
+  // all. The chip has to say what the menu said.
+  const said = (menu: { value: string; label: string }[], v: string) =>
+    menu.find((o) => o.value === v)?.label ?? v;
+
   // What is currently narrowing the list, each one removable on its own. The
   // filters live in the column headings, which is the right place to set them
   // and a poor place to notice five of them at once.
@@ -421,14 +529,18 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
       clear: () => setStage("IN_SERVICE") }] : []),
     ...(propulsion ? [{ label: propulsion === "EV" ? "Electric" : "Not electric",
                         clear: () => setPropulsion("") }] : []),
-    ...(by.category ? [{ label: titleCase(by.category),
+    ...(by.category ? [{ label: said(menus.category, by.category),
                          clear: () => set("category")("") }] : []),
-    ...(by.type   ? [{ label: by.type,  clear: () => set("type")("") }] : []),
-    ...(by.fuel   ? [{ label: titleCase(by.fuel), clear: () => set("fuel")("") }] : []),
-    ...(by.approval ? [{ label: titleCase(by.approval),
+    ...(by.type   ? [{ label: said(menus.type, by.type),
+                       clear: () => set("type")("") }] : []),
+    ...(by.fuel   ? [{ label: said(menus.fuel, by.fuel),
+                       clear: () => set("fuel")("") }] : []),
+    ...(by.approval ? [{ label: said(menus.approval, by.approval),
                          clear: () => set("approval")("") }] : []),
-    ...(by.make   ? [{ label: by.make,  clear: () => set("make")("") }] : []),
-    ...(by.model  ? [{ label: by.model, clear: () => set("model")("") }] : []),
+    ...(by.make   ? [{ label: said(menus.make, by.make),
+                       clear: () => set("make")("") }] : []),
+    ...(by.model  ? [{ label: said(menus.model, by.model),
+                       clear: () => set("model")("") }] : []),
     ...(by.owner  ? [{ label: by.owner, clear: () => set("owner")("") }] : []),
     ...(by.linked ? [{ label: by.linked === "LINKED" ? "Linked to another system"
                               : "Not linked yet",
@@ -497,6 +609,13 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
 
   return (
     <div className="space-y-4">
+      {importing && (
+        <ImportDialog onClose={() => setImporting(false)}
+          onDone={(summary) => {
+            setImporting(false); setNotice(summary);
+            setPicked(new Set()); void load(); onChanged?.();
+          }} />
+      )}
       {error && <Alert tone="error">{error}</Alert>}
       {notice && (
         <Alert tone="success"><span className="inline-flex items-center gap-2"><Check className="w-4 h-4" />{notice}</span></Alert>
@@ -599,6 +718,18 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
                   className="bg-bg-base border border-border rounded-lg pl-8 pr-3 py-1.5 text-[12px]
                              text-txt-primary placeholder:text-txt-light focus:outline-none focus:border-gold w-[180px]" />
               </div>
+              <Button size="sm" variant="secondary"
+                onClick={() => exportRows(visible)}
+                disabled={visible.length === 0}
+                title="Download this list as a spreadsheet, filters and order and all">
+                <Download className="w-3.5 h-3.5" /> Export
+              </Button>
+              {mayManage && (
+                <Button size="sm" variant="secondary" onClick={() => setImporting(true)}
+                  title="Read a spreadsheet in as drafts">
+                  <Upload className="w-3.5 h-3.5" /> Import
+                </Button>
+              )}
               {mayManage && (
                 <Button size="sm" variant="primary" onClick={() => startRegister()}>
                   <Plus className="w-3.5 h-3.5" /> Add
@@ -606,6 +737,36 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
               )}
             </>
           } />
+        {/* What you can do with what you picked. It replaces nothing and
+            covers nothing — it appears above the list when there is a
+            selection and is gone the moment there is not. */}
+        {picked.size > 0 && (
+          <div className="px-5 py-2.5 border-b border-border-light bg-navy/[0.04]
+                          flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 text-[12.5px]
+                             font-semibold text-navy">
+              <CheckSquare className="w-3.5 h-3.5 text-gold-dark" />
+              {picked.size} selected
+            </span>
+            {!allPicked && (
+              <button type="button" onClick={pickAll}
+                className="text-[11.5px] font-semibold text-gold-dark hover:underline
+                           underline-offset-2">
+                Select all {visible.length}
+              </button>
+            )}
+            <span className="flex-1" />
+            <Button size="sm" variant="secondary" onClick={() => exportRows(pickedHere)}>
+              <Download className="w-3.5 h-3.5" /> Export these
+            </Button>
+            <button type="button" onClick={() => { setPicked(new Set()); anchor.current = null; }}
+              className="inline-flex items-center gap-1 text-[11.5px] font-semibold
+                         text-txt-muted hover:text-navy">
+              <X className="w-3 h-3" /> Clear
+            </button>
+          </div>
+        )}
+
         {/* The questions that have no column of their own, plus the control
             that decides how many lists this is. Kept on one line above the
             table rather than folded into a "Filters" drawer: a filter nobody
@@ -688,12 +849,19 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
 
         {view === "cards" ? (
           <CardGrid sections={sections} grouped={Boolean(group)}
-            onOpen={setEditingId} empty={assets.length === 0} />
+            onOpen={setEditingId} empty={assets.length === 0}
+            picked={picked} onPick={pick} />
         ) : (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[720px]">
             <thead>
               <tr>
+                <Th className="w-9 pr-0">
+                  <input type="checkbox" aria-label="Select every machine in this list"
+                    title={allPicked ? "Clear the selection" : "Select all in this list"}
+                    checked={allPicked} onChange={pickAll}
+                    className="accent-gold w-3.5 h-3.5 align-middle cursor-pointer" />
+                </Th>
                 <Th className="w-8" />
                 <Th><SortHeader label="Machine" sort={sort.key === "machine" ? sort.dir : null}
                       onSort={sortBy("machine")} sortLabels={SORT_WORDS.machine} /></Th>
@@ -754,7 +922,7 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
             </thead>
             <tbody>
               {sorted.length === 0 && (
-                <EmptyRow colSpan={8}>
+                <EmptyRow colSpan={9}>
                   {assets.length === 0
                     ? "No machine registered yet — start from the list above, those are transmitting already."
                     : "No machine matches that search."}
@@ -764,7 +932,7 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
                 <React.Fragment key={sec.key || "_all"}>
                 {group && (
                   <tr>
-                    <td colSpan={8} className="px-4 py-2 bg-bg-light border-y border-border">
+                    <td colSpan={9} className="px-4 py-2 bg-bg-light border-y border-border">
                       <span className="inline-flex items-center gap-2">
                         <span className={`w-2.5 h-2.5 rounded-sm ${TONE_DOT[sec.tone]}`} />
                         <span className="font-semibold text-[12.5px] text-navy">{sec.label}</span>
@@ -777,7 +945,15 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
                 )}
                 {sec.rows.map((a) => (
                 <React.Fragment key={a.asset_id}>
-                  <tr className="hover:bg-bg-light transition-colors">
+                  <tr className={`transition-colors ${picked.has(a.asset_id)
+                    ? "bg-gold/[0.06]" : "hover:bg-bg-light"}`}>
+                    <Td className="pr-0">
+                      <input type="checkbox" checked={picked.has(a.asset_id)}
+                        aria-label={`Select ${a.fleet_code}`}
+                        onChange={() => undefined}
+                        onClick={(e) => pick(a, e.shiftKey)}
+                        className="accent-gold w-3.5 h-3.5 align-middle cursor-pointer" />
+                    </Td>
                     <Td className="pr-0">
                       <button onClick={() => openIdentities(a.asset_id)} aria-label="Show identities"
                         className="text-txt-light hover:text-navy">
@@ -796,15 +972,6 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
                             <span className="text-violet font-bold">{a.asset_ref}</span>
                           )}
                           <span>{a.fleet_code}{a.registration_no ? ` · ${a.registration_no}` : ""}</span>
-                        </div>
-                        {/* How stale this row is. A register that cannot say
-                            when a machine was last touched asks people to
-                            trust every row equally, and a tipper last edited
-                            in 2019 has not earned the same confidence as one
-                            edited this morning. */}
-                        <div className="text-[10.5px] text-txt-light/80 mt-0.5">
-                          {changedWhen(a.updated_at ?? a.created_at)}
-                          {a.last_changed_by ? ` by ${a.last_changed_by}` : ""}
                         </div>
                       </button>
                     </Td>
@@ -826,11 +993,7 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
                     <Td className="hidden md:table-cell text-txt-muted">
                       {[a.make, a.model].filter(Boolean).join(" ") || "—"}
                     </Td>
-                    <Td>
-                      {a.ownership === "HIRED"
-                        ? <Chip tone="amber" dot={false}>{a.owner ?? "Hired"}</Chip>
-                        : <span className="text-txt-muted">BAL</span>}
-                    </Td>
+                    <Td><OwnerCell a={a} /></Td>
                     <Td>
                       {a.alias_count === 0
                         ? <Chip tone="amber">none</Chip>
@@ -867,7 +1030,7 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
 
                   {expanded === a.asset_id && (
                     <tr className="bg-bg-light">
-                      <Td /><Td colSpan={7} className="pb-4">
+                      <Td /><Td /><Td colSpan={7} className="pb-4">
                         <div className="text-[10.5px] font-bold uppercase tracking-[.12em] text-txt-light mb-2 font-condensed">
                           What other systems call this machine
                         </div>
@@ -979,9 +1142,10 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
  * and what it runs on in the middle, who owns it and when it last moved along
  * the bottom.
  */
-function CardGrid({ sections, grouped, onOpen, empty }: {
+function CardGrid({ sections, grouped, onOpen, empty, picked, onPick }: {
   sections: Section[]; grouped: boolean;
   onOpen: (id: number) => void; empty: boolean;
+  picked: Set<number>; onPick: (a: Asset, shift: boolean) => void;
 }) {
   if (sections.every((s) => s.rows.length === 0)) {
     return (
@@ -1006,11 +1170,22 @@ function CardGrid({ sections, grouped, onOpen, empty }: {
           )}
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
       {sec.rows.map((a) => (
-        <button key={a.asset_id} type="button" onClick={() => onOpen(a.asset_id)}
-          className="text-left rounded-xl border border-border-light bg-bg-base p-3.5
-                     shadow-sm hover:border-gold hover:shadow-md hover:-translate-y-px
-                     focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/40
-                     transition-all flex flex-col gap-2.5">
+        // The checkbox sits over the card rather than inside it: a card is a
+        // button, and a checkbox inside a button is neither valid nor
+        // clickable in the way people expect.
+        <div key={a.asset_id} className="relative">
+        <input type="checkbox" checked={picked.has(a.asset_id)}
+          aria-label={`Select ${a.fleet_code}`}
+          onChange={() => undefined}
+          onClick={(e) => { e.stopPropagation(); onPick(a, e.shiftKey); }}
+          className="absolute top-3 left-3 z-10 accent-gold w-3.5 h-3.5 cursor-pointer" />
+        <button type="button" onClick={() => onOpen(a.asset_id)}
+          className={`w-full h-full text-left rounded-xl border bg-bg-base p-3.5 pl-9
+                      shadow-sm hover:border-gold hover:shadow-md hover:-translate-y-px
+                      focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/40
+                      transition-all flex flex-col gap-2.5
+                      ${picked.has(a.asset_id)
+                        ? "border-gold ring-1 ring-gold/25" : "border-border-light"}`}>
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
               <div className="font-semibold text-navy text-[13.5px] truncate">
@@ -1040,9 +1215,7 @@ function CardGrid({ sections, grouped, onOpen, empty }: {
                 <Zap className="w-3 h-3" />{a.propulsion === "EV" ? "EV" : "Hybrid"}
               </Chip>
             )}
-            {a.ownership === "HIRED"
-              ? <Chip tone="amber" dot={false}>{a.owner ?? "Hired"}</Chip>
-              : <Chip tone="slate" dot={false}>BAL</Chip>}
+            <OwnerCell a={a} />
           </div>
 
           {/* A dash rather than nothing: a card with a missing line reads as a
@@ -1064,12 +1237,29 @@ function CardGrid({ sections, grouped, onOpen, empty }: {
             </span>
           </div>
         </button>
+        </div>
       ))}
           </div>
         </section>
       ))}
     </div>
   );
+}
+
+/** Who owns it, in one place so the table and the cards cannot drift apart.
+ *  A hired machine with no contractor recorded is shown as the gap it is
+ *  rather than as the word "Hired", which was true and told you nothing. */
+function OwnerCell({ a }: { a: Asset }) {
+  const { value, missing } = ownerOf(a);
+  if (value === "BAL") return <Chip tone="slate" dot={false}>BAL</Chip>;
+  if (missing) {
+    return (
+      <Chip tone="rose" dot={false} title="Hired, but no contractor is recorded against it">
+        owner missing
+      </Chip>
+    );
+  }
+  return <Chip tone="amber" dot={false}>{value}</Chip>;
 }
 
 function AliasAdder({ onAdd }: { onAdd: (system: string, code: string) => void }) {
