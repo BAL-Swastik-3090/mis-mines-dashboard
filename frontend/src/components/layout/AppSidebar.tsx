@@ -58,7 +58,7 @@ const OPERATIONS_ITEM: NavItem =
    worked yet, which is why it is its own page and its own permission rather
    than a sixth tab on the shift board. */
 const WORKFORCE_ITEM: NavItem =
-  { kind: "page", id: "workforce", label: "Workforce", icon: CalendarRange };
+  { kind: "page", id: "workforce", label: "Workforce Planning", icon: CalendarRange };
 
 const ITEM_BASE =
   "w-full flex items-center gap-3 px-3 py-2.5 transition-colors duration-150 relative group";

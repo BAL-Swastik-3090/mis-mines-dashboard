@@ -15,6 +15,7 @@
  * these components instead.
  */
 import React from "react";
+import HoverCard, { CardHead, CardNote } from "./HoverCard";
 
 /* ── Tone system ─────────────────────────────────────────────────────────── */
 export type Tone =
@@ -44,29 +45,47 @@ export const TONE_DOT: Record<Tone, string> =
 /* ── Page header ─────────────────────────────────────────────────────────── */
 /** Two-tone title, subtitle, and the page's primary actions on the right. */
 export function PageHeader({ lead, rest, subtitle, tone = "gold", actions, icon: Icon,
-                             joined = false }: {
+                             joined = false, tuck = false }: {
   lead: string; rest?: string; subtitle?: string; tone?: Tone;
   actions?: React.ReactNode; icon?: React.ElementType;
   /** The two halves are one word. "MineHub Platform" is two and wants the
    *  gap; "Manpower" is one, and rendering it as "Man power" makes the
    *  heading look like a mistake. */
   joined?: boolean;
+  /** Put the subtitle behind the icon instead of under the title.
+   *
+   *  A three-line explanation of what a screen is for is worth reading once
+   *  and then costs sixty vertical pixels every time anybody opens it. Tucked
+   *  away it is still there for whoever needs it and the table starts higher
+   *  for everybody else. */
+  tuck?: boolean;
 }) {
   const t = TONE[tone];
+  const badge = Icon && (
+    <span className={`shrink-0 w-11 h-11 rounded-xl ${t.bg} ring-1 ${t.ring}
+                      flex items-center justify-center mt-0.5
+                      ${tuck && subtitle ? "cursor-help" : ""}`}>
+      <Icon className={`w-5 h-5 ${t.text}`} />
+    </span>
+  );
   return (
     <div className="flex flex-wrap items-end justify-between gap-4 pb-1">
       <div className="min-w-0 flex items-start gap-3.5">
-        {Icon && (
-          <span className={`shrink-0 w-11 h-11 rounded-xl ${t.bg} ring-1 ${t.ring}
-                            flex items-center justify-center mt-0.5`}>
-            <Icon className={`w-5 h-5 ${t.text}`} />
-          </span>
-        )}
+        {tuck && subtitle && Icon ? (
+          <HoverCard width={320} card={
+            <>
+              <CardHead title={`${lead}${rest ? (joined ? "" : " ") + rest : ""}`} />
+              <CardNote>{subtitle}</CardNote>
+            </>
+          }>{badge}</HoverCard>
+        ) : badge}
         <div className="min-w-0">
           <h1 className="font-condensed font-extrabold text-[30px] leading-none tracking-tight text-navy">
             {lead}{rest && <span className={`${joined ? "" : "ml-2"} ${t.text}`}>{rest}</span>}
           </h1>
-          {subtitle && <p className="text-[13px] text-txt-muted mt-1.5 max-w-[68ch]">{subtitle}</p>}
+          {subtitle && !tuck && (
+            <p className="text-[13px] text-txt-muted mt-1.5 max-w-[68ch]">{subtitle}</p>
+          )}
         </div>
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}

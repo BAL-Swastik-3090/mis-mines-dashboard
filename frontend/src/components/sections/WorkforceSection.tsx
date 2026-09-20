@@ -105,8 +105,8 @@ export default function WorkforceSection() {
   return (
     <div className="py-6 max-w-[1500px] space-y-4">
       <PageHeader
-        lead="Work" rest="force" icon={Users} tone="violet"
-        subtitle={active?.hint}
+        lead="Workforce" rest="Planning" icon={Users} tone="violet"
+        subtitle={active?.hint} tuck
       />
 
       {/* The day, on every tab. Every decision here is made against it. */}

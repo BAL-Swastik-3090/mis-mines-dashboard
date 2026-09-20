@@ -84,7 +84,7 @@ export default function ManpowerSection() {
       {!formOpen && (
         <PageHeader
           lead="Man" rest="power" joined tone="emerald" icon={HardHat}
-          subtitle={active?.hint}
+          subtitle={active?.hint} tuck
           actions={
             tab === "register" && mayManage ? (
               <Button variant="primary" size="lg" onClick={() => setAddOpen(true)}>

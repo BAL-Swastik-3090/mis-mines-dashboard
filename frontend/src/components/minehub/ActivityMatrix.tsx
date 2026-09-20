@@ -26,6 +26,7 @@ import {
   Download, Search, TrendingDown, X,
 } from "lucide-react";
 import ColumnFilter, { optionsFrom, matches } from "./ColumnFilter";
+import HoverCard, { CardBody, CardHead, CardNote, Fact } from "./HoverCard";
 import { toDisplay } from "./DateField";
 import { Button, Card, CardHeader, Chip, StatBar, type Tone } from "./ui";
 import { toCsv, download } from "./spreadsheet";
@@ -55,7 +56,7 @@ const CELL: Record<Row["state"], { short: string; cls: string; label: string }> 
 };
 
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const PER_PAGE = 20;
+const PAGE_SIZES = [10, 20, 50, 100];
 
 /** Today is half a day. Everyone on shift is still inside and has not punched
  *  out, so it looks like a quiet day with a broken reader — and it is neither.
@@ -65,12 +66,98 @@ const settled = (days: string[]) => days.filter((d) => d < TODAY);
 
 const hhmm = (iso: string | null) => (iso ? iso.slice(11, 16) : "");
 
+/** 456 minutes as 7h 36m. */
+function spanOf(mins: number): string {
+  const h = Math.floor(mins / 60);
+  return h ? `${h}h ${String(mins % 60).padStart(2, "0")}m` : `${mins}m`;
+}
+
+/** Everything the readers know about one person on one day.
+ *
+ *  A punch record is a small table, not a sentence: two times, two gate names,
+ *  a span and a state. The browser's own tooltip could hold none of that,
+ *  which is why this exists. */
+function DayCard({ row, on, person, quiet }: {
+  row: Row | undefined;
+  on: string;
+  person: { name: string; emp_no: string; trade: string | null;
+            employer: string | null; department: string | null };
+  quiet: boolean;
+}) {
+  const dow = DOW[new Date(on).getDay()];
+  const state = row?.state ?? "NOT_CLOCKED";
+  const look = CELL[state];
+  const isToday = on === TODAY;
+
+  return (
+    <>
+      <CardHead
+        title={person.name}
+        sub={`${person.emp_no}${person.trade ? ` · ${person.trade}` : ""}`}
+        right={
+          <span className={`inline-flex items-center rounded-full px-2 py-0.5 ring-1
+                            text-[10.5px] font-bold ${look.cls}`}>
+            {look.label}
+          </span>
+        } />
+      <CardBody>
+        <Fact label="Day" value={`${dow} ${toDisplay(on)}`}
+          sub={isToday ? "today, still running" : quiet ? "site was quiet" : undefined} />
+
+        {row?.first_in ? (
+          <Fact label="In" value={hhmm(row.first_in)} sub={row.in_gate ?? "gate not recorded"}
+            tone="text-emerald" />
+        ) : (
+          <Fact label="In" value="—" sub="no punch in" tone="text-txt-light" />
+        )}
+
+        {row?.last_out ? (
+          <Fact label="Out" value={hhmm(row.last_out)} sub={row.out_gate ?? "gate not recorded"}
+            tone="text-rose" />
+        ) : (
+          <Fact label="Out" value="—"
+            sub={isToday && row?.first_in ? "still inside" : "no punch out"}
+            tone="text-txt-light" />
+        )}
+
+        {row?.minutes != null && (
+          <Fact label="Span" value={spanOf(row.minutes)}
+            sub="first in to last out, break included" />
+        )}
+        {row && row.punches > 0 && (
+          <Fact label="Punches" value={String(row.punches)}
+            sub={row.punches > 2 ? "more than the usual two" : "one in, one out"} />
+        )}
+        {(person.employer || person.department) && (
+          <Fact label="Posted" value={person.employer ?? "—"}
+            sub={person.department ?? undefined} />
+        )}
+      </CardBody>
+
+      {state === "NOT_CLOCKED" && (
+        <CardNote>
+          {quiet
+            ? "The whole site was quiet this day, so this is a rest day rather than anything about this person."
+            : "No punch either way. That is a gap in the record — it does not say they were absent."}
+        </CardNote>
+      )}
+      {(state === "IN_ONLY" || state === "OUT_ONLY") && !isToday && (
+        <CardNote>
+          One punch only. Worth checking whether the gate reader was working
+          before anybody is asked to explain it.
+        </CardNote>
+      )}
+    </>
+  );
+}
+
 export default function ActivityMatrix({ rows, days }: { rows: Row[]; days: string[] }) {
   const [query, setQuery] = useState("");
   const [by, setBy] = useState({ trade: "", employer: "", department: "" });
   const set = (k: keyof typeof by) => (v: string) => setBy((b) => ({ ...b, [k]: v }));
   const [order, setOrder] = useState<"name" | "irregular" | "quiet">("name");
   const [page, setPage] = useState(0);
+  const [perPage, setPerPage] = useState(20);
   const [open, setOpen] = useState<Row | null>(null);
 
   // One row per worker, their days keyed by date.
@@ -141,8 +228,8 @@ export default function ActivityMatrix({ rows, days }: { rows: Row[]; days: stri
       : a.name.localeCompare(b.name));
   }, [people, by, query, order]);
 
-  const pages = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
-  const shown = filtered.slice(page * PER_PAGE, (page + 1) * PER_PAGE);
+  const pages = Math.max(1, Math.ceil(filtered.length / perPage));
+  const shown = filtered.slice(page * perPage, (page + 1) * perPage);
   const narrowed = Object.values(by).some(Boolean) || Boolean(query.trim());
 
   const totals = (s: Row["state"]) => rows.filter((r) => r.state === s).length;
@@ -333,20 +420,20 @@ export default function ActivityMatrix({ rows, days }: { rows: Row[]; days: stri
                       <td key={d}
                         className={`border-b border-border-light p-[2px] text-center
                                     ${isQuiet ? "bg-slate-100/70" : ""}`}>
-                        <button type="button"
-                          onClick={() => c && c.punches > 0 && setOpen(c)}
-                          title={`${toDisplay(d)} — ${look.label}`
-                            + (c?.first_in ? `\nin ${hhmm(c.first_in)}` : "")
-                            + (c?.last_out ? `\nout ${hhmm(c.last_out)}` : "")
-                            + (c?.in_gate ? `\n${c.in_gate}` : "")}
-                          className={`w-[26px] h-[24px] rounded ring-1 text-[10px] font-bold
-                                      transition-transform hover:scale-110
-                                      ${state === "NOT_CLOCKED" && isQuiet
-                                        ? "bg-transparent ring-transparent text-txt-light/50"
-                                        : look.cls}
-                                      ${c && c.punches > 0 ? "cursor-pointer" : "cursor-default"}`}>
-                          {look.short}
-                        </button>
+                        <HoverCard width={288} card={
+                          <DayCard row={c} on={d} person={p} quiet={isQuiet} />
+                        }>
+                          <button type="button"
+                            onClick={() => c && c.punches > 0 && setOpen(c)}
+                            className={`w-[26px] h-[24px] rounded ring-1 text-[10px] font-bold
+                                        transition-transform hover:scale-110
+                                        ${state === "NOT_CLOCKED" && isQuiet
+                                          ? "bg-transparent ring-transparent text-txt-light/50"
+                                          : look.cls}
+                                        ${c && c.punches > 0 ? "cursor-pointer" : "cursor-default"}`}>
+                            {look.short}
+                          </button>
+                        </HoverCard>
                       </td>
                     );
                   })}
@@ -390,13 +477,28 @@ export default function ActivityMatrix({ rows, days }: { rows: Row[]; days: stri
           </table>
         </div>
 
-        {pages > 1 && (
-          <div className="px-4 py-2.5 border-t border-border-light flex items-center
-                          justify-between gap-2">
-            <span className="text-[11.5px] text-txt-muted">
-              {page * PER_PAGE + 1}–{Math.min((page + 1) * PER_PAGE, filtered.length)} of{" "}
-              {filtered.length}
+        {/* Always shown, because the page size is a control even when there
+            is only one page of results. */}
+        <div className="px-4 py-2.5 border-t border-border-light flex flex-wrap
+                        items-center justify-between gap-2">
+          <span className="flex flex-wrap items-center gap-3 text-[11.5px] text-txt-muted">
+            <span>
+              {filtered.length === 0 ? "Nobody to show"
+                : `${page * perPage + 1}\u2013${Math.min((page + 1) * perPage, filtered.length)} of ${filtered.length}`}
             </span>
+            <label className="inline-flex items-center gap-1.5">
+              Show
+              <select value={perPage}
+                onChange={(e) => { setPerPage(Number(e.target.value)); setPage(0); }}
+                className="bg-bg-base border border-border rounded-lg px-2 py-1
+                           text-[11.5px] font-semibold text-txt-secondary
+                           focus:outline-none focus:border-gold">
+                {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+              at a time
+            </label>
+          </span>
+          {pages > 1 && (
             <span className="flex items-center gap-1">
               <Button size="sm" variant="secondary" disabled={page === 0}
                 onClick={() => setPage((n) => n - 1)}>
@@ -410,8 +512,8 @@ export default function ActivityMatrix({ rows, days }: { rows: Row[]; days: stri
                 <ChevronRight className="w-3.5 h-3.5" />
               </Button>
             </span>
-          </div>
-        )}
+          )}
+        </div>
       </Card>
 
       {/* One cell, opened. */}

@@ -538,3 +538,12 @@ html, body {
    mode keeps working, and disappears while reading — a disabled bin icon on
    every row is clutter that tells the reader nothing. */
 [data-read="true"] fieldset button[aria-label="Remove"] { display: none; }
+
+/* Hover cards come in rather than appearing, which reads as deliberate at the
+   speed a pointer crosses a table. */
+/* Opacity only. A transform here would fight the one that flips a card above
+   its anchor when there is no room below it. */
+@keyframes cardIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}

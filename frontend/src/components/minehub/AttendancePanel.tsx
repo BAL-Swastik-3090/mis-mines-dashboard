@@ -25,6 +25,7 @@ import {
 import api from "@/lib/api";
 import ColumnFilter, { optionsFrom, matches, SortHeader, type SortDir } from "./ColumnFilter";
 import ActivityMatrix from "./ActivityMatrix";
+import HoverCard, { CardBody, CardHead, CardNote, Fact } from "./HoverCard";
 import DateField, { toDisplay } from "./DateField";
 import {
   Alert, Button, Card, CardHeader, Chip, EmptyRow, StatBar, Td, Th, type Tone,
@@ -417,7 +418,45 @@ export default function AttendancePanel() {
                           <Td className="tabular-nums whitespace-nowrap">{toDisplay(r.on_date)}</Td>
                           <Td className="font-mono text-[12px] font-bold text-violet">{r.emp_no}</Td>
                           <Td>
-                            <span className="font-semibold text-navy text-[12.5px]">{r.name}</span>
+                            <HoverCard width={288} card={
+                              <>
+                                <CardHead title={r.name}
+                                  sub={`${r.emp_no}${r.trade ? ` · ${r.trade}` : ""}`}
+                                  right={
+                                    <span className="text-[10.5px] font-bold text-txt-light">
+                                      {toDisplay(r.on_date)}
+                                    </span>
+                                  } />
+                                <CardBody>
+                                  <Fact label="In" value={hhmm(r.first_in) || "—"}
+                                    sub={r.in_gate ?? (r.first_in ? "gate not recorded" : "no punch in")}
+                                    tone={r.first_in ? "text-emerald" : "text-txt-light"} />
+                                  <Fact label="Out" value={hhmm(r.last_out) || "—"}
+                                    sub={r.out_gate ?? (r.running ? "still inside" : "no punch out")}
+                                    tone={r.last_out ? "text-rose" : "text-txt-light"} />
+                                  {r.minutes != null && (
+                                    <Fact label="Span" value={span(r.minutes)}
+                                      sub="first in to last out, break included" />
+                                  )}
+                                  <Fact label="Punches" value={String(r.punches)}
+                                    sub={r.devices ? `${r.devices} reader${r.devices === 1 ? "" : "s"}` : undefined} />
+                                  <Fact label="Posted" value={r.employer ?? "—"}
+                                    sub={[r.department, r.designation].filter(Boolean).join(" · ") || undefined} />
+                                  <Fact label="Reference" value={r.operator_ref ?? "—"} />
+                                </CardBody>
+                                {r.state === "NOT_CLOCKED" && (
+                                  <CardNote>
+                                    No punch either way. A gap in the record — it does not
+                                    say they were absent.
+                                  </CardNote>
+                                )}
+                              </>
+                            }>
+                              <span className="font-semibold text-navy text-[12.5px] cursor-help
+                                               decoration-dotted underline-offset-2 hover:underline">
+                                {r.name}
+                              </span>
+                            </HoverCard>
                             <span className="block text-[10.5px] font-mono text-txt-light">
                               {r.operator_ref}
                             </span>
