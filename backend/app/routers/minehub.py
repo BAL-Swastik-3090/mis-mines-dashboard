@@ -521,6 +521,10 @@ def update_asset(asset_id: int, request: Request, body: dict = Body(...),
 
     data = _clean(body)
     data.pop("fleet_code", None) if body.get("keep_code") else None
+    # Why the stage moved travels with the save but is not a field on the
+    # machine — it belongs to the stage it explains, on asset_lifecycle.
+    stage_reason = (body.get("stage_reason") or "").strip() or None
+    data.pop("stage_reason", None)
 
     changes: dict = {}
     for key, new_value in data.items():
@@ -560,8 +564,26 @@ def update_asset(asset_id: int, request: Request, body: dict = Body(...),
         + " WHERE asset_id = :id"
     ), {**data, "ver": version, "id": asset_id})
 
+    # A stage change is a decision with a date and a reason, not an edit to a
+    # column. The previous stage is closed and the new one opened, so the
+    # register can always say how a machine got where it is.
+    if "status" in changes:
+        db.execute(text("""
+            UPDATE asset_lifecycle SET ended_on = CURRENT_DATE
+            WHERE asset_id = :a AND ended_on IS NULL
+        """), {"a": asset_id})
+        db.execute(text("""
+            INSERT INTO asset_lifecycle (asset_id, stage, started_on, reason,
+                                         decided_by, recorded_by)
+            VALUES (:a, :s, CURRENT_DATE, :why, :by, :by)
+        """), {"a": asset_id, "s": changes["status"]["to"],
+               "why": stage_reason, "by": _actor(request)})
+        _activity(db, request, "ASSET_STAGE_CHANGED", asset_id=asset_id,
+                  payload={"from": changes["status"]["from"],
+                           "to": changes["status"]["to"], "reason": stage_reason})
+
     _revise(db, request, asset_id, version, "UPDATED", changes,
-            remarks=body.get("remarks_for_change"))
+            remarks=body.get("remarks_for_change") or stage_reason)
     _activity(db, request, "ASSET_UPDATED", asset_id=asset_id,
               payload={"version": version, "fields": sorted(changes.keys())})
     db.commit()

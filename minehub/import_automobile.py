@@ -60,6 +60,20 @@ SOURCE = Path(r"D:\Projects\Mines\files\automobile")
 # the status columns, mapped to the stages the register now holds. Anything
 # unrecognised is left for a person rather than forced into the nearest box.
 LIFECYCLE = [
+    # Read in order, and the first two exist to catch what the later rules
+    # would otherwise misread.
+    #
+    # "To be done Off Road" is a plan. The machine is still working until
+    # somebody takes it off, and filing it as OFF_ROAD hid two tippers from
+    # the register's default view — where nobody could find them to correct.
+    #
+    # Narrow to off road on purpose. "Scrap to be done" is a decision already
+    # taken with the scrapping pending, and suppressing that would lose a
+    # write-off.
+    (r"to be (done|made)\s*/?\s*off\s*road", None),
+    # "Off Road/ Running B/D" says running with a breakdown, which is the
+    # workshop rather than the end of the road.
+    (r"running\s*b/?d", "MAINTENANCE"),
     (r"cannibali", "CANNIBALISED"),
     (r"scrap", "SCRAPPED"),
     (r"off\s*road", "OFF_ROAD"),

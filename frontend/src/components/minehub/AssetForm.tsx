@@ -74,6 +74,19 @@ const docLabel = (code: string): string =>
 const docCode = (label: string): string =>
   DOC_TYPES.find(([, l]) => l.toLowerCase() === label.trim().toLowerCase())?.[0]
   ?? label.trim().toUpperCase().replace(/\s+/g, "_");
+/** Where a machine is in its life, in the mine's own words. Changing this is
+ *  a decision, not an edit — see migration 036. */
+const STAGES: [string, string][] = [
+  ["ACTIVE", "Working"],
+  ["MAINTENANCE", "In workshop"],
+  ["STANDBY", "Standby"],
+  ["IDLE", "Idle"],
+  ["OFF_ROAD", "Off road"],
+  ["CANNIBALISED", "Cannibalised"],
+  ["SCRAPPED", "Scrapped"],
+  ["DISPOSED", "Disposed"],
+];
+
 const SCHED_TYPES: [string, string][] = [
   ["SERVICE", "Service"], ["PREVENTIVE", "Preventive"], ["OIL_CHANGE", "Oil change"],
   ["INSPECTION", "Inspection"], ["OVERHAUL", "Overhaul"], ["TYRE_ROTATION", "Tyre rotation"],
@@ -413,6 +426,12 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   const typeName = types.find((t) => String(t.asset_type_id) === f.asset_type_id)?.name ?? "";
   const isHired = f.ownership === "HIRED";
 
+  // The stage only needs explaining when it actually moves. Asking for a
+  // reason on every save would train people to type a full stop.
+  const stageMoved = editing
+    && Boolean(loaded?.status)
+    && (f.status ?? "") !== String(loaded?.status ?? "");
+
   // The combobox speaks in names and the record stores an id, so the two are
   // kept in step here rather than by making either of them pretend.
   const contractorName = React.useMemo(() => {
@@ -511,6 +530,13 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   const raise = (msg: string) => { setNotice(null); setError(msg); };
 
   const submit = async (then: "stay" | "submit" = "stay"): Promise<boolean> => {
+    if (stageMoved && !(f.stage_reason ?? "").trim()) {
+      setInvalid(new Set(["stage_reason"]));
+      raise("Say why the stage changed. It is kept against the machine for as "
+        + "long as it exists, and it is the sentence somebody will be asked for.");
+      return false;
+    }
+
     // A moved date with no answer cannot be saved, because the two answers do
     // different things to the record and neither is a safe default. Guessing
     // would either lose last year's cover or invent a renewal nobody made.
@@ -1191,14 +1217,25 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
                 }} />
             </div>
           </Row>
-          <Row label="Status">
+          <Row label="Stage" required
+               hint="Where this machine is in its life. Moving it is recorded with a reason — the register has to be able to explain why a tipper stopped working">
             <select id="af-status" className={cellInput} value={f.status ?? "ACTIVE"}
               onChange={(e) => set("status", e.target.value)}>
-              {["ACTIVE", "MAINTENANCE", "STANDBY", "IDLE", "DISPOSED"].map((x) => (
-                <option key={x} value={x}>{x[0] + x.slice(1).toLowerCase()}</option>
+              {STAGES.map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
               ))}
             </select>
           </Row>
+          {stageMoved && (
+            <Row label="Why the stage changed" required
+                 invalid={invalid.has("stage_reason")}
+                 hint="Kept against the machine for as long as it exists. An auditor asking why it was scrapped is asking for this sentence">
+              <input id="af-stagewhy" className={cellInput}
+                value={f.stage_reason ?? ""}
+                placeholder="Engine seized; quote exceeds residual value"
+                onChange={(e) => set("stage_reason", e.target.value)} />
+            </Row>
+          )}
           <Row label="Meter reads in">
             <select id="af-ruom" className={cellInput} value={f.reading_uom ?? "HOURS"}
               onChange={(e) => set("reading_uom", e.target.value)}>

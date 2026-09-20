@@ -455,6 +455,23 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
                         ? <Chip tone="amber">none</Chip>
                         : <span className="text-[11px] font-mono text-txt-muted">{a.alias_systems}</span>}
                     </Td>
+                    {/* Its own column rather than a third line under the
+                        machine code. How stale a row is deserves to be
+                        scannable down the page — a register that cannot say
+                        when a machine was last touched asks people to trust
+                        every row equally, and a tipper last edited in 2019 has
+                        not earned the same confidence as one edited this
+                        morning. */}
+                    <Td className="hidden lg:table-cell whitespace-nowrap">
+                      <span className="block text-[11.5px] text-txt-muted tabular-nums">
+                        {changedWhen(a.updated_at ?? a.created_at)}
+                      </span>
+                      {a.last_changed_by && (
+                        <span className="block text-[10.5px] text-txt-light">
+                          {a.last_changed_by}
+                        </span>
+                      )}
+                    </Td>
                     <Td className="text-right whitespace-nowrap">
                       {a.approval_status && a.approval_status !== "APPROVED" && (
                         <Chip tone={APPROVAL_TONE[a.approval_status] ?? "slate"} className="mr-1.5">
