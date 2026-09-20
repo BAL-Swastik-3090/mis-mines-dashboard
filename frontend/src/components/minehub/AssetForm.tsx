@@ -13,6 +13,7 @@
  * that typing is blocked.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import DateField from "./DateField";
 import { Plus, Trash2, Check, Loader2, Info, ArrowLeft, Send, CheckCircle2, Undo2, Copy, Pencil } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
@@ -1028,8 +1029,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
               onChange={(e) => set("engine_no", e.target.value)} />
           </Row>
           <Row label="Commissioned on">
-            <input id="af-comm" type="date" className={cellInput} value={f.commissioned_on ?? ""}
-              onChange={(e) => set("commissioned_on", e.target.value)} />
+            <DateField id="af-comm" className={cellInput} value={f.commissioned_on ?? ""} onChange={(v) => set("commissioned_on", v)} />
           </Row>
         </Sheet>
       </div>
@@ -1081,12 +1081,10 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
                 </div>
               </Row>
               <Row label="PO valid from">
-                <input id="af-povf" type="date" className={cellInput} value={f.po_valid_from ?? ""}
-                  onChange={(e) => set("po_valid_from", e.target.value)} />
+                <DateField id="af-povf" className={cellInput} value={f.po_valid_from ?? ""} onChange={(v) => set("po_valid_from", v)} />
               </Row>
               <Row label="PO valid to" hint="Expiry is flagged alongside insurance and fitness">
-                <input id="af-povt" type="date" className={cellInput} value={f.po_valid_to ?? ""}
-                  onChange={(e) => set("po_valid_to", e.target.value)} />
+                <DateField id="af-povt" className={cellInput} value={f.po_valid_to ?? ""} onChange={(v) => set("po_valid_to", v)} />
               </Row>
               <Row label="Hire rate (₹)">
                 <input id="af-hire" type="number" className={cellInput} value={f.hire_rate ?? ""}
@@ -1110,8 +1108,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
                 </div>
               </Row>
               <Row label="Purchase date">
-                <input id="af-pdate" type="date" className={cellInput} value={f.purchase_date ?? ""}
-                  onChange={(e) => set("purchase_date", e.target.value)} />
+                <DateField id="af-pdate" className={cellInput} value={f.purchase_date ?? ""} onChange={(v) => set("purchase_date", v)} />
               </Row>
               <Row label="Purchase cost (₹)">
                 <input id="af-pcost" type="number" className={cellInput} value={f.purchase_cost ?? ""}
@@ -1303,8 +1300,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
               onChange={(e) => set("current_reading", e.target.value)} />
           </Row>
           <Row label="Reading as on">
-            <input id="af-readon" type="date" className={cellInput} value={f.reading_as_on ?? ""}
-              onChange={(e) => set("reading_as_on", e.target.value)} />
+            <DateField id="af-readon" className={cellInput} value={f.reading_as_on ?? ""} onChange={(v) => set("reading_as_on", v)} />
           </Row>
           <Row label="Remarks">
             <input id="af-remarks" className={cellInput} value={f.remarks ?? ""}
@@ -1362,8 +1358,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
                       value={d.provider} placeholder="Insurer / RTO…"
                       onChange={(v) => setDocs(docs.map((x, j) => j === i ? { ...x, provider: v } : x))} />
                   </td>
-                  <td className="w-[140px]"><input type="date" className={cellInput} value={d.valid_from}
-                    onChange={(e) => setDocs(docs.map((x, j) => j === i ? { ...x, valid_from: e.target.value } : x))} /></td>
+                  <td className="w-[140px]"><DateField className={cellInput} value={d.valid_from} onChange={(v) => setDocs(docs.map((x, j) => j === i ? { ...x, valid_from: v } : x))} /></td>
                   {/* The one column people actually read. Red once it has
                       passed, amber inside thirty days, green beyond. */}
                   <td className="w-[150px] px-1.5 py-1">
@@ -1524,8 +1519,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
                           placeholder="at reading"
                           onChange={(e) => setScheds(scheds.map((x, j) => j === i ? { ...x, last_done_reading: e.target.value } : x))} />
                       ) : (
-                        <input type="date" className={cellInput} value={sc.last_done_on}
-                          onChange={(e) => setScheds(scheds.map((x, j) => j === i ? { ...x, last_done_on: e.target.value } : x))} />
+                        <DateField className={cellInput} value={sc.last_done_on} onChange={(v) => setScheds(scheds.map((x, j) => j === i ? { ...x, last_done_on: v } : x))} />
                       )}
                     </td>
                     <td className="w-[46px] text-center">

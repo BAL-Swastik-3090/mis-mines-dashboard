@@ -17,6 +17,7 @@
  * invites a roster made of exceptions that nothing can explain afterwards.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import DateField from "@/components/minehub/DateField";
 import {
   CalendarRange, ChevronLeft, ChevronRight, Loader2, Users, UserPlus, Search,
   CalendarOff, Plane, Sun, Download, Upload, Check, X, TriangleAlert,
@@ -449,8 +450,7 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
           </Field>
           <Field label="From" required
                  hint="They start at the first day of the cycle on this date.">
-            <input type="date" className={inputClass} value={form.effective_from}
-                   onChange={(e) => setForm({ ...form, effective_from: e.target.value })} />
+            <DateField className={inputClass} value={form.effective_from} onChange={(v) => setForm({ ...form, effective_from: v })} />
           </Field>
           {form.pattern_id && (
             <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2">

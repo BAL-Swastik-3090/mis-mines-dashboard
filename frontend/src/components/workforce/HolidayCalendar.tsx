@@ -13,6 +13,7 @@
  * reading dates.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import DateField from "@/components/minehub/DateField";
 import {
   CalendarDays, Plus, Loader2, Trash2, ChevronLeft, ChevronRight, PartyPopper,
 } from "lucide-react";
@@ -197,8 +198,7 @@ export default function HolidayCalendar({ mayManage }: { mayManage: boolean }) {
         <div className="space-y-3">
           <div className="grid sm:grid-cols-2 gap-3">
             <Field label="Date" required>
-              <input type="date" className={inputClass} value={form.holiday_date}
-                     onChange={(e) => setForm({ ...form, holiday_date: e.target.value })} />
+              <DateField className={inputClass} value={form.holiday_date} onChange={(v) => setForm({ ...form, holiday_date: v })} />
             </Field>
             <Field label="What it is" required>
               <input className={inputClass} value={form.name} placeholder="Republic Day"

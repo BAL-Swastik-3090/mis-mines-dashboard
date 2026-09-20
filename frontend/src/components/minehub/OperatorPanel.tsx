@@ -8,6 +8,7 @@
  * through.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { toDisplay } from "./DateField";
 import {
   Users, Search, Plus, Loader2, HardHat, ShieldCheck, AlertTriangle,
   ClipboardList, Pencil, Grid3x3, Award, CalendarClock, Settings2, Check,
@@ -694,7 +695,7 @@ export default function OperatorPanel({ view: viewProp = "register", addOpen,
                       {w.code ?? <span className="text-rose">no code</span>}
                     </Td>
                     <Td className="text-txt-muted font-mono text-[12px]">{w.machine || "—"}</Td>
-                    <Td className="text-txt-muted">{String(w.last_seen ?? "").slice(0, 10)}</Td>
+                    <Td className="text-txt-muted">{toDisplay(String(w.last_seen ?? "").slice(0, 10))}</Td>
                     <Td className="text-right">
                       {mayManage && (
                         <Button size="sm" variant="primary" onClick={() => startRegister(w)}>

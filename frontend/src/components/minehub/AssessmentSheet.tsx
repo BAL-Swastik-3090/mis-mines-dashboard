@@ -23,6 +23,8 @@
  * assessor works down a page rather than scrolling it.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { toDisplay } from "./DateField";
+import DateField from "./DateField";
 import {
   ArrowLeft, CheckCircle2, Clock, Cpu, Loader2, RotateCcw, Send,
   Settings2, ShieldCheck, Star, User,
@@ -215,7 +217,7 @@ export default function AssessmentSheet({ operatorId, onDone, onSaved, onManageF
       setDraft({}); setDraftRating(null); setRemark("");
       await load();
       onSaved?.();
-      setNotice(`${howMany} level${howMany === 1 ? "" : "s"} recorded against ${on}.`);
+      setNotice(`${howMany} level${howMany === 1 ? "" : "s"} recorded against ${toDisplay(on)}.`);
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(d ?? "Could not record that. Nothing further was sent.");
@@ -313,7 +315,7 @@ export default function AssessmentSheet({ operatorId, onDone, onSaved, onManageF
         onCancel={() => setAsk(null)}>
         <p className="mb-2.5">
           Against <strong>{chosenType?.name}</strong>, judged{" "}
-          {METHODS.find((m) => m.id === method)?.label.toLowerCase()}, on {on}.
+          {METHODS.find((m) => m.id === method)?.label.toLowerCase()}, on {toDisplay(on)}.
           {missing.length > 0 && (
             <span className="block text-amber mt-1.5">
               {missing.map((m) => m.label).join(", ")} still at nought, and will
@@ -402,9 +404,7 @@ export default function AssessmentSheet({ operatorId, onDone, onSaved, onManageF
             <span className="block text-[11px] font-semibold text-txt-secondary mb-1">
               The day it happened <span className="text-rose">*</span>
             </span>
-            <input id="as-on" type="date" value={on}
-              max={new Date().toISOString().slice(0, 10)}
-              onChange={(e) => setOn(e.target.value)} className={cellInput} />
+            <DateField id="as-on" value={on} max={new Date().toISOString().slice(0, 10)} onChange={(v) => setOn(v)} className={cellInput} />
           </label>
           <div className="block">
             <span className="block text-[11px] font-semibold text-txt-secondary mb-1">

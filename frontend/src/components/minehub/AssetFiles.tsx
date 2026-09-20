@@ -13,6 +13,7 @@
  * covers stay together.
  */
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { toDisplay } from "./DateField";
 import {
   Paperclip, Upload, Download, Trash2, Loader2, FileText, X,
 } from "lucide-react";
@@ -186,7 +187,7 @@ export default function AssetFiles({ assetId, mayManage, attachments }: {
                 <p className="text-[11px] text-txt-light">
                   {size(row.size_bytes)}
                   {row.uploaded_by ? ` · ${row.uploaded_by}` : ""}
-                  {` · ${String(row.uploaded_at).slice(0, 10)}`}
+                  {` · ${toDisplay(String(row.uploaded_at).slice(0, 10))}`}
                 </p>
               </div>
               {row.document_type && (

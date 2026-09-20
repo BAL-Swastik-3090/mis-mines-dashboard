@@ -19,6 +19,7 @@
  *             say what it wants. The example does.
  */
 import React from "react";
+import DateField from "./DateField";
 
 /** 280.000 -> "280", 2.500 -> "2.5". Leaves everything else exactly as it is.
  *
@@ -111,16 +112,20 @@ export function ExpiryInput({ value, onChange, id, disabled }: {
   const state = expiryOf(value);
   return (
     <span className="block relative" title={state.label}>
-      <input id={id} type="date" value={value} disabled={disabled}
-        onChange={(e) => onChange(e.target.value)}
-        className={`w-full bg-transparent px-3 py-2 pr-6 text-[13px] rounded-md
-                    focus:outline-none focus:ring-1 focus:ring-inset focus:ring-gold/30
-                    transition-colors disabled:opacity-60 ${state.cell}`} />
+      {/* The marker moved to the left edge when this stopped being a native
+          input: the field now carries its own clear and calendar buttons on
+          the right, and a status dot underneath them is a status dot nobody
+          sees. */}
       {state.state !== "NONE" && (
         <span aria-hidden
-              className={`absolute right-1.5 top-1/2 -translate-y-1/2 w-1.5 h-1.5
-                          rounded-full ${state.dot}`} />
+              className={`absolute left-1 top-1/2 -translate-y-1/2 w-1.5 h-1.5
+                          rounded-full z-10 ${state.dot}`} />
       )}
+      <DateField id={id} value={value} disabled={disabled} padded={false}
+        onChange={(v) => onChange(v)}
+        className={`w-full bg-transparent py-2 text-[13px] rounded-md
+                    ${state.state !== "NONE" ? "pl-4" : "pl-3"}
+                    transition-colors disabled:opacity-60 ${state.cell}`} />
     </span>
   );
 }

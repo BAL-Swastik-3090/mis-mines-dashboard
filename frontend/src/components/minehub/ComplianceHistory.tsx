@@ -15,6 +15,7 @@
  * see, and a panel that is empty most of the time teaches people to skip it.
  */
 import React, { useCallback, useEffect, useState } from "react";
+import { toDisplay } from "./DateField";
 import {
   History, ChevronDown, Loader2, Download, ArrowRight, PencilLine,
 } from "lucide-react";
@@ -215,7 +216,7 @@ export default function ComplianceHistory({ assetId }: { assetId: number | null 
                           </span>
                         ))}
                         <span className="block text-[11px] text-txt-light mt-0.5">
-                          {c.changed_by} · {String(c.changed_at).slice(0, 10)}
+                          {c.changed_by} · {toDisplay(String(c.changed_at).slice(0, 10))}
                           {c.reason ? ` · “${c.reason}”` : ""}
                         </span>
                       </div>

@@ -16,6 +16,7 @@
  * the trail beside the sheet, and never let one person both submit and approve.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import DateField from "./DateField";
 import {
   Check, Loader2, ArrowLeft, Send, CheckCircle2, Undo2, Trash2, Plus, Copy,
   User, Briefcase, FileText, ShieldCheck, Cpu, Link2, Upload, Paperclip,
@@ -821,8 +822,7 @@ export default function OperatorForm({ operatorId, openAt, prefill, onSaved, onD
                   placeholder="As written on the licence" />
               </Row>
               <Row label="Date of birth">
-                <input id="op-dob" type="date" className={cellInput} value={f.date_of_birth ?? ""}
-                  onChange={(e) => set("date_of_birth", e.target.value)} />
+                <DateField id="op-dob" className={cellInput} value={f.date_of_birth ?? ""} onChange={(v) => set("date_of_birth", v)} />
               </Row>
               <Row label="Gender">
                 <select id="op-gender" className={cellInput} value={f.gender ?? ""}
@@ -982,12 +982,10 @@ export default function OperatorForm({ operatorId, openAt, prefill, onSaved, onD
                 </div>
               </Row>
               <Row label="Joined on">
-                <input id="op-joined" type="date" className={cellInput} value={f.joined_on ?? ""}
-                  onChange={(e) => set("joined_on", e.target.value)} />
+                <DateField id="op-joined" className={cellInput} value={f.joined_on ?? ""} onChange={(v) => set("joined_on", v)} />
               </Row>
               <Row label="Employment end" hint="Blank while they are still working here">
-                <input id="op-end" type="date" className={cellInput} value={f.employment_end ?? ""}
-                  onChange={(e) => set("employment_end", e.target.value)} />
+                <DateField id="op-end" className={cellInput} value={f.employment_end ?? ""} onChange={(v) => set("employment_end", v)} />
               </Row>
             </Sheet>
 
@@ -1072,9 +1070,7 @@ export default function OperatorForm({ operatorId, openAt, prefill, onSaved, onD
                                 flex flex-wrap items-end gap-3">
                   <label className="text-[12px]">
                     <span className="block font-semibold text-txt-secondary mb-1">Assessed on</span>
-                    <input type="date" value={assessedOn} max={new Date().toISOString().slice(0, 10)}
-                      onChange={(e) => setAssessedOn(e.target.value)}
-                      className="bg-bg-base border border-border rounded-lg px-3 py-1.5 text-[12.5px]" />
+                    <DateField value={assessedOn} max={new Date().toISOString().slice(0, 10)} onChange={(v) => setAssessedOn(v)} className="bg-bg-base border border-border rounded-lg px-3 py-1.5 text-[12.5px]" />
                   </label>
                   <label className="text-[12px]">
                     <span className="block font-semibold text-txt-secondary mb-1">How</span>
@@ -1477,12 +1473,10 @@ function RecordSection({ kind, title, hint, records, onSave, onRemove, disabled,
                     value={draft.issuer ?? ""} onChange={(e) => setDraft({ ...draft, issuer: e.target.value })} />
                 </td>
                 <td className="px-2 py-1.5">
-                  <input type="date" className={cellInput} value={draft.valid_from ?? ""}
-                    onChange={(e) => setDraft({ ...draft, valid_from: e.target.value })} />
+                  <DateField className={cellInput} value={draft.valid_from ?? ""} onChange={(v) => setDraft({ ...draft, valid_from: v })} />
                 </td>
                 <td className="px-2 py-1.5">
-                  <input type="date" className={cellInput} value={draft.valid_upto ?? ""}
-                    onChange={(e) => setDraft({ ...draft, valid_upto: e.target.value })} />
+                  <DateField className={cellInput} value={draft.valid_upto ?? ""} onChange={(v) => setDraft({ ...draft, valid_upto: v })} />
                 </td>
                 <td className="px-2 py-1.5">
                   <select className={cellInput} value={draft.verification_status ?? "PENDING"}
@@ -1638,9 +1632,7 @@ function SkillSection({ skills, records, disabled, onSave, onRemove }: {
                 </optgroup>
               ))}
             </select>
-            <input type="date" value={validUpto} onChange={(e) => setValidUpto(e.target.value)}
-              title="Valid until, if the certificate has an expiry"
-              className="bg-bg-base border border-border rounded-lg px-3 py-2 text-[13px]" />
+            <DateField value={validUpto} onChange={(v) => setValidUpto(v)} title="Valid until, if the certificate has an expiry" className="bg-bg-base border border-border rounded-lg px-3 py-2 text-[13px]" />
             <Button variant="primary" disabled={!picked}
               onClick={async () => {
                 const s = skills.find((x) => x.code === picked);

@@ -12,6 +12,7 @@
  * form should be making quietly.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import DateField from "@/components/minehub/DateField";
 import {
   Plane, Plus, Loader2, Check, X, Clock, Search, Settings2, CalendarDays,
 } from "lucide-react";
@@ -352,13 +353,10 @@ export default function LeaveDesk({ mayApply, mayApprove, mayManage, onChanged,
               </select>
             </Field>
             <Field label="From" required>
-              <input type="date" className={inputClass} value={form.from_date}
-                     onChange={(e) => setForm({ ...form, from_date: e.target.value,
-                       to_date: e.target.value > form.to_date ? e.target.value : form.to_date })} />
+              <DateField className={inputClass} value={form.from_date} onChange={(v) => setForm({ ...form, from_date: v, to_date: v > form.to_date ? v : form.to_date })} />
             </Field>
             <Field label="To" required>
-              <input type="date" className={inputClass} value={form.to_date} min={form.from_date}
-                     onChange={(e) => setForm({ ...form, to_date: e.target.value })} />
+              <DateField className={inputClass} value={form.to_date} min={form.from_date} onChange={(v) => setForm({ ...form, to_date: v })} />
             </Field>
           </div>
           <div className="flex flex-wrap gap-4">

@@ -20,6 +20,7 @@
  * here, at the only place that wants both.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import DateField from "@/components/minehub/DateField";
 import {
   X, Loader2, Star, Cpu, CalendarRange, Plane, Award, Clock, Activity,
   Plus, TrendingDown, ShieldAlert,
@@ -448,13 +449,10 @@ export default function OperatorDashboard({ operatorId, onClose, mayApply, onCha
           </Field>
           <div className="grid sm:grid-cols-2 gap-3">
             <Field label="From" required>
-              <input type="date" className={inputClass} value={form.from_date}
-                     onChange={(e) => setForm({ ...form, from_date: e.target.value,
-                       to_date: e.target.value > form.to_date ? e.target.value : form.to_date })} />
+              <DateField className={inputClass} value={form.from_date} onChange={(v) => setForm({ ...form, from_date: v, to_date: v > form.to_date ? v : form.to_date })} />
             </Field>
             <Field label="To" required>
-              <input type="date" className={inputClass} value={form.to_date} min={form.from_date}
-                     onChange={(e) => setForm({ ...form, to_date: e.target.value })} />
+              <DateField className={inputClass} value={form.to_date} min={form.from_date} onChange={(v) => setForm({ ...form, to_date: v })} />
             </Field>
           </div>
           <Field label="Reason">

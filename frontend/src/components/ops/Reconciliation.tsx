@@ -13,6 +13,7 @@
  * and linking is one click from here rather than a trip to another screen.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import DateField from "@/components/minehub/DateField";
 import {
   GitCompare, Loader2, Radio, Link2, AlertTriangle, Fuel, Clock, Gauge, Flag,
 } from "lucide-react";
@@ -138,9 +139,7 @@ export default function Reconciliation({ rights, onChanged }: {
           actually saw. Where those three disagree is the point of the screen.
         </p>
         <span className="flex items-center gap-2">
-          <input type="date" value={day} max={new Date().toISOString().slice(0, 10)}
-            onChange={(e) => setDay(e.target.value)}
-            className="bg-bg-base border border-border rounded-lg px-3 py-1.5 text-[12.5px]" />
+          <DateField value={day} max={new Date().toISOString().slice(0, 10)} onChange={(v) => setDay(v)} className="bg-bg-base border border-border rounded-lg px-3 py-1.5 text-[12.5px]" />
           {rights.may_manage && withFindings.length > 0 && (
             <Button size="sm" variant="secondary" disabled={busy === "raise"}
               onClick={() => void raise()}>

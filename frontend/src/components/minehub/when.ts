@@ -37,17 +37,24 @@ export function ago(iso?: string | null, now: number = Date.now()): string {
   if (days < 14) return `${days} days ago`;
   if (days < 60) return `${Math.round(days / 7)} weeks ago`;
 
-  return then.toLocaleDateString("en-IN",
-    { day: "2-digit", month: "short", year: "numeric" });
+  // Past two months the date itself is the answer, written the way the mine
+  // writes every other date on the platform.
+  return `${String(then.getDate()).padStart(2, "0")}-`
+       + `${String(then.getMonth() + 1).padStart(2, "0")}-${then.getFullYear()}`;
 }
 
-/** The whole truth, for the tooltip behind the short form. */
+/** The whole truth, for the tooltip behind the short form.
+ *
+ *  dd-mm-yyyy like everywhere else, rather than the locale's own idea of a
+ *  short date — en-IN renders September as "Sept", which is a fourth spelling
+ *  of a month on a screen that already has enough. */
 export function exactly(iso?: string | null): string {
   if (!iso) return "This has never been edited";
   const then = new Date(iso);
   if (Number.isNaN(then.getTime())) return "";
-  return then.toLocaleString("en-IN", {
-    day: "2-digit", month: "short", year: "numeric",
-    hour: "2-digit", minute: "2-digit", hour12: true,
-  });
+  const d = String(then.getDate()).padStart(2, "0");
+  const m = String(then.getMonth() + 1).padStart(2, "0");
+  const time = then.toLocaleTimeString("en-IN",
+    { hour: "2-digit", minute: "2-digit", hour12: true });
+  return `${d}-${m}-${then.getFullYear()} at ${time}`;
 }
