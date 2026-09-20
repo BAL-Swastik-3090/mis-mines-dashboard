@@ -60,6 +60,44 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ---
 
+## Deployed — 2026-09-20 (2): Workforce activity from the gate readers
+
+Released commit `63a950e` (6 commits on `3c559f0`) to
+mines.balasorealloys.in. Same method as earlier today: `git archive` of HEAD
+extracted over `~/mines_dashboard` with `.env` set aside and restored at 600,
+then `docker compose build && docker compose up -d` on the default
+`docker-compose.yml` + `docker-compose.override.yml` pair.
+
+No new dependencies, nothing deleted between the two releases.
+
+**One configuration change, which this release needed.** The server `.env`
+carried no `FRS_*` block, so the Activity tab would have loaded and then said
+the platform had not been told where the readers write — the feature would
+have looked broken on arrival. Checked first that the server could reach the
+reader database on 80.9.2.75:1433, which it can, then appended the block
+(mode 600, previous file kept as `~/.env.bak-<timestamp>`). `pymssql` 2.4.1
+was already in the image, so nothing else was needed.
+
+Verified after:
+
+| Check | Result |
+|---|---|
+| Site | 200 in 1.4s |
+| Route table inside the container | `/api/attendance/register`, `/api/attendance/punches`, `/api/checklists`, `/api/operators/analytics` all present; 165 routes |
+| Readers, through the live code | configured, 211 of 211 workers matchable, 19 Sep reads 164 complete / 4 in-only / 4 out-only / 39 not clocked |
+| A real row | 17004 Akshaya Kumar Dehury 05:15 → 12:51 at `SUKINDA MINES_CON_CLL_IN_1` |
+| Containers on the box | 77 before, 77 after; only `mines_backend` and `mines_frontend` changed id |
+| Host 80/443 | still nobody |
+| Our ports | `127.0.0.1:4012`, `127.0.0.1:8006` |
+
+Previous tree at `~/mines_dashboard-backup-20260920-1955.tar.gz`.
+
+The Activity screen stores nothing: every row is read from SmartFace as the
+table is drawn and joined to the manpower register in memory. There is no
+migration in this release and nothing to reverse.
+
+---
+
 ## Deployed — 2026-09-20: Manpower, assessment, and one date format
 
 Released `minehub-workforce-release` (commit `3c559f0`, 17 commits on
