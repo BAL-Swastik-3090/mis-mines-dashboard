@@ -246,7 +246,8 @@ def update_asset_type(asset_type_id: int, request: Request, body: dict = Body(..
 def list_assets(q: str = Query(""), status: str = Query(""),
                 asset_type_id: int | None = Query(None),
                 propulsion: str = Query(""),
-                db: Session = Depends(get_minehub_db)) -> list[dict]:
+                db: Session = Depends(get_minehub_db),
+                corp: Session = Depends(get_db)) -> list[dict]:
     where, params = ["1=1"], {}
     if q.strip():
         where.append("(a.fleet_code ILIKE :q OR a.registration_no ILIKE :q "
@@ -311,7 +312,14 @@ def list_assets(q: str = Query(""), status: str = Query(""),
         WHERE {' AND '.join(where)}
         ORDER BY a.fleet_code
     """), params).mappings().all()
-    return [dict(r) for r in rows]
+
+    # The id is what makes the trail reliable; the name is what makes anybody
+    # read it. "changed by 3101" is a row nobody recognises, so nobody checks
+    # it. One batched lookup for the whole page, cached for five minutes, and
+    # an id that has no name — IMPORT, or a leaver — simply keeps the id.
+    names = people.names_for(corp, [r["last_changed_by"] for r in rows])
+    return [{**dict(r), "last_changed_name": names.get(r["last_changed_by"])}
+            for r in rows]
 
 
 @router.post("/assets")

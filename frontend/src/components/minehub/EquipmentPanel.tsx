@@ -12,7 +12,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Search, Link2, Trash2, Check, Loader2, Radio, ChevronDown, ChevronRight,
   Cpu, Zap, Plus, Building2, X, Rows3, LayoutGrid, CircleSlash, Gauge,
-  SlidersHorizontal, Layers, Download, Upload, CheckSquare,
+  SlidersHorizontal, Layers, Download, CheckSquare,
 } from "lucide-react";
 import api from "@/lib/api";
 import ColumnFilter, {
@@ -21,8 +21,8 @@ import ColumnFilter, {
 import CommentThread from "@/components/comments/CommentThread";
 import { useAuth } from "@/contexts/useAuth";
 import AssetForm from "./AssetForm";
-import ImportDialog from "./ImportDialog";
 import { toCsv, download } from "./spreadsheet";
+import { ago as changedWhen, exactly as changedExactly } from "./when";
 import {
   Alert, Button, Card, CardHeader, Chip, EmptyRow, StatBar, Td, Th, TONE_DOT,
   inputClass, type Tone,
@@ -40,7 +40,7 @@ interface Asset {
   owner: string | null; alias_count: number; alias_systems: string | null;
   version?: number; approval_status?: string;
   updated_at?: string | null; created_at?: string | null;
-  last_changed_by?: string | null;
+  last_changed_by?: string | null; last_changed_name?: string | null;
 }
 interface Identity { asset_identity_id: number; system: string; external_code: string }
 interface Unmapped { vehicle_desc: string; feed: string; rows_: number; last_seen: string }
@@ -51,19 +51,10 @@ const APPROVAL_TONE: Record<string, Tone> = {
   DRAFT: "slate", SUBMITTED: "amber", SENT_BACK: "rose", APPROVED: "emerald",
 };
 
-/** When a row last moved, said the way somebody would say it. Anything older
- *  than a fortnight gets the date instead: "47 days ago" is a number people
- *  have to convert, and the date is what they were going to ask for. */
-function changedWhen(iso?: string | null): string {
-  if (!iso) return "never edited";
-  const then = new Date(iso);
-  if (Number.isNaN(then.getTime())) return "";
-  const days = Math.floor((Date.now() - then.getTime()) / 86_400_000);
-  if (days < 1) return "changed today";
-  if (days === 1) return "changed yesterday";
-  if (days < 14) return `changed ${days} days ago`;
-  return `changed ${then.toLocaleDateString("en-IN",
-    { day: "2-digit", month: "short", year: "numeric" })}`;
+/** Who changed it, by name where the employee master knows one. IMPORT and
+ *  other non-people keep the id they were recorded under. */
+function changedBy(a: Asset): string {
+  return (a.last_changed_name || a.last_changed_by || "").trim();
 }
 
 const STATUS_TONE: Record<string, Tone> = {
@@ -271,7 +262,6 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
   // Where the last click landed, so shift-click can mean "and everything
   // between", which is what anybody who has used a list expects it to mean.
   const anchor = React.useRef<number | null>(null);
-  const [importing, setImporting] = useState(false);
   const set = (k: keyof typeof by) => (v: string) => setBy((b) => ({ ...b, [k]: v }));
   const clearAll = () => {
     setBy({ type: "", owner: "", make: "", model: "", linked: "",
@@ -509,7 +499,7 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
       // The date rather than "changed today", because a spreadsheet outlives
       // the day it was taken on.
       (a.updated_at ?? a.created_at ?? "").slice(0, 10),
-      a.last_changed_by ?? "",
+      changedBy(a),
     ])), `fleet-register-${new Date().toISOString().slice(0, 10)}.csv`);
     setNotice(`${rows.length} machine${rows.length === 1 ? "" : "s"} exported.`);
   };
@@ -609,13 +599,6 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
 
   return (
     <div className="space-y-4">
-      {importing && (
-        <ImportDialog onClose={() => setImporting(false)}
-          onDone={(summary) => {
-            setImporting(false); setNotice(summary);
-            setPicked(new Set()); void load(); onChanged?.();
-          }} />
-      )}
       {error && <Alert tone="error">{error}</Alert>}
       {notice && (
         <Alert tone="success"><span className="inline-flex items-center gap-2"><Check className="w-4 h-4" />{notice}</span></Alert>
@@ -724,12 +707,6 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
                 title="Download this list as a spreadsheet, filters and order and all">
                 <Download className="w-3.5 h-3.5" /> Export
               </Button>
-              {mayManage && (
-                <Button size="sm" variant="secondary" onClick={() => setImporting(true)}
-                  title="Read a spreadsheet in as drafts">
-                  <Upload className="w-3.5 h-3.5" /> Import
-                </Button>
-              )}
               {mayManage && (
                 <Button size="sm" variant="primary" onClick={() => startRegister()}>
                   <Plus className="w-3.5 h-3.5" /> Add
@@ -889,9 +866,7 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
                       allLabel="Linked or not"
                       sort={sort.key === "linked" ? sort.dir : null}
                       onSort={sortBy("linked")} sortLabels={SORT_WORDS.linked} /></Th>
-                <Th className="hidden lg:table-cell">
-                  <SortHeader label="Changed" sort={sort.key === "changed" ? sort.dir : null}
-                    onSort={sortBy("changed")} sortLabels={SORT_WORDS.changed} /></Th>
+
                 {/* The column is the control. Somebody scanning the status
                     column is already asking "show me the ones that are…", and
                     making them look elsewhere for the control is the part that
@@ -918,6 +893,13 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
                     onChange={(v) => setStage(
                       v === "" ? "IN_SERVICE" : v === "ALL" ? "" : v)} />
                 </Th>
+                {/* Last, after the stage. What a machine is doing is the
+                    thing people come to the row for; how fresh the record is
+                    is what they check second. */}
+                <Th className="hidden lg:table-cell text-right">
+                  <SortHeader label="Changed" align="right"
+                    sort={sort.key === "changed" ? sort.dir : null}
+                    onSort={sortBy("changed")} sortLabels={SORT_WORDS.changed} /></Th>
               </tr>
             </thead>
             <tbody>
@@ -999,23 +981,6 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
                         ? <Chip tone="amber">none</Chip>
                         : <span className="text-[11px] font-mono text-txt-muted">{a.alias_systems}</span>}
                     </Td>
-                    {/* Its own column rather than a third line under the
-                        machine code. How stale a row is deserves to be
-                        scannable down the page — a register that cannot say
-                        when a machine was last touched asks people to trust
-                        every row equally, and a tipper last edited in 2019 has
-                        not earned the same confidence as one edited this
-                        morning. */}
-                    <Td className="hidden lg:table-cell whitespace-nowrap">
-                      <span className="block text-[11.5px] text-txt-muted tabular-nums">
-                        {changedWhen(a.updated_at ?? a.created_at)}
-                      </span>
-                      {a.last_changed_by && (
-                        <span className="block text-[10.5px] text-txt-light">
-                          {a.last_changed_by}
-                        </span>
-                      )}
-                    </Td>
                     <Td className="text-right whitespace-nowrap">
                       {a.approval_status && a.approval_status !== "APPROVED" && (
                         <Chip tone={APPROVAL_TONE[a.approval_status] ?? "slate"} className="mr-1.5">
@@ -1025,6 +990,25 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
                       <Chip tone={STATUS_TONE[a.status] ?? "slate"}>
                         {STAGE_LABEL[a.status] ?? a.status.toLowerCase()}
                       </Chip>
+                    </Td>
+                    {/* How stale a row is deserves to be scannable down the
+                        page: a register that cannot say when a machine was
+                        last touched asks people to trust every row equally,
+                        and a tipper last edited in 2019 has not earned the
+                        same confidence as one edited this morning. */}
+                    <Td className="hidden lg:table-cell whitespace-nowrap text-right">
+                      <span className="block text-[11.5px] text-txt-muted"
+                        title={changedExactly(a.updated_at ?? a.created_at)}>
+                        {changedWhen(a.updated_at ?? a.created_at)}
+                      </span>
+                      {changedBy(a) && (
+                        <span className="block text-[10.5px] text-txt-light truncate max-w-[16ch]"
+                          title={a.last_changed_name
+                            ? `${a.last_changed_name} (${a.last_changed_by})`
+                            : a.last_changed_by ?? ""}>
+                          {changedBy(a)}
+                        </span>
+                      )}
                     </Td>
                   </tr>
 
@@ -1227,9 +1211,10 @@ function CardGrid({ sections, grouped, onOpen, empty, picked, onPick }: {
 
           <div className="mt-auto pt-2 border-t border-border-light
                           flex items-center justify-between gap-2 text-[11px]">
-            <span className="text-txt-light truncate">
+            <span className="text-txt-light truncate"
+              title={changedExactly(a.updated_at ?? a.created_at)}>
               {changedWhen(a.updated_at ?? a.created_at)}
-              {a.last_changed_by ? ` by ${a.last_changed_by}` : ""}
+              {changedBy(a) ? ` by ${changedBy(a)}` : ""}
             </span>
             <span className="shrink-0 inline-flex items-center gap-1 text-txt-light font-mono">
               <Link2 className="w-3 h-3" />

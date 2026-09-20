@@ -1,11 +1,13 @@
 /**
- * Spreadsheets in and out.
+ * The register, out to a spreadsheet.
  *
- * CSV rather than .xlsx, and deliberately. Excel opens a CSV by double-click,
- * every system in the mine can produce one, and it needs no library — an
- * import format people cannot produce is an import nobody uses. The cost is
- * that CSV has no types, which is why the server re-reads every value rather
- * than trusting what the file says a number is.
+ * CSV rather than .xlsx, and deliberately: Excel opens a CSV by double-click,
+ * every system in the mine can read one, and it needs no library on the page.
+ *
+ * Reading spreadsheets back in was built alongside this and then dropped —
+ * the mine decided the register should only be filled in through the form,
+ * where every entry is somebody's decision rather than a row in a file. The
+ * parser is in the history if that is ever reconsidered.
  */
 
 /** One cell, escaped the way the format actually requires.
@@ -45,57 +47,4 @@ export function download(blob: Blob, filename: string): void {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-/**
- * A CSV file into rows of {heading: value}.
- *
- * Written out rather than pulled from a library because the whole job is one
- * pass over the text, and the alternative is 40KB of parser for it. It handles
- * what a spreadsheet actually emits: quoted fields, doubled quotes inside
- * them, commas and newlines inside quotes, CRLF or LF line endings, and the
- * byte-order mark Excel writes at the front of its own exports.
- */
-export function parseCsv(text: string): Record<string, string>[] {
-  const src = text.replace(/^﻿/, "");
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let field = "";
-  let quoted = false;
-
-  for (let i = 0; i < src.length; i += 1) {
-    const c = src[i];
-
-    if (quoted) {
-      if (c === '"') {
-        // A doubled quote inside a quoted field is one literal quote.
-        if (src[i + 1] === '"') { field += '"'; i += 1; } else { quoted = false; }
-      } else {
-        field += c;
-      }
-      continue;
-    }
-
-    if (c === '"') { quoted = true; continue; }
-    if (c === ",") { row.push(field); field = ""; continue; }
-    if (c === "\r") continue;                       // CRLF: the \n does the work
-    if (c === "\n") { row.push(field); rows.push(row); row = []; field = ""; continue; }
-    field += c;
-  }
-  // Whatever is still in hand when the text runs out is the last field, unless
-  // the file ended with a newline and there is nothing in hand.
-  if (field !== "" || row.length) { row.push(field); rows.push(row); }
-
-  const [headings, ...body] = rows;
-  if (!headings) return [];
-
-  // A tab at the front was ours, added on the way out to stop Excel treating
-  // the value as a formula. It is not part of the data.
-  const clean = (s: string) => s.replace(/^\t/, "").trim();
-
-  return body
-    // Excel keeps trailing blank lines; a row of nothing is not a machine.
-    .filter((r) => r.some((v) => clean(v) !== ""))
-    .map((r) => Object.fromEntries(
-      headings.map((h, i) => [clean(h), clean(r[i] ?? "")])));
 }
