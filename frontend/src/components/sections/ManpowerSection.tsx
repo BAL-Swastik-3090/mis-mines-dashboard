@@ -77,7 +77,7 @@ export default function ManpowerSection() {
           actions={
             tab === "register" && mayManage ? (
               <Button variant="primary" size="lg" onClick={() => setAddOpen(true)}>
-                <Plus className="w-4 h-4" /> Register a person
+                <Plus className="w-4 h-4" /> Add a worker
               </Button>
             ) : null
           } />

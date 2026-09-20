@@ -31,7 +31,7 @@ import {
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
 import ColumnFilter, { optionsFrom, matches, SortHeader, type SortDir } from "./ColumnFilter";
-import OperatorForm from "./OperatorForm";
+import AssessmentSheet from "./AssessmentSheet";
 import {
   Alert, Button, Card, CardHeader, Chip, EmptyRow, StatBar, Td, Th,
   type Stat, type Tone,
@@ -200,14 +200,13 @@ export default function AssessmentPanel({ onChanged }: { onChanged?: () => void 
       `assessment-${queue}-${new Date().toISOString().slice(0, 10)}.csv`);
   };
 
+  // The focused sheet, not the ten-tab profile. Assessing is one job and the
+  // screen for it should offer one job.
   if (editingId) {
     return (
-      <div className="pb-8">
-        <OperatorForm operatorId={editingId} openAt="competency"
-          onSaved={() => { void load(); onChanged?.(); }}
-          onDone={() => { setEditingId(null); void load(); onChanged?.(); }}
-          onCancel={() => setEditingId(null)} />
-      </div>
+      <AssessmentSheet operatorId={editingId}
+        onSaved={() => onChanged?.()}
+        onDone={() => { setEditingId(null); void load(); onChanged?.(); }} />
     );
   }
 

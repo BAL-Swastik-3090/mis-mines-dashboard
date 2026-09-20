@@ -165,6 +165,13 @@ export default function OperatorForm({ operatorId, openAt, prefill, onSaved, onD
     display_name: prefill?.display_name ?? "", employment_type: "OWN", profile_status: "ACTIVE",
   });
   const [loaded, setLoaded] = useState<Record<string, unknown> | null>(null);
+  // Opening somebody rendered the whole sheet from an empty form for the two
+  // seconds the fetch takes: the title read "this profile", the counter said
+  // "1 of 16", and every field was blank. None of it was true — it is Bhaba
+  // Nayak, 6 of 16 — and a page that states facts it has not read yet is worse
+  // than one that admits it is still reading. A new profile has nothing to
+  // fetch, so it starts ready. Same fix as the machine sheet.
+  const [fetching, setFetching] = useState(Boolean(operatorId));
   const [records, setRecords] = useState<Rec[]>([]);
   const [comps, setComps] = useState<Comp[]>([]);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
@@ -294,6 +301,7 @@ export default function OperatorForm({ operatorId, openAt, prefill, onSaved, onD
   const loadProfile = useCallback(async () => {
     if (!id) return;
     try {
+      setFetching(true);
       const [r, d, h] = await Promise.all([
         api.get(`/operators/${id}`),
         api.get(`/operators/${id}/documents`).catch(() => ({ data: [] })),
@@ -312,6 +320,8 @@ export default function OperatorForm({ operatorId, openAt, prefill, onSaved, onD
       setDocuments(d.data ?? []); setHistory(h.data ?? []);
     } catch {
       raise("Could not load this profile.");
+    } finally {
+      setFetching(false);
     }
   }, [id]);
 
@@ -652,6 +662,52 @@ export default function OperatorForm({ operatorId, openAt, prefill, onSaved, onD
   );
 
   /* ── the page ─────────────────────────────────────────────────────────── */
+  // Nothing about an existing person is claimed until it has been read.
+  if (fetching) {
+    return (
+      <div className="space-y-4" aria-busy="true" aria-label="Loading this profile">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="h-8 w-24 rounded-lg bg-slate-200/70 animate-pulse mb-3" />
+            <div className="h-7 w-52 rounded bg-slate-200/70 animate-pulse" />
+            <div className="flex gap-2 mt-2.5">
+              <div className="h-6 w-28 rounded-full bg-slate-200/60 animate-pulse" />
+              <div className="h-6 w-16 rounded-full bg-slate-200/60 animate-pulse" />
+              <div className="h-6 w-20 rounded-full bg-slate-200/60 animate-pulse" />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <div className="h-9 w-28 rounded-lg bg-slate-200/70 animate-pulse" />
+            <div className="h-9 w-36 rounded-lg bg-slate-200/70 animate-pulse" />
+          </div>
+        </div>
+        {/* The tab strip, at its real height, so nothing jumps when it lands. */}
+        <div className="h-11 rounded-xl bg-slate-100 animate-pulse" />
+        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_296px] gap-4 items-start">
+          <div>
+            <div className="h-10 rounded-t-xl bg-navy/90" />
+            <div className="border border-t-0 border-border rounded-b-xl bg-bg-base">
+              {[0, 1, 2, 3, 4, 5].map((row) => (
+                <div key={row} className="grid grid-cols-2 border-b border-border-light last:border-0">
+                  {[0, 1].map((col) => (
+                    <div key={col} className="flex items-center gap-3 px-4 py-3.5">
+                      <div className="h-3 w-24 rounded bg-slate-100 animate-pulse" />
+                      <div className="h-3 flex-1 max-w-[190px] rounded bg-slate-200/60 animate-pulse" />
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="space-y-4">
+            <div className="h-[128px] rounded-xl bg-bg-base border border-border-light animate-pulse" />
+            <div className="h-[168px] rounded-xl bg-bg-base border border-border-light animate-pulse" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       {messages}
