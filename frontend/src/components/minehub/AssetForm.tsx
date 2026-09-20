@@ -239,6 +239,13 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [loaded, setLoaded] = useState<Record<string, unknown> | null>(null);
+  // Opening an existing machine used to render the whole sheet from an empty
+  // form for the two seconds the fetch takes: "Machine", "v1", "0 of 14
+  // filled", every field blank. None of that was true — MAN-14 is v4 with 11
+  // filled — and a page that states facts it has not read yet is worse than
+  // one that admits it is still reading. A new machine has nothing to fetch,
+  // so it starts ready.
+  const [fetching, setFetching] = useState(Boolean(assetId));
   const [revisions, setRevisions] = useState<Revision[]>([]);
   const [loadingRev, setLoadingRev] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -327,6 +334,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   const loadAsset = useCallback(async () => {
     if (!id) return;
     try {
+      setFetching(true);
       const r = await api.get(`/minehub/assets/${id}`);
       const a = r.data ?? {};
       setLoaded(a);
@@ -369,6 +377,8 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
       })));
     } catch {
       setError("Could not load this machine.");
+    } finally {
+      setFetching(false);
     }
   }, [id]);
 
@@ -796,6 +806,51 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
       <Toast tone="error" message={error} onClose={() => setError(null)} />
       <Toast tone="success" message={error ? null : notice} onClose={() => setNotice(null)} />
     </>
+  );
+
+  /** The shape of the sheet while it is still being read.
+   *
+   *  Built to the same proportions as the real thing — the same bands, the
+   *  same two columns, the same row height — so nothing moves when the data
+   *  arrives. A spinner in the middle of an empty page would also be honest,
+   *  but the layout settling under the reader's eyes is the part that feels
+   *  broken, and a skeleton costs nothing to avoid it.
+   */
+  const skeleton = (
+    <div className="space-y-4" aria-busy="true" aria-label="Loading this machine">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="h-7 w-28 rounded bg-slate-200/70 animate-pulse mb-2" />
+          <div className="h-6 w-56 rounded bg-slate-200/70 animate-pulse" />
+          <div className="h-3 w-80 rounded bg-slate-100 animate-pulse mt-2.5" />
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="h-6 w-16 rounded-full bg-slate-200/70 animate-pulse" />
+          <div className="h-6 w-24 rounded-full bg-slate-200/70 animate-pulse" />
+          <div className="h-8 w-20 rounded-lg bg-slate-200/70 animate-pulse" />
+        </div>
+      </div>
+
+      {["Identity", "Ownership & cost", "Capability & fuel"].map((band) => (
+        <div key={band}>
+          <div className="h-9 rounded-t-xl bg-navy/90" />
+          <div className="border border-t-0 border-border rounded-b-xl bg-bg-base">
+            {[0, 1, 2, 3].map((row) => (
+              <div key={row}
+                   className="grid grid-cols-2 border-b border-border-light last:border-0">
+                {[0, 1].map((col) => (
+                  <div key={col} className="flex items-center gap-3 px-4 py-3">
+                    <div className="h-3 w-24 rounded bg-slate-100 animate-pulse" />
+                    <div className="h-3 flex-1 max-w-[180px] rounded bg-slate-200/60
+                                    animate-pulse" />
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 
   const sheet = (
@@ -1591,6 +1646,23 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
       </div>
     </div>
   );
+
+  // Nothing about an existing machine is known until it has been read, so
+  // nothing about it is claimed until then.
+  if (fetching) {
+    return (
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_272px] gap-4 items-start">
+        {messages}
+        {skeleton}
+        <div className="xl:sticky xl:top-[86px] space-y-4">
+          <div className="h-[120px] rounded-xl bg-bg-base border border-border-light
+                          animate-pulse" />
+          <div className="h-[200px] rounded-xl bg-bg-base border border-border-light
+                          animate-pulse" />
+        </div>
+      </div>
+    );
+  }
 
   if (!editing) return <>{messages}{dialogs}{sheet}</>;
 
