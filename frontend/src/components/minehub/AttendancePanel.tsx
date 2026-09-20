@@ -19,13 +19,14 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle, CalendarDays, CheckCircle2, Clock, Download, Grid3x3, Loader2,
-  LogIn, LogOut, Rows3, Search, SlidersHorizontal, Users, X,
+  AlertTriangle, CalendarDays, CheckCircle2, ClipboardCheck, Clock, Download,
+  Grid3x3, Loader2, LogIn, LogOut, Rows3, Search, SlidersHorizontal, Users, X,
 } from "lucide-react";
 import api from "@/lib/api";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import ColumnFilter, { optionsFrom, matches, SortHeader, type SortDir } from "./ColumnFilter";
 import ActivityMatrix from "./ActivityMatrix";
+import CorrectionsPanel from "./CorrectionsPanel";
 import HoverCard, { CardBody, CardHead, CardNote, Fact } from "./HoverCard";
 import DateField, { toDisplay } from "./DateField";
 import {
@@ -40,7 +41,10 @@ interface Row {
   on_date: string; first_in: string | null; last_out: string | null;
   minutes: number | null; punches: number; devices: number;
   in_gate: string | null; out_gate: string | null;
-  state: "COMPLETE" | "IN_ONLY" | "OUT_ONLY" | "NOT_CLOCKED"; running: boolean;
+  state: "COMPLETE" | "IN_ONLY" | "OUT_ONLY" | "NOT_CLOCKED" | "ABSENT" | "PRESENT";
+  running: boolean;
+  corrections: { kind: string; reason: string | null; by: string | null;
+                 remarks: string | null }[];
 }
 interface Punch { at: string; direction: "IN" | "OUT"; device: string }
 
@@ -49,6 +53,10 @@ const STATE: Record<Row["state"], { label: string; tone: Tone }> = {
   IN_ONLY: { label: "in, no out", tone: "amber" },
   OUT_ONLY: { label: "out, no in", tone: "rose" },
   NOT_CLOCKED: { label: "not clocked", tone: "slate" },
+  // Only ever reached through an approved correction. A reader cannot say
+  // somebody was absent; only a person can.
+  ABSENT: { label: "absent", tone: "rose" },
+  PRESENT: { label: "present", tone: "sky" },
 };
 
 /** 05:15:16 on an ISO timestamp, in the 24-hour clock a gate log is read in. */
@@ -82,7 +90,12 @@ export default function AttendancePanel() {
   // Two readings of the same data. The day log answers "what happened on this
   // date"; the matrix answers "what does this person's month look like", which
   // is a different question and a different shape.
-  const [view, setView] = useState<"log" | "matrix">("log");
+  const [view, setView] = useState<"log" | "matrix" | "fix">("log");
+  // Opening the correction form from a day row carries the worker and date
+  // across, because retyping what is already on screen is how the wrong day
+  // gets corrected.
+  const [prefill, setPrefill] = useState<
+    { emp_no: string; name: string; on_date: string; kind?: string } | undefined>();
   // The range comes from the platform's own date filter in the page header —
   // the one every other screen already obeys, which opens on month-to-date.
   // This screen had its own From and To underneath it, which is two calendars
@@ -176,8 +189,10 @@ export default function AttendancePanel() {
 
   const sorted = useMemo(() => {
     const dir = sort.dir === "asc" ? 1 : -1;
+    // Ordered by how settled the day is: a clean day, then a day somebody
+    // decided, then the gaps.
     const rank: Record<Row["state"], number> =
-      { COMPLETE: 0, IN_ONLY: 1, OUT_ONLY: 2, NOT_CLOCKED: 3 };
+      { COMPLETE: 0, PRESENT: 1, ABSENT: 2, IN_ONLY: 3, OUT_ONLY: 4, NOT_CLOCKED: 5 };
     const keyOf = (r: Row): string | number => {
       switch (sort.key) {
         case "date":  return r.on_date;
@@ -270,7 +285,8 @@ export default function AttendancePanel() {
         <span className="flex-1" />
         <span className="inline-flex rounded-lg border border-border bg-bg-light p-0.5">
           {([["log", Rows3, "One row per worker per day"],
-             ["matrix", Grid3x3, "One row per worker, one column per day"]] as const)
+             ["matrix", Grid3x3, "One row per worker, one column per day"],
+             ["fix", ClipboardCheck, "Corrections raised, and the approval queue"]] as const)
             .map(([id, Icon, why]) => (
             <button key={id} type="button" onClick={() => setView(id)}
               title={why} aria-pressed={view === id}
@@ -295,6 +311,9 @@ export default function AttendancePanel() {
             Reading the gate readers{spanDays > 1 ? ` for ${spanDays} days` : ""}…
           </p>
         </div>
+      ) : view === "fix" ? (
+        <CorrectionsPanel prefill={prefill}
+          onDone={() => { setPrefill(undefined); void load(); }} />
       ) : view === "matrix" ? (
         <ActivityMatrix rows={filtered} days={days} narrowed={narrowed} />
       ) : (

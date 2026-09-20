@@ -22,13 +22,18 @@ from app.minehub_db import get_minehub_db
 
 router = APIRouter(prefix="/api/checklists", tags=["Checklists"])
 
-KINDS = ("COMPETENCY", "HOTO")
+KINDS = ("COMPETENCY", "HOTO", "ATTENDANCE_REASON")
 
 # Competency dimensions belong to whoever runs assessment; handover checks
 # belong to whoever runs the machine register. Different lists, different
 # people, so the gate is per kind rather than one permission for "vocabulary".
 MANAGE = {"COMPETENCY": "platform.operators.manage",
-          "HOTO": "platform.registry.manage"}
+          "HOTO": "platform.registry.manage",
+          # The reasons a supervisor may pick from when correcting the gate
+          # record. Whoever approves corrections decides what the list says,
+          # because they are the one who has to live with "Other" being used
+          # for everything.
+          "ATTENDANCE_REASON": "ops.attendance.approve"}
 
 EDITABLE = ("label", "help", "asset_type_id", "is_decisive", "is_required",
             "sort_order", "status")

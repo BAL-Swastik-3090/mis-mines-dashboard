@@ -19,9 +19,10 @@ the record rather than a claim about where they were.
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.minehub_db import get_minehub_db
@@ -92,6 +93,21 @@ def register(
     except Exception:                        # noqa: BLE001
         raise HTTPException(503, "The attendance readers could not be reached.")
 
+    # Approved corrections, laid over the punches rather than into them. The
+    # reader data underneath is untouched; the row says which part of it came
+    # from a person rather than a gate, because a corrected day and a clean one
+    # are not the same evidence.
+    fixes: dict[tuple[str, str], list[dict]] = {}
+    for c in db.execute(text("""
+        SELECT c.emp_no, c.on_date, c.kind, c.at_time, c.reason_code,
+               c.remarks, c.decided_by, r.label AS reason
+          FROM attendance_correction c
+          LEFT JOIN checklist_item r
+                 ON r.kind = 'ATTENDANCE_REASON' AND r.code = c.reason_code
+         WHERE c.status = 'APPROVED' AND c.on_date BETWEEN :frm AND :to
+    """), {"frm": frm, "to": to}).mappings():
+        fixes.setdefault((c["emp_no"], c["on_date"].isoformat()), []).append(dict(c))
+
     today = date.today().isoformat()
     rows = []
     for p in people:
@@ -99,11 +115,30 @@ def register(
             hit = punched.get((p["emp_no"], on))
             first_in = hit["first_in"] if hit else None
             last_out = hit["last_out"] if hit else None
+
+            applied = []
+            for c in fixes.get((p["emp_no"], on), []):
+                applied.append({"kind": c["kind"], "reason": c["reason"],
+                                "by": c["decided_by"], "remarks": c["remarks"]})
+                # A correction only fills a gap. It never moves a time the
+                # reader actually recorded — that would be the platform
+                # overwriting evidence, which is the one thing it must not do.
+                when = (datetime.combine(date.fromisoformat(on), c["at_time"])
+                        if c["at_time"] else None)
+                if c["kind"] == "CLOCK_IN" and not first_in:
+                    first_in = when
+                elif c["kind"] == "CLOCK_OUT" and not last_out:
+                    last_out = when
+
             mins = _minutes(first_in, last_out)
             # Said rather than computed into a boolean, because the mine has
             # not decided what silence means and this screen must not decide
             # it for them.
-            state = ("NOT_CLOCKED" if not hit
+            marked_absent = any(c["kind"] == "MARK_ABSENT" for c in applied)
+            marked_present = any(c["kind"] == "MARK_PRESENT" for c in applied)
+            state = ("ABSENT" if marked_absent
+                     else "PRESENT" if marked_present and not first_in and not last_out
+                     else "NOT_CLOCKED" if not hit and not first_in and not last_out
                      else "IN_ONLY" if first_in and not last_out
                      else "OUT_ONLY" if last_out and not first_in
                      else "COMPLETE")
@@ -129,6 +164,7 @@ def register(
                 "state": state,
                 # A day still running is not an incomplete record.
                 "running": on == today and state == "IN_ONLY",
+                "corrections": applied,
             })
 
     return {"configured": True, "days": days, "people": len(people),

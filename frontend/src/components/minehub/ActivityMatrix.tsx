@@ -44,7 +44,10 @@ export interface Row {
   on_date: string; first_in: string | null; last_out: string | null;
   minutes: number | null; punches: number;
   in_gate: string | null; out_gate: string | null;
-  state: "COMPLETE" | "IN_ONLY" | "OUT_ONLY" | "NOT_CLOCKED"; running: boolean;
+  state: "COMPLETE" | "IN_ONLY" | "OUT_ONLY" | "NOT_CLOCKED" | "ABSENT" | "PRESENT";
+  running: boolean;
+  corrections?: { kind: string; reason: string | null; by: string | null;
+                  remarks: string | null }[];
 }
 
 /** What a cell says, and what it looks like. Four states, because that is how
@@ -59,6 +62,14 @@ const CELL: Record<Row["state"], { short: string; cls: string; label: string }> 
                  label: "out only, no in" },
   NOT_CLOCKED: { short: "–", cls: "bg-rose-bg text-rose/70 ring-rose-ring",
                  label: "no punch" },
+  // Neither of these can come from a reader. A gate knows who walked through
+  // it and nothing else, so a day that says "absent" or "present" says a
+  // person decided that — and the grid marks it as their word, not the
+  // machine's.
+  ABSENT:  { short: "A",  cls: "bg-rose-bg text-rose ring-rose font-black",
+             label: "absent, confirmed by a person" },
+  PRESENT: { short: "P",  cls: "bg-sky-bg text-sky ring-sky-ring font-black",
+             label: "present, confirmed by a person" },
 };
 
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -186,12 +197,15 @@ export default function ActivityMatrix({ rows, days, narrowed: narrowedAbove }: 
       const got = days.map((d) => cells.get(d));
       const count = (s: Row["state"]) => got.filter((c) => c?.state === s).length;
       const single = count("IN_ONLY") + count("OUT_ONLY");
+      const complete = count("COMPLETE") + count("PRESENT");
+      const fixed = got.filter((c) => c?.corrections?.length).length;
       return {
         ...head, cells,
-        active: count("COMPLETE") + single,
-        complete: count("COMPLETE"),
+        active: complete + single,
+        complete,
         single,
-        none: days.length - count("COMPLETE") - single,
+        fixed,
+        none: days.length - complete - single,
       };
     });
   }, [rows, days]);
@@ -354,6 +368,13 @@ export default function ActivityMatrix({ rows, days, narrowed: narrowedAbove }: 
               <span className="w-6 h-6 rounded ring-1 ring-border bg-slate-100" />
               <span className="text-[11px] text-txt-muted">site quiet that day</span>
             </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-6 h-6 rounded ring-1 ring-border bg-bg-light relative">
+                <span className="absolute top-[3px] right-[3px] w-[5px] h-[5px]
+                                 rounded-full bg-gold" />
+              </span>
+              <span className="text-[11px] text-txt-muted">corrected by a person</span>
+            </span>
           </span>
           <span className="flex-1" />
           <span className="text-[11px] text-txt-light">
@@ -434,7 +455,7 @@ export default function ActivityMatrix({ rows, days, narrowed: narrowedAbove }: 
                         <HoverCard width={288} card={
                           <DayCard row={c} on={d} person={p} quiet={isQuiet} />
                         }>
-                          <button type="button"
+                          <button type="button" style={{position:"relative"}}
                             onClick={() => c && c.punches > 0 && setOpen(c)}
                             className={`w-[26px] h-[24px] rounded ring-1 text-[10px] font-bold
                                         transition-transform hover:scale-110
@@ -443,6 +464,10 @@ export default function ActivityMatrix({ rows, days, narrowed: narrowedAbove }: 
                                           : look.cls}
                                         ${c && c.punches > 0 ? "cursor-pointer" : "cursor-default"}`}>
                             {look.short}
+                            {c?.corrections?.length ? (
+                              <span aria-hidden style={{position:"absolute",top:1,right:1}}
+                                className="w-[5px] h-[5px] rounded-full bg-gold" />
+                            ) : null}
                           </button>
                         </HoverCard>
                       </td>
