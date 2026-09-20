@@ -19,11 +19,12 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle, CalendarDays, CheckCircle2, Clock, Download, Loader2,
-  LogIn, LogOut, Search, Users, X,
+  AlertTriangle, CalendarDays, CheckCircle2, Clock, Download, Grid3x3, Loader2,
+  LogIn, LogOut, Rows3, Search, Users, X,
 } from "lucide-react";
 import api from "@/lib/api";
 import ColumnFilter, { optionsFrom, matches, SortHeader, type SortDir } from "./ColumnFilter";
+import ActivityMatrix from "./ActivityMatrix";
 import DateField, { toDisplay } from "./DateField";
 import {
   Alert, Button, Card, CardHeader, Chip, EmptyRow, StatBar, Td, Th, type Tone,
@@ -36,6 +37,7 @@ interface Row {
   department: string | null; designation: string | null;
   on_date: string; first_in: string | null; last_out: string | null;
   minutes: number | null; punches: number; devices: number;
+  in_gate: string | null; out_gate: string | null;
   state: "COMPLETE" | "IN_ONLY" | "OUT_ONLY" | "NOT_CLOCKED"; running: boolean;
 }
 interface Punch { at: string; direction: "IN" | "OUT"; device: string }
@@ -75,6 +77,10 @@ const SORT_WORDS: Record<SortKey, [string, string]> = {
 };
 
 export default function AttendancePanel() {
+  // Two readings of the same data. The day log answers "what happened on this
+  // date"; the matrix answers "what does this person's month look like", which
+  // is a different question and a different shape.
+  const [view, setView] = useState<"log" | "matrix">("log");
   const [from, setFrom] = useState(today);
   const [to, setTo] = useState(today);
   const [rows, setRows] = useState<Row[]>([]);
@@ -189,13 +195,13 @@ export default function AttendancePanel() {
   const exportRows = () => {
     download(toCsv(
       ["Date", "Attendance ID", "Worker", "Reference", "Trade", "Group",
-       "Contractor", "Department", "First in", "Last out", "Span", "Punches",
-       "Readers", "State"],
+       "Contractor", "Department", "First in", "In gate", "Last out", "Out gate",
+       "Span", "Punches", "Readers", "State"],
       sorted.map((r) => [
         toDisplay(r.on_date), r.emp_no, r.name, r.operator_ref ?? "",
         r.trade ?? "", r.trade_group ?? "", r.employer ?? "", r.department ?? "",
-        hhmm(r.first_in), hhmm(r.last_out), span(r.minutes), r.punches,
-        r.devices, STATE[r.state].label,
+        hhmm(r.first_in), r.in_gate ?? "", hhmm(r.last_out), r.out_gate ?? "",
+        span(r.minutes), r.punches, r.devices, STATE[r.state].label,
       ])),
       `attendance-${from}${from === to ? "" : `-to-${to}`}.csv`);
   };
@@ -257,6 +263,21 @@ export default function AttendancePanel() {
           <span className="text-[11.5px] text-txt-muted">
             {spanDays === 1 ? toDisplay(from) : `${toDisplay(from)} to ${toDisplay(to)} · ${spanDays} days`}
           </span>
+
+          <span className="inline-flex rounded-lg border border-border bg-bg-light p-0.5">
+            {([["log", Rows3, "One row per worker per day"],
+               ["matrix", Grid3x3, "One row per worker, one column per day"]] as const)
+              .map(([id, Icon, why]) => (
+              <button key={id} type="button" onClick={() => setView(id)}
+                title={why} aria-pressed={view === id}
+                className={`inline-flex items-center justify-center rounded-[6px] px-2 py-1
+                            transition-colors ${view === id
+                              ? "bg-bg-base text-navy shadow-sm ring-1 ring-border-light"
+                              : "text-txt-light hover:text-navy"}`}>
+                <Icon className="w-3.5 h-3.5" />
+              </button>
+            ))}
+          </span>
         </div>
       </Card>
 
@@ -270,6 +291,8 @@ export default function AttendancePanel() {
             Reading the gate readers{spanDays > 1 ? ` for ${spanDays} days` : ""}…
           </p>
         </div>
+      ) : view === "matrix" ? (
+        <ActivityMatrix rows={rows} days={days} />
       ) : (
         <>
           <StatBar items={[
@@ -410,9 +433,21 @@ export default function AttendancePanel() {
                           </Td>
                           <Td className="text-right tabular-nums font-semibold text-navy">
                             {hhmm(r.first_in) || <span className="text-txt-light font-normal">—</span>}
+                            {r.in_gate && (
+                              <span className="block text-[9.5px] text-txt-light font-normal
+                                               truncate max-w-[9ch]" title={r.in_gate}>
+                                {r.in_gate.replace(/^.*_/, "")}
+                              </span>
+                            )}
                           </Td>
                           <Td className="text-right tabular-nums font-semibold text-navy">
                             {hhmm(r.last_out) || <span className="text-txt-light font-normal">—</span>}
+                            {r.out_gate && (
+                              <span className="block text-[9.5px] text-txt-light font-normal
+                                               truncate max-w-[9ch]" title={r.out_gate}>
+                                {r.out_gate.replace(/^.*_/, "")}
+                              </span>
+                            )}
                           </Td>
                           <Td className="text-right tabular-nums text-txt-secondary">
                             {span(r.minutes) || "—"}

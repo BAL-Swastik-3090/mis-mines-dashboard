@@ -116,6 +116,8 @@ def register(
                 "minutes": mins,
                 "punches": hit["punches"] if hit else 0,
                 "devices": hit["devices"] if hit else 0,
+                "in_gate": hit["in_gate"] if hit else None,
+                "out_gate": hit["out_gate"] if hit else None,
                 "state": state,
                 # A day still running is not an incomplete record.
                 "running": on == today and state == "IN_ONLY",

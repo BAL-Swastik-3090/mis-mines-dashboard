@@ -155,6 +155,27 @@ _EMP_IDS_AT: float = 0.0
 _EMP_TTL = 900.0
 
 
+_DEVICES: dict[int, str] = {}
+_DEVICES_AT: float = 0.0
+
+
+def _device_names(cur) -> dict[int, str]:
+    """Reader id to the name it was given when it was installed.
+
+    Worth having because the names say where the gate is — the CLL workmen
+    punch at SUKINDA MINES_CON_CLL_IN_1 and _OUT_1, which are the contractor's
+    own gates. A few dozen rows, cached with the employee map.
+    """
+    global _DEVICES, _DEVICES_AT
+    import time
+    if _DEVICES and time.monotonic() - _DEVICES_AT < _EMP_TTL:
+        return _DEVICES
+    cur.execute("SELECT ID, LTRIM(RTRIM(Name)) AS name FROM dbo.tblMDevice")
+    _DEVICES = {r["ID"]: r["name"] for r in cur.fetchall()}
+    _DEVICES_AT = time.monotonic()
+    return _DEVICES
+
+
 def _employee_ids(cur) -> dict[str, int]:
     global _EMP_IDS, _EMP_IDS_AT
     import time
@@ -202,13 +223,22 @@ def punch_days(day_from: date | str, day_to: date | str,
                            MIN(CASE WHEN a.InOutMode = 1 THEN a.PunchTime END) AS first_in,
                            MAX(CASE WHEN a.InOutMode = 2 THEN a.PunchTime END) AS last_out,
                            COUNT(*)                                         AS punches,
-                           COUNT(DISTINCT a.DeviceID)                       AS devices
+                           COUNT(DISTINCT a.DeviceID)                       AS devices,
+                           -- The gate they used, not strictly the gate of the
+                           -- first punch: readers are installed as IN gates or
+                           -- OUT gates, so a worker uses one of each and the
+                           -- lowest id is that one. Keeping it inside the same
+                           -- aggregate costs nothing; a window function to be
+                           -- exactly right would cost a scan.
+                           MIN(CASE WHEN a.InOutMode = 1 THEN a.DeviceID END) AS in_device,
+                           MIN(CASE WHEN a.InOutMode = 2 THEN a.DeviceID END) AS out_device
                       FROM Attendance.tblTAttendanceData a
                      WHERE a.AttendanceDate BETWEEN %s AND %s
                        AND a.EmployeeID IN ({placeholders})
                      GROUP BY a.EmployeeID, a.AttendanceDate
                 """, tuple([frm, to] + list(mine)))
                 rows = cur.fetchall()
+                devices = _device_names(cur)
     except Exception:                  # noqa: BLE001 — the register still works
         logger.warning("Attendance readers unreachable for %s..%s", frm, to, exc_info=True)
         raise
@@ -219,6 +249,8 @@ def punch_days(day_from: date | str, day_to: date | str,
             "last_out": r["last_out"],
             "punches": int(r["punches"] or 0),
             "devices": int(r["devices"] or 0),
+            "in_gate": devices.get(r["in_device"]),
+            "out_gate": devices.get(r["out_device"]),
         }
         for r in rows if r["emp_id"] in mine
     }

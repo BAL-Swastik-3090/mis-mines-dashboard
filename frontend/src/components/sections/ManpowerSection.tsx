@@ -42,8 +42,8 @@ const TABS: { id: TabId; label: string; icon: React.ElementType; tone: Tone; hin
   // Read-only for now: it shows what the gate readers recorded and stores
   // nothing, because how much history to hold and what a missing punch means
   // are decisions the mine has not taken yet.
-  { id: "attendance", label: "Attendance", icon: CalendarCheck, tone: "sky",
-    hint: "What the gate readers recorded, day by day — first punch in, last punch out, and every punch behind them." },
+  { id: "attendance", label: "Activity", icon: CalendarCheck, tone: "sky",
+    hint: "What the gate readers recorded — punch behaviour day by day, and the month at a glance. Not an attendance sheet: a missing punch is a gap in the record, not a claim that somebody was absent." },
   { id: "assessment", label: "Assessment", icon: ShieldCheck, tone: "violet",
     hint: "Who is cleared to run what, who is overdue, and who has never been assessed at all." },
   { id: "analytics", label: "Analytics", icon: BarChart3, tone: "sky",
