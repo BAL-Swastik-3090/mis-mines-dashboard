@@ -5,6 +5,7 @@ import Header from "./Header";
 import MainLayout from "./MainLayout";
 import { useAppPage } from "@/contexts/useAppPage";
 import { useAuth } from "@/contexts/useAuth";
+import { canOpen, landingPage } from "@/contexts/pageAccess";
 import api, { AUTH_EXPIRED_EVENT } from "@/lib/api";
 
 export default function AuthWrapper({ children }: { children: React.ReactNode }) {
@@ -86,29 +87,17 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
   // page they can still open instead.
   useEffect(() => {
     if (!user) return;
-    const allowed = user.allowed_pages ?? [];
-    if (allowed.length === 0) return;                       // nothing to enforce
-    // Neither administration screen is in the page matrix — each is gated on the
-    // permissions it needs, so both must be exempted from the allowed_pages
-    // check or the guard would bounce an administrator straight off them.
-    const perms = user.permissions ?? [];
-    if (page === "access-control") {
-      if (!perms.includes("access.users.view")) setPage(allowed[0] as typeof page);
-      return;
-    }
-    if (page === "minehub") {
-      if (!perms.includes("platform.registry.view")) setPage(allowed[0] as typeof page);
-      return;
-    }
-    if (page === "operations") {
-      if (!perms.includes("ops.shift.view")) setPage(allowed[0] as typeof page);
-      return;
-    }
-    if (page === "workforce") {
-      if (!perms.includes("ops.roster.view")) setPage(allowed[0] as typeof page);
-      return;
-    }
-    if (!allowed.includes(page)) setPage(allowed[0] as typeof page);
+    // One rule for both kinds of page — the five dashboards from the page
+    // matrix, and the platform screens gated on their own permission. This
+    // used to be four special cases and a fall-through, which is how the
+    // Workforce page came to bounce people off itself when it was added.
+    if (canOpen(user, page)) return;
+
+    const somewhere = landingPage(user);
+    // Null is a real state: somebody with access to nothing. Leaving them where
+    // they are lets the page say so, which is better than a redirect loop
+    // between screens they cannot open either.
+    if (somewhere) setPage(somewhere);
   }, [user, page, setPage]);
 
   // One row in digital_apps_page_views per page the user opens, which is what

@@ -35,23 +35,45 @@ SessionLocal = None
 
 
 def _reachable(url) -> bool:
-    """Whether something is listening, without waiting out a TCP timeout.
+    """Whether this address will actually give us a session.
 
-    A plain connection attempt to an address nothing answers on takes twenty
-    seconds to fail on Windows, which is twenty seconds of a dead application
-    at start-up. Two seconds is plenty for a host on the same LAN or a tunnel
-    on localhost, and anything slower than that is not the route to use anyway.
+    The first version of this opened a socket and called that reachable, which
+    is not the same question and got the VPN case exactly wrong: over the VPN
+    the server accepts the TCP connection and then refuses the login, because
+    pg_hba admits that address only encrypted and the server offers no TLS. So
+    the probe said yes, the fallback never fired, and every screen showed a
+    database error while a working tunnel sat unused on localhost.
+
+    A real connection is the only honest test. The socket is still checked
+    first, because a connection attempt to an address nothing answers on takes
+    twenty seconds to fail on Windows and this runs at start-up.
     """
     import socket
+
     probe = socket.socket()
     probe.settimeout(2)
     try:
         probe.connect((url.host, url.port or 5432))
-        return True
     except OSError:
         return False
     finally:
         probe.close()
+
+    # It is listening. Now find out whether it will let us in.
+    try:
+        import psycopg
+        with psycopg.connect(
+            host=url.host, port=url.port or 5432, dbname=url.database,
+            user=url.username, password=url.password,
+            sslmode=url.query.get("sslmode", "prefer"),
+            connect_timeout=5,
+        ) as conn:
+            conn.execute("SELECT 1")
+        return True
+    except Exception as exc:                          # noqa: BLE001
+        logger.info("%s:%s is listening but refused a session (%s)",
+                    url.host, url.port, str(exc).splitlines()[0][:120])
+        return False
 
 
 def _choose_url():

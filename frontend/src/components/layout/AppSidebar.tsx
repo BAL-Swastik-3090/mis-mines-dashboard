@@ -3,6 +3,7 @@ import {
   Radar, LayoutDashboard, Gauge, Zap, Activity, ClipboardList, Sparkles, Boxes, ShieldCheck,
          ChevronLeft, ChevronRight, LogOut, ExternalLink, CalendarRange } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
+import { canOpen } from "@/contexts/pageAccess";
 import { useSidebar }               from "@/contexts/useSidebar";
 import { useAuth }                  from "@/contexts/useAuth";
 
@@ -65,7 +66,6 @@ export default function AppSidebar() {
   const { page, setPage }      = useAppPage();
   const { collapsed, toggle }  = useSidebar();
   const user                   = useAuth((s) => s.user);
-  const canAny                 = useAuth((s) => s.canAny);
 
   /* Initials for the avatar. Names here arrive as "AKASH ." and
      "SWASTIK ROY CHOUDHURY", so take the first letter of the first two parts
@@ -78,13 +78,14 @@ export default function AppSidebar() {
     .join("") || (user?.emp_id ?? "?").slice(0, 2);
 
   /* Only the pages this user may open. The same rule is enforced on the API, so
-     this hides entries that would 403 anyway rather than being the gate itself.
-     An empty allowed_pages (older session payload) shows everything rather than
-     presenting an empty sidebar. */
-  const allowed = user?.allowed_pages ?? [];
+     this hides entries that would 403 anyway rather than being the gate itself
+     — but hiding them matters: a tab that opens onto its own error message
+     reads as a broken platform rather than a closed door.
+
+     canOpen draws the absent/empty distinction that this used to get wrong. */
   const items: NavItem[] = [
     ...NAV_ITEMS.filter(
-      (i) => i.kind === "link" || allowed.length === 0 || allowed.includes(i.id),
+      (i) => i.kind === "link" || canOpen(user, i.id as AppPage),
     ),
     // Permission, not role name — a role created in the UI reaches these entries
     // without any code change.
@@ -95,10 +96,10 @@ export default function AppSidebar() {
     // next one. Access Control is last because it is opened about twice a
     // month, and a screen that rare sitting above daily work is a screen people
     // learn to scroll past.
-    ...(canAny("platform.registry.view") ? [PLATFORM_ITEM] : []),
-    ...(canAny("ops.shift.view") ? [OPERATIONS_ITEM] : []),
-    ...(canAny("ops.roster.view") ? [WORKFORCE_ITEM] : []),
-    ...(canAny("access.users.view") ? [ACCESS_ITEM] : []),
+    ...(canOpen(user, "minehub") ? [PLATFORM_ITEM] : []),
+    ...(canOpen(user, "operations") ? [OPERATIONS_ITEM] : []),
+    ...(canOpen(user, "workforce") ? [WORKFORCE_ITEM] : []),
+    ...(canOpen(user, "access-control") ? [ACCESS_ITEM] : []),
   ];
 
   return (

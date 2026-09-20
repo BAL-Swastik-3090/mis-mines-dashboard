@@ -17,8 +17,14 @@ export interface AuthUser {
   roles: UserRole[];
   /** Everything this person may do. The single source of truth for the UI. */
   permissions: string[];
-  /** Pages this user may open, derived server-side from the dashboard.* permissions. */
-  allowed_pages: string[];
+  /** Pages this user may open, derived server-side from the dashboard.*
+   *  permissions.
+   *
+   *  Optional on purpose: absent means an older session payload that predates
+   *  the field, and is tolerated. An empty array means this person has no
+   *  dashboards, which is an answer and must be honoured. Collapsing the two
+   *  is what showed every dashboard tab to somebody holding none of them. */
+  allowed_pages?: string[];
 }
 
 interface AuthStore {
