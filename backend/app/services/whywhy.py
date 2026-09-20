@@ -149,7 +149,12 @@ def _records(db: Session, f: date, t: date) -> list[dict]:
                a.shift, a.breakdown_start_time, a.breakdown_duration_hr,
                a.total_cost, a.breakdown_description, a.immediate_action,
                a.rca_category, a.rca_sub_category, a.problem_who,
-               TRIM(COALESCE(w.why1_a, '')) AS why1
+               TRIM(COALESCE(w.why1_a, '')) AS why1,
+               TRIM(COALESCE(w.why2_a, '')) AS why2,
+               TRIM(COALESCE(w.why3_a, '')) AS why3,
+               TRIM(COALESCE(w.why4_a, '')) AS why4,
+               TRIM(COALESCE(w.why5_a, '')) AS why5,
+               TRIM(COALESCE(w.final_verdict, '')) AS verdict
         FROM {ANALYSIS} a
         LEFT JOIN {ROWS} w ON w.whywhy_id = a.id
         WHERE a.breakdown_date >= :f AND a.breakdown_date <= :t
@@ -465,6 +470,132 @@ def _completeness(recs: list[dict]) -> dict:
     }
 
 
+
+# A machine needs a handful of events before its own Pareto says anything. Below
+# this, one failure is 100% of the chart and the reader draws a false conclusion.
+MIN_EVENTS_FOR_MACHINE_PARETO = 4
+
+# Which recorded cause counts as an operating problem rather than a mechanical
+# one. Kept as a set so a future taxonomy change is one edit, not a grep.
+OPERATOR_CAUSES = {"Operator Error"}
+
+
+def _machine_breakdown(recs: list[dict], limit: int = 10) -> list[dict]:
+    """Per machine: its own failure-mode Pareto and its own cause split.
+
+    The fleet-wide Pareto says tyres are the biggest failure mode; it does not
+    say that tyres are almost entirely a tipper problem and that the excavators
+    fail hydraulically instead. Aggregating hides exactly the thing a maintenance
+    plan needs, because the plan is written per machine.
+
+    Ordered by breakdown count rather than by rate: this table answers "what is
+    wrong with this machine", and the rate table above already answers "which
+    machine is worst".
+    """
+    g: dict[str, list[dict]] = defaultdict(list)
+    for r in recs:
+        g[_machine_key(r["equipment_desc"])].append(r)
+
+    out = []
+    for m, v in sorted(g.items(), key=lambda kv: -len(kv[1])):
+        if len(v) < MIN_EVENTS_FOR_MACHINE_PARETO:
+            continue
+        modes = _share(Counter(family_of(x["breakdown_description"]) for x in v), len(v))
+        causes = _share(
+            Counter(x["rca_category"] for x in v if x["rca_category"]),
+            sum(1 for x in v if x["rca_category"]),
+        )
+        cost_by_mode: dict[str, float] = defaultdict(float)
+        hrs_by_mode: dict[str, float] = defaultdict(float)
+        for x in v:
+            fam = family_of(x["breakdown_description"])
+            cost_by_mode[fam] += _f(x["total_cost"])
+            hrs_by_mode[fam] += _f(x["breakdown_duration_hr"])
+        for mo in modes:
+            mo["cost"] = round(cost_by_mode[mo["label"]], 0)
+            mo["hours"] = round(hrs_by_mode[mo["label"]], 1)
+
+        # How concentrated this machine's failures are. A machine whose top two
+        # modes cover 80% has a fixable pattern; one spread across eight does not.
+        run, top_n = 0, 0
+        for mo in modes:
+            run += mo["count"]
+            top_n += 1
+            if run >= 0.8 * len(v):
+                break
+
+        out.append({
+            "machine": m,
+            "breakdowns": len(v),
+            "hours": round(sum(_f(x["breakdown_duration_hr"]) for x in v), 1),
+            "cost": round(sum(_f(x["total_cost"]) for x in v), 0),
+            "modes": modes,
+            "causes": causes,
+            "causes_recorded": sum(1 for x in v if x["rca_category"]),
+            "modes_to_80pct": top_n,
+            "concentrated": top_n <= 2,
+        })
+    return out[:limit]
+
+
+def _problem_statement(r: dict) -> str:
+    """One sentence saying what happened, from what was actually recorded.
+
+    problem_what / _when / _where / _how are empty on every row in this
+    register, so the statement is assembled from the fields that ARE filled:
+    the machine, the date, the shift and the defect text. Nothing is inferred.
+    """
+    when = r["breakdown_date"].strftime("%d %b %Y") if r["breakdown_date"] else "date not recorded"
+    shift = f", shift {r['shift']}" if r["shift"] else ""
+    defect = (r["breakdown_description"] or "").strip() or "defect not described"
+    return f"{_machine_key(r['equipment_desc'])} on {when}{shift}: {defect.title()}"
+
+
+def _why_chain(r: dict) -> list[str]:
+    return [r[f"why{i}"] for i in range(1, 6) if (r.get(f"why{i}") or "").strip()]
+
+
+def _operator_issues(recs: list[dict], limit: int = 40) -> dict:
+    """Breakdowns whose recorded cause is an operating error, stated in full.
+
+    This is the input to training, so it carries the problem statement and the
+    Why-chain rather than a count. A count tells you operator error is 24% of
+    failures; it does not tell you that the failures are pins, bucket lugs and
+    track chains, which is what a toolbox talk would have to cover.
+
+    The operator name is carried where recorded but is NOT what selects a row —
+    selection is on the recorded cause. Naming someone records presence.
+    """
+    issues = [r for r in recs if (r["rca_category"] or "") in OPERATOR_CAUSES]
+    rows = []
+    for r in sorted(issues, key=lambda x: -_f(x["total_cost"]))[:limit]:
+        who = (r["problem_who"] or "").strip()
+        rows.append({
+            "machine": _machine_key(r["equipment_desc"]),
+            "date": r["breakdown_date"].isoformat() if r["breakdown_date"] else None,
+            "shift": r["shift"],
+            "defect": (r["breakdown_description"] or "").strip(),
+            "family": family_of(r["breakdown_description"]),
+            "sub_category": (r["rca_sub_category"] or "").strip() or None,
+            "operator": who if who not in ("", "-") else None,
+            "problem_statement": _problem_statement(r),
+            "why_chain": _why_chain(r),
+            "hours": round(_f(r["breakdown_duration_hr"]), 1),
+            "cost": round(_f(r["total_cost"]), 0),
+        })
+    named = sum(1 for r in issues if (r["problem_who"] or "").strip() not in ("", "-"))
+    return {
+        "events": len(issues),
+        "named_events": named,
+        "hours": round(sum(_f(r["breakdown_duration_hr"]) for r in issues), 1),
+        "cost": round(sum(_f(r["total_cost"]) for r in issues), 0),
+        "by_family": _share(
+            Counter(family_of(r["breakdown_description"]) for r in issues), len(issues)
+        ),
+        "with_why_chain": sum(1 for r in issues if _why_chain(r)),
+        "issues": rows,
+    }
+
 # -- public -------------------------------------------------------------------
 def compute_whywhy(db: Session, from_date: date | None, to_date: date | None) -> dict:
     """Every analysis point for the window, ready to chart and ready to narrate."""
@@ -473,7 +604,8 @@ def compute_whywhy(db: Session, from_date: date | None, to_date: date | None) ->
         return {
             "window": win, "headline": None, "months": [], "machines": [],
             "failure_modes": None, "root_causes": None, "timing": None,
-            "repeats": [], "watchlist": [], "operators": None, "completeness": None,
+            "repeats": [], "watchlist": [], "operators": None,
+            "machine_detail": [], "operator_issues": None, "completeness": None,
         }
 
     f, t = win["from"], win["to"]
@@ -496,6 +628,8 @@ def compute_whywhy(db: Session, from_date: date | None, to_date: date | None) ->
         "repeats": _repeats(recs),
         "watchlist": _watchlist(recs, t),
         "operators": _operators(recs),
+        "machine_detail": _machine_breakdown(recs),
+        "operator_issues": _operator_issues(recs),
         "completeness": _completeness(recs),
     }
 
@@ -728,5 +862,136 @@ async def generate_narrative(
         "model": resp.model,
         "tokens": resp.usage.total_tokens if resp.usage else None,
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "error": None,
+    }
+
+
+# -- training -----------------------------------------------------------------
+TRAINING_SYSTEM = (
+    "You are a mining equipment trainer writing a toolbox-training plan for "
+    "excavator and tipper operators at a chrome ore mine in Odisha, India.\n\n"
+    "You are given real breakdowns whose recorded root cause was an operating "
+    "error, each with its problem statement and the Why-Why chain the "
+    "maintenance team wrote.\n\n"
+    "RULES:\n"
+    "1. Every topic must trace to the incidents given. Do not invent failures, "
+    "do not add generic safety modules nobody's data asked for.\n"
+    "2. Name the machines and defects from the incidents as the evidence.\n"
+    "3. Do NOT name, rank or blame individual operators. Train the fleet, not a "
+    "person. Operator names in the data record who was present, not who is at "
+    "fault, and there is no hours denominator to compare people fairly.\n"
+    "4. Be concrete and physical. 'Do not side-load the bucket when prying' is "
+    "a topic; 'improve operational awareness' is not.\n"
+    "5. Write for a supervisor running a 30-minute session at shift handover."
+)
+
+TRAINING_SECTIONS = [
+    ("topics", "TOPICS",
+     "4 to 6 training topics, most important first. One per block, in exactly "
+     "this format, each field on its own line:\n"
+     "TOPIC: <short title, max 8 words>\n"
+     "WHY: <the failure pattern in the data that calls for it, with counts and "
+     "machine names>\n"
+     "COVER: <3 specific things to teach or demonstrate, separated by semicolons>\n"
+     "CHECK: <how a supervisor confirms it stuck, one line>\n"),
+    ("priority", "PRIORITY",
+     "Which single topic to run first and why, in 2 sentences, referring to "
+     "cost or downtime from the data."),
+]
+
+# Enough incidents to teach from, few enough to stay inside a sane prompt. The
+# list is already ordered by repair cost, so a cut here keeps the expensive ones.
+TRAINING_INCIDENT_LIMIT = 25
+
+
+def _training_facts(d: dict) -> str:
+    o = d["operator_issues"]
+    L = [
+        f"PERIOD {d['window']['from']} to {d['window']['to']}",
+        f"OPERATING-ERROR BREAKDOWNS {o['events']} of "
+        f"{d['headline']['breakdowns']} total, {o['hours']} hours lost, "
+        f"Rs {o['cost']:,.0f} in repairs",
+        "",
+        "BY COMPONENT GROUP:",
+    ]
+    L += [f"  {x['label']}: {x['count']} ({x['pct']}%)" for x in o["by_family"]]
+    L += ["", f"INCIDENTS (the {min(len(o['issues']), TRAINING_INCIDENT_LIMIT)} "
+              f"most expensive):"]
+    for i in o["issues"][:TRAINING_INCIDENT_LIMIT]:
+        L.append(f"  - {i['problem_statement']} "
+                 f"[{i['family']}, {i['hours']}h, Rs {i['cost']:,.0f}]")
+        for n, c in enumerate(i["why_chain"], 1):
+            L.append(f"      Why {n}: {c}")
+    return "\n".join(L)
+
+
+async def generate_training(
+    db: Session, from_date: date | None, to_date: date | None
+) -> dict:
+    """Training topics derived from the operating-error breakdowns themselves.
+
+    Kept apart from the main narrative because it answers a different question
+    for a different reader: the narrative tells a manager what the fleet is
+    doing, this tells a supervisor what to teach on Monday. It also needs the
+    incident text in the prompt, which the narrative deliberately does without.
+    """
+    from openai import AsyncOpenAI
+
+    from app.config import get_settings
+
+    facts = compute_whywhy(db, from_date, to_date)
+    issues = facts.get("operator_issues")
+    if not issues or issues["events"] == 0:
+        return {
+            "period": facts["window"], "summary": issues, "sections": {},
+            "model": None, "tokens": None, "generated_at": None,
+            "unverified_numbers": [],
+            "error": "No breakdowns with a recorded operating-error cause in this period.",
+        }
+
+    spec = "\n".join(f"---{tag}---\n{desc}" for _, tag, desc in TRAINING_SECTIONS)
+    prompt = (
+        f"{_training_facts(facts)}\n\n"
+        "Write the following sections, each preceded by its marker exactly as "
+        "shown. Do not add any other text.\n\n"
+        f"{spec}\n---END---"
+    )
+
+    st = get_settings()
+    client = AsyncOpenAI(
+        base_url=st.qwen_base_url + "/v1", api_key=st.qwen_api_key, timeout=120.0
+    )
+    resp = await client.chat.completions.create(
+        model=st.qwen_model,
+        messages=[
+            {"role": "system", "content": TRAINING_SYSTEM},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.3,
+        max_tokens=2000,
+    )
+    raw = resp.choices[0].message.content or ""
+
+    tags = [t for _, t, _ in TRAINING_SECTIONS] + ["END"]
+    sections: dict[str, str] = {}
+    for (key, tag, _), nxt in zip(TRAINING_SECTIONS, tags[1:]):
+        start = raw.find(f"---{tag}---")
+        if start == -1:
+            sections[key] = ""
+            continue
+        start += len(tag) + 6
+        end = raw.find(f"---{nxt}---", start)
+        sections[key] = (raw[start:end] if end != -1 else raw[start:]).strip()
+
+    return {
+        "period": facts["window"],
+        "summary": {k: issues[k] for k in
+                    ("events", "named_events", "hours", "cost", "by_family", "with_why_chain")},
+        "incidents": issues["issues"][:TRAINING_INCIDENT_LIMIT],
+        "sections": sections,
+        "model": resp.model,
+        "tokens": resp.usage.total_tokens if resp.usage else None,
+        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "unverified_numbers": audit_numbers(raw, prompt),
         "error": None,
     }

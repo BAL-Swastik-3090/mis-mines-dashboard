@@ -3,11 +3,13 @@ import { useState } from "react";
 import dynamic from "next/dynamic";
 import {
   Wrench, AlertTriangle, Clock, Repeat, Users, Database,
-  Sparkles, RefreshCw, Info, ChevronRight,
+  Sparkles, RefreshCw, Info, ChevronRight, GraduationCap, Layers,
 } from "lucide-react";
-import { useWhyWhy, useWhyWhyNarrative } from "@/hooks/useInsights";
+import { useWhyWhy, useWhyWhyNarrative, useWhyWhyTraining } from "@/hooks/useInsights";
 import { formatIndian } from "@/lib/utils";
-import type { WhyWhyShare, WhyWhyWatch } from "@/types";
+import type {
+  WhyWhyShare, WhyWhyWatch, WhyWhyMachineDetail, WhyWhyOperatorIssues,
+} from "@/types";
 
 const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
 
@@ -161,6 +163,294 @@ const WATCH_STYLE: Record<WhyWhyWatch["state"], { cls: string; label: (w: WhyWhy
   watch: { cls: "bg-navy/5 text-navy border-navy/15",           label: (w) => `In ${w.due_in_days}d` },
   held:  { cls: "bg-success/10 text-success border-success/25", label: () => "Appears held" },
 };
+
+// ── equipment-wise Pareto + RCA ──────────────────────────────
+/**
+ * One machine per block: its own failure Pareto beside its own cause split.
+ *
+ * The fleet Pareto says tyres are the biggest failure mode. It does not say
+ * that tyres are almost entirely a tipper problem while the excavators fail
+ * hydraulically — and a maintenance plan is written per machine, so the
+ * aggregate hides the thing the plan needs.
+ */
+function MachineDetail({ rows }: { rows: WhyWhyMachineDetail[] }) {
+  const [open, setOpen] = useState<string | null>(rows[0]?.machine ?? null);
+  return (
+    <div className="divide-y divide-border-light">
+      {rows.map((m) => {
+        const isOpen = open === m.machine;
+        return (
+          <div key={m.machine} className="py-2 first:pt-0 last:pb-0">
+            <button
+              onClick={() => setOpen(isOpen ? null : m.machine)}
+              className="flex w-full items-center gap-2 text-left"
+            >
+              <ChevronRight
+                size={14}
+                className={`shrink-0 text-txt-muted transition-transform ${isOpen ? "rotate-90" : ""}`}
+              />
+              <span className="font-mono text-[12.5px] font-bold text-navy w-[72px] shrink-0">
+                {m.machine}
+              </span>
+              <span className="font-mono text-[12px] text-txt-secondary shrink-0">
+                {m.breakdowns}
+              </span>
+              <span className="text-[11px] text-txt-muted shrink-0">breakdowns</span>
+              {/* Concentration is the actionable bit: two modes covering 80% is a
+                  pattern you can fix, eight is scatter you can only monitor. */}
+              <span
+                className={`ml-auto shrink-0 rounded border px-1.5 py-[1px] text-[10.5px] font-semibold ${
+                  m.concentrated
+                    ? "border-success/25 bg-success/10 text-success"
+                    : "border-border bg-bg-subtle text-txt-muted"
+                }`}
+              >
+                {m.concentrated
+                  ? `${m.modes_to_80pct} mode${m.modes_to_80pct > 1 ? "s" : ""} = 80%`
+                  : `spread over ${m.modes_to_80pct}`}
+              </span>
+              <span className="font-mono text-[11px] text-txt-muted w-[70px] text-right shrink-0">
+                {num(m.hours, 1)} h
+              </span>
+            </button>
+
+            {isOpen && (
+              <div className="mt-2.5 grid gap-4 pl-[30px] md:grid-cols-2">
+                <div>
+                  <div className="mb-1.5 font-condensed text-[10.5px] font-bold uppercase tracking-widest text-txt-muted">
+                    Failure mode
+                  </div>
+                  <ShareBars rows={m.modes.slice(0, 5)} />
+                </div>
+                <div>
+                  <div className="mb-1.5 font-condensed text-[10.5px] font-bold uppercase tracking-widest text-txt-muted">
+                    Root cause
+                    <span className="ml-1.5 font-sans font-normal normal-case tracking-normal">
+                      ({m.causes_recorded} of {m.breakdowns} recorded)
+                    </span>
+                  </div>
+                  {m.causes.length ? (
+                    <ShareBars rows={m.causes} colours />
+                  ) : (
+                    <p className="text-[11.5px] text-txt-muted">No cause recorded on this machine.</p>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── operator issues + training ───────────────────────────────
+/** Topics arrive as TOPIC/WHY/COVER/CHECK lines — see TRAINING_SECTIONS. */
+function TrainingTopics({ text }: { text: string }) {
+  const blocks = text
+    .split(/(?=TOPIC:)/)
+    .map((b) => b.trim())
+    .filter((b) => b.startsWith("TOPIC:"));
+  if (!blocks.length) return <Prose text={text} />;
+
+  const field = (b: string, key: string) => {
+    const m = b.match(new RegExp(`${key}:\\s*(.+?)(?=\\n[A-Z]{3,}:|$)`, "s"));
+    return m ? m[1].trim() : "";
+  };
+
+  return (
+    <div className="space-y-3">
+      {blocks.map((b, i) => {
+        const cover = field(b, "COVER").split(";").map((x) => x.trim()).filter(Boolean);
+        return (
+          <div key={i} className="rounded-lg border border-border bg-bg-subtle/40 px-3.5 py-3">
+            <div className="flex items-start gap-2">
+              <span className="mt-[1px] grid h-[18px] w-[18px] shrink-0 place-items-center rounded bg-navy text-[10.5px] font-bold text-white">
+                {i + 1}
+              </span>
+              <h4 className="text-[13px] font-bold leading-snug text-txt-primary">
+                {field(b, "TOPIC")}
+              </h4>
+            </div>
+            {field(b, "WHY") ? (
+              <p className="mt-1.5 pl-[26px] text-[11.5px] leading-relaxed text-txt-muted">
+                {field(b, "WHY")}
+              </p>
+            ) : null}
+            {cover.length ? (
+              <ul className="mt-2 space-y-1 pl-[26px]">
+                {cover.map((c, j) => (
+                  <li key={j} className="flex gap-1.5 text-[12px] leading-snug text-txt-secondary">
+                    <span className="text-accent">•</span>
+                    <span>{c}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {field(b, "CHECK") ? (
+              <p className="mt-2 pl-[26px] text-[11px] text-txt-muted">
+                <b className="font-semibold text-txt-secondary">Check</b> {field(b, "CHECK")}
+              </p>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function OperatorIssues({ data }: { data: WhyWhyOperatorIssues }) {
+  const [showAll, setShowAll] = useState(false);
+  const [wantTraining, setWantTraining] = useState(false);
+  const tr = useWhyWhyTraining(wantTraining);
+  const shown = showAll ? data.issues : data.issues.slice(0, 6);
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
+        <Stat label="Events" value={num(data.events)} sub="cause = operating error" />
+        <Stat label="Downtime" value={`${num(data.hours, 1)} h`} />
+        <Stat label="Repair cost" value={`₹${formatIndian(data.cost)}`} />
+        <Stat label="With Why-chain" value={num(data.with_why_chain)} sub={`of ${data.events}`} />
+      </div>
+
+      <div>
+        <div className="mb-1.5 font-condensed text-[10.5px] font-bold uppercase tracking-widest text-txt-muted">
+          What breaks
+        </div>
+        <ShareBars rows={data.by_family.slice(0, 6)} />
+      </div>
+
+      <div>
+        <div className="mb-1.5 font-condensed text-[10.5px] font-bold uppercase tracking-widest text-txt-muted">
+          Problem statements
+          <span className="ml-1.5 font-sans font-normal normal-case tracking-normal">
+            most expensive first
+          </span>
+        </div>
+        <div className="divide-y divide-border-light">
+          {shown.map((i, k) => (
+            <div key={k} className="py-2.5 first:pt-0">
+              <div className="flex items-start gap-2">
+                <span className="text-[12.5px] font-semibold leading-snug text-txt-primary">
+                  {i.problem_statement}
+                </span>
+                <span className="ml-auto shrink-0 font-mono text-[11.5px] text-navy">
+                  ₹{formatIndian(i.cost)}
+                </span>
+              </div>
+              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-txt-muted">
+                <span>{i.family}</span>
+                <span>{num(i.hours, 1)} h</span>
+                {i.sub_category ? <span>{i.sub_category}</span> : null}
+                {/* Shown because it is recorded, labelled so it is not read as blame. */}
+                {i.operator ? <span>Operator on record: {i.operator}</span> : null}
+              </div>
+              {i.why_chain.length ? (
+                <ol className="mt-1.5 space-y-[3px] border-l-2 border-accent/25 pl-2.5">
+                  {i.why_chain.map((c, j) => (
+                    <li key={j} className="text-[11.5px] leading-snug text-txt-secondary">
+                      <b className="text-txt-muted">Why {j + 1}</b> {c}
+                    </li>
+                  ))}
+                </ol>
+              ) : null}
+            </div>
+          ))}
+        </div>
+        {data.issues.length > 6 && (
+          <button
+            onClick={() => setShowAll(!showAll)}
+            className="mt-2 text-[11.5px] font-semibold text-navy hover:underline"
+          >
+            {showAll ? "Show fewer" : `Show all ${data.issues.length}`}
+          </button>
+        )}
+      </div>
+
+      {/* ── training ── */}
+      <div className="rounded-lg border border-accent/25 bg-accent/5 px-3.5 py-3">
+        <div className="flex items-center gap-2">
+          <GraduationCap size={15} className="text-[#c8960c]" />
+          <span className="font-condensed text-[11.5px] font-bold uppercase tracking-widest text-txt-secondary">
+            Training topics
+          </span>
+          {tr.data?.model ? (
+            <span className="ml-auto text-[10.5px] text-txt-muted">
+              {tr.data.model} · {tr.data.generated_at}
+            </span>
+          ) : null}
+        </div>
+
+        {!wantTraining ? (
+          <div className="flex flex-col items-start gap-2 pt-2">
+            <p className="text-[12px] leading-relaxed text-txt-muted">
+              BAL-AI reads the {data.events} problem statements above and returns a
+              toolbox plan — what to teach, why the data calls for it, and how a
+              supervisor checks it stuck. It is told to train the fleet and never
+              to name or rank an operator.
+            </p>
+            <button
+              onClick={() => setWantTraining(true)}
+              className="flex items-center gap-1.5 rounded-md bg-navy px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-navy/90"
+            >
+              <GraduationCap size={13} /> Suggest training topics
+            </button>
+          </div>
+        ) : tr.isLoading ? (
+          <div className="flex items-center gap-2 py-5 text-[12.5px] text-txt-muted">
+            <RefreshCw size={14} className="animate-spin" /> Reading the incidents…
+          </div>
+        ) : tr.isError ? (
+          <div className="flex items-start gap-2 py-3">
+            <AlertTriangle size={14} className="mt-[2px] shrink-0 text-danger" />
+            <div>
+              <p className="text-[12px] text-txt-secondary">
+                {(tr.error as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+                  ?? "Could not reach the BAL-AI gateway."}
+              </p>
+              <button
+                onClick={() => tr.refetch()}
+                className="mt-1.5 flex items-center gap-1.5 text-[12px] font-semibold text-navy hover:underline"
+              >
+                <RefreshCw size={12} /> Try again
+              </button>
+            </div>
+          </div>
+        ) : tr.data?.error ? (
+          <p className="py-3 text-[12px] text-txt-muted">{tr.data.error}</p>
+        ) : tr.data ? (
+          <div className="space-y-3 pt-2.5">
+            {tr.data.unverified_numbers?.length > 0 && (
+              <div className="flex items-start gap-2 rounded border border-danger/25 bg-danger/5 px-3 py-2">
+                <AlertTriangle size={13} className="mt-[2px] shrink-0 text-danger" />
+                <p className="text-[11.5px] leading-snug text-txt-secondary">
+                  <b>Check before quoting.</b> Not in the data given:{" "}
+                  <span className="font-mono">{tr.data.unverified_numbers.join(", ")}</span>.
+                </p>
+              </div>
+            )}
+            {tr.data.sections.topics ? <TrainingTopics text={tr.data.sections.topics} /> : null}
+            {tr.data.sections.priority ? (
+              <div className="rounded border border-border bg-white px-3 py-2">
+                <div className="mb-1 font-condensed text-[10.5px] font-bold uppercase tracking-widest text-txt-muted">
+                  Run this one first
+                </div>
+                <Prose text={tr.data.sections.priority} />
+              </div>
+            ) : null}
+            <button
+              onClick={() => tr.refetch()}
+              className="flex items-center gap-1.5 text-[11.5px] text-txt-muted hover:text-navy"
+            >
+              <RefreshCw size={12} /> Regenerate
+            </button>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
 // ── section ──────────────────────────────────────────────────
 export default function WhyWhyAnalysisSection() {
@@ -380,6 +670,15 @@ export default function WhyWhyAnalysisSection() {
         </Card>
       </div>
 
+      {/* ── equipment-wise Pareto + RCA ── */}
+      {data.machine_detail?.length > 0 && (
+        <Card icon={<Layers size={15} className="text-navy" />}
+              title="Equipment-wise failure mode & root cause"
+              note="machines with 4+ breakdowns">
+          <MachineDetail rows={data.machine_detail} />
+        </Card>
+      )}
+
       {/* ── operators ── */}
       {data.operators && data.operators.named_events > 0 && (
         <Card icon={<Users size={15} className="text-[#5e35b1]" />} title="Operators named on the record"
@@ -399,6 +698,15 @@ export default function WhyWhyAnalysisSection() {
           <p className="mt-3 border-t border-border-light pt-2 text-[11px] leading-relaxed text-txt-muted">
             {data.operators.caveat}
           </p>
+        </Card>
+      )}
+
+      {/* ── operating-error problem statements + training ── */}
+      {data.operator_issues && data.operator_issues.events > 0 && (
+        <Card icon={<GraduationCap size={15} className="text-[#c8960c]" />}
+              title="Operating issues & training"
+              note={`${data.operator_issues.events} breakdowns with cause = operating error`}>
+          <OperatorIssues data={data.operator_issues} />
         </Card>
       )}
 

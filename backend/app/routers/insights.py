@@ -101,6 +101,30 @@ async def why_why_narrative(
         )
 
 
+@router.get("/why-why/training", tags=["Insights"])
+async def why_why_training(
+    from_date: date = None,
+    to_date:   date = None,
+    db: Session = Depends(get_db),
+):
+    """Training topics derived from the operating-error breakdowns themselves.
+
+    A different question for a different reader than /narrative: that one tells
+    a manager what the fleet is doing, this tells a supervisor what to teach.
+    The model is instructed not to name or rank operators - the incidents are
+    the evidence, not the people present at them.
+    """
+    try:
+        return await ww_svc.generate_training(db, from_date, to_date)
+    except Exception as e:
+        from app.config import get_settings
+        cfg = get_settings()
+        raise HTTPException(
+            status_code=502,
+            detail=svc.classify_llm_error(e, cfg.qwen_model, cfg.qwen_base_url),
+        )
+
+
 @router.post("/cache/invalidate", tags=["Insights"])
 def invalidate_insights_cache(target_date: date = None):
     """Clear the cached insights for a given date (defaults to today)."""
