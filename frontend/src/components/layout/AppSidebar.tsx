@@ -1,7 +1,5 @@
 "use client";
-import {
-  Radar, LayoutDashboard, Gauge, Zap, Activity, ClipboardList, Sparkles, Boxes, ShieldCheck,
-         ChevronLeft, ChevronRight, LogOut, ExternalLink, CalendarRange } from "lucide-react";
+import { Activity, Boxes, CalendarRange, ChevronLeft, ChevronRight, ClipboardList, ExternalLink, Gauge, LayoutDashboard, LogOut, Radar, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { canOpen } from "@/contexts/pageAccess";
 import { useSidebar }               from "@/contexts/useSidebar";
@@ -46,6 +44,9 @@ const ACCESS_ITEM: NavItem =
 
 const PLATFORM_ITEM: NavItem =
   { kind: "page", id: "minehub", label: "MineHub Platform", icon: Boxes };
+
+const MANPOWER_ITEM: NavItem =
+  { kind: "page", id: "manpower", label: "Manpower", icon: Users };
 
 /* Shift Control is daily work for a supervisor rather than administration, so it
    sits with the operational pages and behind its own permission — the board
@@ -97,6 +98,7 @@ export default function AppSidebar() {
     // month, and a screen that rare sitting above daily work is a screen people
     // learn to scroll past.
     ...(canOpen(user, "minehub") ? [PLATFORM_ITEM] : []),
+    ...(canOpen(user, "manpower") ? [MANPOWER_ITEM] : []),
     ...(canOpen(user, "operations") ? [OPERATIONS_ITEM] : []),
     ...(canOpen(user, "workforce") ? [WORKFORCE_ITEM] : []),
     ...(canOpen(user, "access-control") ? [ACCESS_ITEM] : []),

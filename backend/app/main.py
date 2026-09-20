@@ -258,6 +258,7 @@ def health_check():
 
 
 # ── Routers ───────────────────────────────────────────────────
+from app.routers import operators_analytics
 from app.routers import production, stock, cob, plant, ob, despatch, equipment, dewatering, insights, live_tracking, fuel_management, ev_tracking, auth, oee, roles, minehub, access, operators, operations, workforce, comments
 app.include_router(production.router,      prefix="/api/production",    tags=["Production"])
 app.include_router(stock.router,           prefix="/api/stock",         tags=["Stock"])
@@ -273,6 +274,9 @@ app.include_router(fuel_management.router)
 app.include_router(ev_tracking.router)
 app.include_router(auth.router)
 app.include_router(oee.router)
+# Before operators.router, whose "/{operator_id}" would otherwise match
+# "/analytics" and fail trying to read it as a number.
+app.include_router(operators_analytics.router)
 app.include_router(operators.router)
 app.include_router(operations.router)
 app.include_router(workforce.router)

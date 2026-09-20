@@ -247,7 +247,28 @@ def list_operators(q: str = Query(""), status: str = Query(""),
                o.employment_type, o.designation, o.version,
                o.exp_total_months, o.exp_hemm_months, o.joined_on,
                p.party_id, p.display_name, p.phone, p.photo_ref, p.blood_group,
+               p.date_of_birth, p.gender,
                e.display_name AS employer, ou.name AS department, pl.name AS plant,
+               -- The number the gate, the muster and the face reader all know
+               -- this person by. Without it on the row, reconciling the
+               -- register against attendance means opening people one at a
+               -- time, which is how a register stops being reconciled.
+               (SELECT i.external_code FROM party_identity i
+                 WHERE i.party_id = o.party_id AND i.system = 'CONTRACTOR'
+                 ORDER BY i.party_identity_id LIMIT 1)            AS attendance_id,
+               (SELECT i.external_code FROM party_identity i
+                 WHERE i.party_id = o.party_id AND i.system = 'BIOMETRIC'
+                 ORDER BY i.party_identity_id LIMIT 1)            AS biometric_id,
+               -- The classified job, beside the words the employer wrote.
+               t.name AS trade, t.trade_group, t.skill_class,
+               t.operates_equipment, ta.name AS trade_machine,
+               -- Years served, computed here so every screen agrees.
+               CASE WHEN o.joined_on IS NOT NULL
+                    THEN round(EXTRACT(EPOCH FROM (now() - o.joined_on)) / 31557600.0, 1)
+               END                                                AS years_served,
+               CASE WHEN p.date_of_birth IS NOT NULL
+                    THEN floor(EXTRACT(EPOCH FROM (now() - p.date_of_birth)) / 31557600.0)
+               END                                                AS age,
                (SELECT count(*) FROM operator_competency c
                  WHERE c.operator_id = o.operator_id AND c.dimension = 'OVERALL'
                    AND c.level >= 2)                               AS machines_competent,
@@ -280,6 +301,8 @@ def list_operators(q: str = Query(""), status: str = Query(""),
         LEFT JOIN party e      ON e.party_id = o.employer_party_id
         LEFT JOIN org_unit ou  ON ou.org_unit_id = o.org_unit_id
         LEFT JOIN plant pl     ON pl.plant_id = o.plant_id
+        LEFT JOIN trade t      ON t.trade_id = o.trade_id
+        LEFT JOIN asset_type ta ON ta.asset_type_id = t.asset_type_id
         WHERE {' AND '.join(where)}
         ORDER BY p.display_name
     """), params).mappings().all()

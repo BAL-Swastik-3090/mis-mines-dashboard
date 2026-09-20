@@ -10,24 +10,21 @@
  * the Equipment Registry the whole point of the screen is to add machines.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Boxes, Cpu, Activity, LayoutGrid, Plus, AlertTriangle, Users, MessageSquare } from "lucide-react";
+import { Boxes, Cpu, Activity, LayoutGrid, Plus, AlertTriangle, MessageSquare } from "lucide-react";
 import { useAuth } from "@/contexts/useAuth";
 import EquipmentPanel from "@/components/minehub/EquipmentPanel";
-import OperatorPanel from "@/components/minehub/OperatorPanel";
 import ActivityPanel from "@/components/minehub/ActivityPanel";
 import AlertsPanel from "@/components/minehub/AlertsPanel";
 import { Button, Card, CardHeader, Chip, PageHeader, Tabs, type Tone } from "@/components/minehub/ui";
 import api from "@/lib/api";
 import NotesFeed from "@/components/comments/NotesFeed";
 
-type TabId = "equipment" | "operators" | "notes" | "alerts" | "activity" | "modules";
+type TabId = "equipment" | "notes" | "alerts" | "activity" | "modules";
 
 const TABS: { id: TabId; label: string; icon: React.ElementType; tone: Tone; hint: string }[] = [
   { id: "equipment", label: "Equipment Registry", icon: Cpu, tone: "sky",
     hint: "One identity per machine, across telematics, handover, weighbridge and RFID" },
-  { id: "operators", label: "Operators", icon: Users, tone: "emerald",
-    hint: "Who may run each machine, what they are certified for, and what is about to lapse" },
-  { id: "notes", label: "Notes", icon: MessageSquare, tone: "gold",
+{ id: "notes", label: "Notes", icon: MessageSquare, tone: "gold",
     hint: "What people have said about machines, crews and shifts — and what is still open" },
   { id: "alerts", label: "Alerts", icon: AlertTriangle, tone: "rose",
     hint: "Documents expiring and services falling due" },
@@ -66,8 +63,6 @@ export default function MineHubSection() {
   // with platform.registry.view where the operator form needs it.
   const mayBrowse = can("platform.registry.browse");
   const mayManage = can("platform.registry.manage");
-  const mayOperators = can("platform.operators.manage");
-  const mayOperatorsView = can("platform.operators.view");
 
   // Machines and people are different registers and different jobs. An
   // operator registrar keeps profiles, licences and assessments; they have no
@@ -79,7 +74,6 @@ export default function MineHubSection() {
   // open the page at all — a note is a sentence about work, not a record.
   const TAB_PERMISSION: Record<TabId, boolean> = {
     equipment: mayBrowse,
-    operators: mayOperatorsView,
     notes: true,
     alerts: mayBrowse,        // the alerts are document expiry on machines
     activity: mayBrowse,
@@ -88,7 +82,7 @@ export default function MineHubSection() {
   const openTabs = useMemo(
     () => TABS.filter((t) => TAB_PERMISSION[t.id]),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [mayBrowse, mayOperatorsView]);
+    [mayBrowse]);
 
   // Land on the first tab this person can open rather than always Equipment,
   // which for an operator registrar was a permission error as a welcome
@@ -129,11 +123,6 @@ export default function MineHubSection() {
                 <Plus className="w-4 h-4" /> Register machine
               </Button>
             )}
-            {tab === "operators" && mayOperators && !formOpen && (
-              <Button variant="primary" size="lg" onClick={() => setAddOpen(true)}>
-                <Plus className="w-4 h-4" /> Register operator
-              </Button>
-            )}
             {alertCount ? (
               <Button variant="secondary" size="lg" onClick={() => setTab("alerts")}>
                 <AlertTriangle className="w-4 h-4 text-rose" />
@@ -150,15 +139,10 @@ export default function MineHubSection() {
 
       {openTabs.length === 0 && (
         <Card><div className="px-5 py-12 text-center text-[13px] text-txt-muted">
-          You do not have permission to open either register. An Access Manager
-          grants <code>platform.registry.browse</code> for machines or{" "}
-          <code>platform.operators.view</code> for people.
+          You do not have permission to open the equipment register. An Access
+          Manager grants <code>platform.registry.browse</code>. People are on
+          the Manpower screen, which <code>platform.operators.view</code> opens.
         </div></Card>
-      )}
-
-      {mayOperatorsView && tab === "operators" && (
-        <OperatorPanel addOpen={addOpen} onAddOpenChange={setAddOpen}
-          onFormOpenChange={setFormOpen} onChanged={loadAlerts} />
       )}
 
       {mayBrowse && tab === "equipment" && (

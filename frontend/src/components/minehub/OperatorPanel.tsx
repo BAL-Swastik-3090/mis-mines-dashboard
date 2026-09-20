@@ -11,7 +11,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Users, Search, Plus, Loader2, HardHat, ShieldCheck, AlertTriangle,
   ClipboardList, Pencil, Grid3x3, Award, CalendarClock, Settings2, Check,
-  GraduationCap, TrendingUp, TrendingDown, Star,
+  GraduationCap, TrendingUp, TrendingDown, Star, Download, X,
 } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
@@ -19,6 +19,24 @@ import {
   Alert, Button, Card, CardHeader, Chip, EmptyRow, Td, Th, Tile, type Tone,
 } from "./ui";
 import OperatorForm from "./OperatorForm";
+import ColumnFilter, {
+  optionsFrom, matches, SortHeader, type SortDir,
+} from "./ColumnFilter";
+import { toCsv, download } from "./spreadsheet";
+
+type OpSortKey = "name" | "attendance" | "trade" | "department" | "employer"
+               | "service" | "assessed" | "classes";
+
+const OP_SORT_WORDS: Record<OpSortKey, [string, string]> = {
+  name:       ["A to Z", "Z to A"],
+  attendance: ["Lowest first", "Highest first"],
+  trade:      ["A to Z", "Z to A"],
+  department: ["A to Z", "Z to A"],
+  employer:   ["A to Z", "Z to A"],
+  service:    ["Newest first", "Longest serving first"],
+  assessed:   ["Longest ago first", "Most recent first"],
+  classes:    ["Fewest first", "Most first"],
+};
 
 interface Operator {
   operator_id: number; operator_ref: string | null; display_name: string;
@@ -29,6 +47,13 @@ interface Operator {
   machines_competent: number; expired_documents: number; assigned_to: string | null;
   last_assessed: string | null; last_assessed_by: string | null; next_due: string | null;
   declined_count: number; improved_count: number; avg_rating: number | null;
+  // Added with the CLL load: the number the gate, the muster and the face
+  // reader know this person by, and the classified job behind the words the
+  // employer wrote.
+  attendance_id: string | null; biometric_id: string | null;
+  trade: string | null; trade_group: string | null; trade_machine: string | null;
+  skill_class: string | null; operates_equipment: boolean | null;
+  years_served: number | null; age: number | null; joined_on: string | null;
 }
 
 interface Due {
@@ -129,6 +154,15 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
   const [plants, setPlants] = useState<Plant[]>([]);
   const [plantId, setPlantId] = useState<string>("");
   const [view, setView] = useState<"register" | "capability">("register");
+  // Every column both filters and orders, as the machine register does. With
+  // 211 people the difference between "find the excavator operators in
+  // Automobile" and "scroll" is the difference between a register and a list.
+  const [by, setBy] = useState({ trade: "", group: "", department: "",
+                                 employer: "", employment: "", approval: "" });
+  const setF = (k: keyof typeof by) => (v: string) => setBy((b) => ({ ...b, [k]: v }));
+  const [sort, setSort] = useState<{ key: OpSortKey; dir: SortDir }>(
+    { key: "name", dir: "asc" });
+  const sortBy = (key: OpSortKey) => (dir: SortDir) => setSort({ key, dir });
   const [matrix, setMatrix] = useState<Matrix | null>(null);
   const [coverage, setCoverage] = useState<Coverage[]>([]);
   const [due, setDue] = useState<Due[]>([]);
@@ -183,12 +217,103 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
   const formOpen = Boolean(addOpen || editingId);
   useEffect(() => { onFormOpenChange?.(formOpen); }, [formOpen, onFormOpenChange]);
 
+  const menus = useMemo(() => ({
+    trade: optionsFrom(operators, (o) => o.trade, (v) => v, "No trade set"),
+    group: optionsFrom(operators, (o) => o.trade_group, (v) => v, null),
+    department: optionsFrom(operators, (o) => o.department, (v) => v, "Not posted"),
+    employer: optionsFrom(operators, (o) => o.employer, (v) => v, "Not recorded"),
+    employment: optionsFrom(operators, (o) => o.employment_type,
+      (v) => v[0] + v.slice(1).toLowerCase(), null),
+    approval: optionsFrom(operators, (o) => o.approval_status,
+      (v) => v.replace("_", " ").toLowerCase().replace(/^./, (c) => c.toUpperCase()), null),
+  }), [operators]);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return operators;
-    return operators.filter((o) => [o.display_name, o.operator_ref, o.designation, o.employer]
-      .some((v) => (v ?? "").toLowerCase().includes(q)));
-  }, [operators, query]);
+    return operators.filter((o) => {
+      if (!matches(o.trade, by.trade)) return false;
+      if (!matches(o.trade_group, by.group)) return false;
+      if (!matches(o.department, by.department)) return false;
+      if (!matches(o.employer, by.employer)) return false;
+      if (!matches(o.employment_type, by.employment)) return false;
+      if (!matches(o.approval_status, by.approval)) return false;
+      if (!q) return true;
+      // The attendance id is searched because it is the number written on
+      // everything else in the mine, and looking somebody up by it is the
+      // commonest reason to open this screen.
+      return [o.display_name, o.operator_ref, o.attendance_id, o.designation,
+              o.trade, o.employer]
+        .some((v) => (v ?? "").toLowerCase().includes(q));
+    });
+  }, [operators, query, by]);
+
+  const sorted = useMemo(() => {
+    const dir = sort.dir === "asc" ? 1 : -1;
+    const keyOf = (o: Operator): string | number => {
+      switch (sort.key) {
+        case "name":       return o.display_name.toLowerCase();
+        // Numeric, so 17100 does not sort between 1710 and 172.
+        case "attendance": return Number(o.attendance_id ?? Number.MAX_SAFE_INTEGER);
+        case "trade":      return (o.trade ?? "").toLowerCase();
+        case "department": return (o.department ?? "").toLowerCase();
+        case "employer":   return (o.employer ?? "").toLowerCase();
+        case "service":    return o.years_served ?? 0;
+        case "assessed":   return o.last_assessed ? new Date(o.last_assessed).getTime() : 0;
+        case "classes":    return o.machines_competent;
+      }
+    };
+    const rank = (v: string | number) => (typeof v === "string" && v === "" ? "￿" : v);
+    return [...filtered].sort((x, y) => {
+      const a = rank(keyOf(x)), b = rank(keyOf(y));
+      if (a === b) return x.display_name.localeCompare(y.display_name);
+      const cmp = typeof a === "number" && typeof b === "number"
+        ? a - b : String(a).localeCompare(String(b));
+      return cmp * dir;
+    });
+  }, [filtered, sort]);
+
+  const narrowed = Boolean(by.trade || by.group || by.department || by.employer
+    || by.employment || by.approval || query.trim());
+
+  const said = (menu: { value: string; label: string }[], v: string) =>
+    menu.find((o) => o.value === v)?.label ?? v;
+
+  const activeFilters: { label: string; clear: () => void }[] = [
+    ...(by.group ? [{ label: said(menus.group, by.group), clear: () => setF("group")("") }] : []),
+    ...(by.trade ? [{ label: said(menus.trade, by.trade), clear: () => setF("trade")("") }] : []),
+    ...(by.department ? [{ label: said(menus.department, by.department),
+                          clear: () => setF("department")("") }] : []),
+    ...(by.employer ? [{ label: said(menus.employer, by.employer),
+                         clear: () => setF("employer")("") }] : []),
+    ...(by.employment ? [{ label: said(menus.employment, by.employment),
+                           clear: () => setF("employment")("") }] : []),
+    ...(by.approval ? [{ label: said(menus.approval, by.approval),
+                         clear: () => setF("approval")("") }] : []),
+    ...(query.trim() ? [{ label: `“${query.trim()}”`, clear: () => setQuery("") }] : []),
+  ];
+
+  const clearFilters = () => {
+    setBy({ trade: "", group: "", department: "", employer: "", employment: "", approval: "" });
+    setQuery("");
+  };
+
+  const exportRegister = () => {
+    download(toCsv(
+      ["Attendance ID", "Reference", "Name", "Trade", "Group", "Designation",
+       "Machine", "Skill class", "Employment", "Employer", "Department",
+       "Plant", "Joined", "Years served", "Age", "Classes cleared",
+       "Last assessed", "Next due", "Approval"],
+      sorted.map((o) => [
+        o.attendance_id ?? "", o.operator_ref ?? "", o.display_name,
+        o.trade ?? "", o.trade_group ?? "", o.designation ?? "",
+        o.trade_machine ?? "", o.skill_class ?? "", o.employment_type ?? "",
+        o.employer ?? "", o.department ?? "", o.plant ?? "",
+        (o.joined_on ?? "").slice(0, 10), o.years_served ?? "", o.age ?? "",
+        o.machines_competent, (o.last_assessed ?? "").slice(0, 10),
+        (o.next_due ?? "").slice(0, 10), o.approval_status,
+      ])),
+      `manpower-register-${new Date().toISOString().slice(0, 10)}.csv`);
+  };
 
   const startRegister = (from?: Waiting) => {
     setPrefill(from ? { display_name: from.name, code: from.code ?? undefined } : {});
@@ -357,6 +482,11 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
                              text-txt-primary placeholder:text-txt-light focus:outline-none
                              focus:border-gold w-[190px]" />
               </div>
+              <Button size="sm" variant="secondary" onClick={exportRegister}
+                disabled={sorted.length === 0}
+                title="Download this list as a spreadsheet, filters and order and all">
+                <Download className="w-3.5 h-3.5" /> Export
+              </Button>
               {mayManage && (
                 <Button size="sm" variant="primary" onClick={() => startRegister()}>
                   <Plus className="w-3.5 h-3.5" /> Add
@@ -365,24 +495,81 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
             </>
           } />
 
+        {activeFilters.length > 0 && (
+          <div className="px-5 py-2.5 border-b border-border-light bg-bg-light/60
+                          flex flex-wrap items-center gap-1.5">
+            <span className="font-condensed text-[9.5px] font-bold uppercase
+                             tracking-[.13em] text-txt-light mr-0.5">Showing only</span>
+            {activeFilters.map((c) => (
+              <button key={c.label} type="button" onClick={c.clear}
+                className="group inline-flex items-center gap-1.5 rounded-full border
+                           border-gold/40 bg-gold/[0.07] pl-2.5 pr-1.5 py-1 text-[11px]
+                           font-semibold text-gold-dark hover:bg-gold/15 transition">
+                {c.label}<X className="w-3 h-3 opacity-60 group-hover:opacity-100" />
+              </button>
+            ))}
+            <button type="button" onClick={clearFilters}
+              className="ml-1 text-[11px] font-semibold text-txt-muted hover:text-navy
+                         underline underline-offset-2">Clear all</button>
+          </div>
+        )}
+
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[820px]">
+          <table className="w-full min-w-[1000px]">
             <thead>
               <tr>
-                <Th>Operator</Th><Th>Employment</Th><Th>Can run</Th>
-                <Th>Last assessed</Th><Th>Next due</Th>
-                <Th className="text-right">Status</Th><Th className="text-right">Action</Th>
+                {/* First, because it is the number the gate, the muster and
+                    the face reader all know this person by, and looking
+                    somebody up by it is the commonest reason to open this. */}
+                <Th className="w-[104px]">
+                  <SortHeader label="Attendance ID"
+                    sort={sort.key === "attendance" ? sort.dir : null}
+                    onSort={sortBy("attendance")} sortLabels={OP_SORT_WORDS.attendance} /></Th>
+                <Th><SortHeader label="Person" sort={sort.key === "name" ? sort.dir : null}
+                      onSort={sortBy("name")} sortLabels={OP_SORT_WORDS.name} /></Th>
+                <Th><ColumnFilter label="Trade" value={by.trade} options={menus.trade}
+                      onChange={setF("trade")} sort={sort.key === "trade" ? sort.dir : null}
+                      onSort={sortBy("trade")} sortLabels={OP_SORT_WORDS.trade} /></Th>
+                <Th className="hidden xl:table-cell">
+                  <ColumnFilter label="Group" value={by.group} options={menus.group}
+                    onChange={setF("group")} /></Th>
+                <Th><ColumnFilter label="Employment" value={by.employment}
+                      options={menus.employment} onChange={setF("employment")} /></Th>
+                <Th className="hidden lg:table-cell">
+                  <ColumnFilter label="Department" value={by.department}
+                    options={menus.department} onChange={setF("department")}
+                    sort={sort.key === "department" ? sort.dir : null}
+                    onSort={sortBy("department")} sortLabels={OP_SORT_WORDS.department} /></Th>
+                <Th className="hidden xl:table-cell text-right">
+                  <SortHeader label="Served" align="right"
+                    sort={sort.key === "service" ? sort.dir : null}
+                    onSort={sortBy("service")} sortLabels={OP_SORT_WORDS.service} /></Th>
+                <Th><SortHeader label="Can run" sort={sort.key === "classes" ? sort.dir : null}
+                      onSort={sortBy("classes")} sortLabels={OP_SORT_WORDS.classes} /></Th>
+                <Th className="hidden lg:table-cell">
+                  <SortHeader label="Last assessed"
+                    sort={sort.key === "assessed" ? sort.dir : null}
+                    onSort={sortBy("assessed")} sortLabels={OP_SORT_WORDS.assessed} /></Th>
+                <Th className="hidden lg:table-cell">Next due</Th>
+                <Th className="text-right">
+                  <ColumnFilter label="Status" value={by.approval} align="right"
+                    options={menus.approval} onChange={setF("approval")} /></Th>
+                <Th className="text-right">Action</Th>
               </tr>
             </thead>
             <tbody>
-              {filtered.length === 0 ? (
-                <EmptyRow colSpan={7}>
+              {sorted.length === 0 ? (
+                <EmptyRow colSpan={12}>
                   {operators.length === 0
                     ? "Nobody registered yet — start from the list below, those names are already in mine records."
-                    : "Nobody matches that search."}
+                    : narrowed ? "Nobody matches that." : "Nobody on the register."}
                 </EmptyRow>
-              ) : filtered.map((o) => (
+              ) : sorted.map((o) => (
                 <tr key={o.operator_id} className="hover:bg-bg-light transition-colors">
+                  <Td className="font-mono text-[12px] font-bold text-violet">
+                    {o.attendance_id
+                      ?? <span className="text-txt-light font-normal text-[11.5px]">not linked</span>}
+                  </Td>
                   <Td>
                     <button onClick={() => setEditingId(o.operator_id)} className="text-left group">
                       <div className="font-semibold text-navy text-[13px] group-hover:text-gold-dark
@@ -391,17 +578,36 @@ export default function OperatorPanel({ addOpen, onAddOpenChange, onFormOpenChan
                       </div>
                       <div className="text-[11px] font-mono text-txt-light flex flex-wrap items-center gap-1.5">
                         {o.operator_ref && <span className="text-violet font-bold">{o.operator_ref}</span>}
-                        <span>{o.designation || "role not set"}</span>
+                        {o.age ? <span>{o.age} yrs</span> : null}
                       </div>
                     </button>
                   </Td>
+                  {/* The classified job, with what the employer actually wrote
+                      underneath: the second is evidence about their paperwork
+                      and the first is the thing anything hangs off. */}
+                  <Td>
+                    <Chip tone={o.operates_equipment ? "emerald" : "sky"} dot={false}>
+                      {o.trade ?? "no trade"}
+                    </Chip>
+                    {o.designation && o.designation.toUpperCase() !== (o.trade ?? "").toUpperCase() && (
+                      <span className="block text-[10.5px] font-mono text-txt-light mt-0.5
+                                       truncate max-w-[20ch]" title={o.designation}>
+                        {o.designation}
+                      </span>
+                    )}
+                  </Td>
+                  <Td className="hidden xl:table-cell text-txt-muted">{o.trade_group ?? "—"}</Td>
                   <Td>
                     <Chip tone={EMPLOYMENT_TONE[o.employment_type ?? "OTHER"] ?? "slate"} dot={false}>
                       {(o.employment_type ?? "—").toLowerCase()}
                     </Chip>
                     {o.employer && (
-                      <span className="text-[11.5px] text-txt-muted ml-2">{o.employer}</span>
+                      <span className="block text-[11.5px] text-txt-muted mt-0.5">{o.employer}</span>
                     )}
+                  </Td>
+                  <Td className="hidden lg:table-cell text-txt-muted">{o.department ?? "—"}</Td>
+                  <Td className="hidden xl:table-cell text-right tabular-nums text-txt-muted">
+                    {o.years_served != null ? `${o.years_served} yr` : "—"}
                   </Td>
                   <Td>
                     {o.machines_competent > 0 ? (

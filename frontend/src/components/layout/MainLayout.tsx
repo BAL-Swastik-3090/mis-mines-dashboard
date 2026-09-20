@@ -6,6 +6,7 @@ import ElectricVehiclesSection from "@/components/sections/ElectricVehiclesSecti
 import OEESection              from "@/components/sections/OEESection";
 import IntelligenceSection     from "@/components/sections/IntelligenceSection";
 import MineHubSection          from "@/components/sections/MineHubSection";
+import ManpowerSection         from "@/components/sections/ManpowerSection";
 import OperationsSection       from "@/components/sections/OperationsSection";
 import WorkforceSection        from "@/components/sections/WorkforceSection";
 import AccessControlSection    from "@/components/sections/AccessControlSection";
@@ -72,6 +73,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           {page === "ev-tracking"      && <ElectricVehiclesSection />}
           {page === "access-control"   && <AccessControlSection />}
           {page === "minehub"          && <MineHubSection />}
+          {page === "manpower"         && <ManpowerSection />}
           {page === "operations"       && <OperationsSection />}
           {page === "workforce"        && <WorkforceSection />}
             </>

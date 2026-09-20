@@ -36,7 +36,8 @@ import type { AppPage } from "./useAppPage";
  *  the machine register to do their own work, which is how a permission
  *  becomes meaningless. Each tab inside still states what it needs. */
 export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
-  "minehub": ["platform.registry.browse", "platform.operators.view"],
+  "minehub": ["platform.registry.browse"],
+  "manpower": ["platform.operators.view"],
   "operations": ["ops.shift.view"],
   "workforce": ["ops.roster.view"],
   "access-control": ["access.users.view"],
