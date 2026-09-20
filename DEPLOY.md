@@ -60,6 +60,57 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ---
 
+## Deployed — 2026-09-20: Manpower, assessment, and one date format
+
+Released `minehub-workforce-release` (commit `3c559f0`, 17 commits on
+`b4cc297`) to mines.balasorealloys.in. Full record in
+`docs/specs/MineHub_Release_20-Sep-2026.md`.
+
+**Code only.** Migrations 038–042 and the CLL manpower load had already been
+applied through the tunnel to the corporate Postgres, which is the same
+database production reads — so there was no migration step on the server and no
+window in which schema and code disagreed. It also meant production had been
+serving the 211 new operators through the old UI since the load.
+
+Method: `git archive` of HEAD, extracted over `~/mines_dashboard` with `.env`
+copied aside and restored at mode 600, then `docker compose build && docker
+compose up -d`. The default `docker-compose.yml` + `docker-compose.override.yml`
+pair — confirmed from the running containers' own labels before touching
+anything, because the `prod` file does not auto-load the override.
+
+Nothing was deleted between `b4cc297` and this release, so extracting over the
+tree left no stale files. (Two files were created and removed inside the range;
+relative to what was live they never existed.)
+
+**No new dependencies**, which is the failure mode of the previous release.
+
+Verified after:
+
+| Check | Result |
+|---|---|
+| Site | 200 |
+| Route table inside the container | `/api/checklists` and `/api/operators/analytics` present, `/api/minehub/assets/import` gone, analytics ordered before `/{operator_id}` |
+| Data through the live code | 211 on strength, 143 operators, 143 unassessed, 37 trades, 15 competency dimensions, 10 handover checks |
+| Containers on the box | 77 before, 77 after; only `mines_backend` and `mines_frontend` changed id |
+| Host 80/443 | still nobody — host nginx owns them |
+| Our ports | `127.0.0.1:4012` and `127.0.0.1:8006` |
+| Running images | both match the images built in this deploy |
+
+Previous tree backed up to `~/mines_dashboard-backup-20260920-1752.tar.gz`.
+
+Four containers belonging to other applications report unhealthy —
+`pems-frontend`, `scm_quotation_agent-celery-worker-1`,
+`scm_quotation_agent-frontend-1`, `scm-chatbotv3-api`. Their uptimes run from
+15 hours to 7 weeks and their container ids did not change, so this predates
+the deployment and was not caused by it. Raised here for whoever owns them.
+
+Checking HTTP status alone would not have proved the new routes exist: the
+auth rule answers 401 before routing, so a missing route and a gated one look
+identical from outside. The route table was read from inside the container
+instead.
+
+---
+
 ## Deployed — 2026-09-19: MineHub workforce, notes, Superadmin rename
 
 Released `minehub-workforce-release` (commit `776dd6d`) to mines.balasorealloys.in.
