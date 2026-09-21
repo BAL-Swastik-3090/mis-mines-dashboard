@@ -476,11 +476,20 @@ def access_audit(limit: int = Query(100, le=500),
 
 
 @router.get("/catalogue")
-def catalogue(pg: Session = Depends(get_minehub_db)) -> dict:
+def catalogue(request: Request, db: Session = Depends(get_db),
+              pg: Session = Depends(get_minehub_db)) -> dict:
     """Roles and permissions together.
 
     The Roles screen needs both, and every separate request pays the whole
     middleware round trip again — session check included. One call is measurably
     faster than two against databases this far away.
+
+    It calls list_roles directly, so it has to carry what list_roles needs.
+    That is exactly how this broke once: list_roles gained a request and a db
+    when the superadmin role was hidden from other people, and this caller
+    kept passing one argument — so the Postgres session arrived where the
+    request should have been and the Roles tab answered 500. FastAPI does not
+    check internal calls. Keep these three in step.
     """
-    return {"roles": list_roles(pg), "permissions": list_permissions(pg)}
+    return {"roles": list_roles(request, db, pg),
+            "permissions": list_permissions(pg)}
