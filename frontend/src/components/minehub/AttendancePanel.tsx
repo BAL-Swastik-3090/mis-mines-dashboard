@@ -25,6 +25,8 @@ import {
 } from "lucide-react";
 import api from "@/lib/api";
 import { useDateFilter } from "@/contexts/useDateFilter";
+import type { ManpowerFilter } from "@/components/sections/ManpowerSection";
+
 import ColumnFilter, { optionsFrom, matches, SortHeader, type SortDir } from "./ColumnFilter";
 import ActivityMatrix from "./ActivityMatrix";
 import CorrectionsPanel from "./CorrectionsPanel";
@@ -90,7 +92,12 @@ const SORT_WORDS: Record<SortKey, [string, string]> = {
   state: ["In and out first", "Not clocked first"],
 };
 
-export default function AttendancePanel() {
+export default function AttendancePanel({ filter }: {
+  /** Chosen once for the whole Manpower screen. The register endpoint takes
+   *  none of these, so they narrow the rows here instead — same result to the
+   *  reader, and it keeps one bar for the screen. */
+  filter?: ManpowerFilter;
+}) {
   // Two readings of the same data. The day log answers "what happened on this
   // date"; the matrix answers "what does this person's month look like", which
   // is a different question and a different shape.
@@ -105,7 +112,7 @@ export default function AttendancePanel() {
   // This screen had its own From and To underneath it, which is two calendars
   // disagreeing about what "the period" means.
   const { apiFrom: from, apiTo: to, label: rangeLabel, periodLabel } = useDateFilter();
-  const [rows, setRows] = useState<Row[]>([]);
+  const [allRows, setAllRows] = useState<Row[]>([]);
   const [days, setDays] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -142,14 +149,14 @@ export default function AttendancePanel() {
       const r = await api.get("/attendance/register", {
         params: { day_from: from, day_to: to },
       });
-      setRows(r.data?.rows ?? []);
+      setAllRows(r.data?.rows ?? []);
       setDays(r.data?.days ?? []);
       setTrimmed(r.data?.trimmed ?? null);
       if (r.data?.note) setNote(r.data.note);
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(d ?? "Could not read the attendance readers.");
-      setRows([]);
+      setAllRows([]);
     } finally { setLoading(false); }
   }, [from, to]);
 
@@ -165,6 +172,20 @@ export default function AttendancePanel() {
       setPunches(res.data ?? []);
     } catch { setPunches([]); } finally { setPunchBusy(false); }
   };
+
+  // The screen's plant narrows everything below it, including the menus —
+  // offering a contractor who has nobody at the chosen plant is offering a
+  // filter that returns nothing.
+  const rows = useMemo(() => {
+    const f = filter;
+    if (!f) return allRows;
+    return allRows.filter((r) =>
+      (!f.plantName   || r.plant === f.plantName) &&
+      (!f.employer    || r.employer === f.employer) &&
+      (!f.department  || r.department === f.department) &&
+      (!f.trade       || r.trade === f.trade) &&
+      (!f.worker      || r.name === f.worker));
+  }, [allRows, filter]);
 
   const menus = useMemo(() => ({
     plant: optionsFrom(rows, (r) => r.plant, (v) => v, null),
@@ -278,34 +299,12 @@ export default function AttendancePanel() {
         </span>
         <span className="w-px self-stretch bg-border-light mx-1" />
 
-        {/* The filters, in the space the range bar was not using. They narrow
-            whichever view is showing, because "the Automobile workshop this
-            month" is one question and having to ask it twice is how the two
-            answers drift apart. */}
-        <span className="flex flex-wrap items-center gap-1.5">
-          <SlidersHorizontal className="w-3.5 h-3.5 text-txt-light" />
-          {menus.plant.length > 1 && (
-            <ColumnFilter variant="control" label="Plant" allLabel="All plants"
-              value={by.plant} options={menus.plant} onChange={set("plant")} />
-          )}
-          <ColumnFilter variant="control" label="Contractor" allLabel="All contractors"
-            value={by.employer} options={menus.employer} onChange={set("employer")} />
-          <ColumnFilter variant="control" label="Department" allLabel="All departments"
-            value={by.department} options={menus.department} onChange={set("department")} />
-          <ColumnFilter variant="control" label="Trade" allLabel="All trades"
-            value={by.trade} options={menus.trade} onChange={set("trade")} />
-          <ColumnFilter variant="control" label="Worker" allLabel="Everybody"
-            value={by.worker} options={menus.worker} onChange={set("worker")} />
-          {(by.plant || by.employer || by.department || by.trade || by.worker) && (
-            <button type="button"
-              onClick={() => setBy((b) => ({ ...b, plant: "", employer: "",
-                                             department: "", trade: "", worker: "" }))}
-              className="inline-flex items-center gap-1 text-[11.5px] font-semibold
-                         text-gold-dark hover:underline underline-offset-2">
-              <X className="w-3 h-3" /> Clear
-            </button>
-          )}
-        </span>
+        {/* Contractor, department, trade, worker and plant used to be drawn
+            here as well. They live in the Manpower screen's own bar now, so
+            one choice covers the register, capability, this screen, the
+            assessments and the analytics. The per-column menus inside the
+            table below stay, for narrowing within what the bar has already
+            chosen. */}
 
         <span className="flex-1" />
         <span className="inline-flex rounded-lg border border-border bg-bg-light p-0.5">

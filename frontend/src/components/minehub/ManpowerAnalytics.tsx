@@ -23,6 +23,8 @@ import {
 } from "lucide-react";
 import ColumnFilter from "./ColumnFilter";
 import api from "@/lib/api";
+import type { ManpowerFilter } from "@/components/sections/ManpowerSection";
+
 import {
   Alert, Button, Card, CardHeader, Chip, StatBar, TONE_DOT, type Tone,
 } from "./ui";
@@ -94,7 +96,10 @@ function Bars({ rows, tone = "sky", unit = "people", href }: {
   );
 }
 
-export default function ManpowerAnalytics() {
+export default function ManpowerAnalytics({ filter }: {
+  /** Chosen once for the whole Manpower screen. */
+  filter?: ManpowerFilter;
+}) {
   const [data, setData] = useState<Analytics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -114,13 +119,17 @@ export default function ManpowerAnalytics() {
           org_unit_id: f.department || undefined,
           trade_group: f.group || undefined,
           operators_only: f.operators || undefined,
+          plant_id: filter?.plantId || undefined,
+          employer_name: filter?.employer || undefined,
+          dept_name: filter?.department || undefined,
+          trade: filter?.trade || undefined,
         },
       })).data);
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(d ?? "Could not read the workforce figures.");
     } finally { setLoading(false); }
-  }, [f]);
+  }, [f, filter]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -164,12 +173,8 @@ export default function ManpowerAnalytics() {
                       px-4 py-2.5 flex flex-wrap items-center gap-2">
         <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold
                          text-txt-light mr-0.5">
-          <SlidersHorizontal className="w-3.5 h-3.5" /> Narrow the whole screen
+          <SlidersHorizontal className="w-3.5 h-3.5" /> On top of the screen filter
         </span>
-        {data.choices.employer.length > 1 && pick("Employer", f.employer, set("employer"),
-          data.choices.employer.map((c) => ({ value: String(c.id), label: c.label, count: c.people })))}
-        {data.choices.department.length > 1 && pick("Department", f.department, set("department"),
-          data.choices.department.map((c) => ({ value: String(c.id), label: c.label, count: c.people })))}
         {data.choices.trade_group.length > 1 && pick("Trade group", f.group, set("group"),
           data.choices.trade_group.map((c) => ({ value: c.label, label: c.label, count: c.people })))}
         {pick("Role", f.operators, set("operators"), [

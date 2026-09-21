@@ -33,6 +33,7 @@ WHERE = """WHERE (CAST(:plant AS bigint) IS NULL OR o.plant_id = CAST(:plant AS 
              AND (CAST(:employer AS bigint) IS NULL OR o.employer_party_id = CAST(:employer AS bigint))
              AND (CAST(:org AS bigint) IS NULL OR o.org_unit_id = CAST(:org AS bigint))
              AND (CAST(:grp AS text) IS NULL OR t.trade_group = CAST(:grp AS text))
+             AND (CAST(:trade AS text) IS NULL OR t.name = CAST(:trade AS text))
              AND (CAST(:approval AS text) IS NULL OR o.approval_status = CAST(:approval AS text))
              AND (CAST(:operators AS boolean) IS NULL
                   OR COALESCE(t.operates_equipment, FALSE) = CAST(:operators AS boolean))"""
@@ -47,13 +48,37 @@ def analytics(plant_id: int | None = Query(None),
               employer_party_id: int | None = Query(None),
               org_unit_id: int | None = Query(None),
               trade_group: str = Query(""),
+              # The Manpower screen filters by trade, not trade group: "tipper
+              # driver" is the question people ask, "Driving" is not.
+              trade: str = Query(""),
+              # Name-keyed twins of employer_party_id / org_unit_id. The
+              # Manpower screen carries one filter bar across five tabs and the
+              # other four match on names; translating to ids in the browser
+              # meant the bar could mean something different here than there.
+              employer_name: str = Query(""),
+              dept_name: str = Query(""),
               approval_status: str = Query(""),
               operators_only: bool | None = Query(None),
               db: Session = Depends(get_minehub_db)) -> dict:
     """Headcount, composition, coverage and the gaps, in the cuts people ask for."""
-    p = {"plant": plant_id, "employer": employer_party_id, "org": org_unit_id,
-         "grp": trade_group or None, "approval": approval_status or None,
-         "operators": operators_only}
+    # Names resolve to the ids the WHERE already filters on. Doing it here
+    # rather than adding e/ou predicates keeps the shared WHERE usable by the
+    # cuts that join neither table. An unknown name resolves to -1 so it
+    # returns nothing, rather than silently matching everybody.
+    def id_of(sql: str, name: str) -> int | None:
+        if not name:
+            return None
+        got = db.execute(text(sql), {"n": name}).scalar()
+        return got if got is not None else -1
+
+    employer_id = employer_party_id or id_of(
+        "SELECT party_id FROM party WHERE display_name = :n LIMIT 1", employer_name)
+    org_id = org_unit_id or id_of(
+        "SELECT org_unit_id FROM org_unit WHERE name = :n LIMIT 1", dept_name)
+
+    p = {"plant": plant_id, "employer": employer_id, "org": org_id,
+         "grp": trade_group or None, "trade": trade or None,
+         "approval": approval_status or None, "operators": operators_only}
 
     def rows(sql: str) -> list[dict]:
         return [dict(r) for r in db.execute(text(sql), p).mappings()]

@@ -16,6 +16,8 @@ import {
 } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
+import type { ManpowerFilter } from "@/components/sections/ManpowerSection";
+
 import {
   Alert, Button, Card, CardHeader, Chip, EmptyRow, StatBar, Td, Th, Tile, type Tone,
 } from "./ui";
@@ -79,7 +81,6 @@ interface Schedule {
   classes: { asset_type_id: number; name: string; assessment_interval_months: number | null }[];
 }
 
-interface Plant { plant_id: number; code: string; name: string; is_default: boolean }
 
 interface Matrix {
   asset_types: { asset_type_id: number; name: string }[];
@@ -129,20 +130,40 @@ function years(months: number | null): string {
 }
 
 export default function OperatorPanel({ view: viewProp = "register", addOpen,
-                                        onAddOpenChange, onFormOpenChange, onChanged }: {
+                                        onAddOpenChange, onFormOpenChange, onChanged,
+                                        filter }: {
   /** Which of the section's two register tabs is showing. */
   view?: "register" | "capability";
   addOpen?: boolean;
   onAddOpenChange?: (v: boolean) => void;
   onFormOpenChange?: (v: boolean) => void;
   onChanged?: () => void;
+  /** Chosen once for the whole Manpower screen, not per tab. */
+  filter?: ManpowerFilter;
 }) {
+  const plantId = filter?.plantId ?? "";
   const can = useAuth((s) => s.can);
   const mayManage = can("platform.operators.manage");
   const mayAssess = can("platform.operators.assess");
   const maySchedule = can("platform.operators.approve");
 
-  const [operators, setOperators] = useState<Operator[]>([]);
+  const [allOperators, setOperators] = useState<Operator[]>([]);
+
+  // The Manpower screen's bar narrows the source list before this panel's own
+  // column menus see it, so the two compose instead of competing. Plant is
+  // already applied at the server by the request above.
+  const keep = <T extends { display_name: string; employer: string | null;
+                            department: string | null; trade: string | null }>(xs: T[]) => {
+    const f = filter;
+    if (!f) return xs;
+    return xs.filter((x) =>
+      (!f.employer   || x.employer === f.employer) &&
+      (!f.department || x.department === f.department) &&
+      (!f.trade      || x.trade === f.trade) &&
+      (!f.worker     || x.display_name === f.worker));
+  };
+  const operators = useMemo(() => keep(allOperators), [allOperators, filter]);
+
   const [waiting, setWaiting] = useState<Waiting[]>([]);
   const [summary, setSummary] = useState<Record<string, number> | null>(null);
   const [query, setQuery] = useState("");
@@ -155,8 +176,7 @@ export default function OperatorPanel({ view: viewProp = "register", addOpen,
   // a scroll past nine sections.
   const [openAt, setOpenAt] = useState<string | undefined>(undefined);
   const [allWaiting, setAllWaiting] = useState(false);
-  const [plants, setPlants] = useState<Plant[]>([]);
-  const [plantId, setPlantId] = useState<string>("");
+
   // Which of the section's two register tabs is showing. It used to be local
   // state with its own switcher directly under the section's tab strip — two
   // tab bars, both starting with the word Register, one inside the other.
@@ -183,18 +203,16 @@ export default function OperatorPanel({ view: viewProp = "register", addOpen,
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [list, queue, sum, pl, dueList, needList] = await Promise.all([
+      const [list, queue, sum, dueList, needList] = await Promise.all([
         api.get("/operators", { params: plantId ? { plant_id: plantId } : {} }),
         api.get("/operators/unregistered"),
         api.get("/operators/summary"),
-        api.get("/minehub/plants").catch(() => ({ data: [] })),
         api.get("/operators/meta/due").catch(() => ({ data: [] })),
         api.get("/operators/meta/training-needs").catch(() => ({ data: [] })),
       ]);
       setOperators(list.data ?? []);
       setWaiting(queue.data ?? []);
       setSummary(sum.data ?? null);
-      setPlants(pl.data ?? []);
       setDue(dueList.data ?? []);
       setNeeds(needList.data ?? []);
       setError(null);
@@ -237,6 +255,7 @@ export default function OperatorPanel({ view: viewProp = "register", addOpen,
     approval: optionsFrom(operators, (o) => o.approval_status,
       (v) => v.replace("_", " ").toLowerCase().replace(/^./, (c) => c.toUpperCase()), null),
   }), [operators]);
+
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -394,19 +413,6 @@ export default function OperatorPanel({ view: viewProp = "register", addOpen,
   return (
     <div className="space-y-4">
       {error && <Alert tone="error">{error}</Alert>}
-
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        <label className="flex items-center gap-2 text-[12px] text-txt-muted">
-          Plant
-          <select value={plantId} onChange={(e) => setPlantId(e.target.value)}
-            className="bg-bg-base border border-border rounded-lg px-3 py-1.5 text-[12.5px] text-txt-primary">
-            <option value="">All plants</option>
-            {plants.map((p) => (
-              <option key={p.plant_id} value={p.plant_id}>{p.code} · {p.name}</option>
-            ))}
-          </select>
-        </label>
-      </div>
 
       {view === "capability" && (
         <>

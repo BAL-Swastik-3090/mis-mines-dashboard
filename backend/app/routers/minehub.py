@@ -1354,10 +1354,46 @@ def list_locations(db: Session = Depends(get_minehub_db)) -> list[dict]:
 
 @router.get("/plants")
 def list_plants(db: Session = Depends(get_minehub_db)) -> list[dict]:
-    """The SAP plants a machine can belong to, default first."""
+    """The SAP plants a machine can belong to, default first.
+
+    `operators` is how many active people are posted to each. Added for the
+    Manpower screen, whose plant selector is useless if it cannot say which
+    plants have anybody: today all 211 workmen sit on 1200 and the other four
+    plants would each silently return an empty screen. Machine callers ignore
+    the field.
+    """
     rows = db.execute(text(
-        "SELECT plant_id, code, name, is_default FROM plant "
-        "WHERE status = 'ACTIVE' ORDER BY is_default DESC, code"
+        "SELECT p.plant_id, p.code, p.name, p.is_default, "
+        "       count(o.operator_id) AS operators "
+        "  FROM plant p "
+        "  LEFT JOIN operator o ON o.plant_id = p.plant_id "
+        "                      AND o.profile_status = 'ACTIVE' "
+        " WHERE p.status = 'ACTIVE' "
+        " GROUP BY p.plant_id, p.code, p.name, p.is_default "
+        " ORDER BY p.is_default DESC, p.code"
+    )).mappings().all()
+    return [dict(r) for r in rows]
+
+
+@router.get("/trades")
+def list_trades(db: Session = Depends(get_minehub_db)) -> list[dict]:
+    """The classified jobs a worker can hold, from the trade master.
+
+    `people` is how many active workers currently hold each. The Manpower
+    filter bar reads this rather than deriving its list from whichever rows
+    happen to be loaded: a trade nobody holds today is still a real trade, and
+    a bar built from the visible rows quietly changes shape as you filter.
+    """
+    rows = db.execute(text(
+        "SELECT t.trade_id, t.code, t.name, t.trade_group, t.skill_class, "
+        "       t.operates_equipment, count(o.operator_id) AS people "
+        "  FROM trade t "
+        "  LEFT JOIN operator o ON o.trade_id = t.trade_id "
+        "                      AND o.profile_status = 'ACTIVE' "
+        " WHERE t.status = 'ACTIVE' "
+        " GROUP BY t.trade_id, t.code, t.name, t.trade_group, t.skill_class, "
+        "          t.operates_equipment, t.sort_order "
+        " ORDER BY t.sort_order, t.name"
     )).mappings().all()
     return [dict(r) for r in rows]
 

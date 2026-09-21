@@ -30,6 +30,8 @@ import {
 } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
+import type { ManpowerFilter } from "@/components/sections/ManpowerSection";
+
 import ColumnFilter, { optionsFrom, matches, SortHeader, type SortDir } from "./ColumnFilter";
 import AssessmentSheet from "./AssessmentSheet";
 import ChecklistsPanel from "./ChecklistsPanel";
@@ -93,11 +95,16 @@ const SORT_WORDS: Record<SortKey, [string, string]> = {
   service: ["Newest first", "Longest serving first"],
 };
 
-export default function AssessmentPanel({ onChanged }: { onChanged?: () => void }) {
+export default function AssessmentPanel({ onChanged, filter }: {
+  onChanged?: () => void;
+  /** Chosen once for the whole Manpower screen. */
+  filter?: ManpowerFilter;
+}) {
+  const plantId = filter?.plantId ?? "";
   const can = useAuth((s) => s.can);
   const mayAssess = can("platform.operators.assess");
 
-  const [people, setPeople] = useState<Person[]>([]);
+  const [allPeople, setPeople] = useState<Person[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [queue, setQueue] = useState<Queue>("never");
@@ -115,18 +122,35 @@ export default function AssessmentPanel({ onChanged }: { onChanged?: () => void 
   const load = useCallback(async () => {
     setError(null);
     try {
-      setPeople((await api.get("/operators")).data ?? []);
+      setPeople((await api.get("/operators",
+        { params: plantId ? { plant_id: plantId } : {} })).data ?? []);
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(d ?? "Could not read the register.");
     } finally { setLoading(false); }
-  }, []);
+  }, [plantId]);
 
   useEffect(() => { void load(); }, [load]);
 
   // Only people employed to operate something. A welder has no machine
   // clearance to be overdue for, and putting 68 of them in a queue called
   // "never assessed" is how a real finding gets buried.
+
+  // The Manpower screen's bar narrows the source list before this panel's own
+  // column menus see it, so the two compose instead of competing. Plant is
+  // already applied at the server by the request above.
+  const keep = <T extends { display_name: string; employer: string | null;
+                            department: string | null; trade: string | null }>(xs: T[]) => {
+    const f = filter;
+    if (!f) return xs;
+    return xs.filter((x) =>
+      (!f.employer   || x.employer === f.employer) &&
+      (!f.department || x.department === f.department) &&
+      (!f.trade      || x.trade === f.trade) &&
+      (!f.worker     || x.display_name === f.worker));
+  };
+  const people = useMemo(() => keep(allPeople), [allPeople, filter]);
+
   const operators = useMemo(
     () => people.filter((p) => p.operates_equipment && p.profile_status === "ACTIVE"),
     [people]);
