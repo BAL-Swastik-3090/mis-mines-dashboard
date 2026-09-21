@@ -20,7 +20,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle, CalendarDays, CheckCircle2, ClipboardCheck, Clock, Download,
-  Grid3x3, Loader2, LogIn, LogOut, Rows3, Search, SlidersHorizontal, Users, X,
+  ChevronLeft, ChevronRight, Grid3x3, Loader2, LogIn, LogOut, Rows3, Search,
+  SlidersHorizontal, Users, X,
 } from "lucide-react";
 import api from "@/lib/api";
 import { useDateFilter } from "@/contexts/useDateFilter";
@@ -74,6 +75,9 @@ function span(mins: number | null): string {
 
 const today = () => new Date().toISOString().slice(0, 10);
 
+const PAGE_SIZES = [50, 100, 200, 500, 1000, 0];
+const sizeLabel = (n: number) => (n === 0 ? "All" : String(n));
+
 type SortKey = "date" | "emp" | "name" | "trade" | "in" | "out" | "span" | "state";
 const SORT_WORDS: Record<SortKey, [string, string]> = {
   date: ["Oldest first", "Newest first"],
@@ -116,7 +120,9 @@ export default function AttendancePanel() {
   // The column headings in the day log write to this same object, so filtering
   // from a heading and filtering from the bar are two doors to one room rather
   // than two filters that can disagree.
-  const [by, setBy] = useState({ plant: "", trade: "", group: "", employer: "",
+  const [page, setPage] = useState(0);
+  const [perPage, setPerPage] = useState(100);
+  const [by, setBy] = useState({ plant: "", trade: "", group: "", employer: "", worker: "",
                                  department: "", state: "" });
   const set = (k: keyof typeof by) => (v: string) => setBy((b) => ({ ...b, [k]: v }));
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>(
@@ -166,6 +172,9 @@ export default function AttendancePanel() {
     group: optionsFrom(rows, (r) => r.trade_group, (v) => v, null),
     employer: optionsFrom(rows, (r) => r.employer, (v) => v, "Not recorded"),
     department: optionsFrom(rows, (r) => r.department, (v) => v, "Not posted"),
+    // Person-wise. The count beside each name is that worker's days in the
+    // window, which is the number somebody scanning this list wants.
+    worker: optionsFrom(rows, (r) => r.name, (v) => v, null),
     state: (Object.keys(STATE) as Row["state"][]).map((s) => ({
       value: s, label: STATE[s].label,
       count: rows.filter((r) => r.state === s).length,
@@ -180,6 +189,7 @@ export default function AttendancePanel() {
       if (!matches(r.trade_group, by.group)) return false;
       if (!matches(r.employer, by.employer)) return false;
       if (!matches(r.department, by.department)) return false;
+      if (!matches(r.name, by.worker)) return false;
       if (by.state && r.state !== by.state) return false;
       if (!q) return true;
       return [r.name, r.emp_no, r.operator_ref, r.trade]
@@ -218,6 +228,19 @@ export default function AttendancePanel() {
   }, [filtered, sort]);
 
   const narrowed = Object.values(by).some(Boolean) || Boolean(query.trim());
+
+  // 4,431 rows in one table is what made the browser struggle. Slice, and
+  // clamp the page so narrowing the filters never leaves somebody looking at
+  // an empty page 12 with no way back.
+  const showAll = perPage === 0;
+  const pages = showAll ? 1 : Math.max(1, Math.ceil(sorted.length / perPage));
+  const safePage = Math.min(page, pages - 1);
+  const shown = showAll ? sorted
+                        : sorted.slice(safePage * perPage, (safePage + 1) * perPage);
+  useEffect(() => { if (page !== safePage) setPage(safePage); }, [page, safePage]);
+  // Narrowing the list should put you back at the top of it, not leave you on
+  // page 7 of a result that now has three pages.
+  useEffect(() => { setPage(0); }, [by, query, from, to]);
   const count = (s: Row["state"]) => rows.filter((r) => r.state === s).length;
   const withSpan = rows.filter((r) => r.minutes !== null);
   const avgSpan = withSpan.length
@@ -271,10 +294,12 @@ export default function AttendancePanel() {
             value={by.department} options={menus.department} onChange={set("department")} />
           <ColumnFilter variant="control" label="Trade" allLabel="All trades"
             value={by.trade} options={menus.trade} onChange={set("trade")} />
-          {(by.plant || by.employer || by.department || by.trade) && (
+          <ColumnFilter variant="control" label="Worker" allLabel="Everybody"
+            value={by.worker} options={menus.worker} onChange={set("worker")} />
+          {(by.plant || by.employer || by.department || by.trade || by.worker) && (
             <button type="button"
               onClick={() => setBy((b) => ({ ...b, plant: "", employer: "",
-                                             department: "", trade: "" }))}
+                                             department: "", trade: "", worker: "" }))}
               className="inline-flex items-center gap-1 text-[11.5px] font-semibold
                          text-gold-dark hover:underline underline-offset-2">
               <X className="w-3 h-3" /> Clear
@@ -372,8 +397,8 @@ export default function AttendancePanel() {
                 </span>
                 <button type="button"
                   onClick={() => { setBy({ plant: "", trade: "", group: "", employer: "",
-                                           department: "", state: "" });
-                                   setQuery(""); }}
+                                           department: "", worker: "", state: "" });
+                                   setQuery(""); setPage(0); }}
                   className="inline-flex items-center gap-1 font-semibold text-gold-dark
                              hover:underline underline-offset-2">
                   <X className="w-3 h-3" /> Clear
@@ -429,7 +454,7 @@ export default function AttendancePanel() {
                         : "Nothing matches that."}
                     </EmptyRow>
                   )}
-                  {sorted.map((r) => {
+                  {shown.map((r) => {
                     const key = `${r.emp_no}|${r.on_date}`;
                     const open = openRow === key;
                     return (
@@ -565,6 +590,56 @@ export default function AttendancePanel() {
                   })}
                 </tbody>
               </table>
+            </div>
+
+            {/* Pager. Export above stays the whole filtered set, not this
+                page — somebody exporting wants the month, not the screen. */}
+            <div className="px-5 py-3 border-t border-border-light bg-bg-light/60
+                            flex flex-wrap items-center justify-between gap-3">
+              <span className="flex flex-wrap items-center gap-3 text-[11.5px] text-txt-muted">
+                <span className="tabular-nums">
+                  {sorted.length === 0 ? "Nothing to show"
+                    : showAll ? `All ${sorted.length} rows`
+                    : `${safePage * perPage + 1}–${Math.min((safePage + 1) * perPage, sorted.length)} of ${sorted.length}`}
+                </span>
+                <label className="inline-flex items-center gap-1.5">
+                  Show
+                  <select value={perPage}
+                    onChange={(e) => { setPerPage(Number(e.target.value)); setPage(0); }}
+                    className="bg-bg-base border border-border rounded-lg px-2 py-1
+                               text-[11.5px] font-semibold text-txt-secondary
+                               focus:outline-none focus:border-gold">
+                    {PAGE_SIZES.map((v) => (
+                      <option key={v} value={v}>{sizeLabel(v)}</option>
+                    ))}
+                  </select>
+                  at a time
+                </label>
+                {showAll && sorted.length > 1000 && (
+                  <span className="text-amber">
+                    {sorted.length.toLocaleString("en-IN")} rows at once will be slow.
+                  </span>
+                )}
+              </span>
+              {pages > 1 && (
+                <span className="flex items-center gap-1">
+                  <Button size="sm" variant="secondary" disabled={safePage === 0}
+                    onClick={() => setPage(0)} title="First page">1</Button>
+                  <Button size="sm" variant="secondary" disabled={safePage === 0}
+                    onClick={() => setPage((v) => v - 1)}>
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                  </Button>
+                  <span className="text-[11.5px] text-txt-muted px-1 tabular-nums">
+                    {safePage + 1} / {pages}
+                  </span>
+                  <Button size="sm" variant="secondary" disabled={safePage >= pages - 1}
+                    onClick={() => setPage((v) => v + 1)}>
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </Button>
+                  <Button size="sm" variant="secondary" disabled={safePage >= pages - 1}
+                    onClick={() => setPage(pages - 1)} title="Last page">{pages}</Button>
+                </span>
+              )}
             </div>
           </Card>
         </>
