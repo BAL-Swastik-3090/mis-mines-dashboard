@@ -27,6 +27,7 @@ import {
   Button, Card, CardHeader, Chip, Field, inputClass, Tile,
 } from "@/components/minehub/ui";
 import Dialog from "@/components/minehub/Dialog";
+import ColumnFilter, { optionsFrom, matches } from "@/components/minehub/ColumnFilter";
 import StarterPatterns from "./StarterPatterns";
 import {
   DAY_STATE, UNROSTERED, dayLabel, isoDay, addDays, span, prettyDate,
@@ -36,6 +37,7 @@ import {
 interface Person {
   operator_id: number; operator_ref: string | null; display_name: string;
   designation: string | null; department: string | null;
+  employer: string | null; trade: string | null; trade_group: string | null;
   pattern_id: number | null; pattern_code: string | null; pattern_name: string | null;
   days: Record<string, DayCell>;
 }
@@ -80,6 +82,11 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [onlyGaps, setOnlyGaps] = useState(false);
+  // Department, contractor and trade. A planner rosters a crew, and a crew is
+  // picked out by who they work for and what they do, not by typing names.
+  const [by, setBy] = useState({ department: "", employer: "", trade: "" });
+  const setFilter = (k: keyof typeof by) => (v: string) =>
+    setBy((was) => ({ ...was, [k]: v }));
 
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [assigning, setAssigning] = useState(false);
@@ -115,11 +122,27 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
     const term = query.trim().toLowerCase();
     return (board?.people ?? []).filter((p) => {
       if (onlyGaps && p.pattern_id) return false;
+      if (!matches(p.department, by.department)) return false;
+      if (!matches(p.employer, by.employer)) return false;
+      if (!matches(p.trade, by.trade)) return false;
       if (!term) return true;
-      return [p.display_name, p.operator_ref, p.designation, p.pattern_code]
+      return [p.display_name, p.operator_ref, p.designation, p.trade,
+              p.employer, p.department, p.pattern_code]
         .some((v) => String(v ?? "").toLowerCase().includes(term));
     });
-  }, [board, query, onlyGaps]);
+  }, [board, query, onlyGaps, by]);
+
+  // Built from everybody, not from the rows currently shown: a menu that
+  // shrinks as you use it is a menu you cannot use to widen the selection
+  // again without clearing it first.
+  const menus = useMemo(() => {
+    const all = board?.people ?? [];
+    return {
+      department: optionsFrom(all, (p) => p.department, (v) => v, "No department"),
+      employer: optionsFrom(all, (p) => p.employer, (v) => v, "Own workforce"),
+      trade: optionsFrom(all, (p) => p.trade, (v) => v, "No trade set"),
+    };
+  }, [board]);
 
   // What the window adds up to, which is the thing a planner actually reads
   // before deciding whether the roster is covered.
@@ -148,6 +171,40 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
   const toggle = (id: number) => setPicked((was) => {
     const next = new Set(was);
     if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  // "All" means all of what the filters are showing, not all 211. Filter to a
+  // contractor, tick the box, and that crew goes on a pattern in one go —
+  // which is the whole reason the filters are here.
+  // The selection outlives the filters, so a planner can gather two crews
+  // before rostering them. That also means some picked rows can be off screen,
+  // which the dialog has to say out loud before anybody confirms.
+  const pickedPeople = useMemo(
+    () => (board?.people ?? []).filter((p) => picked.has(p.operator_id)),
+    [board, picked]);
+  const hiddenPicked = useMemo(() => {
+    const shown = new Set(people.map((p) => p.operator_id));
+    return pickedPeople.filter((p) => !shown.has(p.operator_id));
+  }, [pickedPeople, people]);
+  const pickedSpread = useMemo(() => {
+    const tally = (get: (p: Person) => string | null) => {
+      const m = new Map<string, number>();
+      for (const p of pickedPeople) {
+        const k = get(p) || "—";
+        m.set(k, (m.get(k) ?? 0) + 1);
+      }
+      return [...m.entries()].sort((a, b) => b[1] - a[1]);
+    };
+    return { employer: tally((p) => p.employer), trade: tally((p) => p.trade) };
+  }, [pickedPeople]);
+
+  const allShown = people.length > 0 && people.every((p) => picked.has(p.operator_id));
+  const someShown = people.some((p) => picked.has(p.operator_id));
+  const toggleAllShown = () => setPicked((was) => {
+    const next = new Set(was);
+    if (allShown) people.forEach((p) => next.delete(p.operator_id));
+    else people.forEach((p) => next.add(p.operator_id));
     return next;
   });
 
@@ -257,6 +314,23 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
                 <input className={`${inputClass} pl-8 w-48`} placeholder="Find somebody"
                        value={query} onChange={(e) => setQuery(e.target.value)} />
               </div>
+              {/* A menu with one value in it cannot narrow anything, and today
+                  every workman is CLL's. It appears the day a second
+                  contractor does. */}
+              {menus.department.length > 1 && (
+                <ColumnFilter variant="control" label="Department" allLabel="All departments"
+                  value={by.department} options={menus.department}
+                  onChange={setFilter("department")} />
+              )}
+              {menus.employer.length > 1 && (
+                <ColumnFilter variant="control" label="Contractor" allLabel="All contractors"
+                  value={by.employer} options={menus.employer}
+                  onChange={setFilter("employer")} />
+              )}
+              {menus.trade.length > 1 && (
+                <ColumnFilter variant="control" label="Job" allLabel="All jobs"
+                  value={by.trade} options={menus.trade} onChange={setFilter("trade")} />
+              )}
               <div className="flex rounded-lg border border-slate-200 overflow-hidden">
                 {WINDOWS.map((w) => (
                   <button key={w.days} onClick={() => setLength(w.days)}
@@ -298,6 +372,12 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
                            if (f) void readFile(f);
                          }} />
                 </label>
+              )}
+              {mayManage && picked.size > 0 && (
+                <Button size="sm" variant="ghost" onClick={() => setPicked(new Set())}
+                        title="Clear the selection">
+                  Clear {picked.size}
+                </Button>
               )}
               {mayManage && (
                 <Button size="sm" variant="primary" disabled={picked.size === 0}
@@ -359,7 +439,26 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
                   <th className="sticky left-0 top-0 z-30 bg-white border-b border-r border-slate-200
                                  px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wide
                                  text-txt-light min-w-[220px]">
-                    Operator
+                    <span className="flex items-center gap-2">
+                      {mayManage && (
+                        <input type="checkbox" checked={allShown}
+                               ref={(el) => { if (el) el.indeterminate = !allShown && someShown; }}
+                               onChange={toggleAllShown}
+                               disabled={people.length === 0}
+                               title={allShown ? "Clear these" : `Select all ${people.length} shown`}
+                               className="w-3.5 h-3.5 rounded border-slate-300 cursor-pointer" />
+                      )}
+                      <span>Operator</span>
+                      <span className="ml-auto normal-case tracking-normal font-semibold
+                                       text-[10.5px] text-txt-light">
+                        {people.length === (board?.people.length ?? 0)
+                          ? `${people.length}`
+                          : `${people.length} of ${board?.people.length ?? 0}`}
+                        {picked.size > 0 && (
+                          <span className="text-gold-dark"> · {picked.size} picked</span>
+                        )}
+                      </span>
+                    </span>
                   </th>
                   {dates.map((iso) => {
                     const { weekday, day, weekend } = dayLabel(iso);
@@ -432,6 +531,31 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
         confirmLabel="Roster them" busy={busy}
         onConfirm={() => void assign()} onCancel={() => setAssigning(false)}>
         <div className="space-y-3">
+          <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2">
+            <p className="text-[11px] text-txt-light mb-1.5">Who this covers</p>
+            <div className="flex flex-wrap gap-1.5">
+              {pickedSpread.employer.map(([k, n]) => (
+                <Chip key={`e-${k}`} tone="violet" dot={false}>{k} · {n}</Chip>
+              ))}
+              {pickedSpread.trade.slice(0, 6).map(([k, n]) => (
+                <Chip key={`t-${k}`} tone="slate" dot={false}>{k} · {n}</Chip>
+              ))}
+              {pickedSpread.trade.length > 6 && (
+                <Chip tone="slate" dot={false}>
+                  +{pickedSpread.trade.length - 6} more trades
+                </Chip>
+              )}
+            </div>
+          </div>
+          {hiddenPicked.length > 0 && (
+            <div className="rounded-lg border border-amber/30 bg-amber-bg/40 px-3 py-2">
+              <p className="text-[12px] text-txt-primary">
+                <strong>{hiddenPicked.length}</strong> of these are hidden by the
+                filters you have set — they were picked earlier and are still
+                selected. They will be rostered too.
+              </p>
+            </div>
+          )}
           <p className="text-[12px] text-txt-muted">
             Anybody already on a pattern is moved off it the day before this one
             starts, rather than having their old roster erased — last month still

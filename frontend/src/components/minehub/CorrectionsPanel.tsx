@@ -20,7 +20,7 @@ import {
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
 import ColumnFilter, { optionsFrom, matches } from "./ColumnFilter";
-import DateField, { toDisplay } from "./DateField";
+import { toDisplay } from "./DateField";
 import Dialog from "./Dialog";
 import Toast from "./Toast";
 import HoverCard, { CardBody, CardHead, CardNote, Fact } from "./HoverCard";
@@ -28,6 +28,7 @@ import {
   Alert, Button, Card, CardHeader, Chip, EmptyRow, StatBar, Td, Th, type Tone,
 } from "./ui";
 import { ago, exactly } from "./when";
+import RaiseCorrection from "./RaiseCorrection";
 
 interface Correction {
   correction_id: number; emp_no: string; name: string; operator_ref: string | null;
@@ -40,6 +41,10 @@ interface Correction {
   decided_at: string | null; decision_note: string | null;
 }
 interface Reason { code: string; label: string; help: string | null }
+interface Who {
+  may_raise: boolean; may_decide: boolean; may_edit_reasons: boolean;
+  scope_org_unit_id: number | null; scope_department: string | null;
+}
 
 const KIND: Record<string, { label: string; tone: Tone; needsTime: boolean; why: string }> = {
   CLOCK_IN:     { label: "Missing punch in",  tone: "emerald", needsTime: true,
@@ -61,7 +66,6 @@ const STATUS: Record<Correction["status"], { label: string; tone: Tone }> = {
   WITHDRAWN: { label: "withdrawn", tone: "slate" },
 };
 
-const today = () => new Date().toISOString().slice(0, 10);
 
 export default function CorrectionsPanel({ prefill, onDone }: {
   /** Opened from a day row: the worker and date are already known. */
@@ -86,22 +90,23 @@ export default function CorrectionsPanel({ prefill, onDone }: {
   const set = (k: keyof typeof by) => (v: string) => setBy((b) => ({ ...b, [k]: v }));
 
   const [adding, setAdding] = useState(Boolean(prefill));
-  const [form, setForm] = useState({
-    emp_no: prefill?.emp_no ?? "", on_date: prefill?.on_date ?? today(),
-    kind: prefill?.kind ?? "CLOCK_OUT", at_time: "", reason_code: "", remarks: "",
-  });
+  const [who, setWho] = useState<Who | null>(null);
+  const [problems, setProblems] =
+    useState<{ emp_no: string; kind: string; why: string }[]>([]);
   const [decide, setDecide] = useState<{ row: Correction; to: "APPROVED" | "REJECTED" } | null>(null);
   const [note, setNote] = useState("");
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [c, r] = await Promise.all([
+      const [c, r, w] = await Promise.all([
         api.get("/attendance/corrections"),
         api.get("/checklists", { params: { kind: "ATTENDANCE_REASON" } }),
+        api.get("/attendance/who"),
       ]);
       setRows(c.data ?? []);
       setReasons(r.data ?? []);
+      setWho(w.data ?? null);
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(d ?? "Could not read the corrections.");
@@ -115,17 +120,6 @@ export default function CorrectionsPanel({ prefill, onDone }: {
     setError(d ?? fallback);
   };
 
-  const submit = async () => {
-    setBusy("new"); setError(null);
-    try {
-      await api.post("/attendance/corrections", form);
-      setAdding(false);
-      setForm({ emp_no: "", on_date: today(), kind: "CLOCK_OUT",
-                at_time: "", reason_code: "", remarks: "" });
-      await load(); onDone?.();
-      setNotice("Raised. It waits for somebody else to decide — you cannot approve your own.");
-    } catch (e) { say(e, "Could not raise that."); } finally { setBusy(null); }
-  };
 
   const act = async () => {
     if (!decide) return;
@@ -174,9 +168,6 @@ export default function CorrectionsPanel({ prefill, onDone }: {
 
   const n = (s: Correction["status"]) => rows.filter((r) => r.status === s).length;
   const mine = rows.filter((r) => r.requested_by === me && r.status === "PENDING").length;
-  const kindInfo = KIND[form.kind];
-  const canSubmit = form.emp_no.trim() && form.on_date && form.reason_code
-    && (!kindInfo?.needsTime || form.at_time);
 
   if (loading) {
     return <div className="flex justify-center py-16">
@@ -245,115 +236,51 @@ export default function CorrectionsPanel({ prefill, onDone }: {
       ]} />
 
       {/* ── raising one ─────────────────────────────────────────── */}
-      {mayRaise && (adding ? (
-        <Card tone="gold">
-          <CardHeader title="Raise a correction" icon={Plus} tone="gold"
-            subtitle="What happened, where the readers are silent. It goes to somebody else to decide — raising one asserts nothing on its own."
-            actions={
-              <Button size="sm" variant="secondary" onClick={() => setAdding(false)}>
-                <X className="w-3.5 h-3.5" /> Cancel
-              </Button>
-            } />
-          <div className="p-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-            <label className="block">
-              <span className="block text-[11px] font-semibold text-txt-secondary mb-1">
-                Attendance ID <span className="text-rose">*</span>
-              </span>
-              <input id="cor-emp" value={form.emp_no}
-                onChange={(e) => setForm({ ...form, emp_no: e.target.value })}
-                placeholder="17001" disabled={Boolean(prefill)}
-                className="w-full bg-bg-base border border-border rounded-lg px-3 py-2
-                           text-[13px] font-mono focus:outline-none focus:border-gold
-                           disabled:opacity-60" />
-              {prefill && (
-                <span className="block text-[11px] text-txt-light mt-1">{prefill.name}</span>
-              )}
-            </label>
-
-            <label className="block">
-              <span className="block text-[11px] font-semibold text-txt-secondary mb-1">
-                The day <span className="text-rose">*</span>
-              </span>
-              <DateField id="cor-date" value={form.on_date} max={today()}
-                onChange={(v) => setForm({ ...form, on_date: v })}
-                className="w-full bg-bg-base border border-border rounded-lg" />
-            </label>
-
-            <label className="block">
-              <span className="block text-[11px] font-semibold text-txt-secondary mb-1">
-                What is being corrected <span className="text-rose">*</span>
-              </span>
-              <select id="cor-kind" value={form.kind}
-                onChange={(e) => setForm({ ...form, kind: e.target.value })}
-                className="w-full bg-bg-base border border-border rounded-lg px-3 py-2
-                           text-[13px] focus:outline-none focus:border-gold">
-                {Object.keys(KIND).map((k) => (
-                  <option key={k} value={k}>{KIND[k].label}</option>
-                ))}
-              </select>
-              <span className="block text-[11px] text-txt-light mt-1">{kindInfo?.why}</span>
-            </label>
-
-            {kindInfo?.needsTime && (
-              <label className="block">
-                <span className="block text-[11px] font-semibold text-txt-secondary mb-1">
-                  Time it happened <span className="text-rose">*</span>
-                </span>
-                <input id="cor-time" type="time" value={form.at_time}
-                  onChange={(e) => setForm({ ...form, at_time: e.target.value })}
-                  className="w-full bg-bg-base border border-border rounded-lg px-3 py-2
-                             text-[13px] focus:outline-none focus:border-gold" />
-                <span className="block text-[11px] text-txt-light mt-1">
-                  It cannot contradict a punch the reader did take.
-                </span>
-              </label>
-            )}
-
-            <label className="block">
-              <span className="block text-[11px] font-semibold text-txt-secondary mb-1">
-                Reason <span className="text-rose">*</span>
-              </span>
-              <select id="cor-reason" value={form.reason_code}
-                onChange={(e) => setForm({ ...form, reason_code: e.target.value })}
-                className="w-full bg-bg-base border border-border rounded-lg px-3 py-2
-                           text-[13px] focus:outline-none focus:border-gold">
-                <option value="">Choose a reason…</option>
-                {reasons.map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
-              </select>
-              <span className="block text-[11px] text-txt-light mt-1">
-                {reasons.find((r) => r.code === form.reason_code)?.help
-                  ?? "Compulsory — it is what explains this six months from now."}
-              </span>
-            </label>
-
-            <label className="block xl:col-span-3">
-              <span className="block text-[11px] font-semibold text-txt-secondary mb-1">
-                Remarks
-              </span>
-              <input id="cor-remarks" value={form.remarks}
-                onChange={(e) => setForm({ ...form, remarks: e.target.value })}
-                placeholder="Gate reader was showing an error at shift end; three others affected"
-                className="w-full bg-bg-base border border-border rounded-lg px-3 py-2
-                           text-[13px] focus:outline-none focus:border-gold" />
-            </label>
-          </div>
-          <div className="px-4 py-3 border-t border-border-light bg-bg-light/60
-                          flex items-center gap-3">
-            <Button variant="primary" onClick={submit} disabled={!canSubmit || busy === "new"}>
-              {busy === "new" ? <Loader2 className="w-4 h-4 animate-spin" />
-                              : <Check className="w-4 h-4" />}
-              Raise it for approval
-            </Button>
-            <span className="text-[12px] text-txt-muted">
-              The gate record is not changed. This sits beside it.
-            </span>
-          </div>
-        </Card>
+      {mayRaise && (adding && who ? (
+        <RaiseCorrection who={who} prefill={prefill}
+          onCancel={() => { setAdding(false); setProblems([]); }}
+          onRaised={(summary, refused) => {
+            setAdding(false); setProblems(refused); setNotice(summary);
+            void load(); onDone?.();
+          }} />
       ) : (
-        <Button variant="primary" onClick={() => setAdding(true)}>
+        <Button variant="primary" onClick={() => { setProblems([]); setAdding(true); }}
+          disabled={!who}>
           <Plus className="w-4 h-4" /> Raise a correction
         </Button>
       ))}
+
+      {/* Refused rows, kept where the raiser can see them. A batch that raises
+          thirty and refuses eight has done its job; the eight are the answer,
+          not an error — usually the reader did take that punch after all. */}
+      {problems.length > 0 && (
+        <Card tone="amber">
+          <CardHeader title={`${problems.length} were not raised`} icon={AlertTriangle}
+            tone="amber"
+            subtitle="The rest went through. These were refused one by one, each for its own reason — mostly a punch the reader did take after all."
+            actions={
+              <Button size="sm" variant="secondary" onClick={() => setProblems([])}>
+                <X className="w-3.5 h-3.5" /> Dismiss
+              </Button>
+            } />
+          <ul className="divide-y divide-border-light">
+            {problems.map((p) => (
+              // A shift raises an in and an out, and they can be refused
+              // separately, so the kind is part of what identifies the row.
+              <li key={`${p.emp_no}:${p.kind}`} className="px-5 py-2 flex items-start gap-3">
+                <span className="font-mono text-[11.5px] font-bold text-violet
+                                 w-[52px] shrink-0 pt-0.5">{p.emp_no}</span>
+                <span className="shrink-0 pt-0.5">
+                  <Chip tone={KIND[p.kind]?.tone ?? "slate"} dot={false}>
+                    {KIND[p.kind]?.label ?? p.kind}
+                  </Chip>
+                </span>
+                <span className="text-[12.5px] text-txt-secondary">{p.why}</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
 
       {!mayRaise && !mayDecide && (
         <Alert tone="warning">

@@ -278,10 +278,16 @@ def roster_board(request: Request,
     people = [dict(r) for r in db.execute(text("""
         SELECT o.operator_id, o.operator_ref, o.designation, p.display_name,
                o.org_unit_id, ou.name AS department,
+               -- Who they work for and what they do. The board is where a
+               -- planner rosters a crew, and a crew is picked out by
+               -- contractor and trade far more often than by name.
+               e.display_name AS employer, t.name AS trade, t.trade_group,
                ra.pattern_id, rp.code AS pattern_code, rp.name AS pattern_name
         FROM operator o
         JOIN party p ON p.party_id = o.party_id
         LEFT JOIN org_unit ou ON ou.org_unit_id = o.org_unit_id
+        LEFT JOIN party e     ON e.party_id = o.employer_party_id
+        LEFT JOIN trade t     ON t.trade_id = o.trade_id
         LEFT JOIN roster_assignment ra
                ON ra.operator_id = o.operator_id AND ra.effective_to IS NULL
         LEFT JOIN roster_pattern rp ON rp.pattern_id = ra.pattern_id
