@@ -1174,8 +1174,9 @@ export interface WhyWhyWindow {
   requested_to?:   string;
   /** The global date filter overhung the register and was trimmed to fit. */
   clamped:        boolean;
-  /** The filter missed the register entirely; the full extent is shown. */
-  fell_back:      boolean;
+  /** The filter misses the register entirely. Nothing is shown — the section
+   *  never substitutes a different period for the one that was asked for. */
+  no_overlap:     boolean;
   empty:          boolean;
 }
 

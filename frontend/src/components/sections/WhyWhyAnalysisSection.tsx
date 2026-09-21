@@ -567,11 +567,25 @@ export default function WhyWhyAnalysisSection() {
   const h = data?.headline;
   const w = data?.window;
   if (!data || !h || !w || w.empty || h.breakdowns === 0) {
+    // Empty is an answer, not a failure — but it has to say which period was
+    // asked for and which period the register actually holds, or it reads as
+    // a broken section.
     return (
       <Card icon={<Wrench size={15} className="text-accent" />} title="Why-Why Analysis">
-        <p className="py-6 text-center text-[12.5px] text-txt-muted">
-          No breakdown analyses recorded for this period.
-        </p>
+        <div className="py-7 text-center">
+          <p className="text-[12.5px] text-txt-secondary">
+            No Why-Why analyses recorded for the selected dates
+            {w?.requested_from && w?.requested_to
+              ? <> (<b>{w.requested_from}</b> to <b>{w.requested_to}</b>)</>
+              : null}.
+          </p>
+          {w?.extent_from && w?.extent_to ? (
+            <p className="mt-1.5 text-[11.5px] text-txt-muted">
+              The register currently runs {w.extent_from} to {w.extent_to}.
+              Change the date filter to see it.
+            </p>
+          ) : null}
+        </div>
       </Card>
     );
   }
@@ -583,15 +597,13 @@ export default function WhyWhyAnalysisSection() {
       {/* Which period is actually on screen. The register covers a fixed span,
           so a filter outside it shows the whole extent rather than nothing —
           said plainly instead of leaving the reader to wonder. */}
-      {(w.clamped || w.fell_back) && (
+      {w.clamped && (
         <div className="flex items-start gap-2 rounded-lg border border-accent/25 bg-accent/5 px-3.5 py-2.5">
           <Info size={14} className="mt-[2px] shrink-0 text-[#c8960c]" />
           <p className="text-[12px] leading-snug text-txt-secondary">
-            {w.fell_back
-              ? <>The selected dates fall outside the Why-Why register, which runs{" "}
-                  <b>{w.extent_from} to {w.extent_to}</b>. Showing the full register.</>
-              : <>Trimmed to the register, which runs <b>{w.extent_from} to {w.extent_to}</b>.
-                  Showing <b>{w.from} to {w.to}</b>.</>}
+            Your date filter runs past the Why-Why register, which holds{" "}
+            <b>{w.extent_from} to {w.extent_to}</b>. Showing the overlap,{" "}
+            <b>{w.from} to {w.to}</b>.
           </p>
         </div>
       )}

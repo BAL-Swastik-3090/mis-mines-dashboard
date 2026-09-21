@@ -116,29 +116,38 @@ def data_extent(db: Session) -> tuple[date | None, date | None]:
 def resolve_window(db: Session, from_date: date | None, to_date: date | None) -> dict:
     """Intersect the caller's range with the range the register actually covers.
 
-    The dashboard's global date filter drives this section like every other, but
-    the register is a retrospective bulk load covering a fixed span. Asking for a
-    month outside it would render an empty section that looks broken rather than
-    empty. So the requested range is clamped to the data, and when there is no
-    overlap at all the full extent is returned with a flag saying so — the UI
-    says which period it is showing instead of silently showing nothing.
+    The section follows the dashboard's global date filter and only that. Where
+    the filter overlaps the register the overlap is shown, and `clamped` says so
+    — picking August to October shows August, which is the filter's own data.
+
+    Where there is NO overlap the section reports empty. It deliberately does
+    NOT substitute another period. An earlier version fell back to the whole
+    register, which meant a September filter quietly rendered April-to-August
+    figures under a September heading; the banner said so but the numbers were
+    read first. Showing nothing and naming the register's range is the honest
+    answer to "what happened in September" when the register has no September.
     """
     lo, hi = data_extent(db)
     if lo is None:
         return {
             "from": None, "to": None, "extent_from": None, "extent_to": None,
-            "clamped": False, "fell_back": False, "empty": True,
+            "clamped": False, "no_overlap": False, "empty": True,
         }
     rf, rt = from_date or lo, to_date or hi
     f, t = max(rf, lo), min(rt, hi)
-    fell_back = f > t
-    if fell_back:
-        f, t = lo, hi
+    if f > t:
+        # Outside the register entirely — report the request back so the UI can
+        # say which period was asked for and which period exists.
+        return {
+            "from": None, "to": None, "extent_from": lo, "extent_to": hi,
+            "requested_from": rf, "requested_to": rt,
+            "clamped": False, "no_overlap": True, "empty": True,
+        }
     return {
         "from": f, "to": t, "extent_from": lo, "extent_to": hi,
         "requested_from": rf, "requested_to": rt,
-        "clamped": (not fell_back) and ((rf, rt) != (f, t)),
-        "fell_back": fell_back, "empty": False,
+        "clamped": (rf, rt) != (f, t),
+        "no_overlap": False, "empty": False,
     }
 
 
@@ -734,7 +743,9 @@ def compute_whywhy(db: Session, from_date: date | None, to_date: date | None) ->
     win = resolve_window(db, from_date, to_date)
     if win["empty"]:
         return {
-            "window": win, "headline": None, "months": [], "machines": [],
+            "window": {k: (v.isoformat() if isinstance(v, date) else v)
+                       for k, v in win.items()},
+            "headline": None, "months": [], "machines": [],
             "failure_modes": None, "root_causes": None, "timing": None,
             "repeats": [], "watchlist": [], "operators": None,
             "production_loss": None,
