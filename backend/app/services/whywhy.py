@@ -658,6 +658,23 @@ def _allocate(recs: list[dict], amount: float | None, tonnes: float | None) -> d
     }
 
 
+# Breakdown production loss is COMPUTED BUT NOT SHOWN.
+#
+# Withheld on the user's instruction, 2026-09-22: the business has not yet
+# signed off the costing, and a Rs 47.74 crore figure nobody can defend in a
+# review is worse than no figure at all. The mechanism is sound - it reuses the
+# LCM section's own valuation rather than inventing a second one - but the
+# LCM method itself apportions the whole plan-vs-actual shortfall across every
+# recorded loss hour, so the crore figure is an attribution, not a measurement.
+# That is the part awaiting confirmation from the business users.
+#
+# Nothing is deleted. Flip this to True and the card returns, the narrative
+# leads with the figure again, and the by-machine / by-mode / by-cause splits
+# come back with it. The frontend already renders the card only when the API
+# sends the block, so this one constant governs both.
+SHOW_PRODUCTION_LOSS = False
+
+
 def _production_loss(db: Session, f: date, t: date, recs: list[dict]) -> dict | None:
     """Breakdown production loss, taken from LCM and split by failure detail.
 
@@ -744,7 +761,9 @@ def compute_whywhy(db: Session, from_date: date | None, to_date: date | None) ->
         "repeats": _repeats(recs),
         "watchlist": _watchlist(recs, t),
         "operators": _operators(recs),
-        "production_loss": _production_loss(db, f, t, recs),
+        "production_loss": (
+            _production_loss(db, f, t, recs) if SHOW_PRODUCTION_LOSS else None
+        ),
         "machine_detail": _machine_breakdown(recs),
         "operator_issues": _operator_issues(recs),
         "completeness": _completeness(recs),
@@ -811,6 +830,8 @@ def _facts_block(d: dict) -> str:
         f"REPEAT FAILURES {h['repeat_events']} events ({h['repeat_pct']}%) are a "
         f"machine failing the same way again",
     ]
+    # None while SHOW_PRODUCTION_LOSS is off, so the model is never told the
+    # rupee figure and cannot lead with a number the business has not signed off.
     pl = d.get("production_loss")
     if pl:
         L += [
