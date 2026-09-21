@@ -46,6 +46,7 @@ TIMEOUT = 90.0
 MINERAL = "Chromite"
 STATE = "ODISHA"
 
+
 MONTHS = {m: i for i, m in enumerate(
     ["january", "february", "march", "april", "may", "june", "july",
      "august", "september", "october", "november", "december"], start=1)}
@@ -221,6 +222,7 @@ def parse_asp_pdf(content: bytes,
     published: date | None = None
     state = mineral = unit = None
     rows: list[dict] = []
+    content_text: list[str] = []
 
     with pdfplumber.open(io.BytesIO(content)) as pdf:
         if not any((p.extract_text() or "").strip() for p in pdf.pages):
@@ -229,6 +231,7 @@ def parse_asp_pdf(content: bytes,
                 "published as a scan. Open the PDF to read it.")
         for page in pdf.pages:
             txt = page.extract_text() or ""
+            content_text.append(txt)
             if period is None:
                 period = _period_of(txt, filename)
             if published is None:
@@ -264,7 +267,70 @@ def parse_asp_pdf(content: bytes,
                     rows.append({"mineral": MINERAL, "grade": label,
                                  "state": state, "unit": unit or "t",
                                  "price": float(value)})
+    # extract_tables() is not reliable on these pages. On the July 2026
+    # issue it silently dropped the CONCENTRATES row from Odisha's chromite
+    # block — the "Final Report" watermark is interleaved as its own line
+    # there and appears to break the cell detection. The page TEXT has the
+    # row, plainly:
+    #
+    #     52% And Above Cr2O3,Fines 28461
+    #     CONCENTRATES 24964
+    #
+    # So the text is read as a second, independent pass and anything the
+    # tables missed is added. It can only ADD: a grade already found by the
+    # table parse is left exactly as it was, because the table version knows
+    # which column a figure came from and the text version is inferring it
+    # from position.
+    have = {r["grade"].lower() for r in rows}
+    for extra in _asp_from_text(content_text):
+        if extra["grade"].lower() not in have:
+            rows.append(extra)
+            have.add(extra["grade"].lower())
+
     return period, published, rows
+
+
+# A line like "CONCENTRATES 24964" or "40% To Below 52 % Cr2O3,Fines 24321":
+# everything up to a trailing integer. Grades contain digits themselves, so
+# the figure has to be taken from the END of the line, not the first number.
+_TEXT_ROW = re.compile(r"^(.*?)\s+(\d[\d,]*)$")
+
+
+def _asp_from_text(pages_text: list[str]) -> list[dict]:
+    """The target state's chromite grades, read from the page text.
+
+    A second opinion on the same pages. Used only to fill gaps the table
+    extraction leaves, never to overrule it.
+    """
+    out: list[dict] = []
+    state = mineral = None
+    unit = "t"
+    for txt in pages_text:
+        for raw_line in txt.splitlines():
+            line = _unsmudge(raw_line.strip())
+            if not line:
+                continue
+            if _STATE_ROW.match(line):
+                state, mineral = line, None
+                continue
+            # "Chromite t" — a mineral heading carries the unit and no figure.
+            head = re.match(r"^([A-Za-z][A-Za-z ,()/&.-]+?)\s+(t|kg|carat|cum|tonne)$",
+                            line, re.I)
+            if head:
+                mineral, unit = head.group(1).strip(), head.group(2)
+                continue
+            m = _TEXT_ROW.match(line)
+            if not (m and state == STATE and mineral
+                    and MINERAL.lower() in mineral.lower()):
+                continue
+            grade = m.group(1).strip()
+            # The watermark sits on its own line inside the block; it is not
+            # a grade and carries no figure, but guard anyway.
+            if not grade or grade.lower() in ("final report",):
+                continue
+            out.append({"mineral": MINERAL, "grade": grade, "state": state,
+                        "unit": unit or "t", "price": float(m.group(2).replace(",", ""))})
+    return out
 
 
 def collect_ibm_asp(db: Session, source: dict) -> dict:

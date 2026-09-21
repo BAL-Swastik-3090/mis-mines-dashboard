@@ -439,7 +439,7 @@ export default function MarketSection() {
   const rateOf = (code: string) => royalty?.rates.find((x) => x.code === code);
 
   const exportRoyalty = () => download(
-    toCsv(["Grade", "Sale price", "Royalty", ...parts.map((p) => p.name),
+    toCsv(["Grade", "ASP", "Royalty", ...parts.map((p) => p.name),
            "Total per tonne", "Of value %"],
       (royalty?.rows ?? []).map((r) => [
         r.grade, r.asp, r.royalty, ...r.parts.map((p) => p.amount),
@@ -509,7 +509,7 @@ export default function MarketSection() {
                   <div className="mt-0.5 text-[24px] font-bold text-navy tabular-nums">
                     {r.percent}%</div>
                   <div className="text-[11px] text-txt-light">
-                    of {r.basis === "ASP" ? "the sale price" : "the royalty"}</div>
+                    of {r.basis === "ASP" ? "the ASP" : "the royalty"}</div>
                   <div className="text-[10.5px] text-txt-light mt-0.5">
                     since {dayLabel(r.effective_from)}</div>
                 </div>
@@ -528,14 +528,14 @@ export default function MarketSection() {
 
           <Card tone="gold">
             <CardHeader title="What a tonne owes" icon={Landmark} tone="gold"
-              subtitle={`Royalty is ${rateOf("ROYALTY")?.percent ?? 15}% of the sale price. DMF and NMET are shares of the royalty itself, not of the price — which is why the total is far below the three percentages added together.`}
+              subtitle={`Worked out on the IBM average sale price for Odisha. Royalty is ${rateOf("ROYALTY")?.percent ?? 15}% of the ASP; DMF and NMET are shares of the royalty itself, not of the ASP — which is why the total is far below the three percentages added together.`}
               actions={<Button size="sm" variant="secondary" onClick={exportRoyalty}>
                 Export</Button>} />
             <div className="overflow-x-auto">
               <table className="w-full min-w-[860px]">
                 <thead><tr>
                   <Th>Grade</Th>
-                  <Th right>Sale price</Th>
+                  <Th right>ASP</Th>
                   <Th right>Royalty
                     <span className="block font-normal normal-case text-[9.5px] text-txt-light">
                       {rateOf("ROYALTY")?.percent}% of price</span></Th>
@@ -653,7 +653,7 @@ export default function MarketSection() {
             {/* The rates apply to every line, because they are the law rather
                 than a property of a consignment. */}
             <div className="px-4 pt-3 flex flex-wrap items-end gap-3">
-              {([["royalty", "Royalty %", "of the sale price"],
+              {([["royalty", "Royalty %", "of the ASP"],
                  ["dmf", "DMF %", "of the royalty"],
                  ["nmet", "NMET %", "of the royalty"]] as const).map(([k, label, of]) => (
                 <label key={k} className="block">
@@ -673,7 +673,7 @@ export default function MarketSection() {
             <div className="overflow-x-auto mt-2">
               <table className="w-full min-w-[920px]">
                 <thead><tr>
-                  <Th>Grade</Th><Th right>Sale price</Th><Th right>Tonnes</Th>
+                  <Th>Grade</Th><Th right>ASP</Th><Th right>Tonnes</Th>
                   <Th right>Royalty</Th><Th right>DMF</Th><Th right>NMET</Th>
                   <Th right>Per tonne</Th>
                   <Th right className="bg-indigo-bg/40">Charge on the line</Th>
@@ -793,7 +793,7 @@ export default function MarketSection() {
               </button>
               <Button size="sm" variant="secondary"
                 onClick={() => download(toCsv(
-                  ["Grade", "Sale price", "Tonnes", "Royalty/t", "DMF/t", "NMET/t",
+                  ["Grade", "ASP", "Tonnes", "Royalty/t", "DMF/t", "NMET/t",
                    "Total/t", "Charge on the line"],
                   worked.rows.map((r) => [r.grade, r.asp, r.tonnes,
                     r.royaltyPerT.toFixed(2), r.dmfPerT.toFixed(2),
@@ -843,12 +843,12 @@ export default function MarketSection() {
               <span className={lbl}>Worked out on <span className="text-rose">*</span></span>
               <select className={input} value={editRate.basis}
                 onChange={(e) => setEditRate({ ...editRate, basis: e.target.value })}>
-                <option value="ASP">The sale price</option>
+                <option value="ASP">The ASP</option>
                 <option value="ROYALTY">The royalty</option>
               </select>
               <span className="block text-[11px] text-txt-light mt-1">
-                DMF and NMET are levied on the royalty, not on the sale price.
-                Changing this to the sale price would multiply them by about
+                DMF and NMET are levied on the royalty, not on the ASP.
+                Changing this to the ASP would multiply them by about
                 seven, so change it only if a notification actually says so.
               </span>
             </label>
