@@ -550,19 +550,73 @@ function OperatorIssues({ data }: { data: WhyWhyOperatorIssues }) {
   );
 }
 
+// -- loading ---------------------------------------------------------------
+/** First load: the shape of what is coming, so the page does not jump. */
+function SectionSkeleton() {
+  return (
+    <div className="space-y-4">
+      <Card icon={<Wrench size={15} className="text-accent" />} title="Why-Why Analysis">
+        <div className="grid grid-cols-2 gap-px md:grid-cols-3 xl:grid-cols-6">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="px-3 py-2.5">
+              <div className="h-[9px] w-16 animate-pulse rounded bg-bg-subtle" />
+              <div className="mt-2 h-[18px] w-20 animate-pulse rounded bg-bg-subtle" />
+              <div className="mt-2 h-[9px] w-24 animate-pulse rounded bg-bg-subtle" />
+            </div>
+          ))}
+        </div>
+      </Card>
+      <div className="grid gap-4 lg:grid-cols-2">
+        {[0, 1].map((k) => (
+          <div key={k} className="rounded-lg border border-border bg-white p-4 shadow-sm">
+            <div className="h-[10px] w-28 animate-pulse rounded bg-bg-subtle" />
+            <div className="mt-4 space-y-3">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i}>
+                  <div className="h-[9px] w-40 animate-pulse rounded bg-bg-subtle" />
+                  <div className="mt-1.5 h-[6px] animate-pulse rounded-full bg-bg-subtle"
+                       style={{ width: `${90 - i * 15}%` }} />
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Refetch veil — shown while a new date range loads over the old figures.
+ *
+ * react-query keeps the previous data on screen during a refetch, which stops
+ * the page collapsing but also means the numbers sit there looking current
+ * when they belong to the range you just navigated away from. The veil says
+ * plainly that they are stale, without throwing the layout away and rebuilding
+ * it, which on a section this tall is worse than waiting.
+ */
+function RefetchVeil() {
+  return (
+    <div className="pointer-events-none absolute inset-0 z-20 flex items-start justify-center
+                    rounded-lg bg-white/65 backdrop-blur-[1px]">
+      <span className="mt-16 flex items-center gap-2 rounded-full border border-border
+                       bg-white px-3.5 py-1.5 shadow-sm">
+        <RefreshCw size={13} className="animate-spin text-accent" />
+        <span className="text-[12px] font-semibold text-txt-secondary">
+          Loading the selected dates…
+        </span>
+      </span>
+    </div>
+  );
+}
+
 // ── section ──────────────────────────────────────────────────
 export default function WhyWhyAnalysisSection() {
-  const { data, isLoading } = useWhyWhy();
+  const { data, isLoading, isFetching } = useWhyWhy();
   const [wantNarrative, setWantNarrative] = useState(false);
   const nar = useWhyWhyNarrative(wantNarrative);
 
-  if (isLoading && !data) {
-    return (
-      <Card icon={<Wrench size={15} className="text-accent" />} title="Why-Why Analysis">
-        <div className="h-40 animate-pulse rounded bg-bg-subtle" />
-      </Card>
-    );
-  }
+  if (isLoading && !data) return <SectionSkeleton />;
 
   const h = data?.headline;
   const w = data?.window;
@@ -571,6 +625,8 @@ export default function WhyWhyAnalysisSection() {
     // asked for and which period the register actually holds, or it reads as
     // a broken section.
     return (
+      <div className="relative">
+        {isFetching ? <RefetchVeil /> : null}
       <Card icon={<Wrench size={15} className="text-accent" />} title="Why-Why Analysis">
         <div className="py-7 text-center">
           <p className="text-[12.5px] text-txt-secondary">
@@ -587,13 +643,17 @@ export default function WhyWhyAnalysisSection() {
           ) : null}
         </div>
       </Card>
+      </div>
     );
   }
 
   const hourMax = Math.max(...(data.timing?.by_hour ?? []).map((x) => x.count), 1);
 
   return (
-    <div className="space-y-4">
+    // `relative` so the refetch veil can cover the whole section rather than
+    // one card — a date change invalidates every figure below, not just some.
+    <div className="relative space-y-4">
+      {isFetching ? <RefetchVeil /> : null}
       {/* Which period is actually on screen. The register covers a fixed span,
           so a filter outside it shows the whole extent rather than nothing —
           said plainly instead of leaving the reader to wonder. */}
