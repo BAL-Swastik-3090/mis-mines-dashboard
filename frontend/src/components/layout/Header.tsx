@@ -4,6 +4,7 @@ import { RefreshCw, Bell } from "lucide-react";
 import { useState, useCallback, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import DateFilter from "./DateFilter";
+import ProfileMenu from "./ProfileMenu";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import { cn } from "@/lib/utils";
 
@@ -129,6 +130,11 @@ export default function Header() {
               3
             </span>
           </button>
+
+          {/* Who is signed in. Was at the foot of the sidebar with every role
+              spelled out as a badge, which cost half the rail for anybody
+              holding more than one. */}
+          <ProfileMenu />
         </div>
       </div>
     </header>

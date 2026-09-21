@@ -137,6 +137,19 @@ def get_minehub_db():
     try:
         yield db
     except SQLAlchemyError as exc:
+        # Only OUR failures. This except sits around the yield, so it sees
+        # every SQLAlchemyError raised anywhere downstream in the request —
+        # and most endpoints here also hold a MySQL session. A MySQL dropout
+        # was being reported as "MineHub database error", which sends whoever
+        # is debugging it at the wrong database entirely.
+        #
+        # The drivers are the tell: psycopg raises for Postgres, mysql-
+        # connector for MySQL. Anything that is not ours is re-raised
+        # untouched so it surfaces as what it actually is.
+        orig = getattr(exc, "orig", None)
+        ours = orig is None or type(orig).__module__.split(".")[0] == "psycopg"
+        if not ours:
+            raise
         logger.error("MineHub query failed: %s", exc)
         raise HTTPException(status_code=503, detail="MineHub database error.")
     finally:

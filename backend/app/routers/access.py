@@ -109,9 +109,20 @@ def list_permissions(pg: Session = Depends(get_minehub_db)) -> list[dict]:
 
 # ---------------------------------------------------------------------- roles
 @router.get("/roles")
-def list_roles(pg: Session = Depends(get_minehub_db)) -> list[dict]:
+def list_roles(request: Request, db: Session = Depends(get_db),
+               pg: Session = Depends(get_minehub_db)) -> list[dict]:
+    """The roles this person may work with.
+
+    A role carrying the standing everything-grant is not listed for anybody
+    but a superadmin. An admin who can see it cannot grant it — the checks
+    below refuse that — but offering a row that always refuses is a worse
+    answer than not offering it, and the mine asked that the role not be
+    visible at all.
+    """
+    everything = access_svc.is_superadmin(db, _actor(request))
     rows = pg.execute(text("""
         SELECT r.role_id, r.code, r.name, r.description, r.is_system, r.status,
+               r.grants_everything,
                (SELECT count(*) FROM user_access ua
                  WHERE ua.role_id = r.role_id AND ua.valid_to IS NULL) AS user_count,
                COALESCE((SELECT array_agg(p.code ORDER BY p.sort_order)
@@ -119,8 +130,9 @@ def list_roles(pg: Session = Depends(get_minehub_db)) -> list[dict]:
                            JOIN permission p ON p.permission_id = rp.permission_id
                           WHERE rp.role_id = r.role_id), ARRAY[]::text[]) AS permissions
         FROM role r
+        WHERE :all OR NOT r.grants_everything
         ORDER BY r.is_system DESC, r.name
-    """)).mappings().all()
+    """), {"all": everything}).mappings().all()
     return [dict(r) for r in rows]
 
 
@@ -176,7 +188,7 @@ def update_role(role_id: int, request: Request, body: dict = Body(...),
     _require(db, request, "access.roles.manage")
 
     row = pg.execute(text("""
-        SELECT r.code, r.is_system, r.name,
+        SELECT r.code, r.is_system, r.name, r.grants_everything,
                COALESCE((SELECT array_agg(p.code) FROM role_permission rp
                            JOIN permission p ON p.permission_id = rp.permission_id
                           WHERE rp.role_id = r.role_id), ARRAY[]::text[])
@@ -184,7 +196,10 @@ def update_role(role_id: int, request: Request, body: dict = Body(...),
     """), {"r": role_id}).first()
     if not row:
         raise HTTPException(404, "Role not found.")
-    code, is_system, role_name, before_perms = row
+    code, is_system, role_name, holds_all, before_perms = row
+
+    if holds_all and not access_svc.is_superadmin(db, _actor(request)):
+        raise HTTPException(404, "Role not found.")
 
     if "name" in body or "description" in body:
         if is_system and "name" in body:
@@ -195,10 +210,12 @@ def update_role(role_id: int, request: Request, body: dict = Body(...),
         """), {"n": body.get("name"), "d": body.get("description"), "r": role_id})
 
     if "permissions" in body:
-        if code == access_svc.SUPERADMIN:
+        if holds_all or code == access_svc.SUPERADMIN:
             raise HTTPException(
-                400, "The Superadmin holds every permission by definition and "
-                     "cannot have them edited.")
+                400, f"'{role_name}' holds every permission by definition, "
+                     "including ones added later, so its permissions cannot be "
+                     "edited. Remove that standing grant first if this role "
+                     "should only hold some of them.")
         wanted = [str(c) for c in (body.get("permissions") or [])]
         mine = access_svc.permissions_for(db, _actor(request))
         over = [c for c in wanted if c not in mine]
@@ -258,16 +275,29 @@ def delete_role(role_id: int, request: Request,
 
 # ---------------------------------------------------------------------- users
 @router.get("/users")
-def list_users(db: Session = Depends(get_db),
+def list_users(request: Request, db: Session = Depends(get_db),
                pg: Session = Depends(get_minehub_db)) -> list[dict]:
+    """Who holds what.
+
+    Somebody holding a role this caller cannot see is left out of the list
+    entirely, rather than shown with that role quietly stripped from their
+    row. Showing them would be worse than hiding them: setting a person's
+    roles REPLACES the set, so an admin who saves a superadmin's row while
+    unable to see the superadmin role would silently revoke it.
+    """
+    everything = access_svc.is_superadmin(db, _actor(request))
     rows = pg.execute(text("""
         SELECT ua.emp_id, ua.granted_by, ua.created_at,
                r.role_id, r.code AS role_code, r.name AS role_name
         FROM user_access ua
         JOIN role r ON r.role_id = ua.role_id
         WHERE ua.valid_to IS NULL
+          AND (:all OR ua.emp_id NOT IN (
+                SELECT ua2.emp_id FROM user_access ua2
+                  JOIN role r2 ON r2.role_id = ua2.role_id
+                 WHERE ua2.valid_to IS NULL AND r2.grants_everything))
         ORDER BY ua.emp_id
-    """)).mappings().all()
+    """), {"all": everything}).mappings().all()
 
     by_emp: dict[str, dict] = {}
     for r in rows:
@@ -305,6 +335,19 @@ def set_user_roles(emp_id: str, request: Request, body: dict = Body(...),
                               WHERE rp.role_id = r.role_id), ARRAY[]::text[]) AS perms
             FROM role r WHERE r.role_id = ANY(:ids)
         """), {"ids": role_ids}).mappings().all()
+        # Superadmin is more than the sum of its permissions: it also takes
+        # every permission added in future. An admin who happens to hold all
+        # of today's would otherwise pass the comparison below and hand out
+        # permanent, self-renewing access — including back to themselves.
+        if not access_svc.is_superadmin(db, actor):
+            forbidden = pg.execute(text(
+                "SELECT name FROM role WHERE role_id = ANY(:ids) "
+                "AND grants_everything"), {"ids": role_ids}).scalars().all()
+            if forbidden:
+                raise HTTPException(
+                    403, "Only a superadmin can grant "
+                         f"{', '.join(forbidden)}. It carries every permission "
+                         "the platform will ever have, not just today's.")
         if len(rows) != len(set(role_ids)):
             raise HTTPException(400, "One of those roles does not exist.")
         # You cannot hand out more than you hold, by any route.
@@ -317,6 +360,19 @@ def set_user_roles(emp_id: str, request: Request, body: dict = Body(...),
 
     if emp_id == actor and not role_ids:
         raise HTTPException(400, "You cannot remove your own access.")
+
+    # Setting roles REPLACES the set, so acting on somebody whose roles you
+    # cannot all see would revoke the ones you cannot. They are hidden from
+    # the list; this is the same rule at the endpoint, because the list is a
+    # convenience and the endpoint is the boundary.
+    if not access_svc.is_superadmin(db, actor):
+        hidden = pg.execute(text("""
+            SELECT r.name FROM user_access ua JOIN role r ON r.role_id = ua.role_id
+             WHERE ua.emp_id = :e AND ua.valid_to IS NULL AND r.grants_everything
+        """), {"e": emp_id}).scalars().all()
+        if hidden:
+            raise HTTPException(
+                403, "This person holds access only a superadmin can change.")
 
     before = [r[0] for r in pg.execute(text("""
         SELECT r.name FROM user_access ua JOIN role r ON r.role_id = ua.role_id
