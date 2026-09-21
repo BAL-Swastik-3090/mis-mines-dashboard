@@ -136,6 +136,42 @@ def _period_of(txt: str, filename: str = "") -> date | None:
 
 
 _STATE_ROW = re.compile(r"^[A-Z][A-Z &.\-()]{3,}$")
+
+# Four or more of the same character in a row.
+_RUN = re.compile(r"(.)\1{3,}")
+# Where a real grade starts: "Below 40%...", "40% To Below...", "52% And
+# Above...", "CONCENTRATES", "Sub-Grade Chrome Ore".
+_GRADE_STARTS = re.compile(r"(Below\s|\d|CONCENTRAT|Sub-?\s?Grade)", re.I)
+
+
+def _unsmudge(cell: str) -> str:
+    """Remove a watermark that has bled into a table cell.
+
+    Some issues carry a diagonal "Final Report" stamp across the page, and
+    pdfplumber merges it into whatever cell it crosses — each of its letters
+    repeated ten times. The July 2026 issue turns
+
+        52% And Above Cr2O3,Fines   ->  FFFFFFFFFFiiiiiiiiii...rrrrrrrrrr 52% And Above Cr2O3,Fines
+        t                           ->  tttttttttt
+
+    so the grade was stored under a nonsense name and appeared on the screen
+    as one. Two passes fix it and neither can damage a real value:
+
+    Collapsing runs of four or more identical characters is safe because no
+    grade, unit or figure here repeats a character even twice — it restores
+    the unit exactly, and turns the stamp into readable words.
+
+    Then a leading segment is dropped only when it contains no digit and no
+    Cr2O3, so "Final Report " goes and nothing that could be part of a grade
+    ever does.
+    """
+    out = _RUN.sub(r"\1", cell).strip()
+    m = _GRADE_STARTS.search(out)
+    if m and m.start() > 0:
+        prefix = out[:m.start()]
+        if not re.search(r"\d|Cr2O3", prefix, re.I):
+            out = out[m.start():].strip()
+    return out
 _PUBLISHED = re.compile(
     r"Publish(?:ed)?\s*Date\s*[:\-]?\s*(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})", re.I)
 
@@ -199,7 +235,8 @@ def parse_asp_pdf(content: bytes,
                 published = _published_on(txt)
             for table in page.extract_tables():
                 for raw in table:
-                    cells = [(c or "").replace("\n", " ").strip() for c in raw]
+                    cells = [_unsmudge((c or "").replace("\n", " "))
+                             for c in raw]
                     # Four columns in some issues, three in others: January
                     # 2026 has no spacer column, so reading cells[2] and
                     # cells[3] took the unit as the price and found nothing.
