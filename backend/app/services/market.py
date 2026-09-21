@@ -136,6 +136,27 @@ def _period_of(txt: str, filename: str = "") -> date | None:
 
 
 _STATE_ROW = re.compile(r"^[A-Z][A-Z &.\-()]{3,}$")
+_PUBLISHED = re.compile(
+    r"Publish(?:ed)?\s*Date\s*[:\-]?\s*(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})", re.I)
+
+
+def _published_on(txt: str) -> date | None:
+    """The day the issue was released, from its own cover.
+
+    Worth having because IBM runs about two months behind: the June 2026
+    issue came out on 13 August. Without it, "there is no July figure" and
+    "the collector has stopped" look the same.
+    """
+    m = _PUBLISHED.search(re.sub(r"\s+", " ", txt))
+    if not m:
+        return None
+    d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if y < 100:
+        y += 2000
+    try:
+        return date(y, mo, d)
+    except ValueError:
+        return None
 
 
 class ScannedIssue(RuntimeError):
@@ -149,7 +170,8 @@ class ScannedIssue(RuntimeError):
     """
 
 
-def parse_asp_pdf(content: bytes, filename: str = "") -> tuple[date | None, list[dict]]:
+def parse_asp_pdf(content: bytes,
+                  filename: str = "") -> tuple[date | None, date | None, list[dict]]:
     """Chromite rows for Odisha, with the period the issue covers.
 
     The table's first column carries three different things depending on the
@@ -160,6 +182,7 @@ def parse_asp_pdf(content: bytes, filename: str = "") -> tuple[date | None, list
     import pdfplumber  # imported here so the app starts without it installed
 
     period: date | None = None
+    published: date | None = None
     state = mineral = unit = None
     rows: list[dict] = []
 
@@ -172,6 +195,8 @@ def parse_asp_pdf(content: bytes, filename: str = "") -> tuple[date | None, list
             txt = page.extract_text() or ""
             if period is None:
                 period = _period_of(txt, filename)
+            if published is None:
+                published = _published_on(txt)
             for table in page.extract_tables():
                 for raw in table:
                     cells = [(c or "").replace("\n", " ").strip() for c in raw]
@@ -202,7 +227,7 @@ def parse_asp_pdf(content: bytes, filename: str = "") -> tuple[date | None, list
                     rows.append({"mineral": MINERAL, "grade": label,
                                  "state": state, "unit": unit or "t",
                                  "price": float(value)})
-    return period, rows
+    return period, published, rows
 
 
 def collect_ibm_asp(db: Session, source: dict) -> dict:
@@ -224,7 +249,7 @@ def collect_ibm_asp(db: Session, source: dict) -> dict:
     for url in links[:6]:
         name = url.rsplit("/", 1)[-1]
         try:
-            period, rows = parse_asp_pdf(_fetch(url).content, name)
+            period, published, rows = parse_asp_pdf(_fetch(url).content, name)
         except ScannedIssue as exc:
             # Not a fault — the source did this, and the screen should say so
             # rather than showing a gap in the series with no explanation.
@@ -259,18 +284,20 @@ def collect_ibm_asp(db: Session, source: dict) -> dict:
             db.execute(text("""
                 INSERT INTO mineral_price (source_id, mineral, grade, state,
                                            period, price, unit, document_url,
-                                           is_flagged, flag_reason)
-                VALUES (:src, :m, :g, :s, :p, :v, :u, :doc, :fl, :why)
+                                           published_on, is_flagged, flag_reason)
+                VALUES (:src, :m, :g, :s, :p, :v, :u, :doc, :pub, :fl, :why)
                 ON CONFLICT (mineral, grade, state, period) DO UPDATE
                    SET price = EXCLUDED.price,
                        unit = EXCLUDED.unit,
                        document_url = EXCLUDED.document_url,
+                       published_on = EXCLUDED.published_on,
                        fetched_at = now(),
                        is_flagged = EXCLUDED.is_flagged,
                        flag_reason = EXCLUDED.flag_reason
             """), {"src": source["source_id"], "m": r["mineral"], "g": r["grade"],
                    "s": r["state"], "p": period, "v": r["price"], "u": r["unit"],
-                   "doc": url, "fl": reason is not None, "why": reason})
+                   "doc": url, "pub": published,
+                   "fl": reason is not None, "why": reason})
             written += 1
             flagged += 1 if reason else 0
 

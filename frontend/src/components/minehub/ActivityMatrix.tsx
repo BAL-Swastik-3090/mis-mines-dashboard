@@ -521,7 +521,7 @@ export default function ActivityMatrix({ rows, days, narrowed: narrowedAbove }: 
             <span>
               {filtered.length === 0 ? "Nobody to show"
                 : all ? `All ${filtered.length}`
-                : `${page * perPage + 1}\u2013${Math.min((page + 1) * perPage, filtered.length)} of ${filtered.length}`}
+                : `${page * perPage + 1}–${Math.min((page + 1) * perPage, filtered.length)} of ${filtered.length}`}
             </span>
             <label className="inline-flex items-center gap-1.5">
               Show

@@ -197,7 +197,7 @@ export default function AssessmentPanel({ onChanged, filter }: {
         case "service":    return p.years_served ?? 0;
       }
     };
-    const rank = (v: string | number) => (typeof v === "string" && v === "" ? "\uffff" : v);
+    const rank = (v: string | number) => (typeof v === "string" && v === "" ? "￿" : v);
     return [...filtered].sort((x, y) => {
       const a = rank(keyOf(x)), b = rank(keyOf(y));
       if (a === b) return x.display_name.localeCompare(y.display_name);

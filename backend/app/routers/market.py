@@ -53,6 +53,7 @@ def prices(request: Request,
     rows = [dict(r) for r in pg.execute(text("""
         SELECT p.grade, p.period, p.price, p.unit, p.document_url,
                p.is_flagged, p.flag_reason, p.fetched_at, p.first_seen_at,
+               p.published_on,
                (SELECT count(*) FROM price_revision v
                  WHERE v.kind = 'ASP' AND v.ref_id = p.price_id) AS revisions,
                lag(p.price) OVER (PARTITION BY p.grade ORDER BY p.period) AS prev
@@ -248,10 +249,31 @@ def set_royalty_rate(code: str, request: Request, body: dict = Body(...),
 @router.get("/auction")
 def auction(request: Request,
             mine: str = Query(""),
+            window: str = Query("", description="valid_from of a window; latest if omitted"),
             db: Session = Depends(get_db),
             pg: Session = Depends(get_minehub_db)) -> dict:
-    """OMC e-auction prices, newest window first."""
+    """OMC e-auction prices for one window.
+
+    A window is what OMC actually publishes — a price that holds from one
+    date to another, set by a named auction. Showing every window at once
+    mixes periods that are not comparable, so one is chosen and the rest are
+    offered.
+
+    Whether the chosen window has lapsed is answered here rather than left to
+    the browser: the screen must be able to say "this is last month's price
+    and OMC has not published the next one" instead of presenting a stale
+    figure as if it were current.
+    """
     _require(db, request, VIEW)
+
+    windows = [dict(r) for r in pg.execute(text("""
+        SELECT valid_from, valid_to, auction_date, count(*) AS rows
+          FROM auction_price
+         GROUP BY valid_from, valid_to, auction_date
+         ORDER BY valid_from DESC
+    """)).mappings()]
+
+    chosen = window or (windows[0]["valid_from"].isoformat() if windows else "")
     rows = [dict(r) for r in pg.execute(text("""
         SELECT a.mine, a.grade, a.basis_pct, a.price, a.unit,
                a.valid_from, a.valid_to, a.auction_date, a.document_url,
@@ -261,18 +283,28 @@ def auction(request: Request,
                  AS revisions
           FROM auction_price a
          WHERE (:m = '' OR a.mine = :m)
+           AND (:w = '' OR a.valid_from = CAST(:w AS date))
          ORDER BY a.valid_from DESC, a.mine, a.basis_pct DESC NULLS LAST
-    """), {"m": mine}).mappings()]
+    """), {"m": mine, "w": chosen}).mappings()]
     for r in rows:
         r["price"] = float(r["price"])
         r["basis_pct"] = float(r["basis_pct"]) if r["basis_pct"] is not None else None
-    latest = rows[0]["valid_from"] if rows else None
+
+    valid_to = rows[0]["valid_to"] if rows else None
+    today = date.today()
+    lapsed = bool(valid_to and valid_to < today)
     return {
         "rows": rows,
         "mines": sorted({r["mine"] for r in rows}),
-        "latest_from": latest,
-        "latest_to": rows[0]["valid_to"] if rows else None,
+        "windows": windows,
+        "window": chosen or None,
+        "latest_from": rows[0]["valid_from"] if rows else None,
+        "latest_to": valid_to,
         "auction_date": rows[0]["auction_date"] if rows else None,
+        # The screen says so rather than presenting a lapsed price as current.
+        "lapsed": lapsed,
+        "days_lapsed": (today - valid_to).days if lapsed else 0,
+        "is_latest": bool(windows) and chosen == windows[0]["valid_from"].isoformat(),
     }
 
 

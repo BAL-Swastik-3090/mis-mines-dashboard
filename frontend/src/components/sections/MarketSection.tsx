@@ -27,8 +27,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle, ExternalLink, FileWarning, Gauge, Gavel, Landmark, Loader2,
-  Calculator, History, Languages, Minus, Newspaper, Plus, RefreshCw,
-  TrendingDown, TrendingUp, X,
+  ArrowUpDown, Calculator, Clock, History, Languages, Minus, Newspaper,
+  Plus, RefreshCw, TrendingDown, TrendingUp, X,
 } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
@@ -40,11 +40,13 @@ import { ago, exactly } from "@/components/minehub/when";
 import Dialog from "@/components/minehub/Dialog";
 import DateField from "@/components/minehub/DateField";
 import { toCsv, download } from "@/components/minehub/spreadsheet";
+import { CalendarRange } from "lucide-react";
 
 interface PriceRow {
   grade: string; period: string; price: number; unit: string;
   document_url: string | null; is_flagged: boolean; flag_reason: string | null;
   fetched_at: string; first_seen_at: string | null; revisions: number;
+  published_on: string | null;
   previous: number | null; change_pct: number | null;
 }
 interface Revision {
@@ -79,9 +81,16 @@ interface AuctionRow {
   auction_date: string | null; document_url: string | null;
   first_seen_at: string | null; revisions: number;
 }
+interface Window {
+  valid_from: string; valid_to: string; auction_date: string | null; rows: number;
+}
 interface Auction {
-  rows: AuctionRow[]; mines: string[];
+  rows: AuctionRow[]; mines: string[]; windows: Window[];
+  window: string | null;
   latest_from: string | null; latest_to: string | null; auction_date: string | null;
+  // OMC publishes for a window. Once it passes, the figure is last month's
+  // and the screen must say so rather than showing it as current.
+  lapsed: boolean; days_lapsed: number; is_latest: boolean;
 }
 interface NewsItem {
   news_id: number; title: string; title_en: string | null;
@@ -124,6 +133,34 @@ const input = "w-full bg-bg-base border border-border rounded-lg px-3 py-2 "
   + "focus:border-indigo focus:ring-2 focus:ring-indigo/15";
 const lbl = "block text-[11px] font-semibold text-txt-secondary mb-1";
 
+/** A column heading that sorts. The arrow shows the current direction, and
+ *  a dimmed one shows the column can sort at all — a header that only reveals
+ *  itself on hover is a feature nobody finds. */
+function SortTh({ label, col, sort, onSort, right }: {
+  label: string; col: string;
+  sort: { key: string; dir: string };
+  onSort: (c: string) => void; right?: boolean;
+}) {
+  const on = sort.key === col;
+  return (
+    <th className={`px-3 py-2 border-b border-border-light whitespace-nowrap
+                    ${right ? "text-right" : "text-left"}`}>
+      <button type="button" onClick={() => onSort(col)}
+        className={`inline-flex items-center gap-1 text-[10.5px] font-bold uppercase
+                    tracking-wide transition-colors
+                    ${on ? "text-navy" : "text-txt-light hover:text-txt-secondary"}`}>
+        {label}
+        <ArrowUpDown className={`w-3 h-3 ${on ? "opacity-100" : "opacity-40"}`} />
+        {on && (
+          <span className="text-[9px] font-normal">
+            {sort.dir === "asc" ? "↑" : "↓"}
+          </span>
+        )}
+      </button>
+    </th>
+  );
+}
+
 const Th = ({ children, right, className = "" }: {
   children: React.ReactNode; right?: boolean; className?: string;
 }) => (
@@ -160,7 +197,7 @@ function Revisions({ rows, what }: { rows: Revision[]; what: string }) {
   }
   return (
     <Card tone="amber">
-      <CardHeader title={`Restated \u00b7 ${rows.length}`} icon={History} tone="amber"
+      <CardHeader title={`Restated · ${rows.length}`} icon={History} tone="amber"
         subtitle="A publisher changed a figure after we had already read it. The earlier value is kept here." />
       <div className="overflow-x-auto">
         <table className="w-full min-w-[640px]">
@@ -176,10 +213,10 @@ function Revisions({ rows, what }: { rows: Revision[]; what: string }) {
                 <td className="px-3 py-2 text-[12px] text-txt-muted">{v.period_label}</td>
                 <td className="px-3 py-2 text-right text-[12.5px] tabular-nums
                                text-txt-light line-through">
-                  {v.old_price !== null ? inr(v.old_price) : "\u2014"}</td>
+                  {v.old_price !== null ? inr(v.old_price) : "—"}</td>
                 <td className="px-3 py-2 text-right text-[12.5px] tabular-nums
                                font-semibold text-navy">
-                  {v.new_price !== null ? inr(v.new_price) : "\u2014"}</td>
+                  {v.new_price !== null ? inr(v.new_price) : "—"}</td>
                 <td className="px-3 py-2 text-right text-[12px]">
                   <Move pct={v.change_pct} /></td>
                 <td className="px-3 py-2 text-[11.5px] text-txt-light whitespace-nowrap"
@@ -213,6 +250,12 @@ export default function MarketSection() {
   const [notice, setNotice] = useState<string | null>(null);
 
   const [grade, setGrade] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [sort, setSort] = useState<{ key: "period" | "grade" | "price" | "change";
+                                     dir: "asc" | "desc" }>(
+    { key: "period", dir: "desc" });
+  const [omcWindow, setOmcWindow] = useState("");
   const [mine, setMine] = useState("");
   const [tag, setTag] = useState("");
 
@@ -238,7 +281,7 @@ export default function MarketSection() {
       const [p, r, a, n, s, v] = await Promise.all([
         api.get("/market/prices", { params: { months: 24 } }),
         api.get("/market/royalty"),
-        api.get("/market/auction"),
+        api.get("/market/auction", { params: omcWindow ? { window: omcWindow } : {} }),
         api.get("/market/news", { params: { limit: 80 } }),
         api.get("/market/sources"),
         api.get("/market/revisions", { params: { limit: 200 } }),
@@ -250,7 +293,7 @@ export default function MarketSection() {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(d ?? "Could not read the market figures.");
     } finally { setLoading(false); }
-  }, []);
+  }, [omcWindow]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -277,7 +320,7 @@ export default function MarketSection() {
         effective_from: editRate.effective_from,
         name: editRate.name,
       });
-      setNotice(`${editRate.name}: ${r.data.was} \u2192 ${r.data.now}, `
+      setNotice(`${editRate.name}: ${r.data.was} → ${r.data.now}, `
         + `from ${dayLabel(editRate.effective_from)}. The previous rate is kept, `
         + `so earlier periods still compute on it.`);
       setEditRate(null);
@@ -314,9 +357,33 @@ export default function MarketSection() {
     return [...by.values()].sort((a, b) => a.grade.localeCompare(b.grade));
   }, [prices]);
 
-  const series = useMemo(
-    () => (prices?.rows ?? []).filter((r) => matches(r.grade, grade)),
-    [prices, grade]);
+  const months = useMemo(
+    () => [...new Set((prices?.rows ?? []).map((r) => r.period))].sort(),
+    [prices]);
+
+  const series = useMemo(() => {
+    const rows = (prices?.rows ?? []).filter((r) =>
+      matches(r.grade, grade)
+      && (!from || r.period >= from)
+      && (!to || r.period <= to));
+    const dir = sort.dir === "asc" ? 1 : -1;
+    const key = (r: PriceRow) => {
+      switch (sort.key) {
+        case "grade": return r.grade;
+        case "price": return r.price;
+        // A row with no previous month sorts last either way: no change is
+        // not a small change.
+        case "change": return r.change_pct ?? (sort.dir === "asc" ? Infinity : -Infinity);
+        default: return r.period;
+      }
+    };
+    return [...rows].sort((a, b) => {
+      const x = key(a), y = key(b);
+      if (x === y) return a.grade.localeCompare(b.grade);
+      return (typeof x === "number" && typeof y === "number"
+        ? x - y : String(x).localeCompare(String(y))) * dir;
+    });
+  }, [prices, grade, from, to, sort]);
   const auctionRows = useMemo(
     () => (auction?.rows ?? []).filter((r) => matches(r.mine, mine)),
     [auction, mine]);
@@ -361,6 +428,13 @@ export default function MarketSection() {
     };
   }, [lines, rates]);
 
+  const sortBy = (col: string) => setSort((p_) => ({
+    key: col as typeof p_.key,
+    // Second click reverses; a new column starts descending, because the
+    // first question of any of these columns is "which is the biggest".
+    dir: p_.key === col && p_.dir === "desc" ? "asc" : "desc",
+  }));
+
   const parts = royalty?.rows[0]?.parts ?? [];
   const rateOf = (code: string) => royalty?.rates.find((x) => x.code === code);
 
@@ -382,7 +456,7 @@ export default function MarketSection() {
   return (
     <div className="space-y-4">
       <PageHeader lead="Market" rest="Watch" icon={Gauge} tone="teal"
-        subtitle="Chrome ore prices as published, what the mine owes on them, and what the sector is reporting. None of this is the mine's own data."
+        subtitle="Prices as published · what the mine owes · what the sector reports. None of it is the mine's own data."
         actions={mayRefresh ? (
           <Button variant="secondary" onClick={() => void refresh()} disabled={busy}>
             {busy ? <Loader2 className="w-4 h-4 animate-spin" />
@@ -518,7 +592,7 @@ export default function MarketSection() {
                      `${royalty.basis.mineral}, ${royalty.basis.state}`],
                     ["Grades in the issue", `${royalty.basis.grades}`],
                     ["Read from the source",
-                     royalty.basis.fetched_at ? ago(royalty.basis.fetched_at) : "\u2014"],
+                     royalty.basis.fetched_at ? ago(royalty.basis.fetched_at) : "—"],
                     ["Restated since",
                      royalty.basis.revisions
                        ? `${royalty.basis.revisions} figure(s) — see IBM Sale Price`
@@ -822,56 +896,143 @@ export default function MarketSection() {
               subtitle="One row per grade per month, each linked to the document it was read from."
               actions={
                 <div className="flex flex-wrap items-center gap-2">
-                  <ColumnFilter variant="control" label="Grade" allLabel="All grades"
-                    value={grade} onChange={setGrade}
-                    options={optionsFrom(prices?.rows ?? [], (r) => r.grade, (v) => v, null)} />
+                  <label className="inline-flex items-center gap-1.5 text-[11.5px]
+                                    text-txt-muted">
+                    <CalendarRange className="w-3.5 h-3.5 text-txt-light" />
+                    <select value={from} onChange={(e) => setFrom(e.target.value)}
+                      className="bg-bg-base border border-border rounded-lg px-2 py-1
+                                 text-[11.5px] font-semibold text-txt-secondary
+                                 focus:outline-none focus:border-teal">
+                      <option value="">From the start</option>
+                      {months.map((m) => (
+                        <option key={m} value={m}>{monthLabel(m)}</option>
+                      ))}
+                    </select>
+                    to
+                    <select value={to} onChange={(e) => setTo(e.target.value)}
+                      className="bg-bg-base border border-border rounded-lg px-2 py-1
+                                 text-[11.5px] font-semibold text-txt-secondary
+                                 focus:outline-none focus:border-teal">
+                      <option value="">the latest</option>
+                      {months.map((m) => (
+                        <option key={m} value={m}>{monthLabel(m)}</option>
+                      ))}
+                    </select>
+                  </label>
                   <Button size="sm" variant="secondary"
                     onClick={() => download(toCsv(
-                      ["Grade", "Month", "Price", "Unit", "Change %", "Source"],
-                      series.map((r) => [r.grade, monthLabel(r.period), r.price, r.unit,
-                                         r.change_pct ?? "", r.document_url ?? ""])),
+                      ["Month", "Grade", "Price", "Unit", "Change %", "Published on",
+                       "Source"],
+                      series.map((r) => [monthLabel(r.period), r.grade, r.price,
+                        r.unit, r.change_pct ?? "",
+                        r.published_on ? dayLabel(r.published_on) : "",
+                        r.document_url ?? ""])),
                       "chrome-ore-asp.csv")}>Export</Button>
-                </div>} />
+                </div>
+              } />
+
+            {/* Grade as chips rather than a dropdown: there are five of them,
+                they are the thing people switch between constantly, and a
+                dropdown hides which one is active behind a click. */}
+            <div className="px-4 py-2.5 border-b border-border-light flex flex-wrap
+                            items-center gap-1.5">
+              {[{ v: "", label: "All grades" },
+                ...(prices?.grades ?? []).map((g) => ({
+                  v: g,
+                  // "40% To Below 52 % Cr2O3,Fines" is unreadable as a chip.
+                  label: g.replace(/\s*Cr2O3\s*/i, " ").replace(",", " ").trim(),
+                }))].map((o) => (
+                <button key={o.v || "all"} type="button" onClick={() => setGrade(o.v)}
+                  title={o.v || "Every grade"}
+                  className={`rounded-lg border px-2.5 py-1 text-[11.5px] font-semibold
+                              transition ${grade === o.v
+                      ? "border-navy bg-navy text-white"
+                      : "border-border text-txt-muted hover:border-navy/40"}`}>
+                  {o.label}
+                </button>
+              ))}
+              <span className="flex-1" />
+              <span className="text-[11px] text-txt-light tabular-nums">
+                {series.length} of {prices?.rows.length ?? 0} rows
+              </span>
+            </div>
+
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[720px]">
+              <table className="w-full min-w-[820px]">
                 <thead><tr>
-                  <Th>Month</Th><Th>Grade</Th><Th right>Price</Th>
-                  <Th>Against last month</Th><Th>Source</Th>
+                  <SortTh label="Month" col="period" sort={sort} onSort={sortBy} />
+                  <SortTh label="Grade" col="grade" sort={sort} onSort={sortBy} />
+                  <SortTh label="Price (₹/t)" col="price" sort={sort}
+                    onSort={sortBy} right />
+                  <SortTh label="Against last month" col="change" sort={sort}
+                    onSort={sortBy} />
+                  <Th>Source</Th>
+                  <Th>Published on</Th>
                 </tr></thead>
                 <tbody>
-                  {series.map((r) => (
-                    <tr key={`${r.grade}|${r.period}`}
-                      className={`border-b border-border-light last:border-0
-                                  ${r.is_flagged ? "bg-amber-bg/40" : ""}`}>
-                      <td className="px-3 py-2 text-[12.5px] whitespace-nowrap">
-                        {monthLabel(r.period)}</td>
-                      <td className="px-3 py-2 text-[12.5px] text-txt-secondary">
-                        {r.grade}
-                        {r.revisions > 0 && (
-                          <span title={`Restated ${r.revisions} time(s) since first read. See below.`}
-                            className="ml-1.5 inline-flex items-center gap-0.5 text-[10px]
-                                       font-semibold text-amber">
-                            <History className="w-3 h-3" />{r.revisions}
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-right text-[12.5px] font-semibold
-                                     tabular-nums">{inr(r.price)}
-                        <span className="text-txt-light font-normal"> /{r.unit}</span></td>
-                      <td className="px-3 py-2 text-[12px]"><Move pct={r.change_pct} /></td>
-                      <td className="px-3 py-2">
-                        {r.document_url ? (
-                          <a href={r.document_url} target="_blank" rel="noreferrer"
-                            className="inline-flex items-center gap-1 text-[11.5px]
-                                       text-teal hover:underline">
-                            <ExternalLink className="w-3 h-3" /> PDF</a>
-                        ) : <span className="text-txt-light text-[11.5px]">—</span>}
-                      </td>
-                    </tr>
-                  ))}
+                  {series.map((r, k) => {
+                    // A rule and a heavier month label at each change of month,
+                    // so a long list reads as months rather than as rows.
+                    const newMonth = sort.key === "period"
+                      && (k === 0 || series[k - 1].period !== r.period);
+                    return (
+                      <tr key={`${r.grade}|${r.period}`}
+                        className={`border-b border-border-light last:border-0
+                                    hover:bg-bg-light/70 transition-colors
+                                    ${r.is_flagged ? "bg-amber-bg/40" : ""}
+                                    ${newMonth && k ? "border-t-2 border-t-border" : ""}`}>
+                        <td className={`px-3 py-2 text-[12.5px] whitespace-nowrap
+                                        ${newMonth ? "font-bold text-navy" : "text-txt-light"}`}>
+                          {newMonth || sort.key !== "period" ? monthLabel(r.period) : ""}
+                        </td>
+                        <td className="px-3 py-2 text-[12.5px] text-txt-secondary">
+                          {r.grade}
+                          {r.revisions > 0 && (
+                            <span title={`Restated ${r.revisions} time(s) since first read`}
+                              className="ml-1.5 inline-flex items-center gap-0.5 text-[10px]
+                                         font-semibold text-amber">
+                              <History className="w-3 h-3" />{r.revisions}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-right text-[12.5px] font-semibold
+                                       tabular-nums text-navy">
+                          {inr(r.price)}
+                          <span className="text-txt-light font-normal"> /{r.unit}</span>
+                        </td>
+                        <td className="px-3 py-2 text-[12px]"><Move pct={r.change_pct} /></td>
+                        <td className="px-3 py-2">
+                          {r.document_url ? (
+                            <a href={r.document_url} target="_blank" rel="noreferrer"
+                              className="inline-flex items-center gap-1 text-[11.5px]
+                                         text-teal hover:underline">
+                              <ExternalLink className="w-3 h-3" /> PDF</a>
+                          ) : <span className="text-txt-light text-[11.5px]">—</span>}
+                        </td>
+                        <td className="px-3 py-2 text-[11.5px] text-txt-light
+                                       whitespace-nowrap">
+                          {r.published_on ? dayLabel(r.published_on)
+                                          : <span title="This issue did not print one">not stated</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {series.length === 0 && (
+                    <tr><td colSpan={6}
+                      className="px-4 py-8 text-center text-[12.5px] text-txt-muted">
+                      Nothing in that range for that grade.
+                    </td></tr>
+                  )}
                 </tbody>
               </table>
             </div>
+            <p className="px-4 py-2.5 border-t border-border-light text-[11px]
+                          text-txt-light leading-snug">
+              IBM publishes about ten weeks behind: the June 2026 issue came out
+              on 13 August. A missing recent month usually means it has not been
+              published yet, not that the collector has stopped — the Sources
+              tab says which.
+            </p>
           </Card>
 
           <Revisions rows={revisions.filter((v) => v.kind === "ASP")}
@@ -884,12 +1045,29 @@ export default function MarketSection() {
         <Card tone="violet">
           <CardHeader title="What it fetched at auction" icon={Gavel} tone="violet"
             subtitle={auction.latest_from
-              ? `Weighted average achieved for ${dayLabel(auction.latest_from)} to ${dayLabel(auction.latest_to!)}`
+              ? `${dayLabel(auction.latest_from)} – ${dayLabel(auction.latest_to!)}`
                 + (auction.auction_date
-                    ? `, from the national e-auction of ${dayLabel(auction.auction_date)}.` : ".")
+                    ? ` · e-auction ${dayLabel(auction.auction_date)}` : "")
               : "Weighted average achieved at OMC's national e-auction."}
             actions={
               <div className="flex flex-wrap items-center gap-2">
+                {auction.windows.length > 1 && (
+                  <label className="inline-flex items-center gap-1.5 text-[11.5px]
+                                    text-txt-muted">
+                    <CalendarRange className="w-3.5 h-3.5 text-txt-light" />
+                    <select value={omcWindow || auction.window || ""}
+                      onChange={(e) => setOmcWindow(e.target.value)}
+                      className="bg-bg-base border border-border rounded-lg px-2 py-1
+                                 text-[11.5px] font-semibold text-txt-secondary
+                                 focus:outline-none focus:border-violet">
+                      {auction.windows.map((w) => (
+                        <option key={w.valid_from} value={w.valid_from}>
+                          {dayLabel(w.valid_from)} – {dayLabel(w.valid_to)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 <ColumnFilter variant="control" label="Mine" allLabel="All mines"
                   value={mine} onChange={setMine}
                   options={optionsFrom(auction.rows, (r) => r.mine, (v) => v, null)} />
@@ -900,6 +1078,37 @@ export default function MarketSection() {
                                             r.unit, r.valid_from, r.valid_to])),
                     "omc-auction-prices.csv")}>Export</Button>
               </div>} />
+          {auction.lapsed && auction.is_latest && (
+            <div className="mx-4 mt-3 rounded-xl ring-1 ring-amber-ring bg-amber-bg
+                            px-4 py-3 flex items-start gap-3">
+              <Clock className="w-4 h-4 mt-0.5 text-amber shrink-0" />
+              <p className="text-[12.5px] text-amber leading-snug">
+                <strong>This window ended {dayLabel(auction.latest_to!)}
+                  {auction.days_lapsed === 1 ? ", yesterday" : `, ${auction.days_lapsed} days ago`}.</strong>{" "}
+                These are the most recent prices OMC has published, and they are
+                the right ones to quote until the next e-auction is posted —
+                but they are not current. The collector checks twice a day and
+                will pick the new window up on its own.{" "}
+                <a href="https://omcltd.in/en/our-business/ore-prices" target="_blank"
+                  rel="noreferrer" className="font-semibold underline underline-offset-2">
+                  Check OMC directly
+                </a>.
+              </p>
+            </div>
+          )}
+          {!auction.is_latest && (
+            <div className="mx-4 mt-3 rounded-xl ring-1 ring-sky-ring bg-sky-bg
+                            px-4 py-2.5 flex items-center gap-3">
+              <History className="w-4 h-4 text-sky shrink-0" />
+              <p className="text-[12.5px] text-sky leading-snug">
+                An earlier window, kept for reference.{" "}
+                <button type="button" onClick={() => setOmcWindow("")}
+                  className="font-semibold underline underline-offset-2">
+                  Back to the most recent
+                </button>
+              </p>
+            </div>
+          )}
           <div className="overflow-x-auto">
             <table className="w-full min-w-[760px]">
               <thead><tr>
@@ -942,7 +1151,7 @@ export default function MarketSection() {
             averaged together.{" "}
             <a href="https://omcltd.in/en/our-business/ore-prices" target="_blank"
               rel="noreferrer" className="text-violet hover:underline font-semibold">
-              OMC\u2019s own page</a>.
+              OMC’s own page</a>.
           </p>
         </Card>
       ) : (

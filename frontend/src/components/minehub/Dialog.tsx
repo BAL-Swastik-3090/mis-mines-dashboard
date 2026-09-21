@@ -87,15 +87,22 @@ export default function Dialog({
       // A click on the backdrop means "not now", the same as Cancel.
       onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
       <div ref={panel} role="dialog" aria-modal="true" aria-label={title}
-        className="relative w-[min(560px,100%)] bg-bg-base rounded-2xl shadow-xl border border-border-light
-                   overflow-hidden">
+        // A dialog with a lot in it — the starter patterns, a long list of
+        // people — used to grow past the bottom of the screen, and
+        // overflow-hidden then CLIPPED it rather than scrolling. The footer
+        // went with it, so the confirm button could not be reached at all.
+        // Now the panel is a column bounded by the viewport: the body
+        // scrolls, the heading and the buttons stay put.
+        className="relative w-[min(560px,100%)] max-h-[calc(100dvh-2rem)]
+                   flex flex-col bg-bg-base rounded-2xl shadow-xl
+                   border border-border-light overflow-hidden">
         <button type="button" onClick={onCancel} aria-label="Close"
           className="absolute right-2.5 top-2.5 p-2 rounded-lg text-txt-light
                      hover:text-navy hover:bg-bg-light transition-colors">
           <X className="w-4 h-4" />
         </button>
 
-        <div className="p-5 pr-12 flex items-start gap-3.5">
+        <div className="p-5 pr-12 flex items-start gap-3.5 overflow-y-auto min-h-0">
           <span className={`w-9 h-9 rounded-xl ${look.bg} ${look.fg} flex items-center justify-center shrink-0`}>
             <Icon className="w-4.5 h-4.5" />
           </span>
@@ -105,7 +112,7 @@ export default function Dialog({
           </div>
         </div>
         <div className="px-5 py-3.5 bg-bg-light border-t border-border-light
-                        flex flex-wrap items-center justify-end gap-2">
+                        shrink-0 flex flex-wrap items-center justify-end gap-2">
           <Button variant="ghost" size="sm" onClick={onCancel}>{cancelLabel}</Button>
           {secondary && (
             <Button variant={secondary.tone ?? "secondary"} size="sm"
