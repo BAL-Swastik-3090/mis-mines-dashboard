@@ -41,6 +41,7 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   "operations": ["ops.shift.view"],
   "workforce": ["ops.roster.view"],
   "access-control": ["access.users.view"],
+  "market": ["market.view"],
 };
 
 /**
@@ -64,6 +65,9 @@ const LANDING_RANK: Record<AppPage, number> = {
   "mis": 10,
   "oee": 20,
   "intelligence": 30,
+  // Sits with the dashboards, right after Intelligence: what the fleet did,
+  // then what the ore it produced is worth.
+  "market": 35,
   "fuel-management": 40,
   "ev-tracking": 50,
   "minehub": 60,

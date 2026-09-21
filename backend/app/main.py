@@ -51,6 +51,36 @@ async def _daily_insights_digest():
             logger.error(f"❌ 7AM digest failed: {exc}")
 
 
+async def _market_collector():
+    """Fetch prices and news on each source's own schedule.
+
+    Every hour it asks which sources are due and runs those; the cadence
+    belongs to the source row, so changing how often IBM is checked is an
+    UPDATE rather than a release. A failing source is recorded against itself
+    and never stops the others — government sites go down, and three working
+    collectors are better than none.
+
+    The first pass waits two minutes so startup is not competing with it.
+    """
+    from app.minehub_db import SessionLocal as MineHubSession
+    from app.services import market as market_svc
+    await asyncio.sleep(120)
+    while True:
+        try:
+            if MineHubSession is not None:
+                db = MineHubSession()
+                try:
+                    ran = market_svc.run_all(db)
+                    if ran:
+                        ok = sum(1 for r in ran if r.get("ok"))
+                        logger.info("market collectors: %d of %d answered", ok, len(ran))
+                finally:
+                    db.close()
+        except Exception as exc:
+            logger.warning("market collector pass failed: %s", exc)
+        await asyncio.sleep(3600)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ── Startup — retry up to 5 times for transient errors (e.g. too many connections) ──
@@ -68,6 +98,7 @@ async def lifespan(app: FastAPI):
 
     # Start 7AM digest scheduler as a background task
     digest_task = asyncio.create_task(_daily_insights_digest())
+    market_task = asyncio.create_task(_market_collector())
     # Release pooled connections when the app goes quiet. The MySQL instance is
     # shared and has been refusing connections, so holding idle ones costs
     # somebody else their connection.
@@ -77,6 +108,7 @@ async def lifespan(app: FastAPI):
 
     # ── Shutdown ─────────────────────────────────────────────
     digest_task.cancel()
+    market_task.cancel()
     reaper_task.cancel()
     # Close every pooled connection rather than leaving the server to time them
     # out eight hours later.
@@ -272,6 +304,7 @@ def health_check():
 # ── Routers ───────────────────────────────────────────────────
 from app.routers import attendance as attendance_router
 from app.routers import attendance_corrections
+from app.routers import market
 from app.routers import checklists, operators_analytics
 from app.routers import production, stock, cob, plant, ob, despatch, equipment, dewatering, insights, live_tracking, fuel_management, ev_tracking, auth, oee, roles, minehub, access, operators, operations, workforce, comments
 app.include_router(production.router,      prefix="/api/production",    tags=["Production"])
@@ -293,6 +326,7 @@ app.include_router(oee.router)
 # Before attendance_router: nothing clashes today, but "/corrections"
 # living in a second module is exactly how a path collision appears later.
 app.include_router(attendance_corrections.router)
+app.include_router(market.router)
 app.include_router(attendance_router.router)
 app.include_router(checklists.router)
 app.include_router(operators_analytics.router)

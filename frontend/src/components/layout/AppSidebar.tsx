@@ -1,5 +1,5 @@
 "use client";
-import { Activity, Boxes, CalendarRange, ChevronLeft, ChevronRight, ClipboardList, ExternalLink, Gauge, LayoutDashboard, Radar, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
+import { Activity, Boxes, CalendarRange, ChevronLeft, ChevronRight, ClipboardList, ExternalLink, Gauge, LayoutDashboard, LineChart, Radar, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { canOpen } from "@/contexts/pageAccess";
 import { useSidebar }               from "@/contexts/useSidebar";
@@ -30,6 +30,7 @@ const NAV_ITEMS: NavItem[] = [
   { kind: "page", id: "mis",             label: "MIS Dashboard",              icon: LayoutDashboard },
   { kind: "page", id: "oee",             label: "OEE / LCM",                  icon: Activity        },
   { kind: "page", id: "intelligence",    label: "Intelligence",               icon: Sparkles        },
+  { kind: "page", id: "market",          label: "Market Watch",               icon: LineChart       },
   { kind: "page", id: "fuel-management", label: "Fuel Management",            icon: Gauge           },
   { kind: "page", id: "ev-tracking",     label: "Electric Vehicles Tracking", icon: Zap             },
   { kind: "link", href: PRPO_URL,        label: "PR/PO Status",               icon: ClipboardList   },
