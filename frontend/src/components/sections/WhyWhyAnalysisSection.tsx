@@ -11,7 +11,7 @@ import BreakdownRegisterCard from "@/components/sections/BreakdownRegisterCard";
 import type {
   WhyWhyShare, WhyWhyWatch, WhyWhyMachineDetail, WhyWhyOperatorIssues,
   WhyWhyProductionLoss, WhyWhyLossSlice, WhyWhyOperator,
-  WhyWhyTrainingTopic,
+  WhyWhyTrainingBreakdown,
 } from "@/types";
 
 const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
@@ -344,69 +344,96 @@ function MachineDetail({ rows }: { rows: WhyWhyMachineDetail[] }) {
 
 // -- operator issues + training --------------------------------------------
 /**
- * A training topic as a course, not as a finding.
+ * One breakdown, its operator reason, its qualification pack and its topic.
  *
- * The first version of this rendered "Avoid Side-Loading the Bucket — 4
- * incidents involved…", which is an observation with an imperative on the
- * front. What a training coordinator can act on has a title, a length, an
- * audience and outcomes someone can be assessed against. The backend parses
- * the model's blocks into those fields so this only lays them out, and so an
- * NSQF code the model invented is dropped before it reaches the screen.
+ * The training suggestion belongs to the breakdown, not to the quarter. An
+ * earlier version grouped all 81 into five fleet topics, which reads well on a
+ * calendar and says nothing about why THIS machine failed on THIS day.
+ *
+ * `basis` is the field to read first. Excavators carry a Why-Why on every
+ * operator-attributed breakdown, so their reason is the analysts' own words.
+ * MAN trucks carry one on 23%, so most of theirs is the model reading a defect
+ * string. Both are shown; only one is evidence.
  */
-function TrainingTopicCard({ t, index }: { t: WhyWhyTrainingTopic; index: number }) {
+function BreakdownTopic({ b }: { b: WhyWhyTrainingBreakdown }) {
+  const [open, setOpen] = useState(false);
   return (
-    <div className="rounded-lg border border-border bg-white px-3.5 py-3">
-      <div className="flex items-start gap-2">
-        <span className="mt-[1px] grid h-[18px] w-[18px] shrink-0 place-items-center rounded bg-navy text-[10.5px] font-bold text-white">
-          {index + 1}
+    <div className="rounded-lg border border-border bg-white px-3.5 py-2.5">
+      <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+        <span className="font-mono text-[11.5px] text-navy">{b.machine}</span>
+        <span className="text-[11.5px] text-txt-secondary">{b.defect}</span>
+        <span className="font-mono text-[10.5px] text-txt-muted">{b.date}</span>
+        <span
+          className={`rounded px-1.5 py-[1px] text-[10px] font-semibold ${
+            b.basis === "recorded"
+              ? "bg-success/10 text-success"
+              : "bg-bg-subtle text-txt-muted"
+          }`}
+          title={
+            b.basis === "recorded"
+              ? "Read from the Why-Why chain the analysts wrote"
+              : "No Why-Why chain exists — inferred from the defect and failure mode"
+          }
+        >
+          {b.basis === "recorded" ? "from Why-Why" : "inferred"}
         </span>
-        <div className="min-w-0 flex-1">
-          <h4 className="text-[13px] font-bold leading-snug text-txt-primary">{t.title}</h4>
-          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
-            {t.pack ? (
-              <span className="rounded bg-[#5e35b1]/10 px-1.5 py-[2px] text-[10.5px] font-semibold text-[#5e35b1]">
-                {t.pack.code} · {t.pack.name} · NSQF {t.pack.nsqf}
-              </span>
-            ) : (
-              <span className="rounded bg-bg-subtle px-1.5 py-[2px] text-[10.5px] text-txt-muted">
-                No national pack fits
-              </span>
-            )}
-            {t.format ? <span className="text-[11px] text-txt-muted">{t.format}</span> : null}
-          </div>
-        </div>
+        <span className="ml-auto font-mono text-[10.5px] text-txt-muted">
+          {b.hours} h{b.cost ? ` · ₹${formatIndian(b.cost)}` : ""}
+        </span>
       </div>
 
-      {t.audience ? (
-        <p className="mt-2 pl-[26px] text-[11.5px] text-txt-muted">
-          <b className="font-semibold text-txt-secondary">For</b> {t.audience}
+      {b.reason ? (
+        <p className="mt-1.5 text-[12px] leading-snug text-txt-secondary">
+          <b className="font-semibold text-txt-muted">What the operator did</b> {b.reason}
         </p>
       ) : null}
 
-      {t.outcomes.length ? (
-        <div className="mt-2 pl-[26px]">
-          <div className="font-condensed text-[10px] font-bold uppercase tracking-widest text-txt-muted">
-            By the end, the attendee can
+      {b.topic ? (
+        <div className="mt-2 rounded border border-accent/25 bg-accent/5 px-2.5 py-2">
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+            <GraduationCap size={13} className="text-[#c8960c]" />
+            <span className="text-[12.5px] font-bold text-txt-primary">{b.topic}</span>
+            {b.pack ? (
+              <span className="rounded bg-[#5e35b1]/10 px-1.5 py-[1px] text-[10px] font-semibold text-[#5e35b1]">
+                {b.pack.code} · {b.pack.name} · NSQF {b.pack.nsqf}
+              </span>
+            ) : (
+              <span className="text-[10px] text-txt-muted">no national pack fits</span>
+            )}
           </div>
-          <ul className="mt-1 space-y-1">
-            {t.outcomes.map((o, i) => (
-              <li key={i} className="flex gap-1.5 text-[12px] leading-snug text-txt-secondary">
-                <span className="text-accent">•</span>
-                <span>{o}</span>
-              </li>
-            ))}
-          </ul>
+          {b.outcomes.length ? (
+            <ul className="mt-1.5 space-y-[3px]">
+              {b.outcomes.map((o, i) => (
+                <li key={i} className="flex gap-1.5 text-[11.5px] leading-snug text-txt-secondary">
+                  <span className="text-accent">•</span><span>{o}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </div>
-      ) : null}
+      ) : (
+        <p className="mt-1.5 text-[11.5px] text-txt-muted">No topic was produced for this breakdown.</p>
+      )}
 
-      <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 pl-[26px] text-[11px] text-txt-muted">
-        {t.evidence ? (
-          <span><b className="font-semibold text-txt-secondary">Why</b> {t.evidence}</span>
-        ) : null}
-        {t.assessment ? (
-          <span><b className="font-semibold text-txt-secondary">Assessed by</b> {t.assessment}</span>
-        ) : null}
-      </div>
+      {b.why_chain.length ? (
+        <>
+          <button
+            onClick={() => setOpen(!open)}
+            className="mt-1.5 text-[11px] text-txt-muted hover:text-navy"
+          >
+            {open ? "Hide" : "Show"} the {b.why_chain.length}-why chain
+          </button>
+          {open ? (
+            <ol className="mt-1 space-y-[3px] border-l-2 border-border pl-2.5">
+              {b.why_chain.map((w, i) => (
+                <li key={i} className="text-[11px] leading-snug text-txt-muted">
+                  <b>Why {i + 1}</b> {w}
+                </li>
+              ))}
+            </ol>
+          ) : null}
+        </>
+      ) : null}
     </div>
   );
 }
@@ -414,6 +441,7 @@ function TrainingTopicCard({ t, index }: { t: WhyWhyTrainingTopic; index: number
 function OperatorIssues({ data }: { data: WhyWhyOperatorIssues }) {
   const [showAll, setShowAll] = useState(false);
   const [wantTraining, setWantTraining] = useState(false);
+  const [showAllTopics, setShowAllTopics] = useState(false);
   const tr = useWhyWhyTraining(wantTraining);
   const shown = showAll ? data.issues : data.issues.slice(0, 6);
 
@@ -497,10 +525,10 @@ function OperatorIssues({ data }: { data: WhyWhyOperatorIssues }) {
         {!wantTraining ? (
           <div className="flex flex-col items-start gap-2 pt-2">
             <p className="text-[12px] leading-relaxed text-txt-muted">
-              BAL-AI reads the {data.events} problem statements above and returns a
-              toolbox plan — what to teach, why the data calls for it, and how a
-              supervisor checks it stuck. It is told to train the fleet and never
-              to name or rank an operator.
+              For each of the {data.events} operating-error breakdowns, BAL-AI reads
+              its Why-Why, works out what the operator did, maps it to a national
+              qualification pack and names the training topic that would have
+              prevented it. Takes about two minutes.
             </p>
             <button
               onClick={() => setWantTraining(true)}
@@ -533,40 +561,22 @@ function OperatorIssues({ data }: { data: WhyWhyOperatorIssues }) {
           <p className="py-3 text-[12px] text-txt-muted">{tr.data.error}</p>
         ) : tr.data ? (
           <div className="space-y-3 pt-2.5">
-            {tr.data.unverified_numbers?.length > 0 && (
-              <div className="flex items-start gap-2 rounded border border-danger/25 bg-danger/5 px-3 py-2">
-                <AlertTriangle size={13} className="mt-[2px] shrink-0 text-danger" />
-                <p className="text-[11.5px] leading-snug text-txt-secondary">
-                  <b>Check before quoting.</b> Not in the data given:{" "}
-                  <span className="font-mono">{tr.data.unverified_numbers.join(", ")}</span>.
-                </p>
-              </div>
-            )}
-            {tr.data.topics?.length ? (
-              <div className="space-y-2.5">
-                {tr.data.topics.map((tp, i) => (
-                  <TrainingTopicCard key={i} t={tp} index={i} />
-                ))}
-              </div>
-            ) : null}
-            {tr.data.sections.priority ? (
-              <div className="rounded border border-border bg-white px-3 py-2">
-                <div className="mb-1 font-condensed text-[10.5px] font-bold uppercase tracking-widest text-txt-muted">
-                  Run this one first
-                </div>
-                <Prose text={tr.data.sections.priority} />
+            {tr.data.breakdowns?.length ? (
+              <div className="space-y-2">
+                {(showAllTopics ? tr.data.breakdowns : tr.data.breakdowns.slice(0, 10))
+                  .map((b) => <BreakdownTopic key={b.id} b={b} />)}
+                {tr.data.breakdowns.length > 10 ? (
+                  <button
+                    onClick={() => setShowAllTopics(!showAllTopics)}
+                    className="w-full rounded border border-border py-1.5 text-[12px] font-semibold text-navy hover:bg-bg-subtle"
+                  >
+                    {showAllTopics
+                      ? "Show fewer"
+                      : `Show all ${tr.data.breakdowns.length} breakdowns`}
+                  </button>
+                ) : null}
               </div>
             ) : null}
-            {/* Where the topics came from, so a reader can weigh them. */}
-            <p className="border-t border-border-light pt-2 text-[10.5px] leading-relaxed text-txt-muted">
-              Mapped against {tr.data.packs} national qualification packs
-              {tr.data.packs === 0 ? " (catalogue unavailable — topics carry no pack)" : ""}
-              {tr.data.web.length
-                ? ` · ${tr.data.web.length} public pages consulted as background`
-                : " · no web sources consulted"}.
-              Evidence is the mine's own incidents; a pack code the model could not
-              match is dropped rather than shown.
-            </p>
             <button
               onClick={() => tr.refetch()}
               className="flex items-center gap-1.5 text-[11.5px] text-txt-muted hover:text-navy"
