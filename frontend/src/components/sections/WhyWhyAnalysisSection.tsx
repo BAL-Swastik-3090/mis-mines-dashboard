@@ -11,6 +11,7 @@ import BreakdownRegisterCard from "@/components/sections/BreakdownRegisterCard";
 import type {
   WhyWhyShare, WhyWhyWatch, WhyWhyMachineDetail, WhyWhyOperatorIssues,
   WhyWhyProductionLoss, WhyWhyLossSlice, WhyWhyOperator,
+  WhyWhyTrainingTopic,
 } from "@/types";
 
 const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
@@ -342,56 +343,70 @@ function MachineDetail({ rows }: { rows: WhyWhyMachineDetail[] }) {
 }
 
 // -- operator issues + training --------------------------------------------
-/** Topics arrive as TOPIC/WHY/COVER/CHECK lines — see TRAINING_SECTIONS. */
-function TrainingTopics({ text }: { text: string }) {
-  const blocks = text
-    .split(/(?=TOPIC:)/)
-    .map((b) => b.trim())
-    .filter((b) => b.startsWith("TOPIC:"));
-  if (!blocks.length) return <Prose text={text} />;
-
-  const field = (b: string, key: string) => {
-    const m = b.match(new RegExp(`${key}:\\s*(.+?)(?=\\n[A-Z]{3,}:|$)`, "s"));
-    return m ? m[1].trim() : "";
-  };
-
+/**
+ * A training topic as a course, not as a finding.
+ *
+ * The first version of this rendered "Avoid Side-Loading the Bucket — 4
+ * incidents involved…", which is an observation with an imperative on the
+ * front. What a training coordinator can act on has a title, a length, an
+ * audience and outcomes someone can be assessed against. The backend parses
+ * the model's blocks into those fields so this only lays them out, and so an
+ * NSQF code the model invented is dropped before it reaches the screen.
+ */
+function TrainingTopicCard({ t, index }: { t: WhyWhyTrainingTopic; index: number }) {
   return (
-    <div className="space-y-3">
-      {blocks.map((b, i) => {
-        const cover = field(b, "COVER").split(";").map((x) => x.trim()).filter(Boolean);
-        return (
-          <div key={i} className="rounded-lg border border-border bg-bg-subtle/40 px-3.5 py-3">
-            <div className="flex items-start gap-2">
-              <span className="mt-[1px] grid h-[18px] w-[18px] shrink-0 place-items-center rounded bg-navy text-[10.5px] font-bold text-white">
-                {i + 1}
+    <div className="rounded-lg border border-border bg-white px-3.5 py-3">
+      <div className="flex items-start gap-2">
+        <span className="mt-[1px] grid h-[18px] w-[18px] shrink-0 place-items-center rounded bg-navy text-[10.5px] font-bold text-white">
+          {index + 1}
+        </span>
+        <div className="min-w-0 flex-1">
+          <h4 className="text-[13px] font-bold leading-snug text-txt-primary">{t.title}</h4>
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+            {t.pack ? (
+              <span className="rounded bg-[#5e35b1]/10 px-1.5 py-[2px] text-[10.5px] font-semibold text-[#5e35b1]">
+                {t.pack.code} · {t.pack.name} · NSQF {t.pack.nsqf}
               </span>
-              <h4 className="text-[13px] font-bold leading-snug text-txt-primary">
-                {field(b, "TOPIC")}
-              </h4>
-            </div>
-            {field(b, "WHY") ? (
-              <p className="mt-1.5 pl-[26px] text-[11.5px] leading-relaxed text-txt-muted">
-                {field(b, "WHY")}
-              </p>
-            ) : null}
-            {cover.length ? (
-              <ul className="mt-2 space-y-1 pl-[26px]">
-                {cover.map((c, j) => (
-                  <li key={j} className="flex gap-1.5 text-[12px] leading-snug text-txt-secondary">
-                    <span className="text-accent">•</span>
-                    <span>{c}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-            {field(b, "CHECK") ? (
-              <p className="mt-2 pl-[26px] text-[11px] text-txt-muted">
-                <b className="font-semibold text-txt-secondary">Check</b> {field(b, "CHECK")}
-              </p>
-            ) : null}
+            ) : (
+              <span className="rounded bg-bg-subtle px-1.5 py-[2px] text-[10.5px] text-txt-muted">
+                No national pack fits
+              </span>
+            )}
+            {t.format ? <span className="text-[11px] text-txt-muted">{t.format}</span> : null}
           </div>
-        );
-      })}
+        </div>
+      </div>
+
+      {t.audience ? (
+        <p className="mt-2 pl-[26px] text-[11.5px] text-txt-muted">
+          <b className="font-semibold text-txt-secondary">For</b> {t.audience}
+        </p>
+      ) : null}
+
+      {t.outcomes.length ? (
+        <div className="mt-2 pl-[26px]">
+          <div className="font-condensed text-[10px] font-bold uppercase tracking-widest text-txt-muted">
+            By the end, the attendee can
+          </div>
+          <ul className="mt-1 space-y-1">
+            {t.outcomes.map((o, i) => (
+              <li key={i} className="flex gap-1.5 text-[12px] leading-snug text-txt-secondary">
+                <span className="text-accent">•</span>
+                <span>{o}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 pl-[26px] text-[11px] text-txt-muted">
+        {t.evidence ? (
+          <span><b className="font-semibold text-txt-secondary">Why</b> {t.evidence}</span>
+        ) : null}
+        {t.assessment ? (
+          <span><b className="font-semibold text-txt-secondary">Assessed by</b> {t.assessment}</span>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -527,7 +542,13 @@ function OperatorIssues({ data }: { data: WhyWhyOperatorIssues }) {
                 </p>
               </div>
             )}
-            {tr.data.sections.topics ? <TrainingTopics text={tr.data.sections.topics} /> : null}
+            {tr.data.topics?.length ? (
+              <div className="space-y-2.5">
+                {tr.data.topics.map((tp, i) => (
+                  <TrainingTopicCard key={i} t={tp} index={i} />
+                ))}
+              </div>
+            ) : null}
             {tr.data.sections.priority ? (
               <div className="rounded border border-border bg-white px-3 py-2">
                 <div className="mb-1 font-condensed text-[10.5px] font-bold uppercase tracking-widest text-txt-muted">
@@ -536,6 +557,16 @@ function OperatorIssues({ data }: { data: WhyWhyOperatorIssues }) {
                 <Prose text={tr.data.sections.priority} />
               </div>
             ) : null}
+            {/* Where the topics came from, so a reader can weigh them. */}
+            <p className="border-t border-border-light pt-2 text-[10.5px] leading-relaxed text-txt-muted">
+              Mapped against {tr.data.packs} national qualification packs
+              {tr.data.packs === 0 ? " (catalogue unavailable — topics carry no pack)" : ""}
+              {tr.data.web.length
+                ? ` · ${tr.data.web.length} public pages consulted as background`
+                : " · no web sources consulted"}.
+              Evidence is the mine's own incidents; a pack code the model could not
+              match is dropped rather than shown.
+            </p>
             <button
               onClick={() => tr.refetch()}
               className="flex items-center gap-1.5 text-[11.5px] text-txt-muted hover:text-navy"

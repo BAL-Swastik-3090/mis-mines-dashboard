@@ -29,6 +29,7 @@ WHAT THE DATA WILL NOT SUPPORT, and is therefore not reported:
 """
 from __future__ import annotations
 
+import logging
 import re
 import statistics
 from collections import Counter, defaultdict
@@ -40,6 +41,8 @@ from sqlalchemy.orm import Session
 SCHEMA = "balmpicc"
 ANALYSIS = f"{SCHEMA}.mpicc_whywhy_analysis"
 ROWS = f"{SCHEMA}.mpicc_whywhy_rows"
+
+logger = logging.getLogger(__name__)
 
 # Failure modes are free text typed by the maintenance crew — 200+ distinct
 # spellings over 345 rows, which Paretos into noise. These families are keyword
@@ -604,6 +607,28 @@ def _why_chain(r: dict) -> list[str]:
     return [r[f"why{i}"] for i in range(1, 6) if (r.get(f"why{i}") or "").strip()]
 
 
+
+def _family_totals(issues: list[dict]) -> list[dict]:
+    """Component groups with their hours and cost, not just a count.
+
+    The generator was quoting totals it had worked out from the incident list —
+    "478.5h, Rs 52,500" — which the number audit correctly flagged as figures it
+    was never given. Giving it the real per-group totals removes the reason to
+    compute, which works better than telling it not to.
+    """
+    hrs: dict[str, float] = defaultdict(float)
+    cost: dict[str, float] = defaultdict(float)
+    for r in issues:
+        fam = family_of(r["breakdown_description"])
+        hrs[fam] += _f(r["breakdown_duration_hr"])
+        cost[fam] += _f(r["total_cost"])
+    rows = _share(Counter(family_of(r["breakdown_description"]) for r in issues), len(issues))
+    for x in rows:
+        x["hours"] = round(hrs[x["label"]], 1)
+        x["cost"] = round(cost[x["label"]], 0)
+    return rows
+
+
 def _operator_issues(recs: list[dict], limit: int = 40) -> dict:
     """Breakdowns whose recorded cause is an operating error, stated in full.
 
@@ -638,9 +663,7 @@ def _operator_issues(recs: list[dict], limit: int = 40) -> dict:
         "named_events": named,
         "hours": round(sum(_f(r["breakdown_duration_hr"]) for r in issues), 1),
         "cost": round(sum(_f(r["total_cost"]) for r in issues), 0),
-        "by_family": _share(
-            Counter(family_of(r["breakdown_description"]) for r in issues), len(issues)
-        ),
+        "by_family": _family_totals(issues),
         "with_why_chain": sum(1 for r in issues if _why_chain(r)),
         "issues": rows,
     }
@@ -1154,44 +1177,96 @@ async def generate_narrative(
 
 
 # -- training -----------------------------------------------------------------
+# A TOPIC, not a finding. The first version of this produced lines like "Avoid
+# side-loading the bucket — 4 incidents on EX-2 and EX-7 involved…", which reads
+# as a situation report with a verb on the front. A training coordinator cannot
+# schedule that. What they can schedule has a title, a length, an audience, and
+# something the attendee can do afterwards that they could not do before.
 TRAINING_SYSTEM = (
-    "You are a mining equipment trainer writing a toolbox-training plan for "
-    "excavator and tipper operators at a chrome ore mine in Odisha, India.\n\n"
-    "You are given real breakdowns whose recorded root cause was an operating "
-    "error, each with its problem statement and the Why-Why chain the "
-    "maintenance team wrote.\n\n"
+    "You are a mining training officer building a training plan for equipment "
+    "operators at a chrome ore mine in Odisha, India.\n\n"
+    "You are given: breakdowns whose recorded root cause was an operating "
+    "error, each with the Why-Why chain the maintenance team wrote; the "
+    "national qualification packs (NSQF, Skill Council for Mining Sector) that "
+    "the mine recognises; and sometimes public training material as "
+    "background.\n\n"
     "RULES:\n"
-    "1. Every topic must trace to the incidents given. Do not invent failures, "
-    "do not add generic safety modules nobody's data asked for.\n"
-    "2. Name the machines and defects from the incidents as the evidence.\n"
-    "3. Do NOT name, rank or blame individual operators. Train the fleet, not a "
-    "person. Operator names in the data record who was present, not who is at "
-    "fault, and there is no hours denominator to compare people fairly.\n"
-    "4. Be concrete and physical. 'Do not side-load the bucket when prying' is "
-    "a topic; 'improve operational awareness' is not.\n"
-    "5. Write for a supervisor running a 30-minute session at shift handover."
+    "1. Produce TRAINING TOPICS, not observations. A topic is a course title "
+    "somebody could put on a calendar. 'Excavator Attachment Handling and Load "
+    "Discipline' is a topic. 'Operators are side-loading buckets' is not.\n"
+    "2. Group the incidents. Four to six topics must cover all of them. Do not "
+    "write one topic per breakdown.\n"
+    "3. Map each topic to ONE qualification pack from the list given, by its "
+    "exact code and title. If nothing in the list fits, write PACK: NONE. Never "
+    "invent a code.\n"
+    "4. Learning outcomes are things a person can DO, each starting with a "
+    "verb, and they must be observable at the machine.\n"
+    "5. Evidence comes from the incidents given, with counts. Public material "
+    "is background for how a subject is taught; it is never the evidence.\n"
+    "6. Do NOT name, rank or blame any operator. Operator names in the data "
+    "record who was present, not who was at fault, and there is no "
+    "hours-per-operator denominator to compare people fairly. Train the fleet.\n"
+    "7. Use only figures you were given."
 )
 
 TRAINING_SECTIONS = [
     ("topics", "TOPICS",
-     "4 to 6 training topics, most important first. One per block, in exactly "
-     "this format, each field on its own line:\n"
-     "TOPIC: <short title, max 8 words>\n"
-     "WHY: <the failure pattern in the data that calls for it, with counts and "
-     "machine names>\n"
-     "COVER: <3 specific things to teach or demonstrate, separated by semicolons>\n"
-     "CHECK: <how a supervisor confirms it stuck, one line>\n"),
+     "4 to 6 training topics, most important first. One block each, in exactly "
+     "this format, every field on its own line, with a blank line between "
+     "blocks:\n"
+     "TITLE: <course title, 3-8 words, no verb at the start>\n"
+     "PACK: <exact code> | <exact pack title> | NSQF <level>   (or: PACK: NONE)\n"
+     "FORMAT: <Induction|Refresher|Toolbox> - <duration> - <classroom / "
+     "machine-side / both>\n"
+     "AUDIENCE: <which operators this is for>\n"
+     "OUTCOMES: <3 things the attendee can do afterwards, each starting with a "
+     "verb, separated by semicolons>\n"
+     "EVIDENCE: <quote the component-group counts given above, e.g. '17 "
+     "bucket/boom/arm failures, 15 pins & bolts'. Do NOT add up the incident "
+     "list yourself and do NOT state a total cost or total hours you were not "
+     "given>\n"
+     "ASSESSMENT: <how a supervisor confirms it worked, one line>"),
     ("priority", "PRIORITY",
-     "Which single topic to run first and why, in 2 sentences, referring to "
-     "cost or downtime from the data."),
+     "Which topic to run first and why, in 2 sentences, referring to the "
+     "incident counts or downtime."),
 ]
 
-# Enough incidents to teach from, few enough to stay inside a sane prompt. The
-# list is already ordered by repair cost, so a cut here keeps the expensive ones.
 TRAINING_INCIDENT_LIMIT = 25
 
 
-def _training_facts(d: dict) -> str:
+def skill_catalogue(limit: int = 60) -> list[dict]:
+    """The national qualification packs the mine recognises, from MineHub.
+
+    Read from the MineHub Postgres, which is a different database from
+    everything else this module touches. It is treated as optional on purpose:
+    if it is unreachable the topics are still generated, just without a pack
+    mapping, because a training plan without NSQF codes is far more useful than
+    no training plan.
+    """
+    try:
+        from sqlalchemy import text as _t
+
+        from app.minehub_db import SessionLocal as PG
+
+        db = PG()
+        try:
+            rows = db.execute(_t(
+                "SELECT code, name, nsqf_level, category FROM skill "
+                "WHERE status = 'ACTIVE' ORDER BY category, nsqf_level DESC, name"
+            )).fetchall()
+        finally:
+            db.close()
+        return [
+            {"code": r[0], "name": r[1],
+             "nsqf": float(r[2]) if r[2] is not None else None, "category": r[3]}
+            for r in rows[:limit]
+        ]
+    except Exception as exc:
+        logger.warning("skill catalogue unavailable, topics will carry no pack: %s", exc)
+        return []
+
+
+def _training_facts(d: dict, packs: list[dict]) -> str:
     o = d["operator_issues"]
     L = [
         f"PERIOD {d['window']['from']} to {d['window']['to']}",
@@ -1199,54 +1274,83 @@ def _training_facts(d: dict) -> str:
         f"{d['headline']['breakdowns']} total, {o['hours']} hours lost, "
         f"Rs {o['cost']:,.0f} in repairs",
         "",
-        "BY COMPONENT GROUP:",
+        "WHAT BREAKS, BY COMPONENT GROUP (use this to decide the topics):",
     ]
-    L += [f"  {x['label']}: {x['count']} ({x['pct']}%)" for x in o["by_family"]]
+    L += [f"  {x['label']}: {x['count']} ({x['pct']}%)"
+          + (f", {x['hours']} hours, Rs {x['cost']:,.0f}" if x.get("hours") is not None else "")
+          for x in o["by_family"]]
     L += ["", f"INCIDENTS (the {min(len(o['issues']), TRAINING_INCIDENT_LIMIT)} "
               f"most expensive):"]
     for i in o["issues"][:TRAINING_INCIDENT_LIMIT]:
         L.append(f"  - {i['problem_statement']} "
                  f"[{i['family']}, {i['hours']}h, Rs {i['cost']:,.0f}]")
-        for n, c in enumerate(i["why_chain"], 1):
-            L.append(f"      Why {n}: {c}")
+        for n, ch in enumerate(i["why_chain"], 1):
+            L.append(f"      Why {n}: {ch}")
+
+    if packs:
+        L += ["", "QUALIFICATION PACKS THE MINE RECOGNISES. Map each topic to "
+                  "exactly one of these, by exact code and title, or write NONE:"]
+        cat = None
+        for p in packs:
+            if p["category"] != cat:
+                cat = p["category"]
+                L.append(f"  [{cat}]")
+            L.append(f"    {p['code']} | {p['name']} | NSQF {p['nsqf']}")
+    else:
+        L += ["", "NO QUALIFICATION LIST IS AVAILABLE. Write PACK: NONE on every "
+                  "topic. Do not invent codes."]
     return "\n".join(L)
 
 
 async def generate_training(
     db: Session, from_date: date | None, to_date: date | None
 ) -> dict:
-    """Training topics derived from the operating-error breakdowns themselves.
+    """Training topics from the operating-error breakdowns, mapped to NSQF packs.
 
-    Kept apart from the main narrative because it answers a different question
-    for a different reader: the narrative tells a manager what the fleet is
-    doing, this tells a supervisor what to teach on Monday. It also needs the
-    incident text in the prompt, which the narrative deliberately does without.
+    Three inputs, in descending authority: the mine's own incidents, the
+    national qualification catalogue, and — only if a search key is configured —
+    public training material as background on how a subject is usually taught.
     """
     from openai import AsyncOpenAI
 
     from app.config import get_settings
+    from app.services import websearch
 
     facts = compute_whywhy(db, from_date, to_date)
     issues = facts.get("operator_issues")
     if not issues or issues["events"] == 0:
         return {
-            "period": facts["window"], "summary": issues, "sections": {},
+            "period": facts["window"], "summary": issues, "topics": [],
+            "sections": {}, "packs": 0, "web": [],
             "model": None, "tokens": None, "generated_at": None,
             "unverified_numbers": [],
             "error": "No breakdowns with a recorded operating-error cause in this period.",
         }
 
+    packs = skill_catalogue()
+
+    # Web context is optional and additive. Queries are built from the failure
+    # vocabulary and pack titles only — never from incident text.
+    web = await websearch.search(
+        websearch.build_queries(
+            [x["label"] for x in issues["by_family"]],
+            [p["name"] for p in packs],
+        )
+    ) if websearch.configured() else []
+
     spec = "\n".join(f"---{tag}---\n{desc}" for _, tag, desc in TRAINING_SECTIONS)
+    body = _training_facts(facts, packs)
+    ctx = websearch.as_context(web)
     prompt = (
-        f"{_training_facts(facts)}\n\n"
+        f"{body}\n\n{ctx}\n\n" if ctx else f"{body}\n\n"
+    ) + (
         "Write the following sections, each preceded by its marker exactly as "
-        "shown. Do not add any other text.\n\n"
-        f"{spec}\n---END---"
+        f"shown. Do not add any other text.\n\n{spec}\n---END---"
     )
 
     st = get_settings()
     client = AsyncOpenAI(
-        base_url=st.qwen_base_url + "/v1", api_key=st.qwen_api_key, timeout=120.0
+        base_url=st.qwen_base_url + "/v1", api_key=st.qwen_api_key, timeout=150.0
     )
     resp = await client.chat.completions.create(
         model=st.qwen_model,
@@ -1255,30 +1359,88 @@ async def generate_training(
             {"role": "user", "content": prompt},
         ],
         temperature=0.3,
-        max_tokens=2000,
+        max_tokens=3200,
     )
     raw = resp.choices[0].message.content or ""
 
     tags = [t for _, t, _ in TRAINING_SECTIONS] + ["END"]
     sections: dict[str, str] = {}
     for (key, tag, _), nxt in zip(TRAINING_SECTIONS, tags[1:]):
-        start = raw.find(f"---{tag}---")
-        if start == -1:
+        i = raw.find(f"---{tag}---")
+        if i == -1:
             sections[key] = ""
             continue
-        start += len(tag) + 6
-        end = raw.find(f"---{nxt}---", start)
-        sections[key] = (raw[start:end] if end != -1 else raw[start:]).strip()
+        i += len(tag) + 6
+        j = raw.find(f"---{nxt}---", i)
+        sections[key] = (raw[i:j] if j != -1 else raw[i:]).strip()
 
+    valid = {p["code"] for p in packs}
     return {
         "period": facts["window"],
         "summary": {k: issues[k] for k in
                     ("events", "named_events", "hours", "cost", "by_family", "with_why_chain")},
         "incidents": issues["issues"][:TRAINING_INCIDENT_LIMIT],
-        "sections": sections,
+        # Parsed server-side so the UI renders fields rather than reparsing text,
+        # and so an invented pack code is caught here rather than displayed.
+        "topics": _parse_topics(sections.get("topics", ""), valid),
+        "sections": {"priority": sections.get("priority", "")},
+        "packs": len(packs),
+        "web": [{"title": h["title"], "url": h["url"]} for h in web],
         "model": resp.model,
         "tokens": resp.usage.total_tokens if resp.usage else None,
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "unverified_numbers": audit_numbers(raw, prompt),
         "error": None,
     }
+
+
+_FIELD = re.compile(
+    r"^(TITLE|PACK|FORMAT|AUDIENCE|OUTCOMES|EVIDENCE|ASSESSMENT)\s*:\s*(.*)$", re.I
+)
+
+
+def _parse_topics(text: str, valid_codes: set[str]) -> list[dict]:
+    """Turn the marked-up blocks into records, checking the pack code is real.
+
+    A code the model invented is dropped rather than shown: a plausible-looking
+    NSQF reference that does not exist is worse than none, because somebody will
+    go looking for it.
+    """
+    out: list[dict] = []
+    # Split on the TITLE line rather than on a separator. The model was asked
+    # for --- between blocks and consistently used a blank line instead, which
+    # cost four of five topics on the first run. TITLE: is the one marker it
+    # never omits, because it is the first field of every block.
+    blocks = re.split(r"^(?=TITLE\s*:)", text, flags=re.M | re.I)
+    for block in blocks:
+        fields: dict[str, str] = {}
+        for line in block.splitlines():
+            m = _FIELD.match(line.strip())
+            if m:
+                fields[m.group(1).lower()] = m.group(2).strip()
+        if not fields.get("title"):
+            continue
+
+        pack_raw = fields.get("pack", "")
+        pack = None
+        if pack_raw and pack_raw.strip().upper() not in ("NONE", "N/A", "-"):
+            parts = [p.strip() for p in pack_raw.split("|")]
+            code = parts[0] if parts else ""
+            if code in valid_codes:
+                pack = {
+                    "code": code,
+                    "name": parts[1] if len(parts) > 1 else "",
+                    "nsqf": parts[2].replace("NSQF", "").strip() if len(parts) > 2 else "",
+                }
+
+        out.append({
+            "title": fields["title"],
+            "pack": pack,
+            "pack_claimed": pack_raw or None,
+            "format": fields.get("format") or None,
+            "audience": fields.get("audience") or None,
+            "outcomes": [o.strip() for o in (fields.get("outcomes") or "").split(";") if o.strip()],
+            "evidence": fields.get("evidence") or None,
+            "assessment": fields.get("assessment") or None,
+        })
+    return out

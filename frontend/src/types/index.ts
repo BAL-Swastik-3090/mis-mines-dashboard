@@ -1323,11 +1323,31 @@ export interface WhyWhyOperatorIssues {
   issues:          WhyWhyOperatorIssue[];
 }
 
+/** A course somebody could put on a calendar, not an observation. */
+export interface WhyWhyTrainingTopic {
+  title:      string;
+  /** Null when no national pack fits, or when the model named one that does
+   *  not exist — an invented NSQF code is dropped rather than displayed. */
+  pack:       { code: string; name: string; nsqf: string } | null;
+  pack_claimed: string | null;
+  format:     string | null;
+  audience:   string | null;
+  outcomes:   string[];
+  evidence:   string | null;
+  assessment: string | null;
+}
+
 export interface WhyWhyTrainingResponse {
   period:   WhyWhyWindow;
   summary:  Omit<WhyWhyOperatorIssues, "issues"> | null;
   incidents?: WhyWhyOperatorIssue[];
-  sections: { topics?: string; priority?: string };
+  topics:   WhyWhyTrainingTopic[];
+  sections: { priority?: string };
+  /** How many NSQF packs were available to map against; 0 means MineHub was
+   *  unreachable and the topics carry no pack. */
+  packs:    number;
+  /** Public pages consulted as background, empty unless a search key is set. */
+  web:      Array<{ title: string; url: string }>;
   model:    string | null;
   tokens:   number | null;
   generated_at: string | null;
