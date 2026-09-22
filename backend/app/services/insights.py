@@ -917,7 +917,10 @@ Format your response EXACTLY as:
     client = AsyncOpenAI(
         base_url=settings.qwen_base_url + "/v1",
         api_key=settings.qwen_api_key,
-        timeout=25.0,
+        # Measured at 24s against Qwen 3 32B for the August prompt — 25s was
+        # sized for the previous gateway and now fails on ordinary variance,
+        # which is why the panel errored on first load and worked on retry.
+        timeout=90.0,
     )
 
     response = await client.chat.completions.create(

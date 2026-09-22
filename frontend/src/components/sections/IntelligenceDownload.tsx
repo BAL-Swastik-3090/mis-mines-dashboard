@@ -100,7 +100,7 @@ export default function IntelligenceDownload() {
       {open ? (
         <div
           role="menu"
-          className="absolute right-0 z-40 mt-1.5 w-[248px] overflow-hidden rounded-lg border
+          className="absolute right-0 top-full z-50 mt-1.5 w-[248px] overflow-hidden rounded-lg border
                      border-border bg-white shadow-lg"
         >
           <div className="border-b border-border-light px-3 py-2">

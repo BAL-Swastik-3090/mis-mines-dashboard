@@ -32,7 +32,7 @@ export function useInsightsGenerate(enabled: boolean) {
     queryFn: async () => {
       const res = await api.get("/insights/generate", {
         params:  { from_date: apiFrom, to_date: apiTo },
-        timeout: 30000,   // LiteLLM capped at 25s backend; give 30s here
+        timeout: 120000,  // backend allows the model 90s; leave headroom
       });
       return res.data;
     },
