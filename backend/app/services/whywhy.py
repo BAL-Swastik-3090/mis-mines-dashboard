@@ -428,6 +428,30 @@ def _operators(recs: list[dict], limit: int = 15) -> dict:
             "machines": sorted({_machine_key(r["equipment_desc"]) for r in mine}),
             "causes": _share(Counter(r["rca_category"] for r in mine if r["rca_category"]), n),
             "cost": round(sum(_f(r["total_cost"]) for r in mine), 0),
+            # The breakdowns themselves, newest first, so a name can be opened
+            # and read rather than only counted. A bare count invites the
+            # ranking this data cannot support; the events show what actually
+            # happened, and usually show the cause was nothing to do with the
+            # person who happened to be on the machine.
+            "breakdowns": [
+                {
+                    "date": r["breakdown_date"].isoformat() if r["breakdown_date"] else None,
+                    "shift": r["shift"],
+                    "machine": _machine_key(r["equipment_desc"]),
+                    "defect": (r["breakdown_description"] or "").strip() or None,
+                    "family": family_of(r["breakdown_description"]),
+                    "cause": r["rca_category"],
+                    "hours": round(_f(r["breakdown_duration_hr"]), 1),
+                    "cost": round(_f(r["total_cost"]), 0),
+                    "notification_no": r["notification_no"],
+                    "why_chain": _why_chain(r),
+                }
+                for r in sorted(
+                    mine,
+                    key=lambda x: (x["breakdown_date"] is None, x["breakdown_date"]),
+                    reverse=True,
+                )
+            ],
         })
     blamed = sum(1 for r in named if (r["rca_category"] or "") == "Operator Error")
     return {

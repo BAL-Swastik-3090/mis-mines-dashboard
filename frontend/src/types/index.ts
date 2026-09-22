@@ -1256,10 +1256,7 @@ export interface WhyWhyResponse {
     distinct: number;
     max_events: number;
     operator_error_events: number;
-    top: Array<{
-      operator: string; events: number; machines: string[];
-      causes: WhyWhyShare[]; cost: number;
-    }>;
+    top: WhyWhyOperator[];
     /** Ships from the backend so the UI cannot quietly drop it. */
     caveat: string;
   } | null;
@@ -1370,4 +1367,28 @@ export interface WhyWhyProductionLoss {
     by_cause:   WhyWhyLossSlice[];
   };
   basis: string;
+}
+
+/** One breakdown a named operator was present for. Present, not responsible —
+ *  see WhyWhyResponse.operators.caveat. */
+export interface WhyWhyOperatorBreakdown {
+  date:            string | null;
+  shift:           string | null;
+  machine:         string;
+  defect:          string | null;
+  family:          string;
+  cause:           string | null;
+  hours:           number;
+  cost:            number;
+  notification_no: string | null;
+  why_chain:       string[];
+}
+
+export interface WhyWhyOperator {
+  operator:   string;
+  events:     number;
+  machines:   string[];
+  causes:     WhyWhyShare[];
+  cost:       number;
+  breakdowns: WhyWhyOperatorBreakdown[];
 }

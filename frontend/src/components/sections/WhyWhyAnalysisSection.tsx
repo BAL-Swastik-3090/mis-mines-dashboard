@@ -9,7 +9,7 @@ import { useWhyWhy, useWhyWhyNarrative, useWhyWhyTraining } from "@/hooks/useIns
 import { formatIndian } from "@/lib/utils";
 import type {
   WhyWhyShare, WhyWhyWatch, WhyWhyMachineDetail, WhyWhyOperatorIssues,
-  WhyWhyProductionLoss, WhyWhyLossSlice,
+  WhyWhyProductionLoss, WhyWhyLossSlice, WhyWhyOperator,
 } from "@/types";
 
 const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
@@ -610,6 +610,130 @@ function RefetchVeil() {
   );
 }
 
+// -- operators -------------------------------------------------------------
+/**
+ * Named operators as chips; click one to read the breakdowns behind the count.
+ *
+ * A bare count invites exactly the ranking this data cannot support. Opening a
+ * name shows what actually happened, and usually shows most of it had nothing
+ * to do with the person — the top name here has six events of which one is
+ * recorded as operator error and the rest as ageing. The cause column is the
+ * point of the panel, not a detail in it.
+ */
+function OperatorList({ rows, caveat }: { rows: WhyWhyOperator[]; caveat: string }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const sel = rows.find((r) => r.operator === open) ?? null;
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-1.5">
+        {rows.map((o) => {
+          const isOpen = o.operator === open;
+          return (
+            <button
+              key={o.operator}
+              onClick={() => setOpen(isOpen ? null : o.operator)}
+              aria-expanded={isOpen}
+              title={`${o.machines.join(", ")} · ₹${formatIndian(o.cost)} — click to see the breakdowns`}
+              className={`rounded border px-2 py-1 text-[11.5px] transition-colors ${
+                isOpen
+                  ? "border-navy bg-navy text-white"
+                  : "border-border bg-bg-subtle text-txt-secondary hover:border-navy/40 hover:bg-white"
+              }`}
+            >
+              {o.operator}
+              <span className={`ml-1.5 font-mono font-bold ${isOpen ? "text-white" : "text-navy"}`}>
+                {o.events}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {sel ? (
+        <div className="mt-3 rounded-lg border border-border bg-bg-subtle/40 px-3.5 py-3">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <span className="text-[13px] font-bold text-txt-primary">{sel.operator}</span>
+            <span className="text-[11.5px] text-txt-muted">
+              {sel.events} event{sel.events === 1 ? "" : "s"} · {sel.machines.join(", ")} ·
+              ₹{formatIndian(sel.cost)} in repairs
+            </span>
+            <button onClick={() => setOpen(null)}
+                    className="ml-auto text-[11.5px] text-txt-muted hover:text-navy">
+              Close
+            </button>
+          </div>
+
+          {sel.causes.length ? (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {sel.causes.map((cz) => (
+                <span key={cz.label}
+                      className={`rounded px-1.5 py-[2px] text-[10.5px] font-semibold ${
+                        cz.label === "Operator Error"
+                          ? "bg-[#e65100]/10 text-[#e65100]"
+                          : "bg-navy/5 text-txt-secondary"}`}>
+                  {cz.label} {cz.count}
+                </span>
+              ))}
+            </div>
+          ) : null}
+
+          <div className="mt-2.5 overflow-x-auto">
+            <table className="w-full text-[11.5px]">
+              <thead>
+                <tr className="border-b border-border-light text-txt-muted">
+                  <th className="py-1.5 text-left font-semibold">Date</th>
+                  <th className="py-1.5 text-left font-semibold">Machine</th>
+                  <th className="py-1.5 text-left font-semibold">Defect</th>
+                  <th className="py-1.5 text-left font-semibold">Recorded cause</th>
+                  <th className="py-1.5 text-right font-semibold">Hours</th>
+                  <th className="py-1.5 text-right font-semibold">Repair</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border-light">
+                {sel.breakdowns.map((b, i) => (
+                  <tr key={i} className="align-top">
+                    <td className="py-1.5 whitespace-nowrap font-mono text-txt-muted">
+                      {b.date}{b.shift ? <span className="ml-1">/{b.shift}</span> : null}
+                    </td>
+                    <td className="py-1.5 whitespace-nowrap font-mono text-navy">{b.machine}</td>
+                    <td className="py-1.5 text-txt-secondary">
+                      {b.defect ?? "—"}
+                      {b.why_chain.length ? (
+                        <span className="ml-1.5 text-[10px] text-txt-muted">
+                          ({b.why_chain.length}-why recorded)
+                        </span>
+                      ) : null}
+                    </td>
+                    {/* The column that matters: being named is presence, and
+                        most of these causes are mechanical, not human. */}
+                    <td className="py-1.5">
+                      <span className={b.cause === "Operator Error"
+                        ? "font-semibold text-[#e65100]" : "text-txt-secondary"}>
+                        {b.cause ?? "not recorded"}
+                      </span>
+                    </td>
+                    <td className="py-1.5 text-right font-mono text-txt-muted">{b.hours}</td>
+                    <td className="py-1.5 text-right font-mono text-txt-muted">
+                      {b.cost ? `₹${formatIndian(b.cost)}` : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Shipped by the backend as data, not written here, so it cannot be
+          dropped by a later edit to this file. */}
+      <p className="mt-3 border-t border-border-light pt-2 text-[11px] leading-relaxed text-txt-muted">
+        {caveat}
+      </p>
+    </div>
+  );
+}
+
 // ── section ──────────────────────────────────────────────────
 export default function WhyWhyAnalysisSection() {
   const { data, isLoading, isFetching } = useWhyWhy();
@@ -862,21 +986,7 @@ export default function WhyWhyAnalysisSection() {
       {data.operators && data.operators.named_events > 0 && (
         <Card icon={<Users size={15} className="text-[#5e35b1]" />} title="Operators named on the record"
               note={`${data.operators.named_events} of ${h.breakdowns} events`}>
-          <div className="flex flex-wrap gap-1.5">
-            {data.operators.top.map((o) => (
-              <span key={o.operator}
-                    className="rounded border border-border bg-bg-subtle px-2 py-1 text-[11.5px] text-txt-secondary"
-                    title={`${o.machines.join(", ")} · ₹${formatIndian(o.cost)}`}>
-                {o.operator}
-                <span className="ml-1.5 font-mono font-bold text-navy">{o.events}</span>
-              </span>
-            ))}
-          </div>
-          {/* Shipped by the backend as data, not written here, so it cannot be
-              dropped by a later edit to this file. */}
-          <p className="mt-3 border-t border-border-light pt-2 text-[11px] leading-relaxed text-txt-muted">
-            {data.operators.caveat}
-          </p>
+          <OperatorList rows={data.operators.top} caveat={data.operators.caveat} />
         </Card>
       )}
 
