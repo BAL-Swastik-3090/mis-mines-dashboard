@@ -273,9 +273,15 @@ function ProductionLoss({ d }: { d: WhyWhyProductionLoss }) {
  */
 function MachineDetail({ rows }: { rows: WhyWhyMachineDetail[] }) {
   const [open, setOpen] = useState<string | null>(rows[0]?.machine ?? null);
+  // Every machine that broke down is listed, which on the full register is 38
+  // rows. The long tail is mostly one-offs, so it starts collapsed rather than
+  // pushing the rest of the section off the screen.
+  const [showAll, setShowAll] = useState(false);
+  const VISIBLE = 12;
+  const shown = showAll ? rows : rows.slice(0, VISIBLE);
   return (
     <div className="divide-y divide-border-light">
-      {rows.map((m) => {
+      {shown.map((m) => {
         const isOpen = open === m.machine;
         return (
           <div key={m.machine} className="py-2 first:pt-0 last:pb-0">
@@ -295,17 +301,23 @@ function MachineDetail({ rows }: { rows: WhyWhyMachineDetail[] }) {
               </span>
               <span className="text-[11px] text-txt-muted shrink-0">breakdowns</span>
               {/* Concentration is the actionable bit: two modes covering 80% is a
-                  pattern you can fix, eight is scatter you can only monitor. */}
+                  pattern you can fix, eight is scatter you can only monitor.
+                  Below a handful of events there is no shape to read, and
+                  saying so beats printing a verdict one failure could flip. */}
               <span
                 className={`ml-auto shrink-0 rounded border px-1.5 py-[1px] text-[10.5px] font-semibold ${
-                  m.concentrated
-                    ? "border-success/25 bg-success/10 text-success"
-                    : "border-border bg-bg-subtle text-txt-muted"
+                  !m.enough_for_pareto
+                    ? "border-border bg-transparent text-txt-muted/70"
+                    : m.concentrated
+                      ? "border-success/25 bg-success/10 text-success"
+                      : "border-border bg-bg-subtle text-txt-muted"
                 }`}
               >
-                {m.concentrated
-                  ? `${m.modes_to_80pct} mode${m.modes_to_80pct > 1 ? "s" : ""} = 80%`
-                  : `spread over ${m.modes_to_80pct}`}
+                {!m.enough_for_pareto
+                  ? "too few to read"
+                  : m.concentrated
+                    ? `${m.modes_to_80pct} mode${m.modes_to_80pct > 1 ? "s" : ""} = 80%`
+                    : `spread over ${m.modes_to_80pct}`}
               </span>
               <span className="font-mono text-[11px] text-txt-muted w-[70px] text-right shrink-0">
                 {num(m.hours, 1)} h
@@ -338,11 +350,21 @@ function MachineDetail({ rows }: { rows: WhyWhyMachineDetail[] }) {
           </div>
         );
       })}
+      {rows.length > VISIBLE ? (
+        <button
+          onClick={() => setShowAll(!showAll)}
+          className="w-full pt-2 text-left text-[11.5px] font-semibold text-navy hover:underline"
+        >
+          {showAll
+            ? "Show fewer"
+            : `Show all ${rows.length} machines (${rows.length - VISIBLE} more)`}
+        </button>
+      ) : null}
     </div>
   );
 }
 
-// ── operator issues + training ───────────────────────────────
+// -- operator issues + training --------------------------------------------
 /** Topics arrive as TOPIC/WHY/COVER/CHECK lines — see TRAINING_SECTIONS. */
 function TrainingTopics({ text }: { text: string }) {
   const blocks = text
@@ -977,7 +999,7 @@ export default function WhyWhyAnalysisSection() {
       {data.machine_detail?.length > 0 && (
         <Card icon={<Layers size={15} className="text-navy" />}
               title="Equipment-wise failure mode & root cause"
-              note="machines with 4+ breakdowns">
+              note={`${data.machine_detail.length} machines · click to expand`}>
           <MachineDetail rows={data.machine_detail} />
         </Card>
       )}

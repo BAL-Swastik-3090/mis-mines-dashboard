@@ -1292,6 +1292,8 @@ export interface WhyWhyMachineDetail {
   causes:          WhyWhyShare[];
   causes_recorded: number;
   modes_to_80pct:  number;
+  /** Enough events for a Pareto to mean anything; below it no verdict is given. */
+  enough_for_pareto: boolean;
   /** Two modes or fewer cover 80% — a fixable pattern rather than scatter. */
   concentrated:    boolean;
 }

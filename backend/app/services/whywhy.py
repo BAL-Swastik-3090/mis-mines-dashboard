@@ -504,8 +504,10 @@ def _completeness(recs: list[dict]) -> dict:
 
 
 
-# A machine needs a handful of events before its own Pareto says anything. Below
-# this, one failure is 100% of the chart and the reader draws a false conclusion.
+# A machine needs a handful of events before its own Pareto says anything: with
+# one failure, that failure is 100% of the chart. This no longer HIDES a machine
+# — hiding them meant a single-month filter showed 2 of 25 machines and looked
+# broken — it only decides whether a concentration verdict is offered for it.
 MIN_EVENTS_FOR_MACHINE_PARETO = 4
 
 # Which recorded cause counts as an operating problem rather than a mechanical
@@ -513,7 +515,7 @@ MIN_EVENTS_FOR_MACHINE_PARETO = 4
 OPERATOR_CAUSES = {"Operator Error"}
 
 
-def _machine_breakdown(recs: list[dict], limit: int = 10) -> list[dict]:
+def _machine_breakdown(recs: list[dict]) -> list[dict]:
     """Per machine: its own failure-mode Pareto and its own cause split.
 
     The fleet-wide Pareto says tyres are the biggest failure mode; it does not
@@ -524,15 +526,21 @@ def _machine_breakdown(recs: list[dict], limit: int = 10) -> list[dict]:
     Ordered by breakdown count rather than by rate: this table answers "what is
     wrong with this machine", and the rate table above already answers "which
     machine is worst".
+
+    EVERY machine that broke down appears. An earlier version required four
+    events and returned only the top ten, which was calibrated against the full
+    five-month register; on a one-month filter it showed 2 machines out of 25
+    and read as a bug rather than as a threshold. A machine with two failures
+    still has two failures worth seeing. What the event count now governs is
+    only whether a concentration verdict is offered — `enough_for_pareto` — so
+    a thin machine is shown without a shape being claimed for it.
     """
     g: dict[str, list[dict]] = defaultdict(list)
     for r in recs:
         g[_machine_key(r["equipment_desc"])].append(r)
 
     out = []
-    for m, v in sorted(g.items(), key=lambda kv: -len(kv[1])):
-        if len(v) < MIN_EVENTS_FOR_MACHINE_PARETO:
-            continue
+    for m, v in sorted(g.items(), key=lambda kv: (-len(kv[1]), kv[0])):
         modes = _share(Counter(family_of(x["breakdown_description"]) for x in v), len(v))
         causes = _share(
             Counter(x["rca_category"] for x in v if x["rca_category"]),
@@ -566,9 +574,11 @@ def _machine_breakdown(recs: list[dict], limit: int = 10) -> list[dict]:
             "causes": causes,
             "causes_recorded": sum(1 for x in v if x["rca_category"]),
             "modes_to_80pct": top_n,
-            "concentrated": top_n <= 2,
+            # Only meaningful once there are enough events for a shape to exist.
+            "enough_for_pareto": len(v) >= MIN_EVENTS_FOR_MACHINE_PARETO,
+            "concentrated": len(v) >= MIN_EVENTS_FOR_MACHINE_PARETO and top_n <= 2,
         })
-    return out[:limit]
+    return out
 
 
 def _problem_statement(r: dict) -> str:
