@@ -77,6 +77,22 @@ def why_why_analysis(
     return ww_svc.compute_whywhy(db, from_date, to_date)
 
 
+@router.get("/why-why/register", tags=["Insights"])
+def why_why_register(
+    from_date: date = None,
+    to_date:   date = None,
+    db: Session = Depends(get_db),
+):
+    """Every breakdown in the window with its Why-Why ladder and recorded cause.
+
+    Its own endpoint rather than part of /why-why: the analysis payload is
+    refetched on every date change and must stay small, while this is ~143 KB
+    for 345 records and is only wanted once somebody opens the register.
+    Filtering is done in the browser after it loads.
+    """
+    return ww_svc.breakdown_register(db, from_date, to_date)
+
+
 @router.get("/why-why/narrative", tags=["Insights"])
 async def why_why_narrative(
     from_date: date = None,

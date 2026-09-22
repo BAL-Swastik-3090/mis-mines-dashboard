@@ -1394,3 +1394,35 @@ export interface WhyWhyOperator {
   cost:       number;
   breakdowns: WhyWhyOperatorBreakdown[];
 }
+
+/** One breakdown as recorded, with its 5-Why ladder. Rows with no ladder are
+ *  still listed — 198 of 345 have none, and hiding them would make the
+ *  register look better documented than it is. */
+export interface WhyWhyRegisterRow {
+  id:              number;
+  notification_no: string | null;
+  date:            string | null;
+  shift:           string | null;
+  machine:         string;
+  equipment_desc:  string | null;
+  defect:          string | null;
+  family:          string;
+  cause:           string | null;
+  cause_detail:    string | null;
+  component:       string | null;
+  operator:        string | null;
+  hours:           number;
+  cost:            number;
+  why:             Array<{ level: number; question: string | null; answer: string | null }>;
+  root_cause:      string | null;
+}
+
+export interface WhyWhyRegisterResponse {
+  window:       WhyWhyWindow;
+  rows:         WhyWhyRegisterRow[];
+  machines:     string[];
+  causes:       string[];
+  families:     string[];
+  with_why:     number;
+  without_why:  number;
+}

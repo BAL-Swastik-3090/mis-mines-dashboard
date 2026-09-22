@@ -163,6 +163,12 @@ def _records(db: Session, f: date, t: date) -> list[dict]:
                TRIM(COALESCE(w.why3_a, '')) AS why3,
                TRIM(COALESCE(w.why4_a, '')) AS why4,
                TRIM(COALESCE(w.why5_a, '')) AS why5,
+               TRIM(COALESCE(w.why1_q, '')) AS why1q,
+               TRIM(COALESCE(w.why2_q, '')) AS why2q,
+               TRIM(COALESCE(w.why3_q, '')) AS why3q,
+               TRIM(COALESCE(w.why4_q, '')) AS why4q,
+               TRIM(COALESCE(w.why5_q, '')) AS why5q,
+               TRIM(COALESCE(w.item_examined, '')) AS item_examined,
                TRIM(COALESCE(w.final_verdict, '')) AS verdict
         FROM {ANALYSIS} a
         LEFT JOIN {ROWS} w ON w.whywhy_id = a.id
@@ -814,6 +820,82 @@ def compute_whywhy(db: Session, from_date: date | None, to_date: date | None) ->
         "completeness": _completeness(recs),
     }
 
+
+
+# -- register -----------------------------------------------------------------
+def _why_pairs(r: dict) -> list[dict]:
+    """The 5-Why ladder as question/answer pairs, in order, skipping blanks."""
+    out = []
+    for i in range(1, 6):
+        q = (r.get(f"why{i}q") or "").strip()
+        a = (r.get(f"why{i}") or "").strip()
+        if q or a:
+            out.append({"level": i, "question": q or None, "answer": a or None})
+    return out
+
+
+def breakdown_register(db: Session, from_date: date | None, to_date: date | None) -> dict:
+    """Every breakdown in the window, with its Why-Why ladder and recorded cause.
+
+    Served from its own endpoint rather than folded into /why-why. The analysis
+    payload is read on every date change and must stay small; this is 143 KB for
+    345 records and is only wanted when somebody opens the register. Filtering
+    happens in the browser once it is loaded — 345 rows is nothing to filter
+    client-side, and it avoids a round trip per keystroke.
+
+    Rows carry what was recorded and nothing inferred. Where the 5-Why is
+    missing the row still appears: 198 of 345 have no ladder, and hiding them
+    would misrepresent the register as better documented than it is.
+    """
+    win = resolve_window(db, from_date, to_date)
+    if win["empty"]:
+        return {
+            "window": {k: (v.isoformat() if isinstance(v, date) else v)
+                       for k, v in win.items()},
+            "rows": [], "machines": [], "causes": [], "families": [],
+            "with_why": 0, "without_why": 0,
+        }
+
+    recs = _records(db, win["from"], win["to"])
+    rows = []
+    for r in recs:
+        pairs = _why_pairs(r)
+        rows.append({
+            "id": r["id"],
+            "notification_no": r["notification_no"],
+            "date": r["breakdown_date"].isoformat() if r["breakdown_date"] else None,
+            "shift": r["shift"],
+            "machine": _machine_key(r["equipment_desc"]),
+            "equipment_desc": r["equipment_desc"],
+            "defect": (r["breakdown_description"] or "").strip() or None,
+            "family": family_of(r["breakdown_description"]),
+            "cause": r["rca_category"],
+            "cause_detail": (r["rca_sub_category"] or "").strip() or None,
+            "component": (r.get("item_examined") or "").strip() or None,
+            "operator": ((r["problem_who"] or "").strip() or None)
+                        if (r["problem_who"] or "").strip() != "-" else None,
+            "hours": round(_f(r["breakdown_duration_hr"]), 1),
+            "cost": round(_f(r["total_cost"]), 0),
+            "why": pairs,
+            "root_cause": (r.get("verdict") or "").strip() or None,
+        })
+    # Newest first: the register is read to check recent events far more often
+    # than to browse April.
+    rows.sort(key=lambda x: (x["date"] or "", x["id"]), reverse=True)
+
+    with_why = sum(1 for x in rows if x["why"])
+    return {
+        "window": {k: (v.isoformat() if isinstance(v, date) else v)
+                   for k, v in win.items()},
+        "rows": rows,
+        # Facets for the filter controls, built from what is actually present so
+        # the dropdowns never offer an option that returns nothing.
+        "machines": sorted({x["machine"] for x in rows}),
+        "causes": sorted({x["cause"] for x in rows if x["cause"]}),
+        "families": sorted({x["family"] for x in rows}),
+        "with_why": with_why,
+        "without_why": len(rows) - with_why,
+    }
 
 # -- narrative ----------------------------------------------------------------
 # The model is handed FIGURES, never rows. Everything below exists to make that

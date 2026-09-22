@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { useWhyWhy, useWhyWhyTraining } from "@/hooks/useInsights";
 import { formatIndian } from "@/lib/utils";
+import BreakdownRegisterCard from "@/components/sections/BreakdownRegisterCard";
 import type {
   WhyWhyShare, WhyWhyWatch, WhyWhyMachineDetail, WhyWhyOperatorIssues,
   WhyWhyProductionLoss, WhyWhyLossSlice, WhyWhyOperator,
@@ -994,6 +995,9 @@ export default function WhyWhyAnalysisSection() {
           <OperatorIssues data={data.operator_issues} />
         </Card>
       )}
+
+      {/* ── the rows behind every figure above ── */}
+      <BreakdownRegisterCard />
 
       {/* ── completeness ── */}
       {data.completeness && (

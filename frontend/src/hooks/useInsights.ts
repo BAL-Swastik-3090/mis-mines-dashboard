@@ -4,7 +4,7 @@ import api from "@/lib/api";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import type { RealityCheckResponse, InsightsResponse,
               WhyWhyResponse, WhyWhyNarrativeResponse,
-              WhyWhyTrainingResponse } from "@/types";
+              WhyWhyTrainingResponse, WhyWhyRegisterResponse } from "@/types";
 
 // ── Reality Check (pure computation, polls every 5 min) ───────
 export function useRealityCheck() {
@@ -105,5 +105,25 @@ export function useWhyWhyTraining(enabled: boolean) {
     placeholderData: keepPreviousData,
     enabled:         enabled && Boolean(apiFrom && apiTo),
     retry:           1,
+  });
+}
+
+// ── Why-Why: the breakdown register (heavy, loaded on demand) ─
+// ~220 KB for 345 records, so it is not folded into useWhyWhy, which refetches
+// on every date change. `enabled` keeps it off the wire until the register card
+// is actually opened.
+export function useWhyWhyRegister(enabled: boolean) {
+  const { apiFrom, apiTo } = useDateFilter();
+  return useQuery<WhyWhyRegisterResponse>({
+    queryKey: ["insights", "why-why", "register", apiFrom, apiTo],
+    queryFn: async () => {
+      const res = await api.get("/insights/why-why/register", {
+        params: { from_date: apiFrom, to_date: apiTo },
+      });
+      return res.data;
+    },
+    staleTime:       10 * 60_000,
+    placeholderData: keepPreviousData,
+    enabled:         enabled && Boolean(apiFrom && apiTo),
   });
 }
