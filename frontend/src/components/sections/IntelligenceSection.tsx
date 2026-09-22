@@ -3,6 +3,7 @@ import { Sparkles } from "lucide-react";
 import RealityCheckSection from "@/components/sections/RealityCheckSection";
 import InsightsSection     from "@/components/sections/InsightsSection";
 import WhyWhyAnalysisSection from "@/components/sections/WhyWhyAnalysisSection";
+import IntelligenceDownload  from "@/components/sections/IntelligenceDownload";
 import { useDateFilter }   from "@/contexts/useDateFilter";
 
 /**
@@ -37,20 +38,31 @@ export default function IntelligenceSection() {
               {periodLabel ? <span className="text-white/35"> ({periodLabel})</span> : null}
             </p>
           </div>
+          {/* Export lives in the banner, where the period it snapshots is
+              already stated. */}
+          <div className="ml-auto shrink-0">
+            <IntelligenceDownload />
+          </div>
         </div>
       </header>
 
       {/* ── Reality Check — KPI feasibility vs plan ── */}
-      <RealityCheckSection />
+      <div id="intel-reality-check">
+        <RealityCheckSection />
+      </div>
 
       {/* ── AI Insights — LLM-generated risks & actions ── */}
-      <InsightsSection />
+      <div id="intel-ai-insights">
+        <InsightsSection />
+      </div>
 
       {/* ── Why-Why Analysis — breakdown root causes from the MPICC register.
              Charts are pure DB computation and always render; the AI reading of
              them is opt-in inside the section, so a gateway outage costs one
              card rather than the page. ── */}
-      <WhyWhyAnalysisSection />
+      <div id="intel-why-why">
+        <WhyWhyAnalysisSection />
+      </div>
     </div>
   );
 }

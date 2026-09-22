@@ -127,8 +127,10 @@ function Row({ r }: { r: WhyWhyRegisterRow }) {
 }
 
 export default function BreakdownRegisterCard() {
-  const [opened, setOpened] = useState(false);
-  const { data, isLoading, isFetching } = useWhyWhyRegister(opened);
+  // Loaded with the section. It was behind a button because it is ~220 KB and
+  // that felt worth a click; in use the click was pure friction — the register
+  // is the thing people came to read.
+  const { data, isLoading, isFetching } = useWhyWhyRegister(true);
   const [q, setQ] = useState("");
   const [machine, setMachine] = useState("");
   const [cause, setCause] = useState("");
@@ -179,21 +181,7 @@ export default function BreakdownRegisterCard() {
       </div>
 
       <div className="px-4 py-3">
-        {!opened ? (
-          <div className="flex flex-col items-center gap-2.5 py-5">
-            <p className="max-w-xl text-center text-[12px] leading-relaxed text-txt-muted">
-              Every breakdown in the selected period, with the cause recorded
-              against it and the 5-Why the maintenance team wrote. Searchable,
-              and the place to check any figure above against its own rows.
-            </p>
-            <button
-              onClick={() => setOpened(true)}
-              className="flex items-center gap-1.5 rounded-md bg-navy px-3.5 py-1.5 text-[12px] font-semibold text-white hover:bg-navy/90"
-            >
-              <ListTree size={13} /> Open the register
-            </button>
-          </div>
-        ) : isLoading ? (
+        {isLoading ? (
           <div className="flex items-center justify-center gap-2 py-8 text-[12.5px] text-txt-muted">
             <RefreshCw size={14} className="animate-spin" /> Loading the register…
           </div>

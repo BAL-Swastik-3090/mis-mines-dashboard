@@ -1,5 +1,4 @@
 "use client";
-import { useState } from "react";
 import { Brain, RefreshCw, AlertCircle, Droplets, ShieldAlert, Truck, HardHat, CalendarClock, Zap } from "lucide-react";
 import { useInsightsGenerate } from "@/hooks/useInsights";
 import { useDateFilter } from "@/contexts/useDateFilter";
@@ -72,8 +71,11 @@ function SkeletonCard({ title, accent, icon }: { title: string; accent: string; 
 // ── Main section ──────────────────────────────────────────────
 export default function InsightsSection() {
   const { periodLabel } = useDateFilter();
-  const [triggered, setTriggered] = useState(false);
-  const { data, isLoading, isError, error, refetch, isFetching } = useInsightsGenerate(triggered);
+  // Loads as soon as the section opens rather than waiting for a click. The
+  // query is still cached for 10 minutes, so revisiting the page costs nothing
+  // and only a genuinely new date range calls the gateway again.
+  const { data, isLoading, isError, error, refetch, isFetching } =
+    useInsightsGenerate(true);
 
   // The backend classifies the failure — gateway down vs bad key vs a model the
   // gateway does not serve. Show that instead of the old hardcoded "may be
@@ -84,13 +86,7 @@ export default function InsightsSection() {
 
   const busy = isLoading || isFetching;
 
-  const handleGenerate = () => {
-    if (!triggered) {
-      setTriggered(true);
-    } else {
-      refetch();
-    }
-  };
+  const handleGenerate = () => refetch();
 
   return (
     <section className="space-y-4">
@@ -117,7 +113,7 @@ export default function InsightsSection() {
             className="flex items-center gap-1.5 bg-accent text-white text-[11px] font-bold px-3 py-1 rounded tracking-wide hover:bg-navy transition-colors disabled:opacity-60"
           >
             <RefreshCw size={11} className={busy ? "animate-spin" : ""} />
-            {busy ? "Generating…" : triggered ? "Regenerate" : "Generate Insights"}
+            {busy ? "Generating…" : "Regenerate"}
           </button>
           <span className="bg-navy text-white text-[10px] font-bold px-2 py-0.5 rounded tracking-wider">
             {periodLabel}
@@ -125,25 +121,8 @@ export default function InsightsSection() {
         </span>
       </div>
 
-      {/* Not yet triggered */}
-      {!triggered && (
-        <div className="bg-white border border-border rounded-lg shadow-sm p-8 text-center">
-          <Brain size={32} className="mx-auto text-accent/30 mb-3" />
-          <p className="text-txt-muted text-[13px] mb-1">AI insights are generated on demand</p>
-          <p className="text-txt-light text-[11px] mb-4">
-            Analyses month-end feasibility, 7-day production trends, equipment BD cost impact, revenue projection, dewatering, COB quality, stock and despatch split using Claude. Pre-generated at 7 AM daily.
-          </p>
-          <button
-            onClick={handleGenerate}
-            className="bg-accent text-white text-[12px] font-bold px-5 py-2 rounded hover:bg-navy transition-colors"
-          >
-            Generate Insights
-          </button>
-        </div>
-      )}
-
       {/* Loading */}
-      {triggered && busy && (
+      {busy && (
         <div className="space-y-4">
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
             <SkeletonCard title="Month-End Feasibility Narrative" accent="text-navy" icon={<AlertCircle size={13} />} />
@@ -159,7 +138,7 @@ export default function InsightsSection() {
       )}
 
       {/* Error */}
-      {triggered && isError && !busy && (
+      {isError && !busy && (
         <div className="bg-white border border-danger/30 rounded-lg p-6 text-center">
           <p className="text-danger text-[13px] font-semibold mb-2">Failed to generate insights</p>
           <p className="text-txt-muted text-[11px] mb-3 max-w-[560px] mx-auto leading-relaxed">
@@ -175,7 +154,7 @@ export default function InsightsSection() {
       )}
 
       {/* Results */}
-      {triggered && data && !busy && (
+      {data && !busy && (
         <div className="space-y-4">
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
             <InsightCard icon={<AlertCircle size={13} className="text-navy" />} title="Month-End Feasibility Narrative" accent="text-navy">

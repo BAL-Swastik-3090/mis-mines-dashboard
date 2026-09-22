@@ -440,9 +440,11 @@ function BreakdownTopic({ b }: { b: WhyWhyTrainingBreakdown }) {
 
 function OperatorIssues({ data }: { data: WhyWhyOperatorIssues }) {
   const [showAll, setShowAll] = useState(false);
-  const [wantTraining, setWantTraining] = useState(false);
   const [showAllTopics, setShowAllTopics] = useState(false);
-  const tr = useWhyWhyTraining(wantTraining);
+  // Runs when the section opens. It is the slowest thing on the page — four
+  // batched calls, about two minutes — so it starts immediately rather than
+  // two minutes after somebody notices the button.
+  const tr = useWhyWhyTraining(true);
   const shown = showAll ? data.issues : data.issues.slice(0, 6);
 
   return (
@@ -522,22 +524,7 @@ function OperatorIssues({ data }: { data: WhyWhyOperatorIssues }) {
           ) : null}
         </div>
 
-        {!wantTraining ? (
-          <div className="flex flex-col items-start gap-2 pt-2">
-            <p className="text-[12px] leading-relaxed text-txt-muted">
-              For each of the {data.events} operating-error breakdowns, BAL-AI reads
-              its Why-Why, works out what the operator did, maps it to a national
-              qualification pack and names the training topic that would have
-              prevented it. Takes about two minutes.
-            </p>
-            <button
-              onClick={() => setWantTraining(true)}
-              className="flex items-center gap-1.5 rounded-md bg-navy px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-navy/90"
-            >
-              <GraduationCap size={13} /> Suggest training topics
-            </button>
-          </div>
-        ) : tr.isLoading ? (
+        {tr.isLoading ? (
           <div className="flex items-center gap-2 py-5 text-[12.5px] text-txt-muted">
             <RefreshCw size={14} className="animate-spin" /> Reading the incidents…
           </div>
