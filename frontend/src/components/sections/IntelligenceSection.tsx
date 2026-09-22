@@ -21,8 +21,10 @@ export default function IntelligenceSection() {
   return (
     <div className="space-y-6">
       {/* ── Page banner — mirrors the app masthead (navy + gold) ── */}
-      <header className="relative overflow-hidden rounded-xl border border-white/10 bg-gradient-to-r from-[#1a2744] via-[#20325a] to-[#1a2744] px-5 py-4 shadow-sm">
-        <span className="absolute left-0 top-0 bottom-0 w-[3px] bg-gradient-to-b from-[#c8960c] via-[#f5a623] to-transparent" />
+      {/* No overflow-hidden: the download menu drops out of this banner and was
+          being clipped by it. The accent rail carries its own rounding instead. */}
+      <header className="relative rounded-xl border border-white/10 bg-gradient-to-r from-[#1a2744] via-[#20325a] to-[#1a2744] px-5 py-4 shadow-sm">
+        <span className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-xl bg-gradient-to-b from-[#c8960c] via-[#f5a623] to-transparent" />
         <div className="flex items-center gap-3.5">
           <div className="grid place-items-center w-11 h-11 rounded-lg bg-white/10 border border-white/15 shrink-0">
             <Sparkles size={21} className="text-[#f5a623]" />

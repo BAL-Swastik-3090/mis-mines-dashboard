@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Download, Check, ChevronDown, Loader2 } from "lucide-react";
 import { downloadDashboard } from "@/utils/downloadDashboard";
 import { useDateFilter } from "@/contexts/useDateFilter";
+import { withExportMode } from "@/contexts/useExportMode";
 
 /**
  * Export the Intelligence page, or one section of it, as a self-contained file.
@@ -53,14 +54,19 @@ export default function IntelligenceDownload() {
     setBusy(t.stem);
     setDone(null);
     try {
-      await downloadDashboard({
-        dateRange,
-        periodLabel,
-        // The whole page falls back to the util's own default root.
-        rootSelector: t.id ? `#${t.id}` : undefined,
-        title: t.title,
-        fileStem: `kaliapani-${t.stem}`,
-      });
+      // Expand every collapsible thing first, or the file arrives with empty
+      // expanders — React does not render collapsed content, so the clone
+      // cannot contain it.
+      await withExportMode(() =>
+        downloadDashboard({
+          dateRange,
+          periodLabel,
+          // The whole page falls back to the util's own default root.
+          rootSelector: t.id ? `#${t.id}` : undefined,
+          title: t.title,
+          fileStem: `kaliapani-${t.stem}`,
+        }),
+      );
       setDone(t.stem);
       setTimeout(() => setDone(null), 2500);
       setOpen(false);
@@ -124,8 +130,9 @@ export default function IntelligenceDownload() {
             );
           })}
           <p className="border-t border-border-light px-3 py-2 text-[10.5px] leading-snug text-txt-muted">
-            A static snapshot of what is on screen now, including anything the AI
-            has already produced. Charts are exported as images.
+            A static snapshot with every section expanded — Why chains, machine
+            detail and the full register, not just the rows on screen. Charts
+            are exported as images.
           </p>
         </div>
       ) : null}
