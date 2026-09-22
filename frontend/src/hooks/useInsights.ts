@@ -62,6 +62,9 @@ export function useWhyWhy() {
 }
 
 // ── Why-Why: BAL-AI narrative (slow, may fail, on demand) ─────
+// UNUSED since 2026-09-22 — the "AI reading of these figures" card was removed
+// because it interpreted rather than investigated. Kept because the endpoint is
+// live and the wiring is correct if a use for it appears; delete both together.
 // Separate query on purpose. The charts must not wait ~9s for prose, and a
 // gateway outage must cost the narrative card only, never the section.
 export function useWhyWhyNarrative(enabled: boolean) {

@@ -3,9 +3,9 @@ import { useState } from "react";
 import dynamic from "next/dynamic";
 import {
   Wrench, AlertTriangle, Clock, Repeat, Users, Database,
-  Sparkles, RefreshCw, Info, ChevronRight, GraduationCap, Layers, TrendingDown,
+  RefreshCw, Info, ChevronRight, GraduationCap, Layers, TrendingDown,
 } from "lucide-react";
-import { useWhyWhy, useWhyWhyNarrative, useWhyWhyTraining } from "@/hooks/useInsights";
+import { useWhyWhy, useWhyWhyTraining } from "@/hooks/useInsights";
 import { formatIndian } from "@/lib/utils";
 import type {
   WhyWhyShare, WhyWhyWatch, WhyWhyMachineDetail, WhyWhyOperatorIssues,
@@ -17,16 +17,23 @@ const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
 /**
  * Why-Why Analysis — breakdown root causes, read from the MPICC register.
  *
- * Two data sources, deliberately kept apart. The charts and tables come from
- * /insights/why-why, which is pure SQL and always answers. The prose comes from
- * /insights/why-why/narrative, which asks BAL-AI to interpret those same
- * figures and takes ~9 seconds. The narrative is therefore opt-in and its
- * failure is contained: a gateway outage costs one card, not the section.
+ * Everything on this page is computed from the database by /insights/why-why,
+ * which is pure SQL and always answers.
  *
- * The model is never given the underlying rows and is never asked to count
- * anything, so a number it states should already appear in the figures it was
- * handed. The backend checks that and returns anything it cannot account for,
- * which is surfaced here rather than quietly trusted.
+ * THERE IS NO GENERAL AI COMMENTARY HERE, BY DECISION. A card existed that
+ * asked BAL-AI to read these same figures back as findings and risks; it was
+ * removed on 2026-09-22 because it interpreted rather than investigated. It
+ * could only restate what the charts already showed, in prose that shifted
+ * between runs and occasionally carried a figure from the wrong scope. The
+ * numbers are the authority, and a readable paraphrase of them was not worth
+ * the risk of it being quoted as a finding.
+ *
+ * The one generative card that remains is training topics, under operating
+ * issues. That one produces something the data does not already contain — what
+ * to teach, from the incidents themselves — rather than summarising a chart.
+ *
+ * The endpoint GET /insights/why-why/narrative still exists and still works;
+ * nothing calls it. See useWhyWhyNarrative in hooks/useInsights.ts.
  */
 
 const CHART_FONT = { fontSize: 11, color: "#6b7ea8", fontFamily: "IBM Plex Sans" };
@@ -96,37 +103,6 @@ function Prose({ text }: { text: string }) {
         <p key={i} className="text-[12.5px] leading-relaxed text-txt-secondary">
           {line.trim()}
         </p>
-      ))}
-    </div>
-  );
-}
-
-/** Actions arrive pipe-delimited as "what | owner | trigger" — see the prompt. */
-function ActionTable({ text }: { text: string }) {
-  const rows = text.split("\n").map((l) => l.trim()).filter((l) => l.includes("|"))
-    .map((l) => l.split("|").map((c) => c.trim()));
-  if (!rows.length) return <Prose text={text} />;
-  return (
-    <div className="divide-y divide-border-light">
-      {rows.map((c, i) => (
-        <div key={i} className="py-2.5 first:pt-0 last:pb-0">
-          <div className="flex items-start gap-2">
-            <ChevronRight size={14} className="mt-[3px] shrink-0 text-accent" />
-            <span className="text-[12.5px] text-txt-primary leading-snug">{c[0]}</span>
-          </div>
-          <div className="mt-1 pl-[22px] flex flex-wrap gap-x-4 gap-y-1">
-            {c[1] ? (
-              <span className="text-[11px] text-txt-muted">
-                <b className="font-semibold text-txt-secondary">Owner</b> {c[1]}
-              </span>
-            ) : null}
-            {c[2] ? (
-              <span className="text-[11px] text-txt-muted">
-                <b className="font-semibold text-txt-secondary">Trigger</b> {c[2]}
-              </span>
-            ) : null}
-          </div>
-        </div>
       ))}
     </div>
   );
@@ -759,8 +735,6 @@ function OperatorList({ rows, caveat }: { rows: WhyWhyOperator[]; caveat: string
 // ── section ──────────────────────────────────────────────────
 export default function WhyWhyAnalysisSection() {
   const { data, isLoading, isFetching } = useWhyWhy();
-  const [wantNarrative, setWantNarrative] = useState(false);
-  const nar = useWhyWhyNarrative(wantNarrative);
 
   if (isLoading && !data) return <SectionSkeleton />;
 
@@ -1020,91 +994,6 @@ export default function WhyWhyAnalysisSection() {
           <OperatorIssues data={data.operator_issues} />
         </Card>
       )}
-
-      {/* ── narrative ── */}
-      <Card
-        icon={<Sparkles size={15} className="text-[#c8960c]" />}
-        title="AI reading of these figures"
-        note={nar.data?.model ? `${nar.data.model} · ${nar.data.generated_at}` : undefined}
-      >
-        {!wantNarrative ? (
-          <div className="flex flex-col items-center gap-2.5 py-5">
-            <p className="max-w-lg text-center text-[12px] leading-relaxed text-txt-muted">
-              BAL-AI reads the figures above — never the underlying records — and
-              returns findings, risks and actions. Takes about ten seconds.
-            </p>
-            <button
-              onClick={() => setWantNarrative(true)}
-              className="flex items-center gap-1.5 rounded-md bg-navy px-3.5 py-1.5 text-[12px] font-semibold text-white hover:bg-navy/90"
-            >
-              <Sparkles size={13} /> Generate analysis
-            </button>
-          </div>
-        ) : nar.isLoading ? (
-          <div className="flex items-center justify-center gap-2 py-8 text-[12.5px] text-txt-muted">
-            <RefreshCw size={14} className="animate-spin" /> Reading the figures…
-          </div>
-        ) : nar.isError ? (
-          <div className="flex items-start gap-2 py-4">
-            <AlertTriangle size={15} className="mt-[2px] shrink-0 text-danger" />
-            <div>
-              <p className="text-[12.5px] text-txt-secondary">
-                {(nar.error as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-                  ?? "Could not reach the BAL-AI gateway."}
-              </p>
-              <button onClick={() => nar.refetch()}
-                      className="mt-2 flex items-center gap-1.5 text-[12px] font-semibold text-navy hover:underline">
-                <RefreshCw size={12} /> Try again
-              </button>
-              <p className="mt-2 text-[11px] text-txt-muted">
-                Everything above is computed from the database and is unaffected.
-              </p>
-            </div>
-          </div>
-        ) : nar.data ? (
-          <div className="space-y-4">
-            {/* Numbers the model stated that were not in the figures it was
-                given. Usually empty; shown when not, because a wrong figure
-                nobody can check is the one failure this design guards against. */}
-            {nar.data.unverified_numbers?.length > 0 && (
-              <div className="flex items-start gap-2 rounded border border-danger/25 bg-danger/5 px-3 py-2">
-                <AlertTriangle size={13} className="mt-[2px] shrink-0 text-danger" />
-                <p className="text-[11.5px] leading-snug text-txt-secondary">
-                  <b>Check before quoting.</b> These figures appear in the text below
-                  but not in the data it was given:{" "}
-                  <span className="font-mono">{nar.data.unverified_numbers.join(", ")}</span>.
-                </p>
-              </div>
-            )}
-            {([
-              ["findings", "Findings"],
-              ["risks",    "Risks"],
-              ["gaps",     "What this data still cannot answer"],
-            ] as const).map(([key, label]) =>
-              nar.data!.sections[key] ? (
-                <div key={key}>
-                  <div className="mb-1.5 font-condensed text-[11px] font-bold uppercase tracking-widest text-txt-muted">
-                    {label}
-                  </div>
-                  <Prose text={nar.data!.sections[key]} />
-                </div>
-              ) : null
-            )}
-            {nar.data.sections.actions ? (
-              <div>
-                <div className="mb-1.5 font-condensed text-[11px] font-bold uppercase tracking-widest text-txt-muted">
-                  Actions
-                </div>
-                <ActionTable text={nar.data.sections.actions} />
-              </div>
-            ) : null}
-            <button onClick={() => nar.refetch()}
-                    className="flex items-center gap-1.5 border-t border-border-light pt-2.5 text-[11.5px] text-txt-muted hover:text-navy">
-              <RefreshCw size={12} /> Regenerate
-            </button>
-          </div>
-        ) : null}
-      </Card>
 
       {/* ── completeness ── */}
       {data.completeness && (
