@@ -1204,9 +1204,9 @@ TRAINING_SYSTEM = (
     "  1. state what the operator actually did or failed to do, from the "
     "Why-Why chain where one exists, or from the component and failure mode "
     "where it does not;\n"
-    "  2. choose the ONE qualification pack from the list that covers that "
-    "skill;\n"
-    "  3. name the training topic that would have prevented this breakdown.\n\n"
+    "  2. name the training topic that would have prevented this breakdown.\n\n"
+    "The qualification pack is already decided for you from the machine and is "
+    "shown with each breakdown. Do not choose one and do not mention codes.\n\n"
     "RULES:\n"
     "1. Answer for every breakdown id you are given. Do not merge them, do not "
     "skip any, do not invent ids.\n"
@@ -1215,7 +1215,8 @@ TRAINING_SYSTEM = (
     "fatigued' is not.\n"
     "3. Where there is no Why-Why chain, say what the failure mode implies and "
     "keep it short. Do not manufacture detail you were not given.\n"
-    "4. PACK must be an exact code from the list, or NONE. Never invent a code.\n"
+    "4. Keep the topic inside the scope of the qualification shown for that "
+    "machine. A tipper driver is not trained on excavator technique.\n"
     "5. TOPIC is a course title a coordinator could schedule — a noun phrase, "
     "not an instruction. 'Bucket Loading Technique and Load Limits' is a topic. "
     "'Do not side-load the bucket' is not.\n"
@@ -1228,6 +1229,52 @@ TRAINING_SYSTEM = (
 # the 60-pack catalogue, and a chunk that fails costs 25 rows rather than all 81.
 TRAINING_CHUNK = 25
 
+
+
+# THE MACHINE DECIDES THE PACK, NOT THE MODEL.
+#
+# Letting the model choose gave 68% accuracy over 81 breakdowns: it matched on
+# the failure topic rather than on the machine, so ten MAN tippers with broken
+# leaf springs and hangers became "Loader Operator (Mining)" and eight more
+# became "Excavator Operator" because the defect resembled excavator work.
+#
+# An operator's qualification is a property of the machine they are licensed to
+# drive. A tipper driver needs the tipper pack whatever broke. That is a lookup,
+# and a lookup has no business being inferred. The model now decides only what
+# the operator did and what to teach; the pack is resolved here and is right by
+# construction.
+#
+# Patterns are tried in order, first match wins, so the specific ones come
+# first. A machine with no pack gets None and the UI says no pack fits, which is
+# the truthful answer for a telehandler — the catalogue has no pack for one.
+MACHINE_PACK: list[tuple[str, str]] = [
+    (r"^EX",                        "MIN/IES/Q0103"),   # Excavator Operator
+    (r"Z ?AXIS|LiuGong.*Excavator", "MIN/IES/Q0103"),
+    (r"^MAN|^TATA|TIPPER|HYVA",     "MIN/Q1402"),       # Dumper / Tipper Operator
+    (r"BULL ?DOZER|^CAT DOZER|DOZER", "MIN/Q1401"),     # Bulldozer Operator
+    (r"GRADER",                     "MIN/Q1405"),       # Grader Machine Operator
+    (r"JCB ?3DX|BACKHOE",           "MIN/IES/Q0101"),   # Backhoe Loader Operator
+    (r"HYDRA",                      "MIN/IES/Q0108"),   # Hydra Crane Operator
+    (r"LOADER",                     "MIN/Q1403"),       # Loader Operator (Mining)
+    (r"TANKER",                     "MIN/Q1301"),       # Driver - Special Utility Vehicle
+    (r"DRILL",                      "MIN/Q1206"),       # Drill Operator (DTH / Long Hole)
+    (r"SURFACE MINER",              "MIN/Q1404"),       # Surface Miner Operator
+    (r"SHOVEL",                     "MIN/Q1408"),       # Shovel Operator
+]
+
+
+def pack_for_machine(machine: str, by_code: dict[str, dict]) -> dict | None:
+    """The qualification pack for whoever drives this machine.
+
+    Resolved against the live catalogue rather than a hardcoded title, so a code
+    that has been retired or renamed in MineHub stops being offered here rather
+    than being displayed as something the database no longer holds.
+    """
+    name = (machine or "").upper()
+    for pattern, code in MACHINE_PACK:
+        if re.search(pattern, name, re.I):
+            return by_code.get(code)
+    return None
 
 def skill_catalogue(limit: int = 60) -> list[dict]:
     """The national qualification packs the mine recognises, from MineHub.
@@ -1271,12 +1318,15 @@ def _pack_block(packs: list[dict]) -> str:
     return "\n".join(L)
 
 
-def _incident_block(items: list[dict]) -> str:
+def _incident_block(items: list[dict], packs_by_machine: dict[str, dict]) -> str:
     L = []
     for i in items:
         L.append(f"BREAKDOWN {i['id']}")
         L.append(f"  machine: {i['machine']}   defect: {i['defect']}   "
                  f"component group: {i['family']}")
+        p = packs_by_machine.get(i["machine"])
+        L.append(f"  qualification: {p['code']} {p['name']} (NSQF {p['nsqf']})"
+                 if p else "  qualification: none in the catalogue covers this machine")
         if i.get("component"):
             L.append(f"  component examined: {i['component']}")
         if i.get("sub_category"):
@@ -1290,11 +1340,11 @@ def _incident_block(items: list[dict]) -> str:
     return "\n".join(L)
 
 
-_PB_FIELD = re.compile(r"^(BREAKDOWN|REASON|PACK|TOPIC|OUTCOME)\s*:\s*(.*)$", re.I)
+_PB_FIELD = re.compile(r"^(BREAKDOWN|REASON|TOPIC|OUTCOME)\s*:\s*(.*)$", re.I)
 
 
-def _parse_per_breakdown(text: str, valid_codes: set[str]) -> dict[int, dict]:
-    """Blocks keyed by breakdown id, with invented pack codes dropped."""
+def _parse_per_breakdown(text: str) -> dict[int, dict]:
+    """Blocks keyed by breakdown id. The pack is not parsed — it is looked up."""
     out: dict[int, dict] = {}
     for block in re.split(r"^(?=BREAKDOWN\s*:)", text, flags=re.M | re.I):
         f: dict[str, str] = {}
@@ -1311,19 +1361,9 @@ def _parse_per_breakdown(text: str, valid_codes: set[str]) -> dict[int, dict]:
         raw_id = re.sub(r"[^0-9]", "", f.get("breakdown", ""))
         if not raw_id:
             continue
-        pack_raw = f.get("pack", "")
-        pack = None
-        if pack_raw and pack_raw.strip().upper() not in ("NONE", "N/A", "-"):
-            parts = [p.strip() for p in pack_raw.split("|")]
-            if parts and parts[0] in valid_codes:
-                pack = {"code": parts[0],
-                        "name": parts[1] if len(parts) > 1 else "",
-                        "nsqf": parts[2].replace("NSQF", "").strip() if len(parts) > 2 else ""}
         out[int(raw_id)] = {
             "reason": f.get("reason") or None,
             "topic": f.get("topic") or None,
-            "pack": pack,
-            "pack_claimed": pack_raw or None,
             "outcomes": outcomes,
         }
     return out
@@ -1347,8 +1387,12 @@ async def generate_training(
                 "No breakdowns with a recorded operating-error cause in this period."}
 
     packs = skill_catalogue()
-    valid = {p["code"] for p in packs}
+    by_code = {p["code"]: p for p in packs}
     items = issues["issues"]
+    # Resolved once, from the machine, before anything is asked of the model.
+    packs_by_machine = {
+        i["machine"]: pack_for_machine(i["machine"], by_code) for i in items
+    }
 
     web = await websearch.search(
         websearch.build_queries([x["label"] for x in issues["by_family"]],
@@ -1365,7 +1409,6 @@ async def generate_training(
         "with a blank line between blocks and no other text:\n"
         "BREAKDOWN: <the id>\n"
         "REASON: <what the operator did or failed to do, one sentence>\n"
-        "PACK: <exact code> | <exact title> | NSQF <level>   (or: PACK: NONE)\n"
         "TOPIC: <course title, 3-8 words, a noun phrase>\n"
         "OUTCOME: <one thing the attendee can do afterwards, starting with a verb>\n"
         "OUTCOME: <a second one>"
@@ -1376,7 +1419,7 @@ async def generate_training(
     model = None
     for k in range(0, len(items), TRAINING_CHUNK):
         chunk = items[k:k + TRAINING_CHUNK]
-        prompt = (f"{_incident_block(chunk)}\n{_pack_block(packs)}\n\n"
+        prompt = (f"{_incident_block(chunk, packs_by_machine)}\n\n"
                   + (f"{ctx}\n\n" if ctx else "") + spec)
         try:
             resp = await client.chat.completions.create(
@@ -1386,7 +1429,7 @@ async def generate_training(
                 temperature=0.3, max_tokens=3600,
             )
             raw = resp.choices[0].message.content or ""
-            parsed.update(_parse_per_breakdown(raw, valid))
+            parsed.update(_parse_per_breakdown(raw))
             tokens += resp.usage.total_tokens if resp.usage else 0
             model = resp.model
         except Exception as exc:
@@ -1409,8 +1452,7 @@ async def generate_training(
             "basis": "recorded" if i["why_chain"] else "inferred",
             "reason": a.get("reason"),
             "topic": a.get("topic"),
-            "pack": a.get("pack"),
-            "pack_claimed": a.get("pack_claimed"),
+            "pack": packs_by_machine.get(i["machine"]),
             "outcomes": a.get("outcomes") or [],
             "analysed": bool(a.get("topic")),
         })

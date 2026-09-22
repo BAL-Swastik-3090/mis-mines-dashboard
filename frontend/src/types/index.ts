@@ -1343,10 +1343,10 @@ export interface WhyWhyTrainingBreakdown {
   basis:           "recorded" | "inferred";
   reason:          string | null;
   topic:           string | null;
-  /** Null when no pack fits, or when the model named a code that is not in the
-   *  catalogue — an invented NSQF reference is dropped, never displayed. */
-  pack:            { code: string; name: string; nsqf: string } | null;
-  pack_claimed:    string | null;
+  /** Resolved from the MACHINE, not chosen by the model — an operator's
+   *  qualification is a property of the machine they drive. Null only when the
+   *  catalogue holds no pack for that machine class, e.g. a telehandler. */
+  pack:            { code: string; name: string; nsqf: number | string } | null;
   outcomes:        string[];
   analysed:        boolean;
 }
