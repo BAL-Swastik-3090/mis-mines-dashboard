@@ -60,6 +60,49 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ---
 
+## Deployed — 2026-09-23: Weighbridge, gate, organisation, custom fields
+
+Released commit `0bb405e` to mines.balasorealloys.in by the usual method:
+`git archive` of HEAD extracted over `~/mines_dashboard` with `.env` set aside
+and restored at 600, then `docker compose build && docker compose up -d` on the
+default `docker-compose.yml` + `docker-compose.override.yml` pair.
+
+Backup taken first: `~/mines_dashboard-backup-20260923-1650.tar.gz`.
+
+**No new dependencies and no configuration change.** The new routers import only
+the standard library and what the image already had, so nothing was added to
+requirements and `.env` was not touched.
+
+**No migration step.** 053-063 were already applied: dev and production share
+one PostgreSQL schema (`minehub` on the platform database), so the schema was in
+place before the code that uses it. Every migration in this release is additive —
+new tables and new nullable columns — so the previously running code was never
+looking at a schema it did not understand.
+
+Verified after release: `/api/health` ok, 41 new routes present in the OpenAPI
+schema, frontend 200, and only `mines_backend` and `mines_frontend` restarted —
+the other ~75 containers on the box kept their uptime and the host nginx was not
+reloaded.
+
+**The weighbridge agent now reports here.** During development the agent on the
+weighbridge PC (WB3, 192.168.16.217) posted to a laptop. It now posts to
+`https://mines.balasorealloys.in`, confirmed by reading posts arriving 200 in the
+backend log. Its token did not change and did not need to: the token is hashed
+into `weighbridge_agent` on the shared database, which production reads.
+
+The agent's default `-Server` in `weighbridge-agent/install.ps1` was an IP and
+port. That would not have worked from anywhere: the backend listens on
+`127.0.0.1:8006` and is only reachable through the host nginx. It is now the
+domain, which is also where DEPLOY.md says server addresses should not be — in
+the repo.
+
+**WeighStar starts with the machine.** Separately from this release, the
+weighbridge PC no longer needs anyone to double-click a desktop shortcut for the
+indicator to be read at all. See
+`files/Weighbridge_Tamper_Resistance_Design_23-09-2026.md`.
+
+---
+
 ## Deployed — 2026-09-20 (2): Workforce activity from the gate readers
 
 Released commit `63a950e` (6 commits on `3c559f0`) to
