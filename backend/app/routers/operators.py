@@ -46,6 +46,9 @@ router = APIRouter(prefix="/api/operators", tags=["Operators"])
 PARTY_FIELDS = (
     "display_name", "legal_name", "gender", "date_of_birth", "blood_group",
     "phone", "email", "photo_ref",
+    # Added with the CLL manpower backfill: 204 people arrived carrying these
+    # and the form had no way to show or correct them.
+    "father_name", "marital_status",
 )
 
 OPERATOR_FIELDS = (
@@ -60,6 +63,10 @@ OPERATOR_FIELDS = (
     "exp_kaliapani_months", "exp_current_role_months", "exp_verified_months",
     "exp_verified_by", "exp_verified_on",
     "profile_status", "suspension_reason", "remarks",
+    # From the contractor's manpower sheet. skill_grade is what wages are set
+    # against and pay_grade is the contractor's own band; both were loaded for
+    # 204 people and neither was visible anywhere.
+    "skill_grade", "pay_grade", "retirement_on",
 )
 
 RECORD_FIELDS = (
@@ -247,7 +254,7 @@ def list_operators(q: str = Query(""), status: str = Query(""),
                o.employment_type, o.designation, o.version,
                o.exp_total_months, o.exp_hemm_months, o.joined_on,
                p.party_id, p.display_name, p.phone, p.photo_ref, p.blood_group,
-               p.date_of_birth, p.gender,
+               p.date_of_birth, p.gender, p.father_name, p.marital_status,
                e.display_name AS employer, ou.name AS department, pl.name AS plant,
                -- The number the gate, the muster and the face reader all know
                -- this person by. Without it on the row, reconciling the
@@ -442,7 +449,7 @@ def get_operator(operator_id: int, db: Session = Depends(get_minehub_db),
     """The whole 360 in one call — the screen shows it as tabs, not as requests."""
     row = db.execute(text("""
         SELECT o.*, p.display_name, p.legal_name, p.gender, p.date_of_birth, p.blood_group,
-               p.phone, p.email, p.photo_ref,
+               p.phone, p.email, p.photo_ref, p.father_name, p.marital_status,
                e.display_name AS employer, ou.name AS department, pl.name AS plant,
                s.display_name AS supervisor, l.name AS work_location
         FROM operator o
@@ -1236,6 +1243,24 @@ def remove_document(operator_id: int, document_id: int, request: Request,
 
 
 # -- the national skills list ------------------------------------------------
+@router.get("/meta/identity-systems")
+def identity_systems(db: Session = Depends(get_minehub_db)) -> list[dict]:
+    """What other systems call a person — the list, from the database.
+
+    The form used to carry its own copy of this, and the two drifted: three of
+    the eight options it offered could not be saved, because the database had
+    never heard of them. Now there is one list and both ends read it, so a new
+    system is a row rather than an edit in two places that somebody forgets to
+    make twice.
+    """
+    return [dict(r) for r in db.execute(text("""
+        SELECT code, label, is_sensitive, has_expiry, hint
+          FROM identity_system
+         WHERE status = 'ACTIVE'
+         ORDER BY sort_order, label
+    """)).mappings()]
+
+
 @router.get("/meta/skills")
 def list_skills(q: str = Query(""), db: Session = Depends(get_minehub_db)) -> list[dict]:
     """Qualification packs from the Skill Council for Mining Sector.

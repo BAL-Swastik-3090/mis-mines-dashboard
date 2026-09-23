@@ -10,6 +10,9 @@ import ManpowerSection         from "@/components/sections/ManpowerSection";
 import OperationsSection       from "@/components/sections/OperationsSection";
 import WorkforceSection        from "@/components/sections/WorkforceSection";
 import MarketSection           from "@/components/sections/MarketSection";
+import OrganisationSection     from "@/components/sections/OrganisationSection";
+import WeighbridgeSection      from "@/components/sections/WeighbridgeSection";
+import GateSection             from "@/components/sections/GateSection";
 import AccessControlSection    from "@/components/sections/AccessControlSection";
 import { useAppPage }          from "@/contexts/useAppPage";
 import { useSidebar }          from "@/contexts/useSidebar";
@@ -78,6 +81,9 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           {page === "operations"       && <OperationsSection />}
           {page === "workforce"        && <WorkforceSection />}
           {page === "market"           && <MarketSection />}
+          {page === "organisation"     && <OrganisationSection />}
+          {page === "gate"             && <GateSection />}
+          {page === "weighbridge"      && <WeighbridgeSection />}
             </>
           )}
         </div>

@@ -42,6 +42,13 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   "workforce": ["ops.roster.view"],
   "access-control": ["access.users.view"],
   "market": ["market.view"],
+  "organisation": ["org.view"],
+  "weighbridge": ["wb.view"],
+  // The gate is a different job from the weighbridge and a different
+  // person: a security officer admits vehicles, a weighbridge operator
+  // weighs loads. Gating the gate on wb.view would mean handing the
+  // whole weighbridge to the man on the boundary.
+  "gate": ["wb.gate"],
 };
 
 /**
@@ -70,8 +77,15 @@ const LANDING_RANK: Record<AppPage, number> = {
   "market": 35,
   "fuel-management": 40,
   "ev-tracking": 50,
+  // Before the registers: a machine, a person and a material all have to be
+  // held against a department, so the department is the thing to see first.
+  "organisation": 55,
   "minehub": 60,
   "manpower": 65,
+  // With the operational screens, not the registers: the weighbridge is
+  // run all shift by the person sitting at it.
+  "gate": 66,
+  "weighbridge": 68,
   "operations": 70,
   "workforce": 80,
   "access-control": 90,

@@ -20,7 +20,7 @@ import DateField from "./DateField";
 import {
   Check, Loader2, ArrowLeft, Send, CheckCircle2, Undo2, Trash2, Plus, Copy,
   User, Briefcase, FileText, ShieldCheck, Cpu, Link2, Upload, Paperclip,
-  GraduationCap, Languages as LanguagesIcon, Award, History,
+  GraduationCap, Languages as LanguagesIcon, Award, History, SlidersHorizontal,
 } from "lucide-react";
 import api from "@/lib/api";
 import { Alert, Button, Chip, type Tone } from "./ui";
@@ -28,6 +28,7 @@ import { Band, Row, Sheet, cellInput } from "./sheet";
 import Combobox from "./Combobox";
 import Toast from "./Toast";
 import Dialog from "./Dialog";
+import CustomFields from "./CustomFields";
 import RevisionPanel, { type Revision } from "./RevisionPanel";
 
 /* ── the sections, in the order a person is described ───────────────────── */
@@ -42,6 +43,9 @@ const SECTIONS = [
   { id: "machines",   label: "Machines",     icon: Cpu },
   { id: "identity",   label: "Identity",     icon: Link2 },
   { id: "files",      label: "Files",        icon: Paperclip },
+  // Last, because it holds whatever the mine added after the software was
+  // written — it is the open end of the record, not part of its spine.
+  { id: "more",       label: "More",         icon: SlidersHorizontal },
 ] as const;
 
 type SectionId = (typeof SECTIONS)[number]["id"];
@@ -833,6 +837,22 @@ export default function OperatorForm({ operatorId, openAt, prefill, onSaved, onD
                   <option value="O">Other</option>
                 </select>
               </Row>
+              <Row label="Father's name"
+                   hint="As written on the contractor's muster — used to tell two people of the same name apart">
+                <input id="op-father" className={cellInput} value={f.father_name ?? ""}
+                  onChange={(e) => set("father_name", e.target.value)} />
+              </Row>
+              <Row label="Marital status">
+                <select id="op-marital" className={cellInput} value={f.marital_status ?? ""}
+                  onChange={(e) => set("marital_status", e.target.value)}>
+                  <option value="">Not recorded</option>
+                  <option value="MARRIED">Married</option>
+                  <option value="UNMARRIED">Unmarried</option>
+                  <option value="WIDOWED">Widowed</option>
+                  <option value="DIVORCED">Divorced</option>
+                  <option value="SEPARATED">Separated</option>
+                </select>
+              </Row>
               <Row label="Blood group">
                 <div className="px-1.5 py-1">
                   <Combobox id="op-blood" category="BLOOD_GROUP" value={f.blood_group ?? ""}
@@ -987,7 +1007,26 @@ export default function OperatorForm({ operatorId, openAt, prefill, onSaved, onD
               <Row label="Employment end" hint="Blank while they are still working here">
                 <DateField id="op-end" className={cellInput} value={f.employment_end ?? ""} onChange={(v) => set("employment_end", v)} />
               </Row>
-            </Sheet>
+                          <Row label="Skill grade"
+                   hint="What wages are set against, on the contractor's classification">
+                <select id="op-skill-grade" className={cellInput} value={f.skill_grade ?? ""}
+                  onChange={(e) => set("skill_grade", e.target.value)}>
+                  <option value="">Not recorded</option>
+                  <option value="UNSKILLED">Unskilled</option>
+                  <option value="SEMI_SKILLED">Semi-skilled</option>
+                  <option value="SKILLED">Skilled</option>
+                  <option value="HIGHLY_SKILLED">Highly skilled</option>
+                </select>
+              </Row>
+              <Row label="Pay grade" hint="The contractor's own band — E6, E7">
+                <input id="op-pay-grade" className={cellInput} value={f.pay_grade ?? ""}
+                  onChange={(e) => set("pay_grade", e.target.value)} />
+              </Row>
+              <Row label="Retirement date">
+                <DateField id="op-retire" className={cellInput}
+                  value={f.retirement_on ?? ""} onChange={(v) => set("retirement_on", v)} />
+              </Row>
+</Sheet>
 
             <div className="mt-4">
               <Band title="Experience"
@@ -1284,6 +1323,14 @@ export default function OperatorForm({ operatorId, openAt, prefill, onSaved, onD
             <FileSection documents={documents} disabled={!editing || !rights.may_manage}
               onUpload={(file, kind) => uploadFor(file, kind)}
               onOpen={openDocument} onRemove={removeDocument} />
+          </section>
+
+          <section id="sec-more" ref={register("more")} className="scroll-mt-[210px]">
+            <CustomFields
+              entity="OPERATOR"
+              entityId={id ?? null}
+              disabled={!editing || !rights.may_manage}
+            />
           </section>
 
           {/* Foot */}
@@ -1595,6 +1642,35 @@ function LanguageSection({ records, onSave, onRemove, disabled }: {
 }
 
 /* ── skills: the country's names for what a person can do ───────────────── */
+/** The identity systems the platform knows, loaded once.
+ *
+ *  Read from the database rather than written here. The list used to live in
+ *  this file as a string array and had drifted three entries out of step with
+ *  what could actually be saved. */
+interface IdentitySystem {
+  code: string; label: string; is_sensitive: boolean;
+  has_expiry: boolean; hint: string | null;
+}
+
+function useIdentitySystems(): IdentitySystem[] {
+  const [systems, setSystems] = useState<IdentitySystem[]>([]);
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      try {
+        const r = await api.get("/operators/meta/identity-systems");
+        if (live) setSystems(r.data ?? []);
+      } catch {
+        // A dropdown with nothing in it is honest; a dropdown with a guessed
+        // list is what caused this.
+      }
+    })();
+    return () => { live = false; };
+  }, []);
+  return systems;
+}
+
+
 function SkillSection({ skills, records, disabled, onSave, onRemove }: {
   skills: Skill[]; records: Rec[]; disabled: boolean;
   onSave: (r: Rec) => Promise<void>;
@@ -1775,6 +1851,7 @@ function IdentitySection({ idents, disabled, onAdd, onRemove }: {
   onAdd: (system: string, code: string) => Promise<void>;
   onRemove: (id: number) => Promise<void>;
 }) {
+  const systems = useIdentitySystems();
   const [system, setSystem] = useState("SAP");
   const [code, setCode] = useState("");
 
@@ -1787,8 +1864,9 @@ function IdentitySection({ idents, disabled, onAdd, onRemove }: {
           <div className="flex flex-wrap items-center gap-2">
             <select value={system} onChange={(e) => setSystem(e.target.value)}
               className="bg-bg-base border border-border rounded-lg px-3 py-2 text-[13px]">
-              {["SAP", "HRMS", "DRIVER_MASTER", "CONTRACTOR", "GATE_PASS", "BIOMETRIC", "RFID", "OTHER"]
-                .map((s) => <option key={s} value={s}>{s.replace("_", " ")}</option>)}
+              {systems.map((s) => (
+                <option key={s.code} value={s.code}>{s.label}</option>
+              ))}
             </select>
             <input value={code} onChange={(e) => setCode(e.target.value)}
               onKeyDown={(e) => {

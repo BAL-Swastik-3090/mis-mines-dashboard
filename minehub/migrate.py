@@ -87,6 +87,20 @@ def main() -> int:
 
     with connect(env) as conn:
         print(f"connected to {env['PG_DATABASE']} @ {env['PG_HOST']}  schema={schema}")
+
+        # Set it here rather than relying on migration 001 to do it.
+        #
+        # 001 issues `SET search_path TO minehub, public`, and because every
+        # file in a run shares this one connection, that setting leaked into
+        # all 50-odd files after it. Which worked, invisibly, for as long as
+        # every run started from 001 — and broke the first time a single late
+        # migration was applied to an already-populated database, where the
+        # connection is fresh and nothing has set the path. 054 then failed on
+        # `relation "asset" does not exist` while asset was sitting in minehub
+        # all along.
+        with conn.cursor() as c:
+            c.execute(f'SET search_path TO "{schema}", public')
+
         done = applied_set(conn, schema)
 
         if args.status:
@@ -108,7 +122,29 @@ def main() -> int:
             try:
                 with conn.cursor() as c:
                     c.execute(sql)
+                    # Record it in the same transaction as the migration itself.
+                    #
+                    # This was missing entirely. The runner read schema_migration
+                    # to decide what was outstanding and then never wrote to it,
+                    # so every migration was outstanding for ever and re-ran on
+                    # every invocation — which is why the ledger stopped at 044
+                    # while the database was at 052, and why 054 applied twice.
+                    #
+                    # It went unnoticed because these files are written to be
+                    # idempotent, so a second pass is usually harmless. Usually
+                    # is not a guarantee: 047 seeds a market_source row that 048
+                    # renames, and re-running the pair would have left two
+                    # sources for one site.
+                    #
+                    # In the same transaction, so a migration that fails is not
+                    # recorded as done, and one that succeeds cannot be left
+                    # unrecorded by a crash between the two statements.
+                    c.execute(
+                        f'INSERT INTO "{schema}".schema_migration (migration_id, description) '
+                        "VALUES (%s, %s) ON CONFLICT (migration_id) DO NOTHING",
+                        (f.stem, f"Applied by migrate.py from {f.name}"))
                 conn.commit()
+                done.add(f.stem)
                 print(" ok")
             except Exception as exc:
                 conn.rollback()

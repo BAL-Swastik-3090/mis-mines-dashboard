@@ -1,5 +1,5 @@
 "use client";
-import { Activity, Boxes, CalendarRange, ChevronLeft, ChevronRight, ClipboardList, ExternalLink, Gauge, LayoutDashboard, LineChart, Radar, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
+import { Activity, Boxes, CalendarRange, DoorOpen, Network, Scale, ChevronLeft, ChevronRight, ClipboardList, ExternalLink, Gauge, LayoutDashboard, LineChart, Radar, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { canOpen } from "@/contexts/pageAccess";
 import { useSidebar }               from "@/contexts/useSidebar";
@@ -43,11 +43,29 @@ const NAV_ITEMS: NavItem[] = [
 const ACCESS_ITEM: NavItem =
   { kind: "page", id: "access-control", label: "Access Control", icon: ShieldCheck };
 
+/* The organisation sits above the registers because everything in them is held
+   against a department: a machine, a person, and soon a crate of bearings. A
+   register whose owning department has no head is a register nobody answers
+   for, and this is the screen that says so. */
+const ORG_ITEM: NavItem =
+  { kind: "page", id: "organisation", label: "Organisation", icon: Network };
+
 const PLATFORM_ITEM: NavItem =
   { kind: "page", id: "minehub", label: "MineHub Platform", icon: Boxes };
 
 const MANPOWER_ITEM: NavItem =
   { kind: "page", id: "manpower", label: "Manpower", icon: Users };
+
+/* The gate is the security officer's screen, not the weighbridge operator's,
+   and it sits before the bridge because that is the order of the day: a
+   vehicle is admitted, then it hauls. */
+const GATE_ITEM: NavItem =
+  { kind: "page", id: "gate", label: "Gate", icon: DoorOpen };
+
+/* The weighbridge is somebody's whole shift, so it sits with the operational
+   screens rather than the registers. */
+const WEIGHBRIDGE_ITEM: NavItem =
+  { kind: "page", id: "weighbridge", label: "Weighbridge", icon: Scale };
 
 /* Shift Control is daily work for a supervisor rather than administration, so it
    sits with the operational pages and behind its own permission — the board
@@ -88,8 +106,11 @@ export default function AppSidebar() {
     // next one. Access Control is last because it is opened about twice a
     // month, and a screen that rare sitting above daily work is a screen people
     // learn to scroll past.
+    ...(canOpen(user, "organisation") ? [ORG_ITEM] : []),
     ...(canOpen(user, "minehub") ? [PLATFORM_ITEM] : []),
     ...(canOpen(user, "manpower") ? [MANPOWER_ITEM] : []),
+    ...(canOpen(user, "gate") ? [GATE_ITEM] : []),
+    ...(canOpen(user, "weighbridge") ? [WEIGHBRIDGE_ITEM] : []),
     ...(canOpen(user, "operations") ? [OPERATIONS_ITEM] : []),
     ...(canOpen(user, "workforce") ? [WORKFORCE_ITEM] : []),
     ...(canOpen(user, "access-control") ? [ACCESS_ITEM] : []),

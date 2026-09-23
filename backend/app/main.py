@@ -142,7 +142,14 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 # the health probe and the API docs. This is the only thing standing between the
 # data and anyone who can reach the host, so it is enforced here rather than per
 # router — a new router is protected the moment it is added.
-_AUTH_EXEMPT = ("/api/auth/", "/api/health", "/api/docs", "/api/redoc", "/api/openapi.json")
+_AUTH_EXEMPT = ("/api/auth/", "/api/health", "/api/docs", "/api/redoc", "/api/openapi.json",
+                # The weighbridge agent is a program on the weighbridge PC, not a
+                # person, and carries a token instead of a session. Only this one
+                # path is open: the rest of /api/weighbridge is for signed-in
+                # people and stays behind the middleware. The handler authenticates
+                # the token itself and can do nothing but add readings to the one
+                # bridge that token names.
+                "/api/weighbridge/readings")
 
 # The permission a path prefix requires. Permissions rather than role names, so
 # a new role created in the UI can be given exactly these without any code
@@ -305,6 +312,9 @@ def health_check():
 from app.routers import attendance as attendance_router
 from app.routers import attendance_corrections
 from app.routers import market
+from app.routers import organisation
+from app.routers import weighbridge
+from app.routers import fields
 from app.routers import checklists, operators_analytics
 from app.routers import production, stock, cob, plant, ob, despatch, equipment, dewatering, insights, live_tracking, fuel_management, ev_tracking, auth, oee, roles, minehub, access, operators, operations, workforce, comments
 app.include_router(production.router,      prefix="/api/production",    tags=["Production"])
@@ -327,6 +337,9 @@ app.include_router(oee.router)
 # living in a second module is exactly how a path collision appears later.
 app.include_router(attendance_corrections.router)
 app.include_router(market.router)
+app.include_router(organisation.router)
+app.include_router(weighbridge.router)
+app.include_router(fields.router)
 app.include_router(attendance_router.router)
 app.include_router(checklists.router)
 app.include_router(operators_analytics.router)

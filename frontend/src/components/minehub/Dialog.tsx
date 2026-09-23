@@ -28,7 +28,7 @@ const LOOK: Record<DialogTone, {
 export default function Dialog({
   open, tone = "info", title, children,
   confirmLabel = "Confirm", cancelLabel = "Cancel",
-  onConfirm, onCancel, busy, secondary,
+  onConfirm, onCancel, busy, secondary, width = 560, bare = false,
 }: {
   open: boolean;
   tone?: DialogTone;
@@ -39,6 +39,14 @@ export default function Dialog({
   onConfirm: () => void;
   onCancel: () => void;
   busy?: boolean;
+  /** How wide the panel may grow, in pixels. 560 suits a question with a
+   *  field or two. A form that would otherwise become a nine-block column the
+   *  user has to scroll — the weighbridge capture is the case — is better as
+   *  two columns at 880 than as a tall one at 560. */
+  width?: number;
+  /** Drop the tone icon and the indented body, giving the content the full
+   *  panel width. For a form; a question still wants the icon. */
+  bare?: boolean;
   /** A third answer, for questions that have one — "save and leave" beside
    *  "leave anyway". Cancel is not that: it is what closing the dialog means. */
   secondary?: { label: string; onClick: () => void; tone?: "danger" | "secondary" };
@@ -93,7 +101,8 @@ export default function Dialog({
         // went with it, so the confirm button could not be reached at all.
         // Now the panel is a column bounded by the viewport: the body
         // scrolls, the heading and the buttons stay put.
-        className="relative w-[min(560px,100%)] max-h-[calc(100dvh-2rem)]
+        style={{ width: `min(${width}px, 100%)` }}
+        className="relative max-h-[calc(100dvh-2rem)]
                    flex flex-col bg-bg-base rounded-2xl shadow-xl
                    border border-border-light overflow-hidden">
         <button type="button" onClick={onCancel} aria-label="Close"
@@ -102,11 +111,14 @@ export default function Dialog({
           <X className="w-4 h-4" />
         </button>
 
-        <div className="p-5 pr-12 flex items-start gap-3.5 overflow-y-auto min-h-0">
-          <span className={`w-9 h-9 rounded-xl ${look.bg} ${look.fg} flex items-center justify-center shrink-0`}>
-            <Icon className="w-4.5 h-4.5" />
-          </span>
-          <div className="min-w-0">
+        <div className={`p-5 pr-12 overflow-y-auto min-h-0
+                         ${bare ? "" : "flex items-start gap-3.5"}`}>
+          {!bare && (
+            <span className={`w-9 h-9 rounded-xl ${look.bg} ${look.fg} flex items-center justify-center shrink-0`}>
+              <Icon className="w-4.5 h-4.5" />
+            </span>
+          )}
+          <div className="min-w-0 flex-1">
             <h3 className="font-condensed font-extrabold text-[17px] text-navy leading-tight">{title}</h3>
             <div className="text-[12.5px] text-txt-secondary leading-relaxed mt-1.5">{children}</div>
           </div>

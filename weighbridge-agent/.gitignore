@@ -1,0 +1,16 @@
+# The token in here identifies a weighbridge PC to the server. It is a
+# credential and belongs on that machine, not in the repository.
+wbagent.ini
+
+# Readings queued while the server was unreachable.
+spool.jsonl
+
+# Test scratch and build output.
+.test/
+build/
+dist/
+*.spec
+
+# The built agent. 18MB of binary rebuilt from source in one command; the
+# repository holds what it is built from, not the output.
+MineHubWeighbridge.exe
