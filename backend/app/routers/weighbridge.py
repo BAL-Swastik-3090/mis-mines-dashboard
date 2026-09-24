@@ -218,6 +218,11 @@ def inside(request: Request,
                (SELECT count(*) FROM trip t
                  WHERE t.gate_pass_id = g.gate_pass_id
                    AND t.production_date = CURRENT_DATE) AS trips_today,
+               -- Every trip ever, not just today's. A pass with none has
+               -- recorded nothing, which is what decides whether the gate may
+               -- take the admission back or must sign the vehicle out.
+               (SELECT count(*) FROM trip t
+                 WHERE t.gate_pass_id = g.gate_pass_id) AS trips_total,
                (SELECT t.trip_id FROM trip t
                  WHERE t.gate_pass_id = g.gate_pass_id AND t.status = 'OPEN'
                  ORDER BY t.trip_id DESC LIMIT 1) AS open_trip_id
@@ -1006,6 +1011,60 @@ def gate_exit(pass_id: int, request: Request, body: dict = Body(default={}),
            "r": (body.get("reason") or "").strip()})
     pg.commit()
     return {"ok": True, "trips_recorded": row["trips"]}
+
+
+@router.delete("/gate/{pass_id}")
+def remove_gate_pass(pass_id: int, request: Request,
+                     db: Session = Depends(get_db),
+                     pg: Session = Depends(get_minehub_db)) -> dict:
+    """Take back an admission that should not have been made.
+
+    Signing a vehicle out and removing its pass are different things, and the
+    difference is whether the vehicle was ever really here.
+
+    A pass with trips against it is the record. Every load names it, and that
+    is how a weight is traced back to the stay it was hauled under. Those are
+    signed out, never removed — the vehicle left, which is a fact about the
+    day, not a mistake to erase.
+
+    A pass with no trips is an admission that turned out to be wrong: the wrong
+    truck picked from the register, a vehicle admitted twice, a pass opened
+    while somebody was learning the screen. Signing it out would leave a stay
+    on the record that never happened, and the gate log would say a vehicle
+    came and went when it did not. There is nothing to preserve, so it goes.
+    """
+    _require(db, request, GATE)
+
+    row = pg.execute(text("""
+        SELECT g.gate_pass_no, g.status,
+               (SELECT count(*) FROM trip t
+                 WHERE t.gate_pass_id = g.gate_pass_id) AS trips
+          FROM gate_pass g WHERE g.gate_pass_id = :id
+    """), {"id": pass_id}).mappings().first()
+    if not row:
+        raise HTTPException(404, "No such gate pass.")
+    if row["trips"]:
+        raise HTTPException(409,
+            f"{row['gate_pass_no']} has {row['trips']} trip(s) recorded against "
+            "it, so it is part of the record. Sign the vehicle out instead.")
+
+    # The NOT EXISTS is repeated here on purpose. The check above and this
+    # delete are two statements, and a trip weighed between them would
+    # otherwise be orphaned against the foreign key. In the WHERE clause the
+    # database decides, not a count this read a moment ago.
+    removed = pg.execute(text("""
+        DELETE FROM gate_pass g
+         WHERE g.gate_pass_id = :id
+           AND NOT EXISTS (SELECT 1 FROM trip t
+                            WHERE t.gate_pass_id = g.gate_pass_id)
+        RETURNING g.gate_pass_no"""), {"id": pass_id}).scalar()
+    pg.commit()
+
+    if removed is None:
+        raise HTTPException(409, "A load was weighed against that pass just "
+                                 "now, so it was kept. Sign the vehicle out "
+                                 "instead.")
+    return {"ok": True, "gate_pass_no": removed}
 
 
 # ═══════════════════════════════════════════════════════════════════════════

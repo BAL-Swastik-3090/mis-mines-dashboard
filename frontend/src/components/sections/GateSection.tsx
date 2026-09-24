@@ -21,7 +21,7 @@ import { matchesSearch } from "@/lib/search";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle, ArrowRightLeft, Clock, DoorOpen, IdCard, Loader2, LogIn,
-  LogOut, Search, ShieldAlert, Truck, Users, X,
+  LogOut, Search, ShieldAlert, Trash2, Truck, Users, X,
 } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
@@ -39,7 +39,7 @@ interface Vehicle {
   vehicle_type: string | null; transporter: string | null;
   standing_tare_kg: number | null; tare_age_days: number | null;
   tare_is_stale: boolean; has_tare: boolean;
-  days_inside: number; trips_today: number;
+  days_inside: number; trips_today: number; trips_total: number;
 }
 interface Found {
   kind: "ASSET" | "VISITOR";
@@ -84,6 +84,7 @@ export default function GateSection() {
   const [notice, setNotice] = useState<string | null>(null);
   const [admitting, setAdmitting] = useState(false);
   const [exiting, setExiting] = useState<Vehicle | null>(null);
+  const [removing, setRemoving] = useState<Vehicle | null>(null);
   const [q, setQ] = useState("");
   const [purpose, setPurpose] = useState("");
 
@@ -231,7 +232,18 @@ export default function GateSection() {
                       </Td>
                       <Td>
                         {mayGate && (
-                          <div className="flex justify-end">
+                          <div className="flex justify-end gap-1.5">
+                            {/* Only for a pass that has recorded nothing. Once a
+                                load has been hauled under it the stay is part of
+                                the record and the vehicle is signed out instead,
+                                so the button is not offered at all rather than
+                                offered and refused. */}
+                            {v.trips_total === 0 && (
+                              <Button size="sm" onClick={() => setRemoving(v)}
+                                      title="Remove this admission — nothing has been hauled under it">
+                                <Trash2 className="w-3.5 h-3.5" /> Remove
+                              </Button>
+                            )}
                             <Button size="sm" onClick={() => setExiting(v)}>
                               <LogOut className="w-3.5 h-3.5" /> Sign out
                             </Button>
@@ -255,6 +267,11 @@ export default function GateSection() {
         <AdmitDialog onClose={() => setAdmitting(false)}
           onDone={(m) => { setAdmitting(false); setNotice(m); void load(); }}
           onError={setError} />
+      )}
+      {removing && (
+        <RemoveDialog vehicle={removing} onClose={() => setRemoving(null)}
+          onDone={(m) => { setRemoving(null); setNotice(m); void load(); }}
+          onError={(m) => { setRemoving(null); setError(m); }} />
       )}
       {exiting && (
         <ExitDialog vehicle={exiting} onClose={() => setExiting(null)}
@@ -664,6 +681,43 @@ function AdmitDialog({ onClose, onDone, onError }: {
             it made stay on the record either way.
           </p>
         </div>
+      </div>
+    </Dialog>
+  );
+}
+
+function RemoveDialog({ vehicle, onClose, onDone, onError }: {
+  vehicle: Vehicle | null; onClose: () => void;
+  onDone: (m: string) => void; onError: (m: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  if (!vehicle) return null;
+
+  const remove = async () => {
+    setBusy(true);
+    try {
+      await api.delete(`/weighbridge/gate/${vehicle.gate_pass_id}`);
+      onDone(`${vehicle.gate_pass_no} removed. ${vehicle.vehicle} was never `
+             + `recorded as being inside.`);
+    } catch (e) { onError(errorOf(e, "Could not remove the gate pass.")); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Dialog open tone="danger" title={`Remove ${vehicle.gate_pass_no}`}
+            confirmLabel="Remove the admission" cancelLabel="Keep it"
+            onCancel={onClose} onConfirm={() => void remove()} busy={busy}>
+      <div className="space-y-2 text-[13px] text-txt-secondary">
+        <p>
+          Nothing has been hauled under this pass, so there is nothing to keep.
+          It goes entirely, and the gate log will not show that
+          <span className="text-txt-primary"> {vehicle.vehicle} </span>
+          was ever inside.
+        </p>
+        <p>
+          If the vehicle really did come in and has now left, sign it out
+          instead — that keeps the stay on the record.
+        </p>
       </div>
     </Dialog>
   );
