@@ -405,14 +405,36 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
   const exportRoster = async () => {
     setBusy(true);
     try {
+      // Download what the screen is showing.
+      //
+      // Ticking two people and pressing Excel gave a workbook of all 204, and
+      // so did filtering to one department. The button said "this window" and
+      // meant the dates only.
+      //
+      // Ticked people win over the filter, because ticking is the narrower and
+      // more deliberate act. With nothing ticked it is whoever the filters have
+      // left, and with neither it is everybody — which is what no selection and
+      // no filter means, and is sent as nothing at all rather than as a list of
+      // two hundred ids in a query string.
+      const chosen = picked.size > 0
+        ? [...picked]
+        : (people.length === (board?.people.length ?? 0)
+            ? [] : people.map((p) => p.operator_id));
+
       const r = await api.get("/workforce/export", {
-        params: { from_date: start, to_date: end },
+        params: {
+          from_date: start, to_date: end,
+          ...(chosen.length ? { operator_ids: chosen.join(",") } : {}),
+        },
         responseType: "blob",
       });
       const url = URL.createObjectURL(new Blob([r.data]));
       const link = document.createElement("a");
       link.href = url;
-      link.download = `Kaliapani-roster-${start}-${end}.xlsx`;
+      const scope = picked.size > 0 ? `${picked.size}-people`
+                  : chosen.length ? `${chosen.length}-filtered`
+                  : "everyone";
+      link.download = `Kaliapani-roster-${scope}-${start}-${end}.xlsx`;
       link.click();
       URL.revokeObjectURL(url);
     } catch {

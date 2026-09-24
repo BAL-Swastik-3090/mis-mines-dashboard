@@ -962,6 +962,7 @@ def export_roster(request: Request,
                   from_date: str | None = Query(None),
                   to_date: str | None = Query(None),
                   plant_id: int | None = Query(None),
+                  operator_ids: str | None = Query(None),
                   db: Session = Depends(get_minehub_db)):
     """The roster as a workbook: the grid to read, the assignments to edit.
 
@@ -984,6 +985,16 @@ def export_roster(request: Request,
     if (end - start).days > 366:
         raise HTTPException(400, "Ask for at most a year at a time.")
 
+    # Who the screen was showing when the button was pressed.
+    #
+    # It exported all 204 whatever was on screen, so somebody looking at one
+    # department with two people ticked got a workbook of everybody and had to
+    # find them in it. A download that ignores the filters is one somebody
+    # filters again by hand.
+    #
+    # Empty means everybody, which is what no selection and no filter means.
+    wanted = [int(x) for x in (operator_ids or "").split(",") if x.strip().isdigit()]
+
     people = [dict(r) for r in db.execute(text("""
         SELECT o.operator_id, o.operator_ref, p.display_name, o.designation,
                -- The number the muster, the gate and the face reader know this
@@ -999,8 +1010,10 @@ def export_roster(request: Request,
                ON ra.operator_id = o.operator_id AND ra.effective_to IS NULL
         LEFT JOIN roster_pattern rp ON rp.pattern_id = ra.pattern_id
         WHERE o.profile_status = 'ACTIVE'
+          AND (CAST(:ids AS bigint[]) IS NULL
+               OR o.operator_id = ANY(CAST(:ids AS bigint[])))
         ORDER BY rp.code NULLS LAST, p.display_name
-    """)).mappings()]
+    """), {"ids": wanted or None}).mappings()]
 
     ids = [p["operator_id"] for p in people]
     board = roster.duty(db, start, end, ids, plant_id)
