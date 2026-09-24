@@ -567,6 +567,89 @@ def comp_off(request: Request,
             "owed_in_total": sum(x["earned"] for x in people)}
 
 
+@router.put("/cover/{asset_id}/crew")
+def set_crew(asset_id: int, request: Request, body: dict = Body(...),
+             db: Session = Depends(get_minehub_db)) -> dict:
+    """Name everybody who runs this machine. A plan, not a deployment.
+
+    A tipper is not run by one man. It has a driver on each shift and somebody
+    who covers when one of them is off, and the register has always been able
+    to say so — operator_assignment has no unique key on the machine, and never
+    did. The screen was the thing insisting on one name.
+
+    Nothing here puts anybody on a machine today. This is the standing map of
+    who runs what, which is what a shift is built from; deploying is a separate
+    act on a separate day, and conflating the two would mean editing a plan
+    silently sent somebody out.
+
+    The whole crew is sent, not a change to it. A caller that adds and removes
+    one at a time has to know what is already there and gets it wrong the first
+    time two people edit at once; sending the list means the last writer's
+    intention is what stands, and it is legible in one row of the audit.
+    """
+    _require(request, MANAGE, "manage the roster")
+
+    # Either a plain list of ids, or a list saying what each person is on this
+    # machine. The role column has carried a default of PRIMARY since it was
+    # written, which is the mine's own answer to "several people, one machine":
+    # one drives it, the others cover.
+    raw = body.get("operators") or body.get("operator_ids") or []
+    wanted: dict[int, str] = {}
+    for item in raw:
+        if isinstance(item, dict):
+            wanted[int(item["operator_id"])] = (
+                str(item.get("role") or "PRIMARY").strip().upper() or "PRIMARY")
+        else:
+            wanted[int(item)] = "PRIMARY"
+    shift = (body.get("shift") or "").strip().upper() or None
+
+    machine = db.execute(text(
+        "SELECT asset_id, fleet_code FROM asset WHERE asset_id = :a"),
+        {"a": asset_id}).mappings().first()
+    if not machine:
+        raise HTTPException(404, "No such machine.")
+
+    current = {r["operator_id"]: r["operator_assignment_id"] for r in db.execute(text("""
+        SELECT operator_id, operator_assignment_id FROM operator_assignment
+         WHERE asset_id = :a AND status = 'ACTIVE'
+    """), {"a": asset_id}).mappings()}
+
+    actor = _actor(request)
+    added = sorted(set(wanted) - set(current))
+    removed = sorted(set(current) - set(wanted))
+
+    if removed:
+        # Ended, not deleted. Who ran this machine in March is a question the
+        # register has to answer after somebody has come off it.
+        db.execute(text("""
+            UPDATE operator_assignment
+               SET status = 'ENDED', valid_to = CURRENT_DATE
+             WHERE asset_id = :a AND status = 'ACTIVE'
+               AND operator_id = ANY(:ids)
+        """), {"a": asset_id, "ids": removed})
+
+    for operator_id in added:
+        db.execute(text("""
+            INSERT INTO operator_assignment
+                   (operator_id, asset_id, shift, role, valid_from,
+                    status, assigned_by, created_by)
+            VALUES (:o, :a, :s, :r, CURRENT_DATE, 'ACTIVE', :by, :by)
+        """), {"o": operator_id, "a": asset_id, "s": shift,
+               # Never NULL. Passing one explicitly overrides the column's own
+               # default, which is how this failed the first time it ran.
+               "r": wanted[operator_id] or "PRIMARY", "by": actor})
+
+    if added or removed:
+        _event(db, request, "MACHINE_CREW_SET",
+               payload={"asset_id": asset_id, "fleet_code": machine["fleet_code"],
+                        "added": added, "removed": removed,
+                        "crew_size": len(wanted), "shift": shift})
+    db.commit()
+
+    return {"ok": True, "asset_id": asset_id, "fleet_code": machine["fleet_code"],
+            "crew_size": len(wanted), "added": len(added), "removed": len(removed)}
+
+
 @router.get("/cover")
 def who_can_run(request: Request,
                 day: str | None = Query(None),
@@ -600,18 +683,28 @@ def who_can_run(request: Request,
     machines = [dict(r) for r in db.execute(text("""
         SELECT a.asset_id, a.fleet_code, a.registration_no, a.nickname,
                a.asset_type_id, t.name AS asset_type, t.category, a.status,
-               oa.operator_id       AS assigned_operator_id,
-               ap.legal_name        AS assigned_operator,
-               oa.shift             AS assigned_shift
+               -- The whole crew, not the first of them. A machine with three
+               -- drivers reported one and the other two were invisible, which
+               -- is what made this look like a one-name field.
+               COALESCE((
+                 SELECT json_agg(json_build_object(
+                          'operator_id', oa.operator_id,
+                          'person', cp.legal_name,
+                          'operator_ref', co.operator_ref,
+                          'shift', oa.shift,
+                          'role', oa.role,
+                          'since', oa.valid_from)
+                        ORDER BY cp.legal_name)
+                   FROM operator_assignment oa
+                   JOIN operator co ON co.operator_id = oa.operator_id
+                   JOIN party cp ON cp.party_id = co.party_id
+                  WHERE oa.asset_id = a.asset_id
+                    AND oa.status = 'ACTIVE'
+                    AND oa.valid_from <= :on
+                    AND (oa.valid_to IS NULL OR oa.valid_to >= :on)
+               ), '[]'::json) AS crew
           FROM asset a
           JOIN asset_type t ON t.asset_type_id = a.asset_type_id
-          LEFT JOIN operator_assignment oa
-                 ON oa.asset_id = a.asset_id
-                AND oa.status = 'ACTIVE'
-                AND oa.valid_from <= :on
-                AND (oa.valid_to IS NULL OR oa.valid_to >= :on)
-          LEFT JOIN operator ao ON ao.operator_id = oa.operator_id
-          LEFT JOIN party ap ON ap.party_id = ao.party_id
          -- CANNIBALISED belongs here with the other two: a machine stripped
          -- for parts cannot be run, and offering drivers for it is offering
          -- cover for work that cannot happen.
@@ -642,6 +735,10 @@ def who_can_run(request: Request,
         cleared.setdefault(key, []).append(dict(r))
 
     everyone = {o for group in cleared.values() for o in (x["operator_id"] for x in group)}
+    # The crew too. Somebody assigned to a machine but not cleared on it is
+    # exactly the case worth seeing, and leaving them out of the roster read
+    # would have shown them with no state at all.
+    everyone |= {c["operator_id"] for m in machines for c in (m.get("crew") or [])}
     duty = roster.duty(db, on, on, list(everyone)) if everyone else {}
     iso = on.isoformat()
 
@@ -695,11 +792,16 @@ def who_can_run(request: Request,
                                        -(c["level"] or 0)))
 
         free = [c for c in candidates if not c["why_not"]]
-        assigned_cell = ((duty.get(m["assigned_operator_id"]) or {}).get(iso) or {}
-                         if m["assigned_operator_id"] else {})
-        out.append({**m,
-                    "assigned_state": assigned_cell.get("state"),
-                    "assigned_shift": assigned_cell.get("shift"),
+        # What each of the crew is doing that day, so the plan can be read
+        # against the roster without opening anybody.
+        crew = [dict(c, **{
+            "state": ((duty.get(c["operator_id"]) or {}).get(iso) or {}).get("state"),
+            "cleared": any(x["operator_id"] == c["operator_id"] for x in candidates),
+        }) for c in (m.get("crew") or [])]
+
+        out.append({**m, "crew": crew,
+                    "crew_size": len(crew),
+                    "crew_not_cleared": sum(1 for c in crew if not c["cleared"]),
                     "can_run": len(candidates),
                     "free_now": len(free),
                     "candidates": candidates})
