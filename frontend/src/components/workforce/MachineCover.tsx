@@ -89,7 +89,22 @@ export default function MachineCover() {
     setLoading(true);
     try {
       const r = await api.get("/workforce/cover", { params: { day } });
-      setRows(r.data?.machines ?? []);
+      // Normalised here, once, because the shape is a claim and not a promise.
+      //
+      // `crew: CrewMember[]` is what TypeScript believes; what arrives is
+      // whatever the server sent. A browser holding this bundle against a
+      // backend that has not been restarted yet gets a response with no crew
+      // field at all, and `m.crew.map` took the whole page down with a
+      // TypeError — which is how a deploy in progress becomes a white screen
+      // for everybody mid-request rather than a list missing one column.
+      setRows((r.data?.machines ?? []).map((m: Machine) => ({
+        ...m,
+        crew: Array.isArray(m.crew) ? m.crew : [],
+        candidates: Array.isArray(m.candidates) ? m.candidates : [],
+        crew_size: m.crew_size ?? (Array.isArray(m.crew) ? m.crew.length : 0),
+        crew_not_cleared: m.crew_not_cleared ?? 0,
+        can_run: m.can_run ?? 0,
+      })));
       setError(null);
     } catch {
       setError("Who runs what could not be read.");
@@ -100,7 +115,10 @@ export default function MachineCover() {
 
   useEffect(() => {
     void (async () => {
-      try { setPeople((await api.get("/workforce/people")).data ?? []); }
+      try {
+        const d = (await api.get("/workforce/people")).data;
+        setPeople(Array.isArray(d) ? d : []);
+      }
       catch { /* the picker says so itself when it comes up empty */ }
     })();
   }, []);
