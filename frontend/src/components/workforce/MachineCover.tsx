@@ -24,6 +24,11 @@ import {
 } from "@/components/minehub/ui";
 import { isoDay } from "./state";
 
+interface Person {
+  operator_id: number; display_name: string; operator_ref: string | null;
+  designation: string | null;
+}
+
 interface Candidate {
   operator_id: number; person: string; operator_ref: string | null;
   trade: string | null; level: number | null; rating: number | null;
@@ -58,6 +63,10 @@ export default function MachineCover() {
   const [open, setOpen] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [people, setPeople] = useState<Person[]>([]);
+  const [assigning, setAssigning] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -71,6 +80,35 @@ export default function MachineCover() {
   }, [day]);
 
   useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    void (async () => {
+      try { setPeople((await api.get("/workforce/people")).data ?? []); }
+      catch { /* the picker says so itself when it is empty */ }
+    })();
+  }, []);
+
+  /** Put somebody on a machine, through the register's own endpoint.
+   *
+   *  Not a second way of writing operator_assignment. That endpoint ends the
+   *  previous assignment, runs the eligibility check and records what was
+   *  overridden — a machine-first shortcut that skipped all three would be a
+   *  second answer to "who is on this machine" that disagreed with the first. */
+  const assign = useCallback(async (assetId: number, operatorId: number) => {
+    setBusy(true);
+    try {
+      await api.post(`/operators/${operatorId}/assignments`, {
+        asset_id: assetId,
+        valid_from: day,
+      });
+      setAssigning(null);
+      setNotice("Assigned. Eligibility was checked and recorded, not enforced.");
+      await load();
+    } catch (e: unknown) {
+      const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(typeof d === "string" ? d : "That operator could not be assigned.");
+    } finally { setBusy(false); }
+  }, [day, load]);
 
   const shown = useMemo(() => rows
     .filter((m) => !gapsOnly || m.free_now === 0)
@@ -113,13 +151,17 @@ export default function MachineCover() {
         } />
 
       {error && <p className="px-4 py-3 text-[12.5px] text-rose">{error}</p>}
+      {notice && <p className="px-4 py-3 text-[12.5px] text-emerald">{notice}</p>}
 
       {!error && (
         <>
           <p className="px-4 pt-3 text-[12px] text-txt-muted">
-            Who is cleared to run a machine is a standing fact from the
-            competency register and does not change with the date. The date
-            decides only which of them are free.
+            <strong className="text-txt-primary">Normally run by</strong> is
+            yours to set — click it and choose.{" "}
+            <strong className="text-txt-primary">Cleared to run it</strong> is
+            not: it comes from the competency register, and somebody appears
+            there once they have been assessed on the machine or its class. The
+            date changes only who is free.
           </p>
           <div className="px-4 py-2 border-b border-border-light flex flex-wrap items-center
                           gap-3 text-[12px] text-txt-muted">
@@ -175,7 +217,60 @@ export default function MachineCover() {
                       </Td>
                       <Td className="text-[12px]">{m.asset_type || "—"}</Td>
                       <Td className="text-[12px]">
-                        {m.assigned_operator ?? <span className="text-txt-light">nobody assigned</span>}
+                        {/* The row toggles the candidate list; this cell is a
+                            control of its own, so its clicks stop here rather
+                            than also opening the panel underneath. */}
+                        <span onClick={(e) => e.stopPropagation()}>
+                        {/* Chosen here, because this is the screen somebody is
+                            on when they decide it. The register could only be
+                            written the other way round — open a person, give
+                            them a machine — which is the wrong direction when
+                            the machine is the thing in front of you. */}
+                        {assigning === m.asset_id ? (
+                          <select autoFocus disabled={busy} className={`${inputClass} w-[200px]`}
+                            defaultValue=""
+                            onChange={(e) => {
+                              const id = Number(e.target.value);
+                              if (id) void assign(m.asset_id, id);
+                            }}
+                            onBlur={() => setAssigning(null)}>
+                            <option value="">Choose somebody…</option>
+                            {/* Cleared first, and said so, because a supervisor
+                                assigning somebody not cleared should know that
+                                is what they are doing. */}
+                            {m.candidates.length > 0 && (
+                              <optgroup label="Cleared to run it">
+                                {m.candidates.map((c) => (
+                                  <option key={c.operator_id} value={c.operator_id}>
+                                    {c.person}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+                            <optgroup label="Everybody else — not assessed on this">
+                              {people
+                                .filter((pp) => !m.candidates.some(
+                                  (c) => c.operator_id === pp.operator_id))
+                                .map((pp) => (
+                                  <option key={pp.operator_id} value={pp.operator_id}>
+                                    {pp.display_name}
+                                    {pp.designation ? ` · ${pp.designation}` : ""}
+                                  </option>
+                                ))}
+                            </optgroup>
+                          </select>
+                        ) : m.assigned_operator ? (
+                          <button type="button" onClick={() => setAssigning(m.asset_id)}
+                                  className="text-left hover:text-gold hover:underline">
+                            {m.assigned_operator}
+                          </button>
+                        ) : (
+                          <button type="button" onClick={() => setAssigning(m.asset_id)}
+                                  className="text-txt-light hover:text-gold hover:underline">
+                            nobody assigned — choose
+                          </button>
+                        )}
+                        </span>
                       </Td>
                       <Td>
                         {/* The names, not just a count.
