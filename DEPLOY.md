@@ -60,6 +60,50 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ---
 
+## Deployed — 2026-09-24: Search that matches how people type, and a gate that can undo
+
+Released commit `67e5457` to mines.balasorealloys.in, by the usual method.
+Three releases went out today; this note covers all of them.
+
+Backups: `~/mines_dashboard-backup-20260924-0913.tar.gz`, `-0935`, `-0957`.
+
+**What changed**
+
+1. `4908951` — the server registers match on a normalised form: separators and
+   case come off both sides, words are matched independently, and results are
+   ranked rather than alphabetical. "man19" finds MAN-19; it found nothing
+   before. Done in the query, not the schema — a few hundred vehicles need no
+   index, and the shared production schema stays untouched.
+2. `82b3558` — the same for the sixteen lists filtered in the browser, through
+   one matcher in `frontend/src/lib/search.ts`. Named `matchesSearch`, because
+   `ColumnFilter` already exports a `matches()` and shadowing it silently
+   changed which function six panels were calling.
+3. `788cafd` — sixteen search boxes had sixteen widths, from 150px to 340px.
+   All now use one responsive width.
+4. `3ab8683` — the gate can remove an admission that recorded nothing. A pass
+   with trips against it is the record and is signed out instead.
+5. `67e5457` — the operator register searches mobile, department, group, plant,
+   biometric id and blood group, not just name and reference. 203 of the 211
+   have a mobile.
+
+**No new dependencies, no configuration change, no migration.** Nothing was
+added to requirements, `.env` was not touched, and no SQL shipped with any of
+these: the normalisation is done in the query and the one new backend column
+(`trips_total`) is computed, not stored.
+
+Verified after release: `/api/health` ok, `DELETE /api/weighbridge/gate/{pass_id}`
+present in the OpenAPI schema, frontend 200, no errors in the backend log, and
+only `mines_backend` and `mines_frontend` recreated — the other 74 containers on
+the box kept their uptime and the host nginx was not reloaded.
+
+**Two data changes made directly, both on records that had recorded nothing.**
+Two weighbridge agent registrations ("Mine WB3", "Weight Bridge3" — 0 readings,
+never seen) and one gate pass (`GP-20260922-0001` — 0 trips) were removed. Each
+deletion was guarded in its `WHERE` clause rather than by a prior check, so a
+row that had started recording in the meantime would have been kept.
+
+---
+
 ## Deployed — 2026-09-23: Weighbridge, gate, organisation, custom fields
 
 Released commit `0bb405e` to mines.balasorealloys.in by the usual method:
