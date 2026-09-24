@@ -26,7 +26,10 @@ export interface Suggestion {
 }
 
 export default function StarterPatterns({ onAdopted, compact }: {
-  onAdopted?: () => void;
+  /** The codes that were actually created, so a caller waiting on a pattern
+   *  can use the one it just made instead of asking the user to go and find
+   *  it in a list that was empty a second ago. */
+  onAdopted?: (created: string[]) => void;
   /** Inside a dialog there is no room for the full reasoning, so the cards
    *  shrink to the cycle and the sentence that matters. */
   compact?: boolean;
@@ -60,10 +63,10 @@ export default function StarterPatterns({ onAdopted, compact }: {
     if (picked.size === 0) return;
     setBusy(true);
     try {
-      await api.post("/workforce/patterns/adopt", { codes: [...picked] });
+      const r = await api.post("/workforce/patterns/adopt", { codes: [...picked] });
       setPicked(new Set());
       await load();
-      onAdopted?.();
+      onAdopted?.(r.data?.created ?? []);
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(typeof d === "string" ? d : "Those patterns could not be created.");
@@ -151,14 +154,19 @@ export default function StarterPatterns({ onAdopted, compact }: {
         })}
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <Button variant="primary" size="sm" disabled={picked.size === 0 || busy}
                 onClick={() => void adopt()}>
           {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
                 : <Sparkles className="w-3.5 h-3.5" />}
           {picked.size ? `Create ${picked.size} pattern${picked.size === 1 ? "" : "s"}`
-                       : "Choose one to create"}
+                       : "Pick one above to create it"}
         </Button>
+        {picked.size === 0 && available.length > 0 && (
+          <span className="text-[11.5px] text-txt-light">
+            Tap a card, then create it — it becomes choosable straight away.
+          </span>
+        )}
         {available.length === 0 && (
           <span className="text-[11.5px] text-txt-light">
             Every suggestion is already defined.

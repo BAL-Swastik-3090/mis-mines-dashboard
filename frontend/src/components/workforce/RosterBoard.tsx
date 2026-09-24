@@ -100,7 +100,10 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
   const end = useMemo(() => addDays(start, length), [start, length]);
   const dates = useMemo(() => span(start, end), [start, end]);
 
-  const load = useCallback(async () => {
+  // Hands back the patterns as well as storing them. A caller that has just
+  // created one needs it now, and reading the state it also sets would give it
+  // the render before this one.
+  const load = useCallback(async (): Promise<Pattern[]> => {
     setLoading(true);
     try {
       const [b, p] = await Promise.all([
@@ -108,11 +111,14 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
         api.get("/workforce/patterns"),
       ]);
       setBoard(b.data);
-      setPatterns(p.data ?? []);
+      const list: Pattern[] = p.data ?? [];
+      setPatterns(list);
       setError(null);
+      return list;
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(typeof d === "string" ? d : "The roster could not be loaded.");
+      return [];
     } finally { setLoading(false); }
   }, [start, end]);
 
@@ -619,7 +625,18 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
                 list fills in.
               </p>
               {mayManage && (
-                <StarterPatterns compact onAdopted={() => void load()} />
+                /* Creating a pattern here is not the errand — rostering these
+                   people is, and the pattern is only missing because nobody
+                   had defined one yet. So the one just created is chosen, and
+                   the dialog carries on where it left off rather than handing
+                   back an empty picker and a list that has changed behind it. */
+                <StarterPatterns compact onAdopted={(created) => {
+                  void (async () => {
+                    const fresh = await load();
+                    const first = (fresh ?? []).find((p) => created.includes(p.code));
+                    if (first) setForm((was) => ({ ...was, pattern_id: String(first.pattern_id) }));
+                  })();
+                }} />
               )}
             </div>
           )}
