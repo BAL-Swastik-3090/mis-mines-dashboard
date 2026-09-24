@@ -308,6 +308,7 @@ export default function WeighbridgeSection() {
           onClose={() => setWeighing(null)}
           onDone={(m) => { setWeighing(null); setNotice(m); void refresh(); }}
           onError={setError}
+          onTare={mayTare ? (v) => { setWeighing(null); setTaring(v); } : undefined}
         />
       )}
       {taring && (
@@ -443,11 +444,14 @@ function VehiclePicker({ vehicles, onPick, onTare, disabled }: {
 
 /* ── Capturing a load: the one screen the whole module is for ────────────── */
 function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
-                         mayManual, mayWeigh, onClose, onDone, onError }: {
+                         mayManual, mayWeigh, onClose, onDone, onError, onTare }: {
   vehicle: Vehicle; bridges: Bridge[];
   categories: Category[]; sources: MoveGroup[]; destinations: MoveGroup[];
   mayManual: boolean; mayWeigh: boolean;
   onClose: () => void; onDone: (m: string) => void; onError: (m: string) => void;
+  /** Take this vehicle's tare instead. Offered only to somebody allowed to,
+   *  and only when the missing tare is what is blocking the weighment. */
+  onTare?: (v: Vehicle) => void;
 }) {
   const usable = bridges.filter((b) => b.status === "ACTIVE");
   const [bridgeId, setBridgeId] = useState<number | null>(usable[0]?.weighbridge_id ?? null);
@@ -651,9 +655,18 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
                              ${!vehicle.has_tare ? "bg-rose-bg border-rose-ring text-rose"
                                : vehicle.tare_is_stale ? "bg-amber-bg border-amber-ring text-amber"
                                : "bg-bg-section border-border-light text-txt-muted"}`}>
-              {!vehicle.has_tare
-                ? "No standing tare — no net can be worked out"
-                : vehicle.tare_is_stale
+              {!vehicle.has_tare ? (
+                <span className="flex flex-wrap items-center justify-between gap-2">
+                  <span>No standing tare — no net can be worked out</span>
+                  {onTare && (
+                    <button type="button"
+                      onClick={() => { onClose(); onTare(vehicle); }}
+                      className="underline font-semibold hover:no-underline">
+                      Take its tare now
+                    </button>
+                  )}
+                </span>
+              ) : vehicle.tare_is_stale
                   ? `Tare ${kg(vehicle.standing_tare_kg)} kg · ${vehicle.tare_age_days} days old`
                   : `Tare ${kg(vehicle.standing_tare_kg)} kg`}
             </div>
@@ -817,12 +830,14 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
             </div>
           )}
 
-          {!vehicle.has_tare && (
-            <Alert tone="warning">
-              This vehicle has no standing tare, so no net weight can be worked out
-              from a gross alone. Take its tare first.
-            </Alert>
-          )}
+          {/* The missing tare is stated once, on the vehicle it is about, with
+              the thing to do about it attached.
+
+              It used to be said twice — under the vehicle card and again at the
+              bottom of the form — and neither said it could be fixed from here.
+              An operator with a truck on the deck, a disabled button and two
+              paragraphs telling them to take a tare "first" has been told the
+              problem and not the way out of it. */}
           {driver?.licence_expired && (
             <Alert tone="error">
               {driver.full_name}&apos;s licence expired

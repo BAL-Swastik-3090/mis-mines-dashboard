@@ -417,7 +417,7 @@ export default function MachineCover() {
                       <Td className="text-[12px]">{m.asset_type || "—"}</Td>
 
                       <Td>
-                        <div className="flex flex-wrap items-center gap-1.5">
+                        <div className="relative flex flex-wrap items-center gap-1.5">
                           {chosen.map((c) => (
                             <span key={c.operator_id}
                               title={`${c.role.toLowerCase()} · ${doing(c.state)}`
@@ -454,9 +454,17 @@ export default function MachineCover() {
                             </span>
                           ))}
 
-                          {open ? (
-                            <div className="mt-1 w-[380px] rounded-xl border border-gold/50
-                                            bg-white shadow-lg overflow-hidden">
+                          {open && (
+                            /* Floating, not inline.
+                               Opening it used to grow the row to the height of
+                               the panel — four hundred pixels of one machine,
+                               with the rest of the fleet shoved down the page
+                               and the row you were editing no longer beside the
+                               ones you were comparing it against. It hangs over
+                               the table now and the row keeps its height. */
+                            <div className="absolute z-30 mt-1 w-[380px] rounded-xl
+                                            border border-gold/50 bg-white shadow-xl
+                                            overflow-hidden">
                               <div className="px-2.5 pt-2 pb-2 border-b border-slate-100 space-y-1.5">
                                 <input autoFocus value={pick} placeholder="Type a name…"
                                   onChange={(e) => setPick(e.target.value)}
@@ -553,7 +561,8 @@ export default function MachineCover() {
                                 </span>
                               </div>
                             </div>
-                          ) : (
+                          )}
+                          {!open && (
                             <button type="button" disabled={busy}
                               onClick={() => {
                                 setEditing(m.asset_id);
