@@ -479,7 +479,7 @@ export default function OperatorPanel({ view: viewProp = "register", addOpen,
                   placeholder="Name, reference, role…"
                   className="bg-bg-base border border-border rounded-lg pl-8 pr-3 py-1.5 text-[12px]
                              text-txt-primary placeholder:text-txt-light focus:outline-none
-                             focus:border-gold w-[190px]" />
+                             focus:border-gold w-full sm:w-[320px] lg:w-[440px] xl:w-[520px]" />
               </div>
               <Button size="sm" variant="secondary" onClick={() => exportRegister()}
                 disabled={sorted.length === 0}

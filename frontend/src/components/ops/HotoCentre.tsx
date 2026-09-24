@@ -267,7 +267,7 @@ export default function HotoCentre({ openId, onOpened, rights, onChanged }: {
                   <Gauge className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-txt-light" />
                   <input type="number" value={meter} onChange={(e) => setMeter(e.target.value)}
                     className="bg-bg-base border border-border rounded-lg pl-8 pr-3 py-1.5
-                               text-[13px] w-[140px] tabular-nums" />
+                               text-[13px] w-full sm:w-[320px] lg:w-[440px] xl:w-[520px] tabular-nums" />
                 </span>
               </label>
               <label className="text-[12px] flex-1 min-w-[200px]">

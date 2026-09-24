@@ -86,7 +86,7 @@ export default function AuditPanel() {
               <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-txt-light" />
               <input id="mh-audit-emp" value={emp} onChange={(e) => setEmp(e.target.value)}
                 placeholder="Employee ID…"
-                className="bg-bg-base border border-border rounded pl-8 pr-3 py-1.5 text-[12px] text-txt-primary placeholder:text-txt-light focus:outline-none focus:border-gold w-[150px]" />
+                className="bg-bg-base border border-border rounded pl-8 pr-3 py-1.5 text-[12px] text-txt-primary placeholder:text-txt-light focus:outline-none focus:border-gold w-full sm:w-[320px] lg:w-[440px] xl:w-[520px]" />
             </div>
           }
         />

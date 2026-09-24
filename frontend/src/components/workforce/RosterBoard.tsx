@@ -311,7 +311,7 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
             <div className="flex flex-wrap items-center gap-2">
               <div className="relative">
                 <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-txt-light" />
-                <input className={`${inputClass} pl-8 w-48`} placeholder="Find somebody"
+                <input className={`${inputClass} pl-8 w-full sm:w-[320px] lg:w-[440px] xl:w-[520px]`} placeholder="Find somebody"
                        value={query} onChange={(e) => setQuery(e.target.value)} />
               </div>
               {/* A menu with one value in it cannot narrow anything, and today

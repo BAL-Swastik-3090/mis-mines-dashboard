@@ -183,7 +183,7 @@ export default function GateSection() {
                   <Search className="w-3.5 h-3.5 text-txt-light absolute left-3 top-1/2 -translate-y-1/2" />
                   <input value={q} onChange={(e) => setQ(e.target.value)}
                          placeholder="Vehicle, contractor, pass or contract"
-                         className={`${inputClass} pl-8 w-[280px]`} />
+                         className={`${inputClass} pl-8 w-full sm:w-[320px] lg:w-[440px] xl:w-[520px]`} />
                 </div>
               </div>
             }
@@ -293,7 +293,7 @@ function VehicleRegisters() {
             <Search className="w-3.5 h-3.5 text-txt-light absolute left-3 top-1/2 -translate-y-1/2" />
             <input value={q} onChange={(e) => setQ(e.target.value)}
                    placeholder="Number — with or without spaces — fleet code or owner"
-                   className={`${inputClass} pl-8 w-[340px]`} />
+                   className={`${inputClass} pl-8 w-full sm:w-[320px] lg:w-[440px] xl:w-[520px]`} />
           </div>
         }
       />
@@ -361,7 +361,7 @@ function DriverRegisters() {
             <Search className="w-3.5 h-3.5 text-txt-light absolute left-3 top-1/2 -translate-y-1/2" />
             <input value={q} onChange={(e) => setQ(e.target.value)}
                    placeholder="Name, operator number or licence"
-                   className={`${inputClass} pl-8 w-[300px]`} />
+                   className={`${inputClass} pl-8 w-full sm:w-[320px] lg:w-[440px] xl:w-[520px]`} />
           </div>
         }
       />

@@ -190,7 +190,7 @@ export default function LeaveDesk({ mayApply, mayApprove, mayManage, onChanged,
             <div className="flex flex-wrap items-center gap-2">
               <div className="relative">
                 <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-txt-light" />
-                <input className={`${inputClass} pl-8 w-44`} placeholder="Find a request"
+                <input className={`${inputClass} pl-8 w-full sm:w-[320px] lg:w-[440px] xl:w-[520px]`} placeholder="Find a request"
                        value={query} onChange={(e) => setQuery(e.target.value)} />
               </div>
               <div className="flex rounded-lg border border-slate-200 overflow-hidden">

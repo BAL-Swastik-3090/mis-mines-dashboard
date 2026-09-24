@@ -297,7 +297,7 @@ export default function AssessmentPanel({ onChanged, filter }: {
                   placeholder="Name, attendance ID, trade…"
                   className="bg-bg-base border border-border rounded-lg pl-8 pr-3 py-1.5 text-[12px]
                              text-txt-primary placeholder:text-txt-light focus:outline-none
-                             focus:border-gold w-[200px]" />
+                             focus:border-gold w-full sm:w-[320px] lg:w-[440px] xl:w-[520px]" />
               </div>
             </>
           } />

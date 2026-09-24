@@ -699,7 +699,7 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
                 <input id="eq-search" value={query} onChange={(e) => setQuery(e.target.value)}
                   placeholder="Search by reference, code, make…"
                   className="bg-bg-base border border-border rounded-lg pl-8 pr-3 py-1.5 text-[12px]
-                             text-txt-primary placeholder:text-txt-light focus:outline-none focus:border-gold w-[180px]" />
+                             text-txt-primary placeholder:text-txt-light focus:outline-none focus:border-gold w-full sm:w-[320px] lg:w-[440px] xl:w-[520px]" />
               </div>
               <Button size="sm" variant="secondary"
                 onClick={() => exportRows(visible)}

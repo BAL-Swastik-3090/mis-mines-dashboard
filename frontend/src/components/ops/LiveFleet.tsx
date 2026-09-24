@@ -232,7 +232,7 @@ export default function LiveFleet({ shiftInstanceId, rights, onChanged, onHandov
                 <input value={query} onChange={(e) => setQuery(e.target.value)}
                   placeholder="Machine, operator, type…"
                   className="bg-bg-base border border-border rounded-lg pl-8 pr-3 py-1.5 text-[12px]
-                             w-[190px] focus:outline-none focus:border-gold" />
+                             w-full sm:w-[320px] lg:w-[440px] xl:w-[520px] focus:outline-none focus:border-gold" />
               </div>
               <Button size="sm" variant="secondary" onClick={() => void load()}>
                 <RefreshCw className="w-3.5 h-3.5" /> Refresh

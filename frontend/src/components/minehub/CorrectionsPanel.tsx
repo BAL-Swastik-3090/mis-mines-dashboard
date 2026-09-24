@@ -315,7 +315,7 @@ export default function CorrectionsPanel({ prefill, onDone }: {
                 <input id="cor-search" value={query} onChange={(e) => setQuery(e.target.value)}
                   placeholder="Name, ID, reason…"
                   className="bg-bg-base border border-border rounded-lg pl-8 pr-3 py-1.5
-                             text-[12px] focus:outline-none focus:border-gold w-[180px]" />
+                             text-[12px] focus:outline-none focus:border-gold w-full sm:w-[320px] lg:w-[440px] xl:w-[520px]" />
               </div>
             </>
           } />
