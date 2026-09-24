@@ -26,6 +26,7 @@ is signed in and goes through the ordinary middleware.
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 from datetime import date
 
@@ -672,6 +673,57 @@ def retire_or_rename(kind: str, row_id: int, request: Request, body: dict = Body
     return {"ok": True}
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Finding a thing by what someone types
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# A gate clerk reads a number off a bumper or a fleet plate and types it the
+# way it looks to them. "MAN-19" gets typed man19, MAN 19, man-19. "OD 04 B
+# 8776" gets typed od04b8776. None of those are wrong, and a search that only
+# matches the punctuation as stored finds nothing — which sends the clerk to
+# register a vehicle the mine already owns, and now there are two of it.
+#
+# So separators and case are removed from both sides before matching, and the
+# words are matched independently: "man tipper" finds the MAN tippers whichever
+# order they are typed in, and matches the type as readily as the code.
+
+_NOT_ALPHANUMERIC = re.compile(r"[^A-Za-z0-9]")
+
+
+def _squashed(value: str | None) -> str:
+    """A code with its punctuation and case removed: "MAN-19" -> "MAN19"."""
+    return _NOT_ALPHANUMERIC.sub("", value or "").upper()
+
+
+def _like_literal(value: str) -> str:
+    """The text as itself inside LIKE, not as a pattern.
+
+    Someone typing % or _ means those characters. Left alone, % matches the
+    whole register and _ matches any character, so the search quietly stops
+    filtering at all.
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _terms(q: str) -> list[tuple[str, str]]:
+    """The words someone typed, each as (squashed, as-typed).
+
+    Words that are punctuation only are dropped: a stray hyphen should narrow
+    nothing rather than match nothing.
+    """
+    out = []
+    for word in (q or "").split():
+        squashed = _squashed(word)
+        if squashed:
+            out.append((squashed, _like_literal(word)))
+    return out
+
+
+def _sql_normalised(column: str) -> str:
+    """The same squashing, done by the database to a stored column."""
+    return f"upper(regexp_replace(COALESCE({column}, ''), '[^A-Za-z0-9]', '', 'g'))"
+
+
 @router.get("/vehicles/search")
 def vehicle_search(request: Request,
                    q: str = Query("", max_length=60),
@@ -688,7 +740,26 @@ def vehicle_search(request: Request,
     """
     _require(db, request, VIEW)
 
-    return [dict(r) for r in pg.execute(text("""
+    code = _sql_normalised("v.fleet_code")
+    params: dict = {"lim": limit, "needle": _squashed(q)}
+
+    # Every word must match something, but each may match a different field:
+    # "man tipper" is a make and a type, "8776 man" is half a number and a make.
+    # Requiring all of them is what makes a second word narrow the list instead
+    # of widening it.
+    conditions = []
+    for i, (squashed, typed) in enumerate(_terms(q)):
+        params[f"s{i}"], params[f"w{i}"] = squashed, typed
+        conditions.append(f"""(
+                   v.reg_normalised LIKE '%' || :s{i} || '%'
+                OR {code}          LIKE '%' || :s{i} || '%'
+                OR v.vehicle_type ILIKE '%' || :w{i} || '%'
+                OR v.make         ILIKE '%' || :w{i} || '%'
+                OR v.model        ILIKE '%' || :w{i} || '%'
+                OR v.owner        ILIKE '%' || :w{i} || '%')""")
+    where = " AND ".join(conditions) if conditions else "TRUE"
+
+    return [dict(r) for r in pg.execute(text(f"""
         SELECT v.kind, v.asset_id, v.visiting_vehicle_id, v.registration_no,
                v.fleet_code, v.vehicle_type, v.make, v.model,
                v.payload_capacity_kg, v.standing_tare_kg, v.owner, v.ownership,
@@ -702,19 +773,25 @@ def vehicle_search(request: Request,
                  WHERE vv.visiting_vehicle_id = v.visiting_vehicle_id) AS previous_visits
           FROM weighable_vehicle v
          WHERE v.status NOT IN ('SCRAPPED', 'DISPOSED', 'BLACKLISTED', 'INACTIVE')
-           AND (:q = ''
-                -- Matched on the normalised form as well as the literal one, so
-                -- "OD04G5856" finds the machine stored as "OD 04 G 5856". An
-                -- operator reading a number off a bumper does not type spaces,
-                -- and a search that misses sends them to create a duplicate.
-                OR v.reg_normalised LIKE
-                     '%' || upper(regexp_replace(:q, '[^A-Za-z0-9]', '', 'g')) || '%'
-                OR v.registration_no ILIKE '%' || :q || '%'
-                OR v.fleet_code ILIKE '%' || :q || '%'
-                OR v.owner ILIKE '%' || :q || '%')
-         ORDER BY (v.kind = 'ASSET') DESC, v.registration_no
+           AND ({where})
+         -- Closest match first. Someone who types a whole fleet code or a whole
+         -- number wants that vehicle, not the alphabetically first of the forty
+         -- that contain those characters somewhere.
+         ORDER BY CASE
+                    WHEN :needle = '' THEN 4
+                    WHEN {code} = :needle THEN 0
+                    WHEN v.reg_normalised = :needle THEN 1
+                    WHEN {code} LIKE :needle || '%' THEN 2
+                    WHEN v.reg_normalised LIKE :needle || '%' THEN 3
+                    ELSE 4
+                  END,
+                  (v.kind = 'ASSET') DESC,
+                  -- On the normalised number, not the typed one: sorting on the
+                  -- punctuation interleaves "OD-04-B-8776" and "OD 04 B 8777",
+                  -- which are consecutive trucks and should read that way.
+                  v.reg_normalised
          LIMIT :lim
-    """), {"q": q.strip(), "lim": limit}).mappings()]
+    """), params).mappings()]
 
 
 @router.get("/drivers/search")
@@ -735,7 +812,26 @@ def driver_search(request: Request,
     """
     _require(db, request, VIEW)
 
-    rows = [dict(r) for r in pg.execute(text("""
+    reference = _sql_normalised("d.reference")
+    terms = _terms(q)
+    params: dict = {"lim": limit, "needle": _squashed(q),
+                    "first": terms[0][1] if terms else ""}
+
+    # Each word matched separately, so a name types in either order. A man
+    # entered as "RAM KUMAR SAHU" is found by "sahu ram", which is how someone
+    # who knows him will look for him.
+    conditions = []
+    for i, (squashed, typed) in enumerate(terms):
+        params[f"s{i}"], params[f"w{i}"] = squashed, typed
+        conditions.append(f"""(
+                   d.licence_normalised LIKE '%' || :s{i} || '%'
+                OR {reference}          LIKE '%' || :s{i} || '%'
+                OR d.full_name         ILIKE '%' || :w{i} || '%'
+                OR d.employer          ILIKE '%' || :w{i} || '%'
+                OR d.designation       ILIKE '%' || :w{i} || '%')""")
+    where = " AND ".join(conditions) if conditions else "TRUE"
+
+    rows = [dict(r) for r in pg.execute(text(f"""
         SELECT d.kind, d.operator_id, d.visiting_driver_id, d.full_name,
                d.reference, d.licence_no, d.licence_valid_upto, d.phone,
                d.employer, d.designation, d.visits,
@@ -743,14 +839,18 @@ def driver_search(request: Request,
                     ELSE (d.licence_valid_upto - CURRENT_DATE) END AS licence_days_left
           FROM weighable_driver d
          WHERE d.status NOT IN ('BLACKLISTED', 'INACTIVE')
-           AND (:q = ''
-                OR d.full_name ILIKE '%' || :q || '%'
-                OR d.reference ILIKE '%' || :q || '%'
-                OR d.licence_normalised LIKE
-                     '%' || upper(regexp_replace(:q, '[^A-Za-z0-9]', '', 'g')) || '%')
-         ORDER BY (d.kind = 'OPERATOR') DESC, d.full_name
+           AND ({where})
+         ORDER BY CASE
+                    WHEN :needle = '' THEN 3
+                    WHEN d.licence_normalised = :needle THEN 0
+                    WHEN {reference} = :needle THEN 1
+                    WHEN :first <> '' AND d.full_name ILIKE :first || '%' THEN 2
+                    ELSE 3
+                  END,
+                  (d.kind = 'OPERATOR') DESC,
+                  d.full_name
          LIMIT :lim
-    """), {"q": q.strip(), "lim": limit}).mappings()]
+    """), params).mappings()]
 
     for r in rows:
         left = r["licence_days_left"]
