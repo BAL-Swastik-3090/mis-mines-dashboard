@@ -856,6 +856,18 @@ SHIFT_FILL = {
 }
 
 
+# Where the day columns start in the Roster grid: after Operator, Employee ID,
+# Reference, Role and Pattern. Named because the export writes it, the import
+# reads it, and the two drifting apart silently is how a grid import starts
+# putting Thursday's shift on Wednesday.
+FIRST_DAY_COL = 6
+
+
+def _short_code(code: str) -> str:
+    """The one letter a roster gets written in. GENERAL is G."""
+    return code if len(code) <= 2 else code[0]
+
+
 def _shift_band(code: str | None, start_time=None) -> str:
     """Which part of the day a shift belongs to — the same rule as the screen.
 
@@ -894,6 +906,7 @@ def export_roster(request: Request,
     from io import BytesIO
 
     from openpyxl import Workbook
+    from openpyxl.formatting.rule import FormulaRule
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
 
@@ -904,6 +917,12 @@ def export_roster(request: Request,
 
     people = [dict(r) for r in db.execute(text("""
         SELECT o.operator_id, o.operator_ref, p.display_name, o.designation,
+               -- The number the muster, the gate and the face reader know this
+               -- person by. A roster that goes round the office on paper is
+               -- reconciled against attendance, and attendance speaks in this.
+               (SELECT i.external_code FROM party_identity i
+                 WHERE i.party_id = o.party_id AND i.system = 'CONTRACTOR'
+                 ORDER BY i.party_identity_id LIMIT 1) AS attendance_id,
                rp.code AS pattern_code, ra.anchor_date, ra.effective_from
         FROM operator o
         JOIN party p ON p.party_id = o.party_id
@@ -918,6 +937,12 @@ def export_roster(request: Request,
     board = roster.duty(db, start, end, ids, plant_id)
     days = [start + timedelta(days=i) for i in range((end - start).days + 1)]
 
+    shift_hours = {r["code"].upper(): r["start_time"] for r in db.execute(text(
+        "SELECT DISTINCT ON (code) code, start_time FROM shift_calendar "
+        "ORDER BY code, valid_from DESC")).mappings()}
+    fills = {band: PatternFill("solid", fgColor=colour)
+             for band, colour in SHIFT_FILL.items()}
+
     wb = Workbook()
     head = Font(bold=True, color="FFFFFF", size=10)
     navy = PatternFill("solid", fgColor="16233C")
@@ -930,9 +955,14 @@ def export_roster(request: Request,
 
     grid = wb.active
     grid.title = "Roster"
-    grid.append(["Operator", "Reference", "Role", "Pattern"]
-                + [d.strftime("%d %b") for d in days])
-    grid.append(["", "", "", ""] + [d.strftime("%a") for d in days])
+    # The day headers are real dates formatted to read as "25 Sep", not text
+    # that looks like one. Excel shows the same thing either way; the import
+    # gets an unambiguous date instead of guessing which year "25 Sep" is.
+    grid.append(["Operator", "Employee ID", "Reference", "Role", "Pattern"] + days)
+    grid.append(["", "", "", "", ""] + [d.strftime("%a") for d in days])
+    for i in range(len(days)):
+        header = grid.cell(row=1, column=FIRST_DAY_COL + i)
+        header.number_format = "dd mmm"
 
     for row in (1, 2):
         for cell in grid[row]:
@@ -948,18 +978,13 @@ def export_roster(request: Request,
             state = cell.get("state")
             cells.append(cell.get("shift") if state == "ON"
                          else EXPORT_STATE.get(state or "", EXPORT_UNKNOWN))
-        grid.append([person["display_name"], person["operator_ref"] or "",
+        grid.append([person["display_name"], person["attendance_id"] or "",
+                     person["operator_ref"] or "",
                      person["designation"] or "",
                      person["pattern_code"] or "NOT ROSTERED"] + cells)
 
-    shift_hours = {r["code"].upper(): r["start_time"] for r in db.execute(text(
-        "SELECT DISTINCT ON (code) code, start_time FROM shift_calendar "
-        "ORDER BY code, valid_from DESC")).mappings()}
-    fills = {band: PatternFill("solid", fgColor=colour)
-             for band, colour in SHIFT_FILL.items()}
-
     for r in range(3, 3 + len(people)):
-        for c in range(5, 5 + len(days)):
+        for c in range(FIRST_DAY_COL, FIRST_DAY_COL + len(days)):
             cell = grid.cell(row=r, column=c)
             cell.alignment = centre
             cell.border = thin
@@ -977,11 +1002,45 @@ def export_roster(request: Request,
                 cell.fill = fills[_shift_band(value, shift_hours.get(value.upper()))]
                 cell.font = Font(bold=True, size=10)
 
-    for col, width in zip("ABCD", (26, 15, 20, 14)):
+    for col, width in zip("ABCDE", (26, 13, 15, 20, 14)):
         grid.column_dimensions[col].width = width
     for i in range(len(days)):
-        grid.column_dimensions[get_column_letter(5 + i)].width = 6
-    grid.freeze_panes = "E3"
+        grid.column_dimensions[get_column_letter(FIRST_DAY_COL + i)].width = 6
+    grid.freeze_panes = f"{get_column_letter(FIRST_DAY_COL)}3"
+
+    # Typing a letter colours its own square.
+    #
+    # The export colours what the roster already says; the point of the grid is
+    # that somebody edits it, and a letter typed into it stayed white. These
+    # rules live in the file, so the colour follows the typing on a machine that
+    # has never heard of this application — which is where the sheet ends up.
+    # bgColor, not fgColor.
+    #
+    # A conditional format is a "differential" format, and Excel paints a solid
+    # differential fill from its background colour. openpyxl will accept a
+    # PatternFill built the ordinary way and write fgColor alone, which Excel
+    # renders as no fill — the rules fire, the letters stay white, and nothing
+    # anywhere says why. Found by reading the styles.xml the export produced.
+    def typed_fill(colour: str) -> PatternFill:
+        return PatternFill(patternType="solid", bgColor=colour, fgColor=colour)
+
+    last = get_column_letter(FIRST_DAY_COL + len(days) - 1)
+    span = f"{get_column_letter(FIRST_DAY_COL)}3:{last}{2 + len(people)}"
+    for code, start_time in sorted(shift_hours.items()):
+        band = _shift_band(code, start_time)
+        grid.conditional_formatting.add(span, FormulaRule(
+            # Case-insensitive, and G is taken as GENERAL, the same as the
+            # import does. Somebody writing a roster by hand writes g.
+            formula=[f'EXACT(UPPER(TRIM({get_column_letter(FIRST_DAY_COL)}3)),"{code}")'],
+            fill=typed_fill(SHIFT_FILL[band]), stopIfTrue=True))
+        short = _short_code(code)
+        if short != code:
+            grid.conditional_formatting.add(span, FormulaRule(
+                formula=[f'EXACT(UPPER(TRIM({get_column_letter(FIRST_DAY_COL)}3)),"{short}")'],
+                fill=typed_fill(SHIFT_FILL[band]), stopIfTrue=True))
+    grid.conditional_formatting.add(span, FormulaRule(
+        formula=[f'EXACT(UPPER(TRIM({get_column_letter(FIRST_DAY_COL)}3)),"REST")'],
+        fill=typed_fill("EEF1F5"), stopIfTrue=True))
 
     # Sheet two: the editable one.
     edit = wb.create_sheet("Assignments")
@@ -1103,6 +1162,139 @@ def _as_date(value, fallback):
         return fallback
 
 
+def _shift_written(value, known: set[str]) -> tuple[str | None, str | None]:
+    """What somebody meant by what they typed in a shift cell.
+
+    Returns (intent, complaint). The intent is a shift code, None for a rest
+    day, or "CLEAR" for no decision at all.
+
+    Somebody writing a roster by hand writes g, not GENERAL, and does not hold
+    shift while doing it. Both are accepted, because refusing them teaches
+    people the file is fussy rather than that they made a mistake.
+    """
+    text_value = str(value or "").strip().upper()
+    if text_value in ("", "-", "BLANK", "NONE", "NOT ROSTERED"):
+        return "CLEAR", None
+    if text_value in ("REST", "R", "OFF", "\u00b7"):
+        return None, None
+    if text_value in known:
+        return text_value, None
+    # A single letter standing for a longer code: G for GENERAL.
+    matches = [c for c in known if _short_code(c) == text_value]
+    if len(matches) == 1:
+        return matches[0], None
+    if len(matches) > 1:
+        return None, (f"{text_value} could mean any of "
+                      f"{', '.join(sorted(matches))}. Write the code in full.")
+    return None, (f"This mine has no shift called {text_value}. It runs: "
+                  f"{', '.join(sorted(known))}, or REST, or leave it empty.")
+
+
+def _read_grid_sheet(sheet, db) -> tuple[list[dict], list[dict]]:
+    """Read the Roster grid: one row per person, one column per day.
+
+    This is the sheet people edit, because it is the one that looks like a
+    roster. Reading only the tidy list beside it meant somebody could type a
+    fortnight of shifts into the grid, import the file, and be told nothing had
+    changed — which is worse than an error, because it looks like it worked.
+    """
+    people = {}
+    for r in db.execute(text("""
+        SELECT o.operator_id, o.operator_ref, p.display_name
+          FROM operator o JOIN party p ON p.party_id = o.party_id
+         WHERE o.profile_status = 'ACTIVE' AND o.operator_ref IS NOT NULL
+    """)).mappings():
+        people[r["operator_ref"].strip().upper()] = dict(r)
+
+    known = {r[0].upper() for r in db.execute(
+        text("SELECT code FROM shift_calendar")).all()}
+    existing = {(r["operator_id"], r["on_date"]): r["shift_code"]
+                for r in db.execute(text(
+                    "SELECT operator_id, on_date, shift_code FROM roster_day")).mappings()}
+
+    # Where the reference lives, and where the days start, read from the header
+    # rather than assumed.
+    #
+    # They were positions until a file exported before the Employee ID column
+    # existed came back: every row was rejected as an unknown reference,
+    # because the reader was looking at Role. A workbook that has been round
+    # the office is older than the code reading it more often than not.
+    ref_col, first_day = None, None
+    for col in range(1, sheet.max_column + 1):
+        label = str(sheet.cell(row=1, column=col).value or "").strip().lower()
+        if label.startswith("reference") or label.endswith("reference"):
+            ref_col = col
+        elif label and ref_col and first_day is None and label not in (
+                "operator", "employee id", "role", "pattern", "name"):
+            first_day = col
+    if ref_col is None:
+        return [], [{"row": 1, "ref": "(header)",
+                     "why": "This sheet has no Reference column, so its rows "
+                            "cannot be matched to anybody."}]
+    if first_day is None:
+        return [], []
+
+    # The day columns, from the header. Real dates where the export wrote them;
+    # a written "25 Sep" is read as a date in the year the months imply, which
+    # is what a file exported before this change carries.
+    columns: dict[int, date] = {}
+    unreadable_headers = []
+    year = date.today().year
+    previous_month = None
+    for col in range(first_day, sheet.max_column + 1):
+        raw = sheet.cell(row=1, column=col).value
+        if raw in (None, ""):
+            continue
+        when = raw.date() if isinstance(raw, datetime) else raw
+        if isinstance(when, date):
+            columns[col] = when
+            continue
+        try:
+            parsed = datetime.strptime(str(raw).strip(), "%d %b")
+        except ValueError:
+            unreadable_headers.append(str(raw))
+            continue
+        if previous_month is not None and parsed.month < previous_month:
+            year += 1
+        previous_month = parsed.month
+        columns[col] = date(year, parsed.month, parsed.day)
+
+    rows, problems = [], []
+    if unreadable_headers:
+        problems.append({"row": 1, "ref": "(header)",
+                         "why": "These day columns could not be read as dates: "
+                                + ", ".join(unreadable_headers[:6])
+                                + ". Export the roster again and edit that file."})
+
+    for n in range(3, sheet.max_row + 1):
+        ref = str(sheet.cell(row=n, column=ref_col).value or "").strip().upper()
+        if not ref:
+            continue
+        person = people.get(ref)
+        if not person:
+            problems.append({"row": n, "ref": ref,
+                             "why": "No active operator has that reference."})
+            continue
+
+        for col, on_date in columns.items():
+            wanted, complaint = _shift_written(sheet.cell(row=n, column=col).value, known)
+            if complaint:
+                problems.append({"row": n, "ref": ref,
+                                 "why": f"{on_date.isoformat()}: {complaint}"})
+                continue
+
+            was = existing.get((person["operator_id"], on_date), "__none__")
+            if (was == "__none__" and wanted == "CLEAR") or was == wanted:
+                continue
+
+            rows.append({"row": n, "ref": ref, "display_name": person["display_name"],
+                         "operator_id": person["operator_id"],
+                         "on_date": on_date.isoformat(),
+                         "from_shift": None if was == "__none__" else (was or "REST"),
+                         "to_shift": "blank" if wanted == "CLEAR" else (wanted or "REST")})
+    return rows, problems
+
+
 def _read_day_sheet(sheet, db) -> tuple[list[dict], list[dict]]:
     """Read a Days sheet: reference, name, date, shift.
 
@@ -1147,18 +1339,9 @@ def _read_day_sheet(sheet, db) -> tuple[list[dict], list[dict]]:
                                     "Use a real date cell, or YYYY-MM-DD."})
             continue
 
-        code = str(shift or "").strip().upper()
-        if code in ("", "-", "BLANK", "NONE"):
-            wanted = "CLEAR"
-        elif code == "REST":
-            wanted = None
-        elif code in known_shifts:
-            wanted = code
-        else:
-            problems.append({"row": n, "ref": ref,
-                             "why": f"This mine has no shift called {code}. "
-                                    f"It runs: {', '.join(sorted(known_shifts))}, "
-                                    "or REST, or leave the cell empty."})
+        wanted, complaint = _shift_written(shift, known_shifts)
+        if complaint:
+            problems.append({"row": n, "ref": ref, "why": complaint})
             continue
 
         was = existing.get((person["operator_id"], on_date), "__none__")
@@ -1233,7 +1416,19 @@ async def import_roster(request: Request, file: UploadFile = File(...),
     if "Days" in wb.sheetnames:
         day_rows, day_problems = _read_day_sheet(wb["Days"], db)
 
-    if "Assignments" not in wb.sheetnames and day_rows:
+    # The grid too, because that is the sheet that looks like a roster and so
+    # the sheet people edit. Read after the Days list and merged onto it, so a
+    # file carrying both ends with the grid winning on any day they disagree —
+    # the grid is the one somebody was looking at.
+    if "Roster" in wb.sheetnames:
+        grid_rows, grid_problems = _read_grid_sheet(wb["Roster"], db)
+        by_cell = {(r["operator_id"], r["on_date"]): r for r in day_rows}
+        for r in grid_rows:
+            by_cell[(r["operator_id"], r["on_date"])] = r
+        day_rows = list(by_cell.values())
+        day_problems += grid_problems
+
+    if "Assignments" not in wb.sheetnames and (day_rows or day_problems):
         # A Days-only workbook. Nothing to do on the pattern side, and falling
         # through to wb.active would read the Days sheet as assignments and
         # report every row as a problem.
