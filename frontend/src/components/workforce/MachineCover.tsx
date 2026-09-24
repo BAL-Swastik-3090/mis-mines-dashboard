@@ -94,7 +94,8 @@ export default function MachineCover() {
   // Machines are narrowed the way a planner thinks about them: the part of the
   // mine, the kind of work, the hire. Three hundred rows is not a list anybody
   // reads, and a filter is what turns it into one.
-  const [by, setBy] = useState({ category: "", department: "", type: "", ownership: "" });
+  const [by, setBy] = useState({ category: "", department: "", type: "",
+                                 ownership: "", crew: "" });
   const [importing, setImporting] = useState<ImportReport | null>(null);
   const [pending, setPending] = useState<File | null>(null);
   const [editing, setEditing] = useState<number | null>(null);
@@ -162,6 +163,12 @@ export default function MachineCover() {
   const optionsOf = useCallback((pick: (m: Machine) => string | null) =>
     [...new Set(rows.map(pick).filter(Boolean) as string[])].sort(), [rows]);
 
+  /** Only people actually on a crew. Offering all 211 would be a list of
+   *  names that mostly return nothing. */
+  const crewNames = useMemo(() =>
+    [...new Set(rows.flatMap((m) => m.crew.map((c) => c.person)))].sort(),
+    [rows]);
+
   const exportPlan = useCallback(async () => {
     setBusy(true);
     try {
@@ -212,7 +219,11 @@ export default function MachineCover() {
     .filter((m) => (!by.category || m.category === by.category)
                 && (!by.department || (m.department ?? "") === by.department)
                 && (!by.type || m.asset_type === by.type)
-                && (!by.ownership || m.ownership === by.ownership))
+                && (!by.ownership || m.ownership === by.ownership)
+                // "Which machines is this man on" is the other direction of the
+                // same question, and until now the only way to ask it was to
+                // read every row.
+                && (!by.crew || m.crew.some((c) => c.person === by.crew)))
     .filter((m) => matchesSearch(q, [
       m.fleet_code, m.registration_no, m.nickname, m.asset_type,
       ...m.crew.map((c) => c.person),
@@ -240,6 +251,7 @@ export default function MachineCover() {
               ["category", "All work", optionsOf((m) => m.category)],
               ["type", "All types", optionsOf((m) => m.asset_type)],
               ["ownership", "Own and hired", optionsOf((m) => m.ownership)],
+              ["crew", "Anybody's machines", crewNames],
             ] as const).map(([key, all, options]) => (
               <select key={key} value={by[key]}
                 onChange={(e) => setBy({ ...by, [key]: e.target.value })}
@@ -378,16 +390,27 @@ export default function MachineCover() {
                             </span>
                           ))}
 
+                          {/* The picker is a panel of its own width, not a
+                              takeover of the cell. Letting it fill the row made
+                              one machine four hundred pixels tall and pushed the
+                              rest of the fleet off screen — the list you are
+                              choosing for stopped being visible while you chose.
+
+                              The comment sits here and not inside the ternary:
+                              a branch takes one element, and a comment beside
+                              the div is a second child with no parent. */}
                           {editing === m.asset_id ? (
-                            <div className="w-full mt-1 rounded-lg border border-gold/40
-                                            bg-gold/[0.04] p-2 space-y-1.5">
-                              <input autoFocus value={pick} placeholder="Type a name…"
-                                onChange={(e) => setPick(e.target.value)}
-                                className={`${inputClass} py-1`} />
-                              <div className="max-h-44 overflow-auto divide-y divide-slate-100">
+                            <div className="mt-1 w-[320px] rounded-xl border border-gold/50
+                                            bg-white shadow-lg overflow-hidden">
+                              <div className="px-2.5 pt-2 pb-1.5 border-b border-slate-100">
+                                <input autoFocus value={pick} placeholder="Type a name…"
+                                  onChange={(e) => setPick(e.target.value)}
+                                  className={`${inputClass} py-1 text-[12px]`} />
+                              </div>
+                              <div className="max-h-52 overflow-auto">
                                 {offer.length === 0 && (
-                                  <p className="px-1 py-2 text-[11.5px] text-txt-light">
-                                    Nobody left to add.
+                                  <p className="px-3 py-3 text-[11.5px] text-txt-light">
+                                    {pick ? `Nobody matches “${pick}”.` : "Nobody left to add."}
                                   </p>
                                 )}
                                 {offer.slice(0, 40).map((o) => (
@@ -404,22 +427,35 @@ export default function MachineCover() {
                                       }]);
                                       setPick("");
                                     }}
-                                    className="w-full text-left px-1 py-1.5 flex items-center
-                                               gap-2 hover:bg-white rounded">
-                                    <span className="text-[12px] font-semibold text-navy">
-                                      {o.name}
+                                    className="w-full text-left px-3 py-1.5 flex items-center
+                                               justify-between gap-2 hover:bg-gold/[0.07]
+                                               border-b border-slate-50 last:border-0">
+                                    <span className="min-w-0">
+                                      <span className="block text-[12px] font-semibold
+                                                       text-navy truncate">
+                                        {o.name}
+                                      </span>
+                                      <span className={`block text-[10.5px] truncate ${
+                                        o.cleared ? "text-emerald" : "text-txt-light"}`}>
+                                        {o.note}
+                                      </span>
                                     </span>
-                                    <span className={`text-[11px] ${
-                                      o.cleared ? "text-emerald" : "text-txt-light"}`}>
-                                      {o.note}
-                                    </span>
+                                    {o.cleared
+                                      ? <ShieldCheck className="w-3.5 h-3.5 text-emerald shrink-0" />
+                                      : <Plus className="w-3.5 h-3.5 text-txt-light shrink-0" />}
                                   </button>
                                 ))}
                               </div>
-                              <Button size="sm" variant="ghost"
-                                      onClick={() => { setEditing(null); setPick(""); }}>
-                                Done
-                              </Button>
+                              <div className="px-2.5 py-1.5 border-t border-slate-100
+                                              flex items-center justify-between">
+                                <span className="text-[10.5px] text-txt-light">
+                                  {offer.length} to choose from
+                                </span>
+                                <Button size="sm" variant="ghost"
+                                        onClick={() => { setEditing(null); setPick(""); }}>
+                                  Done
+                                </Button>
+                              </div>
                             </div>
                           ) : (
                             <button type="button" disabled={busy}
