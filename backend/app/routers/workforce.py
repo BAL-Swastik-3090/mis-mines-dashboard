@@ -567,6 +567,151 @@ def comp_off(request: Request,
             "owed_in_total": sum(x["earned"] for x in people)}
 
 
+@router.get("/cover")
+def who_can_run(request: Request,
+                day: str | None = Query(None),
+                asset_id: int | None = Query(None),
+                asset_type_id: int | None = Query(None),
+                only_gaps: bool = Query(False),
+                db: Session = Depends(get_minehub_db)) -> dict:
+    """For each machine: who normally runs it, and who else could today.
+
+    The question this answers is asked at six in the morning when somebody has
+    not turned up, and it is asked about a particular machine: the tipper is in
+    the yard, its driver is on leave, who else is cleared to take it out. Until
+    now that meant opening operators one at a time and reading their
+    assessments, which is why it was done from memory instead.
+
+    Competency is read two ways, because the register records it two ways. Most
+    of it is by class — cleared on Tippers, which is every tipper. Some of it is
+    against one machine, because a mine does sometimes clear a man on one
+    particular excavator and not its sister. Both count, and a man cleared on
+    the machine itself is offered before one cleared only on its class.
+
+    Availability comes from the roster, so somebody on leave or resting is
+    listed and marked rather than hidden. Who is free is a different question
+    from who is able, and a supervisor short of a driver wants to see both — the
+    man who is able but resting is a phone call, and the man who is not able is
+    not.
+    """
+    _require(request, VIEW, "see the roster")
+    on = _day(day)
+
+    machines = [dict(r) for r in db.execute(text("""
+        SELECT a.asset_id, a.fleet_code, a.registration_no, a.nickname,
+               a.asset_type_id, t.name AS asset_type, t.category, a.status,
+               oa.operator_id       AS assigned_operator_id,
+               ap.legal_name        AS assigned_operator,
+               oa.shift             AS assigned_shift
+          FROM asset a
+          JOIN asset_type t ON t.asset_type_id = a.asset_type_id
+          LEFT JOIN operator_assignment oa
+                 ON oa.asset_id = a.asset_id
+                AND oa.status = 'ACTIVE'
+                AND oa.valid_from <= :on
+                AND (oa.valid_to IS NULL OR oa.valid_to >= :on)
+          LEFT JOIN operator ao ON ao.operator_id = oa.operator_id
+          LEFT JOIN party ap ON ap.party_id = ao.party_id
+         -- CANNIBALISED belongs here with the other two: a machine stripped
+         -- for parts cannot be run, and offering drivers for it is offering
+         -- cover for work that cannot happen.
+         WHERE a.status NOT IN ('DISPOSED', 'SCRAPPED', 'CANNIBALISED')
+           AND (CAST(:aid AS bigint) IS NULL OR a.asset_id = CAST(:aid AS bigint))
+           AND (CAST(:atid AS bigint) IS NULL
+                OR a.asset_type_id = CAST(:atid AS bigint))
+         ORDER BY t.name, a.fleet_code
+    """), {"on": on, "aid": asset_id, "atid": asset_type_id}).mappings()]
+
+    # Everybody cleared on anything, in one query rather than one per machine.
+    # A mine with a hundred machines and two hundred people is twenty thousand
+    # questions asked that way.
+    cleared: dict[tuple, list[dict]] = {}
+    for r in db.execute(text("""
+        SELECT oc.operator_id, oc.asset_type_id, oc.asset_id, oc.level,
+               oc.valid_upto, oc.next_assessment_due, oc.rating,
+               p.legal_name AS person, o.operator_ref, t.name AS trade
+          FROM operator_competency oc
+          JOIN operator o ON o.operator_id = oc.operator_id
+                         AND o.profile_status = 'ACTIVE'
+          JOIN party p ON p.party_id = o.party_id
+          LEFT JOIN trade t ON t.trade_id = o.trade_id
+         WHERE oc.dimension = 'OVERALL' AND oc.status = 'ACTIVE'
+           AND COALESCE(oc.level, 0) > 0
+    """)).mappings():
+        key = ("ASSET", r["asset_id"]) if r["asset_id"] else ("TYPE", r["asset_type_id"])
+        cleared.setdefault(key, []).append(dict(r))
+
+    everyone = {o for group in cleared.values() for o in (x["operator_id"] for x in group)}
+    duty = roster.duty(db, on, on, list(everyone)) if everyone else {}
+    iso = on.isoformat()
+
+    # Already on a machine that day, so offering them again would double-book.
+    busy = {r[0]: r[1] for r in db.execute(text("""
+        SELECT d.operator_id, a.fleet_code
+          FROM deployment d
+          JOIN shift_instance si ON si.shift_instance_id = d.shift_instance_id
+          JOIN asset a ON a.asset_id = d.asset_id
+         WHERE si.production_day = :on AND d.ended_at IS NULL
+    """), {"on": on}).all()}
+
+    out = []
+    for m in machines:
+        people = ([dict(x, matched="this machine")
+                   for x in cleared.get(("ASSET", m["asset_id"]), [])]
+                  + [dict(x, matched="its class")
+                     for x in cleared.get(("TYPE", m["asset_type_id"]), [])])
+
+        seen, candidates = set(), []
+        for c in people:
+            if c["operator_id"] in seen:
+                continue          # cleared on the machine beats cleared on its class
+            seen.add(c["operator_id"])
+
+            cell = (duty.get(c["operator_id"]) or {}).get(iso) or {}
+            state = cell.get("state")
+            candidates.append({
+                "operator_id": c["operator_id"], "person": c["person"],
+                "operator_ref": c["operator_ref"], "trade": c["trade"],
+                "level": c["level"], "rating": c["rating"],
+                "matched": c["matched"],
+                "lapsed": bool(c["valid_upto"] and c["valid_upto"] < on),
+                "reassessment_overdue": bool(c["next_assessment_due"]
+                                             and c["next_assessment_due"] < on),
+                "state": state, "shift": cell.get("shift"),
+                "why_not": ("on leave" if state == "LEAVE"
+                            else f"already on {busy[c['operator_id']]}"
+                            if c["operator_id"] in busy
+                            else "resting" if state == "REST"
+                            else "not on a roster" if state is None
+                            else None),
+            })
+
+        # On shift first, then resting, then everybody else: that is the order a
+        # supervisor rings round in.
+        rank = {"ON": 0, "HOLIDAY": 1, "REST": 2, None: 3, "LEAVE": 4}
+        candidates.sort(key=lambda c: (c["operator_id"] in busy,
+                                       rank.get(c["state"], 3),
+                                       c["matched"] != "this machine",
+                                       -(c["level"] or 0)))
+
+        free = [c for c in candidates if not c["why_not"]]
+        assigned_cell = ((duty.get(m["assigned_operator_id"]) or {}).get(iso) or {}
+                         if m["assigned_operator_id"] else {})
+        out.append({**m,
+                    "assigned_state": assigned_cell.get("state"),
+                    "assigned_shift": assigned_cell.get("shift"),
+                    "can_run": len(candidates),
+                    "free_now": len(free),
+                    "candidates": candidates})
+
+    if only_gaps:
+        out = [m for m in out if m["free_now"] == 0]
+
+    return {"day": iso, "machines": out,
+            "machines_with_nobody": sum(1 for m in out if m["can_run"] == 0),
+            "machines_with_nobody_free": sum(1 for m in out if m["free_now"] == 0)}
+
+
 # ── the board ────────────────────────────────────────────────────────────────
 @router.get("/board")
 def roster_board(request: Request,

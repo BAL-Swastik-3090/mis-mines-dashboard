@@ -14,7 +14,7 @@
  */
 import React, { useCallback, useEffect, useState } from "react";
 import {
-  CalendarRange, Plane, CalendarDays, Repeat, Sparkles, Users, Loader2, History,
+  CalendarRange, Plane, CalendarDays, Repeat, Sparkles, Users, Loader2, History, Truck,
   Sun, Moon, CircleSlash,
 } from "lucide-react";
 import { useAuth } from "@/contexts/useAuth";
@@ -27,8 +27,10 @@ import PatternStudio from "@/components/workforce/PatternStudio";
 import AllocationEngine from "@/components/workforce/AllocationEngine";
 import OperatorDashboard from "@/components/workforce/OperatorDashboard";
 import RosterActivity from "@/components/workforce/RosterActivity";
+import MachineCover from "@/components/workforce/MachineCover";
 
-type TabId = "roster" | "leave" | "calendar" | "patterns" | "allocate" | "history";
+type TabId = "roster" | "leave" | "calendar" | "patterns" | "allocate"
+           | "cover" | "history";
 
 const TABS: { id: TabId; label: string; icon: React.ElementType; tone: Tone; hint: string }[] = [
   { id: "roster", label: "Roster", icon: CalendarRange, tone: "violet",
@@ -41,6 +43,8 @@ const TABS: { id: TabId; label: string; icon: React.ElementType; tone: Tone; hin
     hint: "The days the mine closes, and the ones it works through" },
   { id: "patterns", label: "Patterns", icon: Repeat, tone: "navy",
     hint: "The cycles this mine works — six on one off, three-crew rotation" },
+  { id: "cover", label: "Who can run what", icon: Truck, tone: "teal",
+    hint: "Every machine, who is cleared to run it, and who is free today" },
   { id: "history", label: "History", icon: History, tone: "slate",
     hint: "Every change to who works when, and who made it" },
 ];
@@ -200,6 +204,7 @@ export default function WorkforceSection() {
       )}
       {tab === "calendar" && <HolidayCalendar mayManage={mayManage} />}
       {tab === "patterns" && <PatternStudio mayManage={mayManage} onChanged={load} />}
+      {tab === "cover" && <MachineCover />}
       {tab === "history" && <RosterActivity />}
 
       <OperatorDashboard operatorId={viewing} mayApply={mayApply}

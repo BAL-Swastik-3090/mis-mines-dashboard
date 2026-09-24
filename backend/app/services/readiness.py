@@ -235,10 +235,24 @@ def eligibility(db: Session, operator_id: int, asset_id: int) -> Readiness:
             warnings.append(f"{label.capitalize()} has not been verified")
 
     comp = db.execute(text("""
-        SELECT level, valid_upto, next_assessment_due, rating FROM operator_competency
-        WHERE operator_id = :o AND asset_type_id = :t AND dimension = 'OVERALL'
-          AND asset_id IS NULL AND status = 'ACTIVE'
-    """), {"o": operator_id, "t": machine["asset_type_id"]}).mappings().first()
+        -- Cleared on this machine, or cleared on its class.
+        --
+        -- The class row was the only one read, and the asset_id column was
+        -- filtered out entirely — so a man assessed on one particular
+        -- excavator counted for nothing and the register held a fact the
+        -- platform refused to use. A mine does clear somebody on one machine
+        -- and not its sister; that is what the column is for.
+        --
+        -- The machine's own row wins where both exist, which is why it sorts
+        -- first: it is the more specific statement about the same man.
+        SELECT level, valid_upto, next_assessment_due, rating
+          FROM operator_competency
+         WHERE operator_id = :o AND dimension = 'OVERALL' AND status = 'ACTIVE'
+           AND (asset_id = :a OR (asset_id IS NULL AND asset_type_id = :t))
+         ORDER BY asset_id NULLS LAST
+         LIMIT 1
+    """), {"o": operator_id, "t": machine["asset_type_id"],
+           "a": machine["asset_id"]}).mappings().first()
 
     if not comp or (comp["level"] or 0) == 0:
         blockers.append(f"Not assessed on {machine['asset_type'] or 'this class'}")
@@ -442,13 +456,21 @@ def fleet_readiness(db: Session, plant_id: int | None = None) -> list[dict]:
         """), {"ids": operator_ids}).mappings():
             op_docs.setdefault(row["operator_id"], {})[row["record_type"]] = dict(row)
 
+        # Both kinds, keyed so a machine-specific clearance can be found by the
+        # machine and a class one by the class. The bulk path used to drop the
+        # machine rows exactly as the single path did, so the two agreed with
+        # each other and both were wrong.
         for row in db.execute(text("""
-            SELECT operator_id, asset_type_id, level, valid_upto, next_assessment_due
+            SELECT operator_id, asset_type_id, asset_id, level, valid_upto,
+                   next_assessment_due
             FROM operator_competency
             WHERE operator_id = ANY(:ids) AND dimension = 'OVERALL'
-              AND asset_id IS NULL AND status = 'ACTIVE'
+              AND status = 'ACTIVE'
         """), {"ids": operator_ids}).mappings():
-            op_comp[(row["operator_id"], row["asset_type_id"])] = dict(row)
+            if row["asset_id"]:
+                op_comp[(row["operator_id"], "asset", row["asset_id"])] = dict(row)
+            else:
+                op_comp[(row["operator_id"], "type", row["asset_type_id"])] = dict(row)
 
     today = date.today()
     out: list[dict] = []
@@ -524,7 +546,9 @@ def fleet_readiness(db: Session, plant_id: int | None = None) -> list[dict]:
                 elif not held["verified"]:
                     warnings.append(f"{label.capitalize()} has not been verified")
 
-            comp = op_comp.get((operator_id, m["asset_type_id"]))
+            # The machine's own clearance first; its class as the fallback.
+            comp = (op_comp.get((operator_id, "asset", m["asset_id"]))
+                    or op_comp.get((operator_id, "type", m["asset_type_id"])))
             if not comp or (comp["level"] or 0) == 0:
                 blockers.append(f"Not assessed on {m['asset_type'] or 'this class'}")
             elif comp["level"] == 1:
