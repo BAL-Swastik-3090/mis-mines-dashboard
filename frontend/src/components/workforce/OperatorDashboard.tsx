@@ -31,7 +31,7 @@ import {
 } from "@/components/minehub/ui";
 import Dialog from "@/components/minehub/Dialog";
 import CommentThread from "@/components/comments/CommentThread";
-import { DAY_STATE, UNROSTERED, LEAVE_STATUS, prettyDate, shortDate, isoDay,
+import { DAY_STATE, SHIFT_LOOK, shiftBand, shortShift, UNROSTERED, LEAVE_STATUS, prettyDate, shortDate, isoDay,
          type DayCell } from "./state";
 
 interface Worklife {
@@ -164,9 +164,16 @@ export default function OperatorDashboard({ operatorId, onClose, mayApply, onCha
                 {o?.display_name ?? (loading ? "Loading…" : "Not found")}
               </h2>
               <p className="text-[12px] text-white/65">
-                {o?.operator_ref || "no reference"} · {o?.designation || "role not set"}
-                {o?.department ? ` · ${o.department}` : ""}
-                {o?.plant ? ` · ${o.plant}` : ""}
+                {/* Nothing is asserted about somebody whose record has not
+                    arrived. "no reference · role not set" under "Loading…" says
+                    two things about a man the screen has not read yet, and both
+                    of them turned out to be false — he has a reference and he
+                    is a welder. */}
+                {loading && !o ? "Reading their record…" : <>
+                  {o?.operator_ref || "no reference"} · {o?.designation || "role not set"}
+                  {o?.department ? ` · ${o.department}` : ""}
+                  {o?.plant ? ` · ${o.plant}` : ""}
+                </>}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -234,7 +241,13 @@ export default function OperatorDashboard({ operatorId, onClose, mayApply, onCha
                 <div className="px-5 py-4 flex flex-wrap gap-1">
                   {rosterDays.map((iso) => {
                     const cell = data.roster[iso];
-                    const look = cell?.state ? DAY_STATE[cell.state] : UNROSTERED;
+                    // Coloured by shift, the same as the board. A month strip
+                    // that draws every working day alike cannot answer the
+                    // question it exists for — which shifts this man has been
+                    // put on, and whether they rotate.
+                    const look = cell?.state === "ON"
+                      ? SHIFT_LOOK[shiftBand(cell.shift)]
+                      : cell?.state ? DAY_STATE[cell.state] : UNROSTERED;
                     const isToday = iso === today;
                     return (
                       <span key={iso} title={`${prettyDate(iso)} — ${cell?.label ?? UNROSTERED.label}`}
@@ -243,10 +256,15 @@ export default function OperatorDashboard({ operatorId, onClose, mayApply, onCha
                                     ${isToday ? "ring-2 ring-navy ring-offset-1" : ""}`}>
                         <span className="text-[9px] opacity-70">{iso.slice(8, 10)}</span>
                         <span className="text-[12px]">
-                          {cell?.state === "ON" ? cell.shift
+                          {/* Empty, not "?". A day nobody has rostered is not
+                              an unknown or a fault — it is a gap, and the
+                              dashed square already says so. A question mark
+                              reads as something having gone wrong, which is
+                              what a month of them looked like. */}
+                          {cell?.state === "ON" ? shortShift(cell.shift)
                             : cell?.state === "LEAVE" ? "L"
                             : cell?.state === "HOLIDAY" ? "H"
-                            : cell?.state === "REST" ? "·" : "?"}
+                            : cell?.state === "REST" ? "·" : ""}
                         </span>
                       </span>
                     );

@@ -59,6 +59,17 @@ export const SHIFT_LOOK: Record<string, { cell: string; dot: string; label: stri
              dot: "bg-emerald", label: "On duty" },
 };
 
+/** A shift code short enough for a grid square: "GENERAL" reads as "G".
+ *
+ *  A day gets 28 pixels on the board and 36 in the month strip. A, B and C fit
+ *  either; GENERAL fits neither, and GENERAL is exactly the shift a fitter or a
+ *  clerk is on. The mine says "G shift" out loud, so the screens do too, and
+ *  the full name stays on the hover. */
+export function shortShift(code: string | null | undefined): string {
+  if (!code) return "";
+  return code.length <= 2 ? code : code[0];
+}
+
 /** Which of those a shift is, from when it starts.
  *
  *  By the clock, not the code: this mine calls them A, B and C, the next one

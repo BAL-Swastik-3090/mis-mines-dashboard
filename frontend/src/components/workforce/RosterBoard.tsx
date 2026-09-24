@@ -40,7 +40,7 @@ import Dialog from "@/components/minehub/Dialog";
 import ColumnFilter, { optionsFrom, matches } from "@/components/minehub/ColumnFilter";
 import StarterPatterns from "./StarterPatterns";
 import {
-  DAY_STATE, SHIFT_LOOK, shiftBand, UNROSTERED, dayLabel, isoDay, addDays, span, prettyDate,
+  DAY_STATE, SHIFT_LOOK, shiftBand, shortShift, UNROSTERED, dayLabel, isoDay, addDays, span, prettyDate,
   type DayCell,
 } from "./state";
 
@@ -50,12 +50,6 @@ interface Person {
   employer: string | null; trade: string | null; trade_group: string | null;
   pattern_id: number | null; pattern_code: string | null; pattern_name: string | null;
   days: Record<string, DayCell>;
-}
-
-/** A shift code short enough for a grid square: "GENERAL" reads as "G". */
-function shortShift(code: string | null | undefined): string {
-  if (!code) return "";
-  return code.length <= 2 ? code : code[0];
 }
 
 interface ShiftOption {
