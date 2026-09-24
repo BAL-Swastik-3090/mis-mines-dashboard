@@ -86,10 +86,17 @@ export default function MachineCover() {
   return (
     <Card>
       <CardHeader icon={Truck} title="Who can run what" tone="teal"
-        subtitle="Every machine, the people cleared to run it, and which of them are free on the day."
+        subtitle="The competency register, read by machine: who may run each one, and which of them can take it out on the day."
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <DateField className={`${inputClass} w-[150px]`} value={day} onChange={setDay} />
+            {/* Labelled, because an unlabelled date at the top of a list
+                reads as "this list is about that day" — and the list is not.
+                Who is cleared to run a machine is a standing fact; only the
+                free-today column moves when this changes. */}
+            <span className="inline-flex items-center gap-1.5 text-[11.5px] text-txt-muted">
+              free on
+              <DateField className={`${inputClass} w-[140px]`} value={day} onChange={setDay} />
+            </span>
             <button type="button" onClick={() => setGapsOnly((v) => !v)}
               className={`px-2.5 py-1.5 rounded-lg border text-[12px] transition-colors ${
                 gapsOnly ? "border-rose bg-rose-bg text-rose font-semibold"
@@ -109,6 +116,11 @@ export default function MachineCover() {
 
       {!error && (
         <>
+          <p className="px-4 pt-3 text-[12px] text-txt-muted">
+            Who is cleared to run a machine is a standing fact from the
+            competency register and does not change with the date. The date
+            decides only which of them are free.
+          </p>
           <div className="px-4 py-2 border-b border-border-light flex flex-wrap items-center
                           gap-3 text-[12px] text-txt-muted">
             <span><strong className="text-txt-primary tabular-nums">{shown.length}</strong> machines</span>
@@ -133,8 +145,8 @@ export default function MachineCover() {
                   <Th>Machine</Th>
                   <Th>Type</Th>
                   <Th>Normally run by</Th>
-                  <Th>Cleared</Th>
-                  <Th>Free today</Th>
+                  <Th>Cleared to run it</Th>
+                  <Th>Free that day</Th>
                   <Th> </Th>
                 </tr>
               </thead>
@@ -166,9 +178,24 @@ export default function MachineCover() {
                         {m.assigned_operator ?? <span className="text-txt-light">nobody assigned</span>}
                       </Td>
                       <Td>
+                        {/* The names, not just a count.
+                            This is the mapping somebody came to read — which
+                            machine can be run by whom — and hiding it behind a
+                            click made the screen look like it was about the
+                            date at the top. The count alone answers nothing:
+                            "3" is not a name you can ring. */}
                         {m.can_run === 0
-                          ? <Chip tone="rose" dot={false}>nobody</Chip>
-                          : <Chip tone="slate" dot={false}>{m.can_run}</Chip>}
+                          ? <Chip tone="rose" dot={false}>nobody cleared</Chip>
+                          : (
+                            <span className="text-[12px]">
+                              {m.candidates.slice(0, 3).map((c) => c.person).join(", ")}
+                              {m.can_run > 3 && (
+                                <span className="text-txt-light">
+                                  {" "}and {m.can_run - 3} more
+                                </span>
+                              )}
+                            </span>
+                          )}
                       </Td>
                       <Td>
                         {m.free_now === 0
