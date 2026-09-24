@@ -619,16 +619,22 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
               Rest
             </Button>
 
+            {/* Named for what it does to the square, not for the mechanism
+                underneath. "Back to pattern" is meaningless on a mine where
+                nobody is on a pattern — which is this one, all 204 of them —
+                and somebody looking for the way to make a day blank had no
+                reason to think this was it. */}
             <Button size="sm" variant="ghost" disabled={cellBusy}
                     onClick={() => void applyToCells("CLEAR")}
-                    title="Forget the decision and let the pattern decide again">
-              Back to pattern
+                    title="Take the decision off these days. They go back to the person's pattern, or blank if they are not on one.">
+              Make blank
             </Button>
 
             <Button size="sm" variant="ghost" disabled={cellBusy}
                     onClick={() => { setCells(new Set()); setLastCell(null); }}
-                    className="ml-auto">
-              Clear selection
+                    className="ml-auto"
+                    title="Let go of these squares without changing anything">
+              Deselect
             </Button>
             {cellBusy && <Loader2 className="w-3.5 h-3.5 animate-spin text-txt-light" />}
           </div>
