@@ -40,7 +40,7 @@ import Dialog from "@/components/minehub/Dialog";
 import ColumnFilter, { optionsFrom, matches } from "@/components/minehub/ColumnFilter";
 import StarterPatterns from "./StarterPatterns";
 import {
-  DAY_STATE, UNROSTERED, dayLabel, isoDay, addDays, span, prettyDate,
+  DAY_STATE, SHIFT_LOOK, shiftBand, UNROSTERED, dayLabel, isoDay, addDays, span, prettyDate,
   type DayCell,
 } from "./state";
 
@@ -227,6 +227,11 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
     if (!dragging) return;
     setCells((was) => new Set(was).add(cellKey(op, iso)));
   }, [dragging]);
+
+  // When each shift starts, by code. The colour of a square follows the clock,
+  // and the board only knows the code.
+  const startOf = useMemo(() => Object.fromEntries(
+    shifts.map((sh) => [sh.code, sh.start_time])), [shifts]);
 
   const chosenCells = useMemo(() => [...cells].map((k) => {
     const [op, iso] = k.split("|");
@@ -543,7 +548,23 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
         )}
 
         <div className="px-5 py-2.5 border-b border-slate-100 flex flex-wrap items-center gap-3">
-          {Object.entries(DAY_STATE).map(([key, look]) => (
+          {/* The shifts first, because they are what the board is mostly made
+              of, and a legend that leads with "on duty" explains the one thing
+              nobody needed explaining. */}
+          {shifts.map((sh) => {
+            const look = SHIFT_LOOK[shiftBand(sh.code, sh.start_time)];
+            return (
+              <span key={sh.code} className="inline-flex items-center gap-1.5 text-[11.5px] text-txt-muted"
+                    title={`${sh.name} · ${sh.start_time?.slice(0, 5)}–${sh.end_time?.slice(0, 5)}`}>
+                <span className={`w-3.5 h-3.5 rounded border ${look.cell}
+                                  inline-flex items-center justify-center text-[8px] font-bold`}>
+                  {shortShift(sh.code)}
+                </span>
+                {sh.name}
+              </span>
+            );
+          })}
+          {Object.entries(DAY_STATE).filter(([key]) => key !== "ON").map(([key, look]) => (
             <span key={key} className="inline-flex items-center gap-1.5 text-[11px] text-txt-muted">
               <span className={`w-3.5 h-3.5 rounded border ${look.cell}`} />
               {look.label}
@@ -579,6 +600,10 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
               <Button key={sh.code} size="sm" disabled={cellBusy}
                       onClick={() => void applyToCells(sh.code)}
                       title={`${sh.name} · ${sh.start_time?.slice(0, 5)}–${sh.end_time?.slice(0, 5)}`}>
+                {/* The same colour the square will take, so the button and the
+                    result are recognisably the same thing. */}
+                <span className={`w-2 h-2 rounded-full
+                                  ${SHIFT_LOOK[shiftBand(sh.code, sh.start_time)].dot}`} />
                 {shortShift(sh.code)}
                 <span className="text-[10.5px] font-normal text-txt-muted ml-0.5">
                   {sh.start_time?.slice(0, 5)}
@@ -699,7 +724,13 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
                     </td>
                     {dates.map((iso) => {
                       const cell = p.days?.[iso];
-                      const look = cell?.state ? DAY_STATE[cell.state] : UNROSTERED;
+                      // A working day is coloured by which shift it is; every
+                      // other kind of day keeps the colour of its state, because
+                      // "resting" and "on leave" are not shifts and drawing them
+                      // as one would undo the distinction the palette exists for.
+                      const look = cell?.state === "ON"
+                        ? SHIFT_LOOK[shiftBand(cell.shift, startOf[cell.shift ?? ""])]
+                        : cell?.state ? DAY_STATE[cell.state] : UNROSTERED;
                       const on = cells.has(cellKey(p.operator_id, iso));
                       // Leave and closures are not this screen's to overrule,
                       // so those squares are not offered for selection at all.

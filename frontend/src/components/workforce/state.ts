@@ -31,6 +31,60 @@ export const DAY_STATE: Record<string, { label: string; tone: Tone; cell: string
   HOLIDAY: { label: "Holiday",  tone: "violet",  cell: "bg-violet/15 text-violet border-violet/30" },
 };
 
+/**
+ * A colour per shift, so a roster can be read without reading it.
+ *
+ * "On duty" in one green answered the wrong question. Whether somebody is
+ * working is visible from the letter; what a supervisor scans a fortnight for
+ * is the shape of the crews — who is on nights this week, where the handover
+ * falls, whether one man is on mornings on Monday and nights on Tuesday. All
+ * one colour, that has to be read letter by letter.
+ *
+ * The colours follow the clock rather than the alphabet, because that is the
+ * thing they mean: morning is warm, the afternoon is bright, the night shift is
+ * dark, and the general shift — the one that is not a rotation at all — is set
+ * apart in teal. A mine that renames its shifts keeps the sense of it, because
+ * the mapping is by start time first and by code only as a fallback.
+ */
+export const SHIFT_LOOK: Record<string, { cell: string; dot: string; label: string }> = {
+  MORNING: { cell: "bg-amber/15 text-amber border-amber/40",
+             dot: "bg-amber", label: "Morning" },
+  AFTERNOON: { cell: "bg-sky/15 text-sky border-sky/40",
+               dot: "bg-sky", label: "Afternoon" },
+  NIGHT:   { cell: "bg-indigo/15 text-indigo border-indigo/40",
+             dot: "bg-indigo", label: "Night" },
+  GENERAL: { cell: "bg-teal/15 text-teal border-teal/40",
+             dot: "bg-teal", label: "General" },
+  OTHER:   { cell: "bg-emerald/15 text-emerald border-emerald/30",
+             dot: "bg-emerald", label: "On duty" },
+};
+
+/** Which of those a shift is, from when it starts.
+ *
+ *  By the clock, not the code: this mine calls them A, B and C, the next one
+ *  calls them 1, 2 and 3, and both mean the same three parts of a day. A shift
+ *  with no start time recorded falls back to its letter, and then to the
+ *  neutral green, which is where every shift used to be. */
+export function shiftBand(code: string | null | undefined,
+                          startTime?: string | null): keyof typeof SHIFT_LOOK {
+  const c = (code ?? "").toUpperCase();
+  if (c.startsWith("GEN")) return "GENERAL";
+
+  if (startTime) {
+    const hour = Number(startTime.slice(0, 2));
+    if (!Number.isNaN(hour)) {
+      if (hour >= 4 && hour < 12) return "MORNING";
+      if (hour >= 12 && hour < 19) return "AFTERNOON";
+      return "NIGHT";
+    }
+  }
+
+  if (c === "A") return "MORNING";
+  if (c === "B") return "AFTERNOON";
+  if (c === "C") return "NIGHT";
+  return "OTHER";
+}
+
 /** Nothing said at all. Deliberately drawn as absence of information rather
  *  than as a rest day: somebody nobody has rostered is a gap in the register,
  *  and a roster that quietly shows them resting hides it. */
