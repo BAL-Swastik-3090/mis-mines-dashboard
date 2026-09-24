@@ -620,6 +620,16 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
               </span>
             );
           })}
+          {/* The combination, not just the pieces. Somebody reading this row
+              has to be able to work out what a teal square with a violet
+              dashed border means without being told twice. */}
+          <span className="inline-flex items-center gap-1.5 text-[11.5px] text-txt-muted"
+                title="A shift worked on a holiday — the letter is the shift, the dashed violet border is the holiday. A compensatory off is owed.">
+            <span className={`w-3.5 h-3.5 rounded border-2 border-violet border-dashed
+                              ${SHIFT_LOOK.GENERAL.cell} inline-flex items-center
+                              justify-center text-[8px] font-bold`}>G</span>
+            worked on a holiday
+          </span>
           {Object.entries(DAY_STATE).filter(([key]) => key !== "ON").map(([key, look]) => (
             <span key={key} className="inline-flex items-center gap-1.5 text-[11px] text-txt-muted">
               <span className={`w-3.5 h-3.5 rounded border ${look.cell}`} />
@@ -833,8 +843,24 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
                             }}
                             onMouseEnter={() => { if (!fixed) dragOver(p.operator_id, iso); }}
                             className={`relative inline-flex items-center justify-center w-7 h-6
-                                        rounded border text-[10.5px] font-bold transition-shadow
+                                        rounded text-[10.5px] font-bold transition-shadow
                                         ${look.cell}
+                                        ${/* Two facts, two things drawing them.
+                                              The fill and the letter say what
+                                              the person is doing. The border
+                                              says what kind of day it is.
+
+                                              They were competing for the same
+                                              square before: a man put on G
+                                              shift on Gandhi Jayanti still read
+                                              as "H", because whichever fact won
+                                              erased the other. Working a
+                                              holiday is the case the roster
+                                              most needs to show, and it was the
+                                              one case it could not. */
+                                          cell?.hol && cell?.state !== "HOLIDAY"
+                                            ? "border-2 border-violet border-dashed"
+                                            : "border"}
                                         ${mayManage && !fixed ? "cursor-pointer hover:ring-1 hover:ring-gold/60" : ""}
                                         ${on ? "ring-2 ring-gold ring-offset-1" : ""}`}>
                             {cell?.state === "ON" ? shortShift(cell.shift)
@@ -847,13 +873,6 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
                             {cell?.by_hand && (
                               <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5
                                                rounded-full bg-gold" />
-                            )}
-                            {/* Worked on a holiday. A day back is owed for it,
-                                and a roster that draws it as an ordinary shift
-                                is how the debt goes unnoticed. */}
-                            {cell?.earns_comp_off && (
-                              <span className="absolute -bottom-0.5 -left-0.5 w-1.5 h-1.5
-                                               rounded-full bg-violet ring-1 ring-white" />
                             )}
                           </button>
                         </td>

@@ -250,9 +250,21 @@ export default function OperatorDashboard({ operatorId, onClose, mayApply, onCha
                       : cell?.state ? DAY_STATE[cell.state] : UNROSTERED;
                     const isToday = iso === today;
                     return (
-                      <span key={iso} title={`${prettyDate(iso)} — ${cell?.label ?? UNROSTERED.label}`}
+                      <span key={iso}
+                        title={`${prettyDate(iso)} — ${cell?.label ?? UNROSTERED.label}`
+                               + (cell?.hol && cell?.state !== "HOLIDAY" ? ` · ${cell.hol}` : "")
+                               + (cell?.earns_comp_off ? " · earns a comp off" : "")}
                         className={`inline-flex flex-col items-center justify-center w-9 h-11
-                                    rounded-lg border text-[10px] font-bold ${look.cell}
+                                    rounded-lg text-[10px] font-bold ${look.cell}
+                                    ${/* Same rule as the board: the fill is what
+                                          he is doing, the border is what kind of
+                                          day it is. A man's own record and the
+                                          roster disagreeing about how a worked
+                                          holiday looks is worse than either
+                                          drawing it badly. */
+                                      cell?.hol && cell?.state !== "HOLIDAY"
+                                        ? "border-2 border-violet border-dashed"
+                                        : "border"}
                                     ${isToday ? "ring-2 ring-navy ring-offset-1" : ""}`}>
                         <span className="text-[9px] opacity-70">{iso.slice(8, 10)}</span>
                         <span className="text-[12px]">

@@ -218,6 +218,10 @@ def duty(db: Session, from_date: date, to_date: date,
                     "kind": on_leave["type_code"], "leave_ref": on_leave["leave_ref"],
                     "half_day": half, "colour": on_leave["colour"],
                     "blocks": on_leave["blocks_deployment"],
+                    # The holiday travels with the day even when somebody is on
+                    # leave through it. Two facts about one square, and the
+                    # screen needs both to draw either honestly.
+                    "hol": hol["name"] if hol else None,
                 }
                 continue
 
@@ -238,12 +242,13 @@ def duty(db: Session, from_date: date, to_date: date,
                     # Rested on a holiday is the holiday, said plainly.
                     per_day[iso] = {"state": HOLIDAY, "shift": None,
                                     "label": hol["name"], "kind": hol["kind"],
-                                    "by_hand": True}
+                                    "hol": hol["name"], "by_hand": True}
                 else:
                     per_day[iso] = {"state": OFF, "shift": None,
                                     "label": "rest day", "kind": None,
                                     "pattern": None, "by_hand": True,
-                                    "reason": said["reason"]}
+                                    "reason": said["reason"],
+                                    "hol": hol["name"] if hol else None}
                 continue
 
             # The assignment in force on this particular day, not the newest
@@ -256,7 +261,8 @@ def duty(db: Session, from_date: date, to_date: date,
                 # Nobody has rostered them. On an ordinary day that is a gap;
                 # on a holiday it is simply their holiday.
                 per_day[iso] = ({"state": HOLIDAY, "shift": None,
-                                 "label": hol["name"], "kind": hol["kind"]}
+                                 "label": hol["name"], "kind": hol["kind"],
+                                 "hol": hol["name"]}
                                 if hol else
                                 {"state": None, "shift": None,
                                  "label": "not on a roster", "kind": None})
@@ -267,6 +273,7 @@ def duty(db: Session, from_date: date, to_date: date,
             if slot == REST:
                 per_day[iso] = ({"state": HOLIDAY, "shift": None,
                                  "label": hol["name"], "kind": hol["kind"],
+                                 "hol": hol["name"],
                                  "pattern": pattern["code"] if pattern else None}
                                 if hol else
                                 {"state": OFF, "shift": None, "label": "rest day",
