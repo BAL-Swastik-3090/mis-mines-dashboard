@@ -714,9 +714,19 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
                                        hover:text-gold hover:underline cursor-pointer">
                             {p.display_name}
                           </span>
+                          {/* The job first, always. It used to appear only for
+                              somebody already on a pattern, so on a mine where
+                              nobody is — this one — the column was two hundred
+                              names and no way to tell a driver from a fitter.
+                              Which crew you are rostering is the first thing
+                              you need and the last thing it was showing. */}
                           <span className="block text-[10.5px] text-txt-light truncate">
+                            <span className="text-txt-muted">
+                              {p.trade || p.designation || "job not set"}
+                            </span>
+                            {" · "}
                             {p.pattern_code
-                              ? `${p.pattern_code} · ${p.designation || "role not set"}`
+                              ? p.pattern_code
                               : <span className="text-rose font-semibold">not on a roster</span>}
                           </span>
                         </span>
