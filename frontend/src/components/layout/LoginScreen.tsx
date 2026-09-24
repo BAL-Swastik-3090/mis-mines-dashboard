@@ -89,9 +89,28 @@ export default function LoginScreen({ onLoginSuccess, notice = null }: LoginScre
       }
     } catch (err: unknown) {
       console.error("Login failed:", err);
-      const detail =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setError(detail || "Connection failed. Please try again.");
+      const e = err as {
+        code?: string;
+        response?: { status?: number; data?: { detail?: string } };
+      };
+      const detail = e?.response?.data?.detail;
+
+      // Say which of the three it was.
+      //
+      // "Connection failed" was shown for all of them, including the case that
+      // actually happens: the sign-in worked and took longer than the browser
+      // was willing to wait, because the intranet database was busy serving
+      // several open tabs. Somebody told their connection failed retypes their
+      // password; somebody told the server is busy waits and tries again,
+      // which is the thing that works.
+      setError(
+        detail
+        ?? (e?.code === "ECONNABORTED"
+              ? "The server took too long to answer — it is busy rather than down. "
+                + "Wait a moment and sign in again."
+          : e?.response?.status
+              ? `The server refused the sign-in (${e.response.status}). Please try again.`
+              : "Could not reach the server. Check you are on the mine network."));
     } finally {
       setLoading(false);
     }
