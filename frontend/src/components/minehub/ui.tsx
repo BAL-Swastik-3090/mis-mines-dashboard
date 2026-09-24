@@ -132,22 +132,42 @@ export function Card({ children, className = "", tone }: {
   );
 }
 
-export function CardHeader({ title, subtitle, actions, icon: Icon, tone = "slate" }: {
+export function CardHeader({ title, subtitle, actions, icon: Icon, tone = "slate",
+                             subtitleOnIcon = false }: {
   title: string; subtitle?: string; actions?: React.ReactNode;
   icon?: React.ElementType; tone?: Tone;
+  /** Put the explanation behind the icon instead of under the title.
+   *
+   *  The same reasoning as PageHeader's `tuck`: three lines saying what a
+   *  screen is for are worth reading once and cost sixty vertical pixels every
+   *  time anybody opens it afterwards. Tucked away it is still there for
+   *  whoever needs it, and the table starts higher for everybody else. */
+  subtitleOnIcon?: boolean;
 }) {
   const t = TONE[tone];
+  const tucked = subtitleOnIcon && subtitle && Icon;
+  const badge = Icon && (
+    <span className={`shrink-0 w-8 h-8 rounded-lg ${t.bg} ring-1 ${t.ring}
+                      flex items-center justify-center ${tucked ? "cursor-help" : ""}`}>
+      <Icon className={`w-4 h-4 ${t.text}`} />
+    </span>
+  );
   return (
     <header className="px-5 py-4 border-b border-border-light flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0 flex items-start gap-3">
-        {Icon && (
-          <span className={`shrink-0 w-8 h-8 rounded-lg ${t.bg} ring-1 ${t.ring} flex items-center justify-center`}>
-            <Icon className={`w-4 h-4 ${t.text}`} />
-          </span>
-        )}
+        {tucked ? (
+          <HoverCard width={340} card={
+            <>
+              <CardHead title={title} />
+              <CardNote>{subtitle}</CardNote>
+            </>
+          }>{badge}</HoverCard>
+        ) : badge}
         <div className="min-w-0">
           <h2 className="font-semibold text-[14px] text-navy leading-tight">{title}</h2>
-          {subtitle && <p className="text-[12px] text-txt-muted mt-1 max-w-[74ch]">{subtitle}</p>}
+          {subtitle && !subtitleOnIcon && (
+            <p className="text-[12px] text-txt-muted mt-1 max-w-[74ch]">{subtitle}</p>
+          )}
         </div>
       </div>
       {/* Allowed to wrap and to shrink. shrink-0 here meant a header with

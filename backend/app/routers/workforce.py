@@ -872,7 +872,27 @@ def who_can_run(request: Request,
                           'operator_ref', co.operator_ref,
                           'shift', oa.shift,
                           'role', oa.role,
-                          'since', oa.valid_from)
+                          'since', oa.valid_from,
+                          -- The assessment for this machine, or for its class.
+                          -- A crew chip that cannot say what the man is rated
+                          -- is a chip that looks the same for somebody signed
+                          -- off at level 4 and somebody never assessed.
+                          'level', (SELECT oc.level FROM operator_competency oc
+                                     WHERE oc.operator_id = oa.operator_id
+                                       AND oc.dimension = 'OVERALL'
+                                       AND oc.status = 'ACTIVE'
+                                       AND (oc.asset_id = a.asset_id
+                                            OR (oc.asset_id IS NULL
+                                                AND oc.asset_type_id = a.asset_type_id))
+                                     ORDER BY oc.asset_id NULLS LAST LIMIT 1),
+                          'rating', (SELECT oc.rating FROM operator_competency oc
+                                      WHERE oc.operator_id = oa.operator_id
+                                        AND oc.dimension = 'OVERALL'
+                                        AND oc.status = 'ACTIVE'
+                                        AND (oc.asset_id = a.asset_id
+                                             OR (oc.asset_id IS NULL
+                                                 AND oc.asset_type_id = a.asset_type_id))
+                                      ORDER BY oc.asset_id NULLS LAST LIMIT 1))
                         ORDER BY cp.legal_name)
                    FROM operator_assignment oa
                    JOIN operator co ON co.operator_id = oa.operator_id
@@ -1073,9 +1093,28 @@ def list_people(request: Request, db: Session = Depends(get_minehub_db)) -> list
     return [dict(r) for r in db.execute(text("""
         SELECT o.operator_id, o.operator_ref, o.designation, p.display_name,
                rp.code AS pattern_code, rp.name AS pattern_name,
-               ra.effective_from
+               ra.effective_from,
+               -- What a picker needs to narrow two hundred names to the ten
+               -- worth reading: the contractor who employs him, the department
+               -- he sits in, and the job he is classified as.
+               t.name  AS trade,
+               e.display_name AS employer,
+               ou.name AS department,
+               -- The machines he is already on. Somebody being offered for a
+               -- second machine should be offered with that visible, because
+               -- one man on four tippers is a plan that cannot happen and the
+               -- screen is where it gets noticed.
+               COALESCE((
+                 SELECT json_agg(a2.fleet_code ORDER BY a2.fleet_code)
+                   FROM operator_assignment oa2
+                   JOIN asset a2 ON a2.asset_id = oa2.asset_id
+                  WHERE oa2.operator_id = o.operator_id AND oa2.status = 'ACTIVE'
+               ), '[]'::json) AS assigned_to
         FROM operator o
         JOIN party p ON p.party_id = o.party_id
+        LEFT JOIN trade t ON t.trade_id = o.trade_id
+        LEFT JOIN party e ON e.party_id = o.employer_party_id
+        LEFT JOIN org_unit ou ON ou.org_unit_id = o.org_unit_id
         LEFT JOIN roster_assignment ra
                ON ra.operator_id = o.operator_id AND ra.effective_to IS NULL
         LEFT JOIN roster_pattern rp ON rp.pattern_id = ra.pattern_id

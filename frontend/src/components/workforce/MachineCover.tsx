@@ -37,12 +37,18 @@ import { isoDay } from "./state";
 interface Person {
   operator_id: number; display_name: string; operator_ref: string | null;
   designation: string | null;
+  trade: string | null; employer: string | null; department: string | null;
+  /** Machines this person is already named against. Offering somebody for a
+   *  second machine without showing this is how one man ends up planned onto
+   *  four tippers. */
+  assigned_to: string[];
 }
 
 interface CrewMember {
   operator_id: number; person: string; operator_ref: string | null;
   role: string; shift: string | null; since: string;
   cleared: boolean; state: string | null;
+  level: number | null; rating: number | null;
 }
 
 interface Candidate {
@@ -90,7 +96,6 @@ export default function MachineCover() {
   const [rows, setRows] = useState<Machine[]>([]);
   const [people, setPeople] = useState<Person[]>([]);
   const [q, setQ] = useState("");
-  const [gapsOnly, setGapsOnly] = useState(false);
   // Machines are narrowed the way a planner thinks about them: the part of the
   // mine, the kind of work, the hire. Three hundred rows is not a list anybody
   // reads, and a filter is what turns it into one.
@@ -100,6 +105,12 @@ export default function MachineCover() {
   const [pending, setPending] = useState<File | null>(null);
   const [editing, setEditing] = useState<number | null>(null);
   const [pick, setPick] = useState("");
+  // Chosen but not yet saved. Every click used to be a write, so a supervisor
+  // building a crew of four made four round trips and could not change their
+  // mind halfway without undoing what they had already done.
+  const [draft, setDraft] = useState<CrewMember[]>([]);
+  const [pickBy, setPickBy] = useState({ trade: "", employer: "", department: "" });
+  const [section, setSection] = useState<"all" | "planned" | "none">("all");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -165,6 +176,12 @@ export default function MachineCover() {
 
   /** Only people actually on a crew. Offering all 211 would be a list of
    *  names that mostly return nothing. */
+  const peopleOptions = useMemo(() => ({
+    trade: [...new Set(people.map((p2) => p2.trade).filter(Boolean) as string[])].sort(),
+    employer: [...new Set(people.map((p2) => p2.employer).filter(Boolean) as string[])].sort(),
+    department: [...new Set(people.map((p2) => p2.department).filter(Boolean) as string[])].sort(),
+  }), [people]);
+
   const crewNames = useMemo(() =>
     [...new Set(rows.flatMap((m) => m.crew.map((c) => c.person)))].sort(),
     [rows]);
@@ -215,7 +232,9 @@ export default function MachineCover() {
   }, [pending, load]);
 
   const shown = useMemo(() => rows
-    .filter((m) => !gapsOnly || m.crew_size === 0)
+    .filter((m) => section === "all" ? true
+                 : section === "planned" ? m.crew_size > 0
+                 : m.crew_size === 0)
     .filter((m) => (!by.category || m.category === by.category)
                 && (!by.department || (m.department ?? "") === by.department)
                 && (!by.type || m.asset_type === by.type)
@@ -228,7 +247,7 @@ export default function MachineCover() {
       m.fleet_code, m.registration_no, m.nickname, m.asset_type,
       ...m.crew.map((c) => c.person),
       ...m.candidates.map((c) => c.person),
-    ])), [rows, q, gapsOnly, by]);
+    ])), [rows, q, by, section]);
 
   const unplanned = rows.filter((m) => m.crew_size === 0).length;
   const planned = rows.reduce((n, m) => n + m.crew_size, 0);
@@ -236,13 +255,18 @@ export default function MachineCover() {
 
   return (
     <Card>
+      {/* The explanation is on the icon, not under the title. Three lines
+          saying what the screen is for cost sixty vertical pixels every time
+          anybody opens it, and are worth reading once. */}
       <CardHeader icon={Truck} title="Who runs what" tone="teal"
+        subtitleOnIcon
         subtitle="The standing plan: the crew named against each machine. Naming somebody here deploys nobody — that happens on the Shift Board, on the day."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex items-center gap-1.5 text-[11.5px] text-txt-muted">
               roster of
-              <DateField className={`${inputClass} w-[140px]`} value={day} onChange={setDay} />
+              <DateField className={`${inputClass} w-[125px] py-1 text-[12px]`}
+                         value={day} onChange={setDay} />
             </span>
             {/* One shape for all four, so the bar reads as a set rather than
                 four controls that happen to sit together. */}
@@ -261,12 +285,6 @@ export default function MachineCover() {
                 {options.map((o) => <option key={o} value={o}>{o}</option>)}
               </select>
             ))}
-            <button type="button" onClick={() => setGapsOnly((v) => !v)}
-              className={`px-2.5 py-1.5 rounded-lg border text-[12px] transition-colors ${
-                gapsOnly ? "border-rose bg-rose-bg text-rose font-semibold"
-                         : "border-border text-txt-muted hover:bg-bg-hover"}`}>
-              No crew
-            </button>
             <Button size="sm" variant="secondary" disabled={busy}
                     onClick={() => void exportPlan()} title="Download the whole plan">
               <Download className="w-3.5 h-3.5" /> Excel
@@ -300,7 +318,24 @@ export default function MachineCover() {
         <>
           <div className="px-4 py-2 border-b border-border-light flex flex-wrap items-center
                           gap-3 text-[12px] text-txt-muted">
-            <span><strong className="text-txt-primary tabular-nums">{shown.length}</strong> machines</span>
+            {/* Two sections, because they are two jobs. Reading a plan and
+                filling the gaps in one are different errands, and a single
+                list of a hundred and seven mixes them. */}
+            <div className="flex rounded-lg border border-border overflow-hidden">
+              {([
+                ["all", `All ${rows.length}`],
+                ["planned", `Assigned ${rows.length - unplanned}`],
+                ["none", `No crew ${unplanned}`],
+              ] as const).map(([id, label]) => (
+                <button key={id} type="button" onClick={() => setSection(id)}
+                  className={`px-2.5 py-1 text-[12px] transition-colors ${
+                    section === id
+                      ? "bg-gold/15 text-txt-primary font-semibold"
+                      : "text-txt-muted hover:bg-bg-hover"}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
             <span><strong className="text-txt-primary tabular-nums">{planned}</strong> people planned</span>
             {unplanned > 0 && (
               <span className="inline-flex items-center gap-1 text-amber">
@@ -334,25 +369,36 @@ export default function MachineCover() {
                 {!loading && shown.length === 0 && (
                   <EmptyRow colSpan={4}>
                     {rows.length === 0 ? "No machines to show."
-                      : gapsOnly ? "Every machine has a crew."
+                      : section === "none" ? "Every machine has a crew."
                       : `Nothing matches “${q}”.`}
                   </EmptyRow>
                 )}
                 {!loading && shown.map((m) => {
                   const inCrew = new Set(m.crew.map((c) => c.operator_id));
-                  // Assessed people first and labelled as such, so adding
-                  // somebody who is not is a thing you can do and can see you
-                  // are doing.
-                  const offer = [
-                    ...m.candidates.filter((c) => !inCrew.has(c.operator_id))
-                      .map((c) => ({ id: c.operator_id, name: c.person,
-                                     note: `assessed · ${doing(c.state)}`, cleared: true })),
-                    ...people.filter((p) => !inCrew.has(p.operator_id)
-                        && !m.candidates.some((c) => c.operator_id === p.operator_id))
-                      .map((p) => ({ id: p.operator_id, name: p.display_name,
-                                     note: p.designation ?? "not assessed on this",
-                                     cleared: false })),
-                  ].filter((o) => matchesSearch(pick, [o.name, o.note]));
+                  const open = editing === m.asset_id;
+                  const chosen = open ? draft : m.crew;
+                  const drafted = new Set(chosen.map((c) => c.operator_id));
+
+                  // Everybody, narrowed by the picker's own filters and marked
+                  // with what the screen knows about them: assessed on this
+                  // machine, and where else they are already named.
+                  const offer = people
+                    .filter((pp) => !drafted.has(pp.operator_id))
+                    .filter((pp) => (!pickBy.trade || pp.trade === pickBy.trade)
+                                 && (!pickBy.employer || pp.employer === pickBy.employer)
+                                 && (!pickBy.department || pp.department === pickBy.department))
+                    .map((pp) => {
+                      const cand = m.candidates.find((c) => c.operator_id === pp.operator_id);
+                      return {
+                        id: pp.operator_id, name: pp.display_name,
+                        trade: pp.trade, cleared: Boolean(cand),
+                        rating: cand?.rating ?? null, level: cand?.level ?? null,
+                        elsewhere: (pp.assigned_to ?? []).filter((f) => f !== m.fleet_code),
+                      };
+                    })
+                    .filter((o) => matchesSearch(pick, [o.name, o.trade]))
+                    .sort((a, b) => Number(b.cleared) - Number(a.cleared)
+                                 || a.name.localeCompare(b.name));
 
                   return (
                     <tr key={m.asset_id} className="border-t border-border-light align-top">
@@ -366,106 +412,155 @@ export default function MachineCover() {
 
                       <Td>
                         <div className="flex flex-wrap items-center gap-1.5">
-                          {m.crew.map((c) => (
+                          {chosen.map((c) => (
                             <span key={c.operator_id}
                               title={`${c.role.toLowerCase()} · ${doing(c.state)}`
-                                     + (c.cleared ? " · assessed"
-                                                  : " · NOT assessed on this machine")}
+                                     + (c.cleared
+                                          ? ` · assessed${c.level ? ` at level ${c.level}` : ""}`
+                                          : " · NOT assessed on this machine")}
                               className={`inline-flex items-center gap-1 rounded-full pl-2 pr-1
                                           py-0.5 text-[11.5px] border ${
                                 c.cleared ? "bg-emerald-bg border-emerald-ring text-emerald"
                                           : "bg-rose-bg border-rose-ring text-rose"}`}>
                               {c.cleared && <ShieldCheck className="w-3 h-3" />}
                               {c.person}
+                              {/* What he is rated, or that nobody has said.
+                                  A crew chip that looks the same for a man
+                                  signed off at level 4 and a man never assessed
+                                  is a chip that tells a supervisor nothing. */}
+                              <span className="text-[10px] opacity-80">
+                                {c.rating ? `${c.rating}/5`
+                                  : c.level ? `L${c.level}`
+                                  : "not assessed"}
+                              </span>
                               <Chip tone={ROLE_TONE[c.role] ?? "slate"} dot={false}>
                                 {c.role.toLowerCase()}
                               </Chip>
                               <button type="button" disabled={busy}
                                 title={`Take ${c.person} off ${m.fleet_code}`}
-                                onClick={() => void saveCrew(m,
-                                  m.crew.filter((x) => x.operator_id !== c.operator_id))}
+                                onClick={() => open
+                                  ? setDraft(draft.filter((x) => x.operator_id !== c.operator_id))
+                                  : void saveCrew(m, m.crew.filter(
+                                      (x) => x.operator_id !== c.operator_id))}
                                 className="rounded-full p-0.5 hover:bg-white/60">
                                 <X className="w-3 h-3" />
                               </button>
                             </span>
                           ))}
 
-                          {/* The picker is a panel of its own width, not a
-                              takeover of the cell. Letting it fill the row made
-                              one machine four hundred pixels tall and pushed the
-                              rest of the fleet off screen — the list you are
-                              choosing for stopped being visible while you chose.
-
-                              The comment sits here and not inside the ternary:
-                              a branch takes one element, and a comment beside
-                              the div is a second child with no parent. */}
-                          {editing === m.asset_id ? (
-                            <div className="mt-1 w-[320px] rounded-xl border border-gold/50
+                          {open ? (
+                            <div className="mt-1 w-[380px] rounded-xl border border-gold/50
                                             bg-white shadow-lg overflow-hidden">
-                              <div className="px-2.5 pt-2 pb-1.5 border-b border-slate-100">
+                              <div className="px-2.5 pt-2 pb-2 border-b border-slate-100 space-y-1.5">
                                 <input autoFocus value={pick} placeholder="Type a name…"
                                   onChange={(e) => setPick(e.target.value)}
                                   className={`${inputClass} py-1 text-[12px]`} />
+                                {/* The picker gets its own filters. Two hundred
+                                    names is not a list you scroll — a planner
+                                    knows the contractor, the department or the
+                                    trade before they know the name. */}
+                                <div className="flex flex-wrap gap-1">
+                                  {([
+                                    ["trade", "Any trade", peopleOptions.trade],
+                                    ["employer", "Any contractor", peopleOptions.employer],
+                                    ["department", "Any department", peopleOptions.department],
+                                  ] as const).map(([key, all, options]) => (
+                                    <select key={key} value={pickBy[key]}
+                                      onChange={(e) => setPickBy({ ...pickBy, [key]: e.target.value })}
+                                      className={`${inputClass} w-auto py-0.5 text-[11px] ${
+                                        pickBy[key] ? "border-gold font-semibold" : ""}`}>
+                                      <option value="">{all}</option>
+                                      {options.map((o) => <option key={o} value={o}>{o}</option>)}
+                                    </select>
+                                  ))}
+                                </div>
                               </div>
-                              <div className="max-h-52 overflow-auto">
+
+                              <div className="max-h-56 overflow-auto">
                                 {offer.length === 0 && (
                                   <p className="px-3 py-3 text-[11.5px] text-txt-light">
-                                    {pick ? `Nobody matches “${pick}”.` : "Nobody left to add."}
+                                    Nobody matches. Clear a filter above.
                                   </p>
                                 )}
-                                {offer.slice(0, 40).map((o) => (
-                                  <button key={o.id} type="button" disabled={busy}
-                                    onClick={() => {
-                                      void saveCrew(m, [...m.crew, {
-                                        operator_id: o.id, person: o.name,
-                                        operator_ref: null,
-                                        // The first person on a machine drives
-                                        // it; everybody after that covers.
-                                        role: m.crew.length === 0 ? "PRIMARY" : "RELIEF",
-                                        shift: null, since: day,
-                                        cleared: o.cleared, state: null,
-                                      }]);
-                                      setPick("");
-                                    }}
+                                {offer.slice(0, 60).map((o) => (
+                                  <button key={o.id} type="button"
+                                    onClick={() => setDraft([...chosen, {
+                                      operator_id: o.id, person: o.name,
+                                      operator_ref: null,
+                                      role: chosen.length === 0 ? "PRIMARY" : "RELIEF",
+                                      shift: null, since: day,
+                                      cleared: o.cleared, state: null,
+                                      level: o.level, rating: o.rating,
+                                    }])}
                                     className="w-full text-left px-3 py-1.5 flex items-center
                                                justify-between gap-2 hover:bg-gold/[0.07]
                                                border-b border-slate-50 last:border-0">
                                     <span className="min-w-0">
                                       <span className="block text-[12px] font-semibold
-                                                       text-navy truncate">
-                                        {o.name}
-                                      </span>
-                                      <span className={`block text-[10.5px] truncate ${
-                                        o.cleared ? "text-emerald" : "text-txt-light"}`}>
-                                        {o.note}
+                                                       text-navy truncate">{o.name}</span>
+                                      <span className="block text-[10.5px] text-txt-light truncate">
+                                        {o.trade ?? "trade not set"}
+                                        {/* Already on another machine. A man
+                                            planned onto four tippers is a plan
+                                            that cannot happen, and this is
+                                            where it gets noticed. */}
+                                        {o.elsewhere.length > 0 && (
+                                          <span className="text-amber">
+                                            {" · already on "}{o.elsewhere.join(", ")}
+                                          </span>
+                                        )}
                                       </span>
                                     </span>
-                                    {o.cleared
-                                      ? <ShieldCheck className="w-3.5 h-3.5 text-emerald shrink-0" />
-                                      : <Plus className="w-3.5 h-3.5 text-txt-light shrink-0" />}
+                                    <span className="shrink-0 text-[10.5px] text-right">
+                                      {o.cleared
+                                        ? <span className="text-emerald">
+                                            {o.rating ? `${o.rating}/5` : `L${o.level}`}
+                                          </span>
+                                        : <span className="text-txt-light">not assessed</span>}
+                                    </span>
                                   </button>
                                 ))}
                               </div>
+
                               <div className="px-2.5 py-1.5 border-t border-slate-100
-                                              flex items-center justify-between">
+                                              flex items-center justify-between gap-2">
                                 <span className="text-[10.5px] text-txt-light">
-                                  {offer.length} to choose from
+                                  {chosen.length} chosen · {offer.length} to pick from
                                 </span>
-                                <Button size="sm" variant="ghost"
-                                        onClick={() => { setEditing(null); setPick(""); }}>
-                                  Done
-                                </Button>
+                                <span className="flex items-center gap-1">
+                                  <Button size="sm" variant="ghost" disabled={busy}
+                                          onClick={() => { setEditing(null); setPick(""); }}>
+                                    Cancel
+                                  </Button>
+                                  {/* Saved once, when the crew is right. Every
+                                      click used to be a write, so building a
+                                      crew of four was four round trips and no
+                                      way to change your mind halfway. */}
+                                  <Button size="sm" variant="primary" disabled={busy}
+                                          onClick={() => {
+                                            void saveCrew(m, draft);
+                                            setEditing(null);
+                                            setPick("");
+                                          }}>
+                                    Save crew
+                                  </Button>
+                                </span>
                               </div>
                             </div>
                           ) : (
                             <button type="button" disabled={busy}
-                              onClick={() => { setEditing(m.asset_id); setPick(""); }}
+                              onClick={() => {
+                                setEditing(m.asset_id);
+                                setDraft(m.crew);
+                                setPick("");
+                                setPickBy({ trade: "", employer: "", department: "" });
+                              }}
                               className="inline-flex items-center gap-1 rounded-full border
                                          border-dashed border-slate-300 px-2 py-0.5
                                          text-[11.5px] text-txt-light hover:border-gold
                                          hover:text-gold">
                               <Plus className="w-3 h-3" />
-                              {m.crew.length === 0 ? "add a crew" : "add"}
+                              {m.crew.length === 0 ? "add a crew" : "change"}
                             </button>
                           )}
                         </div>
