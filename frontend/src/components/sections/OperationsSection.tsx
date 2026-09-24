@@ -13,10 +13,11 @@
  * one — so choosing it is the first thing the screen asks and the last thing it
  * forgets.
  */
+import MachineCover from "@/components/workforce/MachineCover";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Radar, Cpu, ClipboardList, ArrowLeftRight, BarChart3, Play, Loader2, CalendarClock,
-  GitCompare,
+  GitCompare, Truck,
 } from "lucide-react";
 import { useAuth } from "@/contexts/useAuth";
 import api from "@/lib/api";
@@ -27,13 +28,20 @@ import HotoCentre from "@/components/ops/HotoCentre";
 import Reconciliation from "@/components/ops/Reconciliation";
 import ShiftAnalysis from "@/components/ops/ShiftAnalysis";
 
-type TabId = "fleet" | "shift" | "hoto" | "reconcile" | "analysis";
+type TabId = "fleet" | "shift" | "cover" | "hoto" | "reconcile" | "analysis";
 
 const TABS: { id: TabId; label: string; icon: React.ElementType; tone: Tone; hint: string }[] = [
   { id: "fleet", label: "Live Fleet", icon: Cpu, tone: "sky",
     hint: "Every machine, what it is doing, and what is stopping the rest" },
   { id: "shift", label: "Shift Board", icon: ClipboardList, tone: "violet",
     hint: "Attendance, shortages, deployments and what is blocking the shift" },
+  // Beside the shift board rather than in Workforce Planning. It answers a
+  // question asked while a shift is being filled — somebody has not turned up,
+  // who else can take the machine — and that is this screen's work, not the
+  // planner's. Workforce Planning decides who works which week; this decides
+  // who is on which machine this morning.
+  { id: "cover", label: "Who can run what", icon: Truck, tone: "teal",
+    hint: "Every machine, who is cleared to run it, and who is free today" },
   { id: "hoto", label: "Handover", icon: ArrowLeftRight, tone: "amber",
     hint: "Transferring responsibility for a machine, with the inspection that goes with it" },
   { id: "reconcile", label: "Reconcile", icon: GitCompare, tone: "rose",
@@ -198,6 +206,7 @@ export default function OperationsSection() {
         <ShiftBoard shift={shift} shifts={shifts} onShiftChange={setCurrent}
           rights={rights} onChanged={load} />
       )}
+      {tab === "cover" && <MachineCover />}
       {tab === "hoto" && (
         <HotoCentre openId={hotoToOpen} onOpened={() => setHotoToOpen(null)}
           rights={rights} onChanged={load} />
