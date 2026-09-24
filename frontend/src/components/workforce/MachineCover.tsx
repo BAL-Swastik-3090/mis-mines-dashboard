@@ -27,13 +27,12 @@ import {
 } from "lucide-react";
 import api from "@/lib/api";
 import { matchesSearch } from "@/lib/search";
-import DateField from "@/components/minehub/DateField";
 import {
   Card, CardHeader, Chip, EmptyRow, Td, Th, inputClass, Button,
   filterSelectClass, type Tone,
 } from "@/components/minehub/ui";
 import Dialog from "@/components/minehub/Dialog";
-import { isoDay } from "./state";
+import { useDateFilter } from "@/contexts/useDateFilter";
 
 interface Person {
   operator_id: number; display_name: string; operator_ref: string | null;
@@ -93,7 +92,14 @@ function doing(state: string | null): string {
 }
 
 export default function MachineCover() {
-  const [day, setDay] = useState(isoDay(new Date()));
+  // The day comes from the date picker in the page header, not from one of its
+  // own. Two pickers on one screen is two answers to "which day am I looking
+  // at", and the one in the header is the one every other screen already obeys
+  // — a roster that disagreed with the header would be the screen at fault.
+  //
+  // The header picks a range; the day that matters here is the end of it, which
+  // is the "report as on" date the header itself displays.
+  const day = useDateFilter((s2) => s2.apiTo);
   const [rows, setRows] = useState<Machine[]>([]);
   const [people, setPeople] = useState<Person[]>([]);
   const [q, setQ] = useState("");
@@ -264,14 +270,6 @@ export default function MachineCover() {
         subtitle="The standing plan: the crew named against each machine. Naming somebody here deploys nobody — that happens on the Shift Board, on the day."
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 text-[11.5px] text-txt-muted">
-              roster of
-              {/* 160, not 125. The field holds dd-mm-yyyy plus a clear and a
-                  calendar icon, and at 125 the year was cut to "24-09-20:" —
-                  which is a date nobody can read and a year nobody can check. */}
-              <DateField className={`${inputClass} w-[160px] py-1 text-[12px]`}
-                         value={day} onChange={setDay} />
-            </span>
             {/* One shape for all four, so the bar reads as a set rather than
                 four controls that happen to sit together. */}
             {([

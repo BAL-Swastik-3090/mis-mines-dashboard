@@ -20,6 +20,7 @@ import {
   GitCompare, Truck,
 } from "lucide-react";
 import { useAuth } from "@/contexts/useAuth";
+import { useDateFilter } from "@/contexts/useDateFilter";
 import api from "@/lib/api";
 import { Button, Card, PageHeader, Tabs, type Tone } from "@/components/minehub/ui";
 import LiveFleet from "@/components/ops/LiveFleet";
@@ -67,6 +68,8 @@ export default function OperationsSection() {
   const mayView = can("ops.shift.view");
 
   const [tab, setTab] = useState<TabId>("fleet");
+  // The header's own label rather than a second formatting of the same dates.
+  const dateLabel = useDateFilter((s2) => s2.label);
   const [shifts, setShifts] = useState<ShiftRow[]>([]);
   const [definitions, setDefinitions] = useState<ShiftDefinition[]>([]);
   const [current, setCurrent] = useState<number | null>(null);
@@ -193,7 +196,20 @@ export default function OperationsSection() {
         }
       />
 
-      <Tabs tabs={TABS} value={tab} onChange={(id) => setTab(id as TabId)} />
+      {/* The date sits with the tabs, because that is the row somebody reads
+          just before they read the table underneath it. Every tab on this
+          screen is answering a question about a day, and which day it is was
+          only visible at the top of the page, above the fold on a laptop once
+          the table had been scrolled. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Tabs tabs={TABS} value={tab} onChange={(id) => setTab(id as TabId)} />
+        <span className="inline-flex items-center gap-1.5 text-[12px] text-txt-muted">
+          <CalendarClock className="w-3.5 h-3.5 text-gold" />
+          showing
+          <strong className="text-txt-primary">{dateLabel}</strong>
+          <span className="text-txt-light">· change it in the header</span>
+        </span>
+      </div>
 
       {tab === "fleet" && (
         <LiveFleet shiftInstanceId={current} rights={rights} onChanged={load}
