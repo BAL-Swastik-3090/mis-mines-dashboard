@@ -268,11 +268,28 @@ export default function OperatorPanel({ view: viewProp = "register", addOpen,
       if (!matches(o.employment_type, by.employment)) return false;
       if (!matches(o.approval_status, by.approval)) return false;
       if (!q) return true;
-      // The attendance id is searched because it is the number written on
-      // everything else in the mine, and looking somebody up by it is the
-      // commonest reason to open this screen.
-      return matchesSearch(q, [o.display_name, o.operator_ref, o.attendance_id, o.designation,
-              o.trade, o.employer]);
+      // Everything the register shows about a person, plus the numbers that
+      // identify one.
+      //
+      // The attendance id is the number written on everything else in the
+      // mine — the muster, the gate, the face reader — and looking somebody up
+      // by it is the commonest reason to open this screen. The mobile number
+      // is how a supervisor identifies a man he cannot name: it is on the
+      // contractor's list and on nothing else here.
+      //
+      // The rule is that a column you can see is a column you can search by.
+      // Department, group and employer are on screen, and a search that
+      // ignores them teaches people the box does not work.
+      return matchesSearch(q, [
+        o.display_name, o.operator_ref, o.attendance_id, o.biometric_id,
+        o.phone,
+        // A number given with the country code still finds the man whose
+        // number is stored without it. Matching runs one way — does the field
+        // contain what was typed — so the variant has to be on this side.
+        o.phone ? `91${o.phone}` : null,
+        o.designation, o.trade, o.trade_group, o.trade_machine, o.skill_class,
+        o.department, o.plant, o.employer, o.blood_group,
+      ]);
     });
   }, [operators, query, by]);
 
@@ -476,7 +493,7 @@ export default function OperatorPanel({ view: viewProp = "register", addOpen,
               <div className="relative">
                 <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-txt-light" />
                 <input id="op-search" value={query} onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Name, reference, role…"
+                  placeholder="Name, ID, mobile, trade, department…"
                   className="bg-bg-base border border-border rounded-lg pl-8 pr-3 py-1.5 text-[12px]
                              text-txt-primary placeholder:text-txt-light focus:outline-none
                              focus:border-gold w-full sm:w-[320px] lg:w-[440px] xl:w-[520px]" />
