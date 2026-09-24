@@ -52,6 +52,39 @@ interface Person {
   days: Record<string, DayCell>;
 }
 
+/** One line per person per shift, instead of one line per square.
+ *
+ *  A fortnight of the night crew is thirty rows of "→ C" and reads as noise;
+ *  as six lines saying who and how many days it is a thing somebody can check
+ *  before pressing Apply — which is the only reason the preview exists. */
+function groupDayChanges(rows: {
+  ref: string; display_name: string; on_date: string; to_shift: string;
+  from_shift: string | null;
+}[]) {
+  const groups = new Map<string, {
+    key: string; name: string; to: string; from: string | null;
+    dates: string[];
+  }>();
+  for (const r of rows) {
+    const key = `${r.ref}|${r.to_shift}`;
+    const g = groups.get(key)
+      ?? { key, name: r.display_name, to: r.to_shift, from: r.from_shift, dates: [] };
+    g.dates.push(r.on_date);
+    // Once a group covers days that were different things before, saying which
+    // one it came from would be a lie about the others.
+    if (g.from !== r.from_shift) g.from = null;
+    groups.set(key, g);
+  }
+  const pretty = (iso: string) =>
+    new Date(iso + "T00:00:00").toLocaleDateString("en-IN",
+      { day: "2-digit", month: "short" });
+  return [...groups.values()].map((g) => {
+    const dates = [...g.dates].sort();
+    return { ...g, days: dates.length,
+             first: pretty(dates[0]), last: pretty(dates[dates.length - 1]) };
+  }).sort((a, b) => a.name.localeCompare(b.name));
+}
+
 interface ShiftOption {
   code: string; name: string; start_time: string; end_time: string;
   planned_hours: number; crosses_midnight: boolean;
@@ -78,6 +111,13 @@ interface ImportReport {
   problems: { row: number; ref: string; why: string }[];
   unchanged: number;
   summary: Record<string, number>;
+  /** Single days from the grid or the Days sheet, as against whole patterns
+   *  from Assignments. This is what a mine with no patterns imports, so the
+   *  preview has to show it or there is nothing to confirm. */
+  day_changes?: {
+    row: number; ref: string; display_name: string; operator_id: number;
+    on_date: string; from_shift: string | null; to_shift: string;
+  }[];
 }
 
 const WINDOWS = [
@@ -896,22 +936,37 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
       </Dialog>
 
       <Dialog open={importing} tone="warning"
-        title={`Import ${preview?.changes.length ?? 0} roster change(s)`}
+        title={`Import ${(preview?.changes.length ?? 0)
+                         + (preview?.day_changes?.length ?? 0)} roster change(s)`}
         confirmLabel="Apply these changes" busy={busy}
         onConfirm={() => void applyImport()}
         onCancel={() => { setImporting(false); setPreview(null); setPendingFile(null); }}>
         {preview && (
           <div className="space-y-3">
             <p className="text-[12px] text-txt-muted">
-              Read from <strong>{preview.sheet}</strong> in {preview.file}. Nothing
-              has been written yet. Rows are matched on the operator reference,
-              never the name — two people called Sahoo is not a hypothetical.
+              {/* Naming only one sheet was wrong as soon as the grid became
+                  readable: a file whose days came from the Roster grid still
+                  said "Read from Assignments", which is the sheet that
+                  contributed nothing. */}
+              Read from <strong>{preview.file}</strong>. Nothing has been
+              written yet.{" "}
+              {(preview.day_changes?.length ?? 0) > 0
+                ? "Single days come from the Roster grid and the Days sheet; whole patterns from Assignments. "
+                : ""}
+              Rows are matched on the operator reference, never the name —
+              two people called Sahoo is not a hypothetical.
             </p>
 
             <div className="flex flex-wrap gap-2">
               <Chip tone={preview.changes.length ? "emerald" : "slate"} dot={false}>
                 {preview.changes.length} would change
               </Chip>
+              {(preview.day_changes?.length ?? 0) > 0 && (
+                <Chip tone="violet" dot={false}>
+                  {preview.day_changes!.length} single day
+                  {preview.day_changes!.length === 1 ? "" : "s"}
+                </Chip>
+              )}
               <Chip tone={preview.problems.length ? "rose" : "slate"} dot={false}>
                 {preview.problems.length} rejected
               </Chip>
@@ -930,6 +985,33 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
                     </span>
                     <span className="ml-auto text-[11px] text-txt-light">
                       from {c.effective_from}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {(preview.day_changes?.length ?? 0) > 0 && (
+              <div className="rounded-lg border border-slate-200 divide-y divide-slate-100
+                              max-h-56 overflow-auto">
+                {/* Grouped by person and shift. A week of one man on C is one
+                    decision and reads as one line; printing it as seven is how
+                    a preview of two hundred cells becomes something nobody
+                    reads before pressing the button. */}
+                {groupDayChanges(preview.day_changes!).map((g) => (
+                  <div key={g.key}
+                       className="px-3 py-1.5 flex items-center gap-2 text-[12px]">
+                    <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                      g.to === "blank" ? "bg-slate-300"
+                        : g.to === "REST" ? "bg-slate-400"
+                        : SHIFT_LOOK[shiftBand(g.to, startOf[g.to])].dot}`} />
+                    <span className="font-semibold text-navy truncate">{g.name}</span>
+                    <span className="text-txt-light truncate">
+                      {g.from ? `${g.from} → ` : ""}
+                      {g.to === "blank" ? "no shift set" : g.to}
+                    </span>
+                    <span className="ml-auto text-[11px] text-txt-light whitespace-nowrap">
+                      {g.days === 1 ? g.first : `${g.first} – ${g.last} · ${g.days} days`}
                     </span>
                   </div>
                 ))}
