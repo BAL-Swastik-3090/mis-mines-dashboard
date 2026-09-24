@@ -73,7 +73,8 @@ def _party_of(db, operator_id: int):
                       {"o": operator_id}).scalar()
 
 
-ROSTER_EVENTS = ("ROSTER_ASSIGNED", "ROSTER_ENDED", "ROSTER_IMPORTED")
+ROSTER_EVENTS = ("ROSTER_ASSIGNED", "ROSTER_ENDED", "ROSTER_IMPORTED",
+                 "ROSTER_DAY_SET", "ROSTER_DAY_CLEARED")
 
 
 @router.get("/activity")
@@ -365,6 +366,136 @@ def end_roster(operator_id: int, request: Request,
                     "effective_to": until.isoformat()})
     db.commit()
     return {"ok": True}
+
+
+# ── single days, set by hand ─────────────────────────────────────────────────
+@router.put("/days")
+def set_days(request: Request, body: dict = Body(...),
+             db: Session = Depends(get_minehub_db)) -> dict:
+    """Set what particular people work on particular days.
+
+    Takes a list of cells, because this is the screen where somebody drags
+    across a fortnight of one crew and says "these are all C". Doing that a
+    request at a time is eighty round trips for one decision.
+
+    `shift` is a shift code, or null for a rest day given on purpose. This does
+    not touch anybody's pattern: the pattern still says what they normally work
+    and these days say what they are doing instead.
+    """
+    _require(request, MANAGE, "manage the roster")
+
+    cells = body.get("cells") or []
+    if not cells:
+        operator_ids = body.get("operator_ids") or []
+        dates = body.get("dates") or []
+        if not operator_ids or not dates:
+            raise HTTPException(400, "Nothing was selected.")
+        cells = [{"operator_id": o, "date": d} for o in operator_ids for d in dates]
+
+    shift = body.get("shift")
+    shift = str(shift).strip().upper() if shift else None
+    reason = (body.get("reason") or "").strip() or None
+    actor = _actor(request)
+
+    if shift:
+        known = {r[0].upper() for r in db.execute(
+            text("SELECT code FROM shift_calendar")).all()}
+        if shift not in known:
+            raise HTTPException(400,
+                f"This mine has no shift called {shift}. "
+                f"It runs: {', '.join(sorted(known))}.")
+
+    # What each of those days said before, so the history can report a change
+    # rather than only an assertion. Read in one query, not one per cell.
+    pairs = [(int(c["operator_id"]), _day(c["date"])) for c in cells]
+    before = {(r["operator_id"], r["on_date"]): r["shift_code"]
+              for r in db.execute(text("""
+        SELECT operator_id, on_date, shift_code FROM roster_day
+         WHERE (operator_id, on_date) IN (
+               SELECT unnest(CAST(:ops AS bigint[])), unnest(CAST(:days AS date[])))
+    """), {"ops": [o for o, _ in pairs],
+           "days": [d for _, d in pairs]}).mappings()}
+
+    for operator_id, on_date in pairs:
+        db.execute(text("""
+            INSERT INTO roster_day (operator_id, on_date, shift_code, reason,
+                                    created_by, updated_by)
+            VALUES (:o, :d, :s, :r, :by, :by)
+            ON CONFLICT (operator_id, on_date) DO UPDATE
+               SET shift_code = EXCLUDED.shift_code,
+                   reason     = EXCLUDED.reason,
+                   updated_by = EXCLUDED.updated_by
+        """), {"o": operator_id, "d": on_date, "s": shift, "r": reason, "by": actor})
+
+    batch = str(uuid.uuid4())
+    for operator_id, on_date in pairs:
+        was = before.get((operator_id, on_date))
+        _event(db, request, "ROSTER_DAY_SET", party_id=_party_of(db, operator_id),
+               payload={"operator_id": operator_id,
+                        "from_pattern": was or None,
+                        "to_pattern": shift or "rest",
+                        "effective_from": on_date.isoformat(),
+                        "batch": batch, "batch_size": len(pairs),
+                        "how": "CELL", "reason": reason})
+    db.commit()
+    return {"ok": True, "days_set": len(pairs),
+            "shift": shift or "rest day"}
+
+
+@router.delete("/days")
+def clear_days(request: Request, body: dict = Body(...),
+               db: Session = Depends(get_minehub_db)) -> dict:
+    """Give those days back to the pattern.
+
+    Not the same as setting a rest day. A rest day is a decision and stays on
+    the record; this removes the decision, and the day goes back to being
+    whatever the person's pattern says — or to nothing, if they have no pattern.
+    """
+    _require(request, MANAGE, "manage the roster")
+
+    cells = body.get("cells") or []
+    if not cells:
+        raise HTTPException(400, "Nothing was selected.")
+    pairs = [(int(c["operator_id"]), _day(c["date"])) for c in cells]
+
+    removed = db.execute(text("""
+        DELETE FROM roster_day
+         WHERE (operator_id, on_date) IN (
+               SELECT unnest(CAST(:ops AS bigint[])), unnest(CAST(:days AS date[])))
+        RETURNING operator_id, on_date, shift_code
+    """), {"ops": [o for o, _ in pairs],
+           "days": [d for _, d in pairs]}).mappings().all()
+
+    batch = str(uuid.uuid4())
+    for r in removed:
+        _event(db, request, "ROSTER_DAY_CLEARED",
+               party_id=_party_of(db, r["operator_id"]),
+               payload={"operator_id": r["operator_id"],
+                        "from_pattern": r["shift_code"] or "rest",
+                        "to_pattern": None,
+                        "effective_from": r["on_date"].isoformat(),
+                        "batch": batch, "batch_size": len(removed),
+                        "how": "CELL"})
+    db.commit()
+    return {"ok": True, "days_cleared": len(removed)}
+
+
+@router.get("/shifts")
+def shifts_the_mine_runs(request: Request,
+                         db: Session = Depends(get_minehub_db)) -> list[dict]:
+    """The shifts a day may be set to, with their hours.
+
+    The picker is built from this rather than from a list in the browser, so a
+    shift the mine stops running stops being offered without a release.
+    """
+    _require(request, VIEW, "see the roster")
+    return [dict(r) for r in db.execute(text("""
+        SELECT DISTINCT ON (code)
+               code, name, start_time, end_time, planned_hours, crosses_midnight
+          FROM shift_calendar
+         WHERE valid_to IS NULL OR valid_to >= CURRENT_DATE
+         ORDER BY code, valid_from DESC
+    """)).mappings()]
 
 
 # ── the board ────────────────────────────────────────────────────────────────

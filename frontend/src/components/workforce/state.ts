@@ -17,6 +17,10 @@ export interface DayCell {
   leave_ref?: string;
   colour?: string | null;
   pattern?: string | null;
+  /** Set on the grid rather than produced by a pattern. Marked on the board so
+   *  a roster made of exceptions looks like one. */
+  by_hand?: boolean;
+  reason?: string | null;
   blocks?: boolean;
 }
 

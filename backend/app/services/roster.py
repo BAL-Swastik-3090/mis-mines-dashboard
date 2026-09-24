@@ -129,6 +129,27 @@ def holidays(db: Session, from_date: date, to_date: date,
     return out
 
 
+def day_overrides(db: Session, from_date: date, to_date: date,
+                  operator_ids: list[int] | None = None) -> dict[int, dict[date, dict]]:
+    """Days somebody set by hand: operator -> date -> what they said.
+
+    One query for the whole window, like everything else here. A roster screen
+    asks for two hundred people across a fortnight and cannot afford a round
+    trip per cell.
+    """
+    rows = db.execute(text("""
+        SELECT operator_id, on_date, shift_code, reason
+          FROM roster_day
+         WHERE on_date BETWEEN :f AND :t
+           AND (CAST(:ids AS bigint[]) IS NULL OR operator_id = ANY(CAST(:ids AS bigint[])))
+    """), {"f": from_date, "t": to_date, "ids": operator_ids}).mappings()
+
+    out: dict[int, dict[date, dict]] = {}
+    for r in rows:
+        out.setdefault(r["operator_id"], {})[r["on_date"]] = dict(r)
+    return out
+
+
 def _slot_for(pattern: dict, anchor: date, day: date) -> str:
     """Where a person sits in their cycle on a given day."""
     cycle = int(pattern["cycle_days"]) or 1
@@ -154,15 +175,20 @@ def duty(db: Session, from_date: date, to_date: date,
     assigns = assignments(db, from_date, to_date, operator_ids)
     leaves = approved_leave(db, from_date, to_date, operator_ids)
     hols = holidays(db, from_date, to_date, plant_id)
+    setbyhand = day_overrides(db, from_date, to_date, operator_ids)
     span = _days(from_date, to_date)
 
-    people = set(assigns) | set(leaves) | set(operator_ids or [])
+    # Somebody with an override and no pattern is still on the roster that day.
+    # Leaving them out would mean a mine that rosters day by day — which is
+    # every mine that has not adopted a pattern yet — saw an empty board.
+    people = set(assigns) | set(leaves) | set(setbyhand) | set(operator_ids or [])
     out: dict[int, dict[str, dict]] = {}
 
     for operator_id in people:
         per_day: dict[str, dict] = {}
         rows = assigns.get(operator_id, [])
         taken = leaves.get(operator_id, [])
+        mine = setbyhand.get(operator_id, {})
 
         for day in span:
             iso = day.isoformat()
@@ -186,6 +212,25 @@ def duty(db: Session, from_date: date, to_date: date,
                     "half_day": half, "colour": on_leave["colour"],
                     "blocks": on_leave["blocks_deployment"],
                 }
+                continue
+
+            # A day somebody set by hand beats the pattern, and only the
+            # pattern. A closure and approved leave are already decided above,
+            # because typing a shift into a box does not bring a man back from
+            # leave or open a mine that is shut.
+            said = mine.get(day)
+            if said is not None:
+                if said["shift_code"]:
+                    per_day[iso] = {"state": ON, "shift": said["shift_code"],
+                                    "label": f"{said['shift_code']} shift",
+                                    "kind": None, "pattern": None, "by_hand": True,
+                                    "reason": said["reason"],
+                                    "hol": hol["name"] if hol else None}
+                else:
+                    per_day[iso] = {"state": OFF, "shift": None,
+                                    "label": "rest day", "kind": None,
+                                    "pattern": None, "by_hand": True,
+                                    "reason": said["reason"]}
                 continue
 
             # The assignment in force on this particular day, not the newest

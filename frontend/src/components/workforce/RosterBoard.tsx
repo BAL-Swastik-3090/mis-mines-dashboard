@@ -12,9 +12,19 @@
  * running a finger across a row, and a grid that loses the name at column nine
  * is a grid people print out instead of using.
  *
- * Nothing here is editable in place. Rostering is a decision about a crew and a
- * date, not about one square, and a grid that lets somebody drag a single cell
- * invites a roster made of exceptions that nothing can explain afterwards.
+ * Cells are editable in place, and for a long time deliberately were not. The
+ * objection was that a grid you can drag across invites a roster made of
+ * exceptions that nothing can explain afterwards, and it was a fair one — the
+ * answer was not to forbid the exceptions but to make them explain themselves.
+ *
+ * Every day set by hand is one row in roster_day and one event saying who set
+ * it, when, and what it was before. A cell that was set by hand is marked as
+ * such on the board, so a roster full of exceptions looks like one. And an
+ * override never touches the pattern underneath: the pattern still says what
+ * somebody normally works, and clearing the day gives it back.
+ *
+ * This is what makes rostering possible at all before any pattern exists,
+ * which is the state this mine is actually in: 204 people on no pattern.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import DateField from "@/components/minehub/DateField";
@@ -40,6 +50,11 @@ interface Person {
   employer: string | null; trade: string | null; trade_group: string | null;
   pattern_id: number | null; pattern_code: string | null; pattern_name: string | null;
   days: Record<string, DayCell>;
+}
+
+interface ShiftOption {
+  code: string; name: string; start_time: string; end_time: string;
+  planned_hours: number; crosses_midnight: boolean;
 }
 
 interface Pattern {
@@ -90,6 +105,14 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
 
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [assigning, setAssigning] = useState(false);
+
+  // Cells picked on the grid, as `${operator_id}|${iso}`. Separate from the
+  // row checkboxes, which choose people for a pattern: this chooses squares.
+  const [cells, setCells] = useState<Set<string>>(new Set());
+  const [dragging, setDragging] = useState(false);
+  const [lastCell, setLastCell] = useState<{ op: number; iso: string } | null>(null);
+  const [shifts, setShifts] = useState<ShiftOption[]>([]);
+  const [cellBusy, setCellBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [importing, setImporting] = useState(false);
   const [preview, setPreview] = useState<ImportReport | null>(null);
@@ -123,6 +146,81 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
   }, [start, end]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // The shifts a cell may be set to come from the mine's own calendar, so one
+  // that stops running stops being offered without anybody editing this file.
+  useEffect(() => {
+    void (async () => {
+      try { setShifts((await api.get("/workforce/shifts")).data ?? []); }
+      catch { /* the picker simply offers rest and clear */ }
+    })();
+  }, []);
+
+  // A drag ends wherever the mouse is let go, which is frequently not over the
+  // grid. Without this the board stays in drag mode and the next click selects
+  // a rectangle nobody asked for.
+  useEffect(() => {
+    const stop = () => setDragging(false);
+    window.addEventListener("mouseup", stop);
+    return () => window.removeEventListener("mouseup", stop);
+  }, []);
+
+  const cellKey = (op: number, iso: string) => `${op}|${iso}`;
+
+  /** Pick a square, or extend from the last one.
+   *
+   *  Shift held, same row: everything between. That is how a fortnight of one
+   *  man gets set, and clicking fourteen squares to do it is how people decide
+   *  the screen is not worth using. */
+  const touchCell = useCallback((op: number, iso: string, extend: boolean) => {
+    setCells((was) => {
+      const next = new Set(was);
+      if (extend && lastCell && lastCell.op === op) {
+        const a = dates.indexOf(lastCell.iso);
+        const b = dates.indexOf(iso);
+        if (a >= 0 && b >= 0) {
+          for (let i = Math.min(a, b); i <= Math.max(a, b); i++) {
+            next.add(cellKey(op, dates[i]));
+          }
+          return next;
+        }
+      }
+      const key = cellKey(op, iso);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+    setLastCell({ op, iso });
+  }, [dates, lastCell]);
+
+  /** Everything the pointer passes over while the button is down. */
+  const dragOver = useCallback((op: number, iso: string) => {
+    if (!dragging) return;
+    setCells((was) => new Set(was).add(cellKey(op, iso)));
+  }, [dragging]);
+
+  const chosenCells = useMemo(() => [...cells].map((k) => {
+    const [op, iso] = k.split("|");
+    return { operator_id: Number(op), date: iso };
+  }), [cells]);
+
+  /** Set every chosen square to one shift, to rest, or back to the pattern. */
+  const applyToCells = useCallback(async (shift: string | null | "CLEAR") => {
+    if (chosenCells.length === 0) return;
+    setCellBusy(true);
+    try {
+      if (shift === "CLEAR") {
+        await api.delete("/workforce/days", { data: { cells: chosenCells } });
+      } else {
+        await api.put("/workforce/days", { cells: chosenCells, shift });
+      }
+      setCells(new Set());
+      setLastCell(null);
+      await load();
+    } catch (e: unknown) {
+      const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(typeof d === "string" ? d : "Those days could not be set.");
+    } finally { setCellBusy(false); }
+  }, [chosenCells, load]);
 
   const people = useMemo(() => {
     const term = query.trim().toLowerCase();
@@ -426,9 +524,54 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
             {UNROSTERED.label}
           </span>
           <span className="ml-auto text-[11px] text-txt-light">
-            A letter is the shift they work that day.
+            {mayManage
+              ? "A letter is the shift they work that day. Click a square to change it — drag, or shift-click, for a run of days."
+              : "A letter is the shift they work that day."}
           </span>
         </div>
+
+        {/* The bar only exists while squares are chosen, and it names every
+            shift rather than hiding them behind a dropdown: choosing a shift is
+            the whole action, and a dropdown would make it two clicks and a read.
+
+            It sticks to the bottom because the selection is usually made by
+            dragging down a long list, and a bar at the top of a two-hundred-row
+            grid is a bar nobody can reach without losing what they selected. */}
+        {mayManage && cells.size > 0 && (
+          <div className="sticky bottom-0 z-20 border-t border-gold/30 bg-gold/[0.06]
+                          backdrop-blur px-4 py-2.5 flex flex-wrap items-center gap-2">
+            <span className="text-[12.5px] font-semibold text-txt-primary tabular-nums">
+              {cells.size} day{cells.size === 1 ? "" : "s"} selected
+            </span>
+            <span className="text-[11.5px] text-txt-muted">set to</span>
+
+            {shifts.map((sh) => (
+              <Button key={sh.code} size="sm" disabled={cellBusy}
+                      onClick={() => void applyToCells(sh.code)}
+                      title={`${sh.name} · ${sh.start_time?.slice(0, 5)}–${sh.end_time?.slice(0, 5)}`}>
+                {sh.code}
+              </Button>
+            ))}
+
+            <Button size="sm" disabled={cellBusy} onClick={() => void applyToCells(null)}
+                    title="A rest day given on purpose — it stays on the record">
+              Rest
+            </Button>
+
+            <Button size="sm" variant="ghost" disabled={cellBusy}
+                    onClick={() => void applyToCells("CLEAR")}
+                    title="Forget the decision and let the pattern decide again">
+              Back to pattern
+            </Button>
+
+            <Button size="sm" variant="ghost" disabled={cellBusy}
+                    onClick={() => { setCells(new Set()); setLastCell(null); }}
+                    className="ml-auto">
+              Clear selection
+            </Button>
+            {cellBusy && <Loader2 className="w-3.5 h-3.5 animate-spin text-txt-light" />}
+          </div>
+        )}
 
         {loading ? (
           <div className="px-5 py-16 text-center text-[13px] text-txt-muted">
@@ -515,16 +658,41 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
                     {dates.map((iso) => {
                       const cell = p.days?.[iso];
                       const look = cell?.state ? DAY_STATE[cell.state] : UNROSTERED;
+                      const on = cells.has(cellKey(p.operator_id, iso));
+                      // Leave and closures are not this screen's to overrule,
+                      // so those squares are not offered for selection at all.
+                      const fixed = cell?.state === "LEAVE" || cell?.state === "HOLIDAY";
+                      const label = (cell?.label || UNROSTERED.label)
+                        + (cell?.by_hand ? " · set by hand" : "")
+                        + (cell?.reason ? ` — ${cell.reason}` : "");
                       return (
                         <td key={iso} className="border-b border-slate-100 px-0.5 py-1 text-center">
-                          <span title={cell?.label || UNROSTERED.label}
-                                className={`inline-flex items-center justify-center w-7 h-6 rounded
-                                            border text-[10.5px] font-bold ${look.cell}`}>
+                          <button type="button" title={label}
+                            disabled={!mayManage || fixed}
+                            onMouseDown={(e) => {
+                              if (!mayManage || fixed) return;
+                              e.preventDefault();
+                              setDragging(true);
+                              touchCell(p.operator_id, iso, e.shiftKey);
+                            }}
+                            onMouseEnter={() => { if (!fixed) dragOver(p.operator_id, iso); }}
+                            className={`relative inline-flex items-center justify-center w-7 h-6
+                                        rounded border text-[10.5px] font-bold transition-shadow
+                                        ${look.cell}
+                                        ${mayManage && !fixed ? "cursor-pointer hover:ring-1 hover:ring-gold/60" : ""}
+                                        ${on ? "ring-2 ring-gold ring-offset-1" : ""}`}>
                             {cell?.state === "ON" ? cell.shift
                               : cell?.state === "LEAVE" ? (cell.half_day ? "½" : "L")
                               : cell?.state === "HOLIDAY" ? "H"
                               : cell?.state === "REST" ? "·" : ""}
-                          </span>
+                            {/* A day somebody typed, as against a day a pattern
+                                produced. Without this the two are the same
+                                square and the roster cannot be read back. */}
+                            {cell?.by_hand && (
+                              <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5
+                                               rounded-full bg-gold" />
+                            )}
+                          </button>
                         </td>
                       );
                     })}
