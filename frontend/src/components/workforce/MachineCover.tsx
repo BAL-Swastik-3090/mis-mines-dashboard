@@ -110,7 +110,7 @@ export default function MachineCover() {
   // mind halfway without undoing what they had already done.
   const [draft, setDraft] = useState<CrewMember[]>([]);
   const [pickBy, setPickBy] = useState({ trade: "", employer: "", department: "" });
-  const [section, setSection] = useState<"all" | "planned" | "none">("all");
+  const [section, setSection] = useState<"all" | "planned" | "none">("planned");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -322,10 +322,13 @@ export default function MachineCover() {
                 filling the gaps in one are different errands, and a single
                 list of a hundred and seven mixes them. */}
             <div className="flex rounded-lg border border-border overflow-hidden">
+              {/* Assigned first, then the gaps, then everything. The plan
+                  is what somebody came to read; "all 107" is the least useful
+                  of the three and was leading. */}
               {([
-                ["all", `All ${rows.length}`],
                 ["planned", `Assigned ${rows.length - unplanned}`],
                 ["none", `No crew ${unplanned}`],
+                ["all", `All ${rows.length}`],
               ] as const).map(([id, label]) => (
                 <button key={id} type="button" onClick={() => setSection(id)}
                   className={`px-2.5 py-1 text-[12px] transition-colors ${
@@ -370,6 +373,8 @@ export default function MachineCover() {
                   <EmptyRow colSpan={4}>
                     {rows.length === 0 ? "No machines to show."
                       : section === "none" ? "Every machine has a crew."
+                      : section === "planned" && !q
+                        ? "No machine has a crew yet. Open “No crew” and start naming people."
                       : `Nothing matches “${q}”.`}
                   </EmptyRow>
                 )}

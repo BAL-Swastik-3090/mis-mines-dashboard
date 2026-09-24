@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/contexts/useAuth";
 import api from "@/lib/api";
-import { Button, Card, Chip, PageHeader, Tabs, type Tone } from "@/components/minehub/ui";
+import { Button, Card, PageHeader, Tabs, type Tone } from "@/components/minehub/ui";
 import LiveFleet from "@/components/ops/LiveFleet";
 import ShiftBoard from "@/components/ops/ShiftBoard";
 import HotoCentre from "@/components/ops/HotoCentre";
@@ -128,73 +128,70 @@ export default function OperationsSection() {
 
   return (
     <div className="py-6 space-y-5 max-w-[1600px]">
+      {/* The shift sits in the title row, not in a band of its own.
+          It was a full-width card under the header carrying one date, one
+          sentence and four buttons — eighty vertical pixels above every tab on
+          this screen, saying something that fits beside the title. Which shift
+          is open is context for the page, and context belongs in its header. */}
       <PageHeader
         lead="Shift" rest="Control" tone="sky" icon={Radar}
         subtitle={active?.hint}
         actions={
-          shift ? (
-            <span className="inline-flex items-center gap-2">
-              <Chip tone={shift.status === "OPEN" ? "emerald" : "slate"}>
-                {shift.shift_code} · {shift.status.toLowerCase()}
-              </Chip>
-              {shift.open_exceptions > 0 && (
-                <Button variant="secondary" size="lg" onClick={() => setTab("shift")}>
-                  {shift.open_exceptions} to deal with
-                </Button>
-              )}
+          <span className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 text-[12px] text-txt-muted">
+              <CalendarClock className="w-3.5 h-3.5 text-gold" />
+              <span className="font-semibold text-navy">{today}</span>
             </span>
-          ) : null
-        }
-      />
 
-      {/* The shift everything else hangs off */}
-      <div className="rounded-xl border border-border-light bg-bg-base px-4 py-3
-                      flex flex-wrap items-center gap-3">
-        <span className="inline-flex items-center gap-2 text-[12.5px] text-txt-muted">
-          <CalendarClock className="w-4 h-4 text-gold" />
-          <span className="font-semibold text-navy">{today}</span>
-        </span>
+            {loading ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-gold" />
+            ) : shifts.length === 0 ? (
+              <span className="text-[12px] text-txt-muted">No shift today yet.</span>
+            ) : (
+              <span className="flex flex-wrap gap-1">
+                {shifts.map((s2) => (
+                  <button key={s2.shift_instance_id}
+                    onClick={() => setCurrent(s2.shift_instance_id)}
+                    className={`px-2.5 py-1 rounded-lg text-[12px] font-semibold border
+                                transition-colors
+                      ${current === s2.shift_instance_id
+                        ? "bg-navy text-white border-navy"
+                        : "bg-bg-base text-txt-muted border-border hover:border-navy hover:text-navy"}`}>
+                    {s2.shift_code}
+                    <span className="opacity-70 font-normal ml-1">
+                      {s2.status === "OPEN" ? `${s2.live} live` : s2.status.toLowerCase()}
+                    </span>
+                  </button>
+                ))}
+              </span>
+            )}
 
-        {loading ? (
-          <Loader2 className="w-4 h-4 animate-spin text-gold" />
-        ) : shifts.length === 0 ? (
-          <span className="text-[12.5px] text-txt-muted">
-            No shift today yet.
-          </span>
-        ) : (
-          <span className="flex flex-wrap gap-1.5">
-            {shifts.map((s) => (
-              <button key={s.shift_instance_id} onClick={() => setCurrent(s.shift_instance_id)}
-                className={`px-3 py-1.5 rounded-lg text-[12.5px] font-semibold border transition-colors
-                  ${current === s.shift_instance_id
-                    ? "bg-navy text-white border-navy"
-                    : "bg-bg-base text-txt-muted border-border hover:border-navy hover:text-navy"}`}>
-                {s.shift_code}
-                <span className="opacity-70 font-normal ml-1.5">
-                  {s.status === "OPEN" ? `${s.live} live` : s.status.toLowerCase()}
-                </span>
-              </button>
-            ))}
-          </span>
-        )}
+            {shift && shift.open_exceptions > 0 && (
+              <Button variant="secondary" size="sm" onClick={() => setTab("shift")}>
+                {shift.open_exceptions} to deal with
+              </Button>
+            )}
 
-        {rights.may_manage && (
-          <span className="ml-auto flex flex-wrap items-center gap-1.5">
-            <span className="text-[11.5px] text-txt-light">Open</span>
-            {definitions
-              .filter((d) => !shifts.some((s) => s.shift_id === d.shift_id && s.status !== "CANCELLED"))
-              .map((d) => (
-                <Button key={d.shift_id} size="sm" variant="secondary" disabled={opening}
-                  onClick={() => void openShift(d.shift_id)}>
-                  <Play className="w-3.5 h-3.5" /> {d.code}
-                </Button>
-              ))}
-            {definitions.every((d) => shifts.some((s) => s.shift_id === d.shift_id)) && (
-              <span className="text-[11.5px] text-txt-light">all shifts started today</span>
+            {rights.may_manage && (
+              <span className="flex flex-wrap items-center gap-1">
+                <span className="text-[11px] text-txt-light">Open</span>
+                {definitions
+                  .filter((d) => !shifts.some(
+                    (s2) => s2.shift_id === d.shift_id && s2.status !== "CANCELLED"))
+                  .map((d) => (
+                    <Button key={d.shift_id} size="sm" variant="secondary" disabled={opening}
+                      onClick={() => void openShift(d.shift_id)}>
+                      <Play className="w-3 h-3" /> {d.code}
+                    </Button>
+                  ))}
+                {definitions.every((d) => shifts.some((s2) => s2.shift_id === d.shift_id)) && (
+                  <span className="text-[11px] text-txt-light">all shifts started</span>
+                )}
+              </span>
             )}
           </span>
-        )}
-      </div>
+        }
+      />
 
       <Tabs tabs={TABS} value={tab} onChange={(id) => setTab(id as TabId)} />
 
