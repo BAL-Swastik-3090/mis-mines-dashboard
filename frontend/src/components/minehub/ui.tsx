@@ -336,6 +336,27 @@ export const inputClass =
   "placeholder:text-txt-light transition-colors " +
   "focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/15";
 
+/** A filter dropdown, sized and marked the same way everywhere.
+ *
+ *  A native select cannot have its open list styled, so what is left to get
+ *  right is the closed state: the room it gives its longest label, the chevron,
+ *  and whether it shows that it is filtering anything. These were being written
+ *  out by hand at each call site and drifting — one clipped "All departments"
+ *  to "All departmen", another sat a pixel taller than the button beside it.
+ *
+ *  `narrow` is for a dropdown inside a panel rather than a page toolbar. */
+export function filterSelectClass(active: boolean, narrow = false): string {
+  return [
+    "appearance-none rounded-lg border bg-bg-base text-txt-primary",
+    "bg-[url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%2364748b%22 stroke-width=%222%22><path d=%22M6 9l6 6 6-6%22/></svg>')]",
+    "bg-no-repeat bg-[length:14px_14px]",
+    narrow ? "bg-[right_0.4rem_center] pl-2 pr-6 py-1 text-[11.5px] min-w-[7.5rem]"
+           : "bg-[right_0.55rem_center] pl-2.5 pr-7 py-1.5 text-[12px] min-w-[9.5rem]",
+    "transition-colors focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/15",
+    active ? "border-gold font-semibold" : "border-border text-txt-muted hover:border-slate-300",
+  ].join(" ");
+}
+
 export function Field({ label, children, hint, required }: {
   label: string; children: React.ReactNode; hint?: string; required?: boolean;
 }) {

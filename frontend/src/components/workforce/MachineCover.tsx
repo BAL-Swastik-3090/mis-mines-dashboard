@@ -29,7 +29,8 @@ import api from "@/lib/api";
 import { matchesSearch } from "@/lib/search";
 import DateField from "@/components/minehub/DateField";
 import {
-  Card, CardHeader, Chip, EmptyRow, Td, Th, inputClass, Button, type Tone,
+  Card, CardHeader, Chip, EmptyRow, Td, Th, inputClass, Button,
+  filterSelectClass, type Tone,
 } from "@/components/minehub/ui";
 import Dialog from "@/components/minehub/Dialog";
 import { isoDay } from "./state";
@@ -265,7 +266,10 @@ export default function MachineCover() {
           <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex items-center gap-1.5 text-[11.5px] text-txt-muted">
               roster of
-              <DateField className={`${inputClass} w-[125px] py-1 text-[12px]`}
+              {/* 160, not 125. The field holds dd-mm-yyyy plus a clear and a
+                  calendar icon, and at 125 the year was cut to "24-09-20:" —
+                  which is a date nobody can read and a year nobody can check. */}
+              <DateField className={`${inputClass} w-[160px] py-1 text-[12px]`}
                          value={day} onChange={setDay} />
             </span>
             {/* One shape for all four, so the bar reads as a set rather than
@@ -279,8 +283,7 @@ export default function MachineCover() {
             ] as const).map(([key, all, options]) => (
               <select key={key} value={by[key]}
                 onChange={(e) => setBy({ ...by, [key]: e.target.value })}
-                className={`${inputClass} w-auto py-1.5 text-[12px] ${
-                  by[key] ? "border-gold text-txt-primary font-semibold" : ""}`}>
+                className={filterSelectClass(Boolean(by[key]))}>
                 <option value="">{all}</option>
                 {options.map((o) => <option key={o} value={o}>{o}</option>)}
               </select>
@@ -472,8 +475,8 @@ export default function MachineCover() {
                                   ] as const).map(([key, all, options]) => (
                                     <select key={key} value={pickBy[key]}
                                       onChange={(e) => setPickBy({ ...pickBy, [key]: e.target.value })}
-                                      className={`${inputClass} w-auto py-0.5 text-[11px] ${
-                                        pickBy[key] ? "border-gold font-semibold" : ""}`}>
+                                      className={filterSelectClass(
+                                        Boolean(pickBy[key]), true)}>
                                       <option value="">{all}</option>
                                       {options.map((o) => <option key={o} value={o}>{o}</option>)}
                                     </select>
