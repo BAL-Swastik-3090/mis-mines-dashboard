@@ -13,6 +13,7 @@ puts an unlicensed operator on a dozer.
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import date, datetime, timedelta
 
 from fastapi import (APIRouter, Body, Depends, File, HTTPException, Query,
@@ -59,6 +60,73 @@ def _event(db, request: Request, event_type: str, *, party_id=None,
 
 def _day(value: str | None) -> date:
     return date.fromisoformat(value) if value else date.today()
+
+
+def _party_of(db, operator_id: int):
+    """The person behind an operator row, so an event hangs off a human.
+
+    `event.party_id` is what ties a change to somebody the rest of the platform
+    already knows; the operator id is this module's own handle and means
+    nothing to the other screens.
+    """
+    return db.execute(text("SELECT party_id FROM operator WHERE operator_id = :o"),
+                      {"o": operator_id}).scalar()
+
+
+ROSTER_EVENTS = ("ROSTER_ASSIGNED", "ROSTER_ENDED", "ROSTER_IMPORTED")
+
+
+@router.get("/activity")
+def roster_activity(request: Request,
+                    days: int = Query(30, ge=1, le=365),
+                    operator_id: int | None = Query(None),
+                    limit: int = Query(200, ge=1, le=1000),
+                    db: Session = Depends(get_minehub_db)) -> list[dict]:
+    """Every roster change, newest first: who moved, off what, onto what, by whom.
+
+    Read from the event log rather than from the assignment rows. The rows say
+    what the roster is now and, with their dates, what it was; they cannot say
+    who typed it or when they typed it, and "who put the night crew on A shift
+    last Tuesday" is a question about people, not about dates.
+    """
+    _require(request, VIEW, "see the roster")
+
+    # The roster events are gathered first, in their own step, and only then
+    # joined. Casting payload ->> 'operator_id' to bigint alongside the filter
+    # would leave the cast applied to every other kind of event in the table if
+    # the planner chose to join before filtering — and one asset event whose
+    # payload holds a word where this expects a number would fail the whole
+    # query. Narrowing first makes that impossible rather than unlikely.
+    return [dict(r) for r in db.execute(text("""
+        WITH changes AS (
+            SELECT e.event_id, e.event_type, e.occurred_at, e.recorded_by,
+                   e.party_id, e.payload
+              FROM event e
+             WHERE e.event_type = ANY(:types)
+               AND e.occurred_at > now() - make_interval(days => :days)
+        )
+        SELECT c.event_id, c.event_type, c.occurred_at, c.recorded_by,
+               p.legal_name                      AS person,
+               o.operator_ref,
+               c.payload ->> 'from_pattern'      AS from_pattern,
+               c.payload ->> 'to_pattern'        AS to_pattern,
+               c.payload ->> 'effective_from'    AS effective_from,
+               c.payload ->> 'batch'             AS batch,
+               (c.payload ->> 'batch_size')::int AS batch_size,
+               c.payload ->> 'how'               AS how
+          FROM changes c
+          LEFT JOIN operator o
+                 ON o.operator_id = (c.payload ->> 'operator_id')::bigint
+          LEFT JOIN party p ON p.party_id = c.party_id
+         -- CAST(:oid AS bigint), not :oid. An untyped parameter compared only
+         -- against NULL gives Postgres nothing to infer a type from, and the
+         -- whole query is rejected before it runs.
+         WHERE (CAST(:oid AS bigint) IS NULL
+                OR (c.payload ->> 'operator_id')::bigint = CAST(:oid AS bigint))
+         ORDER BY c.occurred_at DESC, c.event_id
+         LIMIT :lim
+    """), {"types": list(ROSTER_EVENTS), "days": days,
+           "oid": operator_id, "lim": limit}).mappings()]
 
 
 # ── patterns ─────────────────────────────────────────────────────────────────
@@ -208,6 +276,18 @@ def assign_roster(request: Request, body: dict = Body(...),
     effective_from = _day(body.get("effective_from"))
     anchor = _day(body.get("anchor_date") or body.get("effective_from"))
 
+    # Read what each of them is on before any of it is changed. Afterwards the
+    # old pattern is only recoverable by reading closed rows and reasoning about
+    # dates, and "which shift did Ajaya move off, and when" is the question this
+    # screen exists to answer.
+    was_on = {r["operator_id"]: r for r in db.execute(text("""
+        SELECT ra.operator_id, ra.pattern_id, rp.code AS pattern_code,
+               ra.effective_from
+          FROM roster_assignment ra
+          JOIN roster_pattern rp ON rp.pattern_id = ra.pattern_id
+         WHERE ra.operator_id = ANY(:ids) AND ra.effective_to IS NULL
+    """), {"ids": operator_ids}).mappings()}
+
     db.execute(text("""
         UPDATE roster_assignment SET effective_to = :yesterday
         WHERE operator_id = ANY(:ids) AND effective_to IS NULL
@@ -230,9 +310,30 @@ def assign_roster(request: Request, body: dict = Body(...),
            "from": effective_from, "plant": body.get("plant_id"),
            "r": body.get("remarks"), "by": _actor(request)})
 
-    _event(db, request, "ROSTER_ASSIGNED",
-           payload={"operators": len(operator_ids), "pattern_id": pattern_id,
-                    "effective_from": effective_from.isoformat()})
+    # One event per person, not one per click.
+    #
+    # The summary this used to write said "operators: 5" — enough to know
+    # something happened, useless for the only questions anybody asks of a
+    # roster afterwards: who moved, off what, onto what, from when. A bulk
+    # change is still one decision, so the events carry a shared batch id and
+    # the screen groups them back together.
+    moved_to = db.execute(text(
+        "SELECT code FROM roster_pattern WHERE pattern_id = :p"),
+        {"p": pattern_id}).scalar()
+    batch = str(uuid.uuid4())
+    for oid in operator_ids:
+        before = was_on.get(oid)
+        _event(db, request, "ROSTER_ASSIGNED",
+               party_id=_party_of(db, oid),
+               payload={"operator_id": oid,
+                        "from_pattern_id": before["pattern_id"] if before else None,
+                        "from_pattern": before["pattern_code"] if before else None,
+                        "to_pattern_id": pattern_id,
+                        "to_pattern": moved_to,
+                        "effective_from": effective_from.isoformat(),
+                        "batch": batch,
+                        "batch_size": len(operator_ids),
+                        "how": body.get("how") or "SCREEN"})
     db.commit()
     return {"ok": True, "assigned": len(operator_ids),
             "effective_from": effective_from.isoformat()}
@@ -245,12 +346,23 @@ def end_roster(operator_id: int, request: Request,
     """Take somebody off the roster from a date, without erasing that they were on it."""
     _require(request, MANAGE, "manage the roster")
     until = _day(on)
+    before = db.execute(text("""
+        SELECT ra.pattern_id, rp.code
+          FROM roster_assignment ra
+          JOIN roster_pattern rp ON rp.pattern_id = ra.pattern_id
+         WHERE ra.operator_id = :o AND ra.effective_to IS NULL
+    """), {"o": operator_id}).mappings().first()
     db.execute(text("""
         UPDATE roster_assignment SET effective_to = :until
         WHERE operator_id = :o AND effective_to IS NULL
     """), {"o": operator_id, "until": until})
-    _event(db, request, "ROSTER_ENDED",
-           payload={"operator_id": operator_id, "effective_to": until.isoformat()})
+    _event(db, request, "ROSTER_ENDED", party_id=_party_of(db, operator_id),
+           payload={"operator_id": operator_id,
+                    "from_pattern_id": before["pattern_id"] if before else None,
+                    "from_pattern": before["code"] if before else None,
+                    "to_pattern": None,
+                    "effective_from": until.isoformat(),
+                    "effective_to": until.isoformat()})
     db.commit()
     return {"ok": True}
 

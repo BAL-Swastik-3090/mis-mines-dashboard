@@ -150,7 +150,16 @@ export function CardHeader({ title, subtitle, actions, icon: Icon, tone = "slate
           {subtitle && <p className="text-[12px] text-txt-muted mt-1 max-w-[74ch]">{subtitle}</p>}
         </div>
       </div>
-      {actions && <div className="flex items-center gap-2 shrink-0">{actions}</div>}
+      {/* Allowed to wrap and to shrink. shrink-0 here meant a header with
+          several controls — the roster has a search, two pickers, three
+          range buttons, paging and four actions — grew past the card and
+          off the right of the screen, taking the last button with it.
+          Wrapping onto a second line is the lesser of the two. */}
+      {actions && (
+        <div className="flex flex-wrap items-center justify-end gap-2 min-w-0">
+          {actions}
+        </div>
+      )}
     </header>
   );
 }

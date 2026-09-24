@@ -14,7 +14,7 @@
  */
 import React, { useCallback, useEffect, useState } from "react";
 import {
-  CalendarRange, Plane, CalendarDays, Repeat, Sparkles, Users, Loader2,
+  CalendarRange, Plane, CalendarDays, Repeat, Sparkles, Users, Loader2, History,
   Sun, Moon, CircleSlash,
 } from "lucide-react";
 import { useAuth } from "@/contexts/useAuth";
@@ -26,8 +26,9 @@ import HolidayCalendar from "@/components/workforce/HolidayCalendar";
 import PatternStudio from "@/components/workforce/PatternStudio";
 import AllocationEngine from "@/components/workforce/AllocationEngine";
 import OperatorDashboard from "@/components/workforce/OperatorDashboard";
+import RosterActivity from "@/components/workforce/RosterActivity";
 
-type TabId = "roster" | "leave" | "calendar" | "patterns" | "allocate";
+type TabId = "roster" | "leave" | "calendar" | "patterns" | "allocate" | "history";
 
 const TABS: { id: TabId; label: string; icon: React.ElementType; tone: Tone; hint: string }[] = [
   { id: "roster", label: "Roster", icon: CalendarRange, tone: "violet",
@@ -40,6 +41,8 @@ const TABS: { id: TabId; label: string; icon: React.ElementType; tone: Tone; hin
     hint: "The days the mine closes, and the ones it works through" },
   { id: "patterns", label: "Patterns", icon: Repeat, tone: "navy",
     hint: "The cycles this mine works — six on one off, three-crew rotation" },
+  { id: "history", label: "History", icon: History, tone: "slate",
+    hint: "Every change to who works when, and who made it" },
 ];
 
 interface Coverage {
@@ -197,6 +200,7 @@ export default function WorkforceSection() {
       )}
       {tab === "calendar" && <HolidayCalendar mayManage={mayManage} />}
       {tab === "patterns" && <PatternStudio mayManage={mayManage} onChanged={load} />}
+      {tab === "history" && <RosterActivity />}
 
       <OperatorDashboard operatorId={viewing} mayApply={mayApply}
                          onClose={() => setViewing(null)} onChanged={load} />

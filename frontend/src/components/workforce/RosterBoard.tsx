@@ -311,7 +311,10 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
             <div className="flex flex-wrap items-center gap-2">
               <div className="relative">
                 <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-txt-light" />
-                <input className={`${inputClass} pl-8 w-full sm:w-[320px] lg:w-[440px] xl:w-[520px]`} placeholder="Find somebody"
+                {/* This header is the busiest in the app, so its search takes
+                    what is left rather than a fixed width it has to be given. */}
+                <input className={`${inputClass} pl-8 w-full sm:w-[260px] lg:w-[340px]`}
+                       placeholder="Find somebody"
                        value={query} onChange={(e) => setQuery(e.target.value)} />
               </div>
               {/* A menu with one value in it cannot narrow anything, and today
@@ -527,10 +530,18 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
         )}
       </Card>
 
+      {/* Wide, and two columns on a laptop. Stacked at 560px this was a column
+          eight blocks tall — who it covers, two paragraphs, a picker, a date, a
+          cycle preview and four starter patterns — so the button that does the
+          thing sat below the fold and the starters could only be reached by
+          scrolling inside a modal. The decision is: these people, this pattern,
+          from this date. It fits side by side. */}
       <Dialog open={assigning} tone="info" title={`Put ${picked.size} on a pattern`}
-        confirmLabel="Roster them" busy={busy}
+        confirmLabel="Roster them" busy={busy} width={980}
         onConfirm={() => void assign()} onCancel={() => setAssigning(false)}>
-        <div className="space-y-3">
+        <div className="grid gap-4 lg:grid-cols-2 lg:items-start">
+          {/* Who it affects */}
+          <div className="space-y-3">
           <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2">
             <p className="text-[11px] text-txt-light mb-1.5">Who this covers</p>
             <div className="flex flex-wrap gap-1.5">
@@ -556,11 +567,15 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
               </p>
             </div>
           )}
-          <p className="text-[12px] text-txt-muted">
-            Anybody already on a pattern is moved off it the day before this one
-            starts, rather than having their old roster erased — last month still
-            has to be explainable.
-          </p>
+            <p className="text-[12px] text-txt-muted">
+              Anybody already on a pattern is moved off it the day before this
+              one starts, rather than having their old roster erased — last
+              month still has to be explainable.
+            </p>
+          </div>
+
+          {/* What is being decided */}
+          <div className="space-y-3">
           <Field label="Pattern" required>
             <select className={inputClass} value={form.pattern_id}
                     onChange={(e) => setForm({ ...form, pattern_id: e.target.value })}>
@@ -591,8 +606,10 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
               </div>
             </div>
           )}
+          </div>
+
           {patterns.length === 0 && (
-            <div className="rounded-lg border border-amber/30 bg-amber-bg/40 px-3 py-3">
+            <div className="lg:col-span-2 rounded-lg border border-amber/30 bg-amber-bg/40 px-3 py-3">
               <p className="text-[12.5px] text-txt-primary font-semibold mb-1">
                 No patterns exist yet, which is why the list above is empty.
               </p>

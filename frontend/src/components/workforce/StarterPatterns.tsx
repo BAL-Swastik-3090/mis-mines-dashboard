@@ -101,7 +101,12 @@ export default function StarterPatterns({ onAdopted, compact }: {
         </p>
       )}
 
-      <div className={`grid gap-2 ${compact ? "sm:grid-cols-2" : "sm:grid-cols-2 lg:grid-cols-3"}`}>
+      {/* Four across on a laptop when compact, because the dialog that holds
+          them is now wide enough for it. Two-up inside a 560px modal is what
+          made this a scrolling list instead of a set of choices you can see. */}
+      <div className={`grid gap-2 ${compact
+        ? "sm:grid-cols-2 lg:grid-cols-4"
+        : "sm:grid-cols-2 lg:grid-cols-3"}`}>
         {rows.map((r) => {
           const chosen = picked.has(r.code);
           return (
