@@ -650,6 +650,184 @@ def set_crew(asset_id: int, request: Request, body: dict = Body(...),
             "crew_size": len(wanted), "added": len(added), "removed": len(removed)}
 
 
+@router.get("/cover/export")
+def export_crews(request: Request,
+                 db: Session = Depends(get_minehub_db)):
+    """The whole plan as a workbook: one row per person per machine.
+
+    One row per person, not one per machine with the names in a cell. A cell
+    holding "A, B, C" is a cell somebody edits into "A,B , C" and an import
+    that has to guess what they meant. A row per pairing is the shape the
+    register already has, and it is the shape that comes back cleanly.
+    """
+    _require(request, VIEW, "see the roster")
+    from io import BytesIO
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+
+    rows = [dict(r) for r in db.execute(text("""
+        SELECT a.fleet_code, a.registration_no, t.name AS asset_type,
+               t.category, ou.name AS department,
+               o.operator_ref, p.legal_name AS person, oa.role, oa.shift,
+               (SELECT i.external_code FROM party_identity i
+                 WHERE i.party_id = p.party_id AND i.system = 'CONTRACTOR'
+                 ORDER BY i.party_identity_id LIMIT 1) AS employee_id
+          FROM asset a
+          JOIN asset_type t ON t.asset_type_id = a.asset_type_id
+          LEFT JOIN org_unit ou ON ou.org_unit_id = a.org_unit_id
+          LEFT JOIN operator_assignment oa
+                 ON oa.asset_id = a.asset_id AND oa.status = 'ACTIVE'
+          LEFT JOIN operator o ON o.operator_id = oa.operator_id
+          LEFT JOIN party p ON p.party_id = o.party_id
+         WHERE a.status NOT IN ('DISPOSED', 'SCRAPPED', 'CANNIBALISED')
+         ORDER BY t.name, a.fleet_code, oa.role, p.legal_name
+    """)).mappings()]
+
+    wb = Workbook()
+    head = Font(bold=True, color="FFFFFF", size=10)
+    navy = PatternFill("solid", fgColor="16233C")
+
+    sheet = wb.active
+    sheet.title = "Crews"
+    sheet.append(["Machine", "Registration", "Type", "Category", "Department",
+                  "Employee ID", "Operator reference", "Person", "Role", "Shift"])
+    for cell in sheet[1]:
+        cell.font = head
+        cell.fill = navy
+
+    for r in rows:
+        sheet.append([r["fleet_code"], r["registration_no"], r["asset_type"],
+                      r["category"], r["department"], r["employee_id"],
+                      r["operator_ref"], r["person"], r["role"], r["shift"]])
+
+    for col, width in zip("ABCDEFGHIJ", (18, 16, 18, 14, 22, 13, 20, 26, 12, 10)):
+        sheet.column_dimensions[col].width = width
+    sheet.freeze_panes = "A2"
+
+    key = wb.create_sheet("Key")
+    key.append(["This file", ""])
+    key.append(["Crews", "One row per person per machine. A machine with three "
+                         "people has three rows; one with nobody has a row with "
+                         "the person columns empty."])
+    key.append(["", "Rows are matched on the operator reference and the machine's "
+                    "fleet code, never on the names."])
+    key.append(["", "Add a row to put somebody on a machine. Delete a row and "
+                    "nothing happens — taking somebody off is done by clearing "
+                    "the Person column, so a row deleted by accident cannot "
+                    "quietly empty a crew."])
+    key.append(["Role", "PRIMARY for the person who normally runs it, RELIEF for "
+                        "cover, STANDBY, TRAINEE."])
+    for col, width in zip("AB", (16, 90)):
+        key.column_dimensions[col].width = width
+
+    buffer = BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    name = f"Kaliapani-crews-{date.today().isoformat()}.xlsx"
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )
+
+
+@router.post("/cover/import")
+async def import_crews(request: Request, file: UploadFile = File(...),
+                       dry_run: bool = Query(True),
+                       db: Session = Depends(get_minehub_db)) -> dict:
+    """Read a Crews sheet back. A dry run by default, like every other import.
+
+    Rows are matched on the fleet code and the operator reference, never on the
+    names. Two people called Sahoo is not a hypothetical at a mine this size,
+    and neither is two machines somebody has typed the same nickname against.
+    """
+    _require(request, MANAGE, "manage the roster")
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    raw = await file.read()
+    if len(raw) > 10 * 1024 * 1024:
+        raise HTTPException(400, "That file is larger than 10 MB.")
+    try:
+        wb = load_workbook(BytesIO(raw), data_only=True)
+    except Exception:                                   # noqa: BLE001
+        raise HTTPException(400, "That does not open as an Excel workbook.")
+
+    sheet = wb["Crews"] if "Crews" in wb.sheetnames else wb.active
+
+    machines = {str(r[0]).strip().upper(): r[1] for r in db.execute(text(
+        "SELECT fleet_code, asset_id FROM asset WHERE fleet_code IS NOT NULL")).all()}
+    people = {str(r[0]).strip().upper(): (r[1], r[2]) for r in db.execute(text("""
+        SELECT o.operator_ref, o.operator_id, p.legal_name
+          FROM operator o JOIN party p ON p.party_id = o.party_id
+         WHERE o.operator_ref IS NOT NULL AND o.profile_status = 'ACTIVE'
+    """)).all()}
+    current = {(r[0], r[1]) for r in db.execute(text(
+        "SELECT asset_id, operator_id FROM operator_assignment "
+        "WHERE status = 'ACTIVE'")).all()}
+
+    # Column positions from the header, not assumed: a file that has been round
+    # the office has had columns moved.
+    where = {}
+    for col in range(1, sheet.max_column + 1):
+        label = str(sheet.cell(row=1, column=col).value or "").strip().lower()
+        if label:
+            where[label] = col
+
+    for needed in ("machine", "operator reference"):
+        if needed not in where:
+            raise HTTPException(400,
+                f"This sheet has no {needed.title()} column, so its rows cannot "
+                "be matched. Export the plan again and edit that file.")
+
+    wanted: dict[int, dict[int, str]] = {}
+    changes, problems = [], []
+    for n in range(2, sheet.max_row + 1):
+        fleet = str(sheet.cell(row=n, column=where["machine"]).value or "").strip().upper()
+        ref = str(sheet.cell(row=n, column=where["operator reference"]).value or "").strip().upper()
+        if not fleet:
+            continue
+        asset_id = machines.get(fleet)
+        if not asset_id:
+            problems.append({"row": n, "ref": fleet,
+                             "why": "No machine has that fleet code."})
+            continue
+        wanted.setdefault(asset_id, {})
+        if not ref:
+            continue                      # a machine listed with nobody on it
+        person = people.get(ref)
+        if not person:
+            problems.append({"row": n, "ref": ref,
+                             "why": "No active operator has that reference."})
+            continue
+        role = str(sheet.cell(row=n, column=where.get("role", 0)).value
+                   or "PRIMARY").strip().upper() if where.get("role") else "PRIMARY"
+        wanted[asset_id][person[0]] = role or "PRIMARY"
+        if (asset_id, person[0]) not in current:
+            changes.append({"row": n, "ref": ref, "display_name": person[1],
+                            "fleet_code": fleet, "role": role, "action": "add"})
+
+    for asset_id, crew in wanted.items():
+        for a, o in current:
+            if a == asset_id and o not in crew:
+                changes.append({"row": 0, "ref": "", "fleet_code": "",
+                                "display_name": "", "action": "remove",
+                                "asset_id": a, "operator_id": o})
+
+    if not dry_run:
+        for asset_id, crew in wanted.items():
+            set_crew(asset_id, request, body={"operators": [
+                {"operator_id": o, "role": r} for o, r in crew.items()]}, db=db)
+
+    return {"dry_run": dry_run, "file": file.filename, "sheet": sheet.title,
+            "machines_in_file": len(wanted),
+            "changes": changes, "problems": problems,
+            "summary": {"would_change" if dry_run else "changed": len(changes),
+                        "rejected": len(problems)}}
+
+
 @router.get("/cover")
 def who_can_run(request: Request,
                 day: str | None = Query(None),
@@ -683,6 +861,7 @@ def who_can_run(request: Request,
     machines = [dict(r) for r in db.execute(text("""
         SELECT a.asset_id, a.fleet_code, a.registration_no, a.nickname,
                a.asset_type_id, t.name AS asset_type, t.category, a.status,
+               a.ownership, ou.name AS department, own.display_name AS owner,
                -- The whole crew, not the first of them. A machine with three
                -- drivers reported one and the other two were invisible, which
                -- is what made this look like a one-name field.
@@ -705,6 +884,8 @@ def who_can_run(request: Request,
                ), '[]'::json) AS crew
           FROM asset a
           JOIN asset_type t ON t.asset_type_id = a.asset_type_id
+          LEFT JOIN org_unit ou ON ou.org_unit_id = a.org_unit_id
+          LEFT JOIN party own ON own.party_id = a.owner_party_id
          -- CANNIBALISED belongs here with the other two: a machine stripped
          -- for parts cannot be run, and offering drivers for it is offering
          -- cover for work that cannot happen.

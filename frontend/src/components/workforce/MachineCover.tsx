@@ -23,6 +23,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Truck, Loader2, Search, AlertTriangle, UserX, Plus, X, ShieldCheck,
+  Download, Upload, Check,
 } from "lucide-react";
 import api from "@/lib/api";
 import { matchesSearch } from "@/lib/search";
@@ -30,6 +31,7 @@ import DateField from "@/components/minehub/DateField";
 import {
   Card, CardHeader, Chip, EmptyRow, Td, Th, inputClass, Button, type Tone,
 } from "@/components/minehub/ui";
+import Dialog from "@/components/minehub/Dialog";
 import { isoDay } from "./state";
 
 interface Person {
@@ -54,8 +56,18 @@ interface Candidate {
 interface Machine {
   asset_id: number; fleet_code: string | null; registration_no: string | null;
   nickname: string | null; asset_type: string | null; status: string;
+  category: string | null; department: string | null;
+  ownership: string | null; owner: string | null;
   crew: CrewMember[]; crew_size: number; crew_not_cleared: number;
   can_run: number; free_now: number; candidates: Candidate[];
+}
+
+interface ImportReport {
+  dry_run: boolean; file: string; machines_in_file: number;
+  changes: { row: number; ref: string; display_name: string;
+             fleet_code: string; role?: string; action: string }[];
+  problems: { row: number; ref: string; why: string }[];
+  summary: Record<string, number>;
 }
 
 const ROLE_TONE: Record<string, Tone> = {
@@ -79,6 +91,12 @@ export default function MachineCover() {
   const [people, setPeople] = useState<Person[]>([]);
   const [q, setQ] = useState("");
   const [gapsOnly, setGapsOnly] = useState(false);
+  // Machines are narrowed the way a planner thinks about them: the part of the
+  // mine, the kind of work, the hire. Three hundred rows is not a list anybody
+  // reads, and a filter is what turns it into one.
+  const [by, setBy] = useState({ category: "", department: "", type: "", ownership: "" });
+  const [importing, setImporting] = useState<ImportReport | null>(null);
+  const [pending, setPending] = useState<File | null>(null);
   const [editing, setEditing] = useState<number | null>(null);
   const [pick, setPick] = useState("");
   const [loading, setLoading] = useState(true);
@@ -141,13 +159,65 @@ export default function MachineCover() {
     } finally { setBusy(false); }
   }, [load]);
 
+  const optionsOf = useCallback((pick: (m: Machine) => string | null) =>
+    [...new Set(rows.map(pick).filter(Boolean) as string[])].sort(), [rows]);
+
+  const exportPlan = useCallback(async () => {
+    setBusy(true);
+    try {
+      const r = await api.get("/workforce/cover/export", { responseType: "blob" });
+      const url = URL.createObjectURL(new Blob([r.data]));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `Kaliapani-crews-${day}.xlsx`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch { setError("The plan could not be exported."); }
+    finally { setBusy(false); }
+  }, [day]);
+
+  /** Always read first. Nothing is written until somebody has seen what would
+   *  change — a spreadsheet that has been round the office is never something
+   *  anybody is certain about. */
+  const readImport = useCallback(async (f: File) => {
+    setBusy(true);
+    try {
+      const form = new FormData();
+      form.append("file", f);
+      const r = await api.post("/workforce/cover/import?dry_run=true", form);
+      setPending(f);
+      setImporting(r.data);
+    } catch (e: unknown) {
+      const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(typeof d === "string" ? d : "That file could not be read.");
+    } finally { setBusy(false); }
+  }, []);
+
+  const applyImport = useCallback(async () => {
+    if (!pending) return;
+    setBusy(true);
+    try {
+      const form = new FormData();
+      form.append("file", pending);
+      await api.post("/workforce/cover/import?dry_run=false", form);
+      setImporting(null);
+      setPending(null);
+      await load();
+    } catch { setError("Those changes could not be applied."); }
+    finally { setBusy(false); }
+  }, [pending, load]);
+
   const shown = useMemo(() => rows
     .filter((m) => !gapsOnly || m.crew_size === 0)
+    .filter((m) => (!by.category || m.category === by.category)
+                && (!by.department || (m.department ?? "") === by.department)
+                && (!by.type || m.asset_type === by.type)
+                && (!by.ownership || m.ownership === by.ownership))
     .filter((m) => matchesSearch(q, [
       m.fleet_code, m.registration_no, m.nickname, m.asset_type,
       ...m.crew.map((c) => c.person),
       ...m.candidates.map((c) => c.person),
-    ])), [rows, q, gapsOnly]);
+    ])), [rows, q, gapsOnly, by]);
 
   const unplanned = rows.filter((m) => m.crew_size === 0).length;
   const planned = rows.reduce((n, m) => n + m.crew_size, 0);
@@ -163,12 +233,46 @@ export default function MachineCover() {
               roster of
               <DateField className={`${inputClass} w-[140px]`} value={day} onChange={setDay} />
             </span>
+            {/* One shape for all four, so the bar reads as a set rather than
+                four controls that happen to sit together. */}
+            {([
+              ["department", "All departments", optionsOf((m) => m.department)],
+              ["category", "All work", optionsOf((m) => m.category)],
+              ["type", "All types", optionsOf((m) => m.asset_type)],
+              ["ownership", "Own and hired", optionsOf((m) => m.ownership)],
+            ] as const).map(([key, all, options]) => (
+              <select key={key} value={by[key]}
+                onChange={(e) => setBy({ ...by, [key]: e.target.value })}
+                className={`${inputClass} w-auto py-1.5 text-[12px] ${
+                  by[key] ? "border-gold text-txt-primary font-semibold" : ""}`}>
+                <option value="">{all}</option>
+                {options.map((o) => <option key={o} value={o}>{o}</option>)}
+              </select>
+            ))}
             <button type="button" onClick={() => setGapsOnly((v) => !v)}
               className={`px-2.5 py-1.5 rounded-lg border text-[12px] transition-colors ${
                 gapsOnly ? "border-rose bg-rose-bg text-rose font-semibold"
                          : "border-border text-txt-muted hover:bg-bg-hover"}`}>
-              Only machines with no crew
+              No crew
             </button>
+            <Button size="sm" variant="secondary" disabled={busy}
+                    onClick={() => void exportPlan()} title="Download the whole plan">
+              <Download className="w-3.5 h-3.5" /> Excel
+            </Button>
+            <label className="inline-flex items-center gap-1.5 rounded-lg border
+                              border-slate-200 bg-white px-2.5 py-1.5 text-[11px]
+                              font-semibold text-txt-muted hover:bg-slate-50
+                              cursor-pointer transition"
+                   title="Bring an edited Crews sheet back">
+              <Upload className="w-3.5 h-3.5" /> Import
+              <input type="file" className="hidden"
+                     accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                     onChange={(e) => {
+                       const f = e.target.files?.[0];
+                       e.target.value = "";
+                       if (f) void readImport(f);
+                     }} />
+            </label>
             <div className="relative">
               <Search className="w-3.5 h-3.5 text-txt-light absolute left-3 top-1/2 -translate-y-1/2" />
               <input value={q} onChange={(e) => setQ(e.target.value)}
@@ -352,6 +456,66 @@ export default function MachineCover() {
             </table>
           </div>
         </>
+      )}
+
+      {importing && (
+        <Dialog open tone="warning" width={760}
+          title={`Import ${importing.changes.length} crew change(s)`}
+          confirmLabel="Apply these changes" busy={busy}
+          onConfirm={() => void applyImport()}
+          onCancel={() => { setImporting(null); setPending(null); }}>
+          <div className="space-y-3">
+            <p className="text-[12px] text-txt-muted">
+              Read from <strong>{importing.file}</strong>. Nothing has been
+              written yet. Machines are matched on the fleet code and people on
+              the operator reference, never on the names — two people called
+              Sahoo is not a hypothetical.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Chip tone={importing.changes.length ? "emerald" : "slate"} dot={false}>
+                {importing.changes.length} would change
+              </Chip>
+              <Chip tone={importing.problems.length ? "rose" : "slate"} dot={false}>
+                {importing.problems.length} rejected
+              </Chip>
+              <Chip tone="slate" dot={false}>
+                {importing.machines_in_file} machines in the file
+              </Chip>
+            </div>
+
+            {importing.changes.length > 0 && (
+              <div className="rounded-lg border border-slate-200 divide-y divide-slate-100
+                              max-h-56 overflow-auto">
+                {importing.changes.map((c, i) => (
+                  <div key={i} className="px-3 py-1.5 flex items-center gap-2 text-[12px]">
+                    {c.action === "add"
+                      ? <Check className="w-3.5 h-3.5 text-emerald shrink-0" />
+                      : <X className="w-3.5 h-3.5 text-rose shrink-0" />}
+                    <span className="font-semibold text-navy">
+                      {c.display_name || "somebody"}
+                    </span>
+                    <span className="text-txt-light">
+                      {c.action === "add"
+                        ? `onto ${c.fleet_code}${c.role ? ` as ${c.role.toLowerCase()}` : ""}`
+                        : "taken off"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {importing.problems.length > 0 && (
+              <div className="rounded-lg border border-rose/30 bg-rose-bg/40 divide-y
+                              divide-rose/10 max-h-40 overflow-auto">
+                {importing.problems.map((p2, i) => (
+                  <div key={i} className="px-3 py-1.5 text-[12px] text-rose">
+                    Row {p2.row} ({p2.ref}): {p2.why}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </Dialog>
       )}
     </Card>
   );
