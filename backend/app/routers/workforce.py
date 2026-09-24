@@ -498,6 +498,75 @@ def shifts_the_mine_runs(request: Request,
     """)).mappings()]
 
 
+@router.get("/comp-off")
+def comp_off(request: Request,
+             from_date: str | None = Query(None),
+             to_date: str | None = Query(None),
+             db: Session = Depends(get_minehub_db)) -> dict:
+    """Who has worked a holiday, and therefore is owed a day back.
+
+    Earned, not granted. A comp off exists because somebody was on shift on a
+    day the company declared a holiday, and that fact is already in the roster
+    — the day they worked and the holiday it fell on. Asking a supervisor to
+    remember and record it separately is asking for a debt the mine forgets and
+    the man does not.
+
+    Derived rather than stored for the same reason every other figure here is:
+    a stored count drifts from the roster the first time a day is changed, and
+    then two screens disagree about what somebody is owed.
+    """
+    _require(request, VIEW, "see the roster")
+
+    start = _day(from_date) if from_date else date(date.today().year, 1, 1)
+    end = _day(to_date) if to_date else date(date.today().year, 12, 31)
+
+    rows = [dict(r) for r in db.execute(text("""
+        SELECT o.operator_id, o.operator_ref, p.legal_name AS person,
+               t.name AS trade, h.holiday_date, h.name AS holiday,
+               COALESCE(rd.shift_code, rp.code) AS worked_as,
+               (rd.operator_id IS NOT NULL) AS set_by_hand
+          FROM holiday h
+          JOIN operator o ON o.profile_status = 'ACTIVE'
+          JOIN party p ON p.party_id = o.party_id
+          LEFT JOIN trade t ON t.trade_id = o.trade_id
+          -- Set by hand on the day itself.
+          LEFT JOIN roster_day rd
+                 ON rd.operator_id = o.operator_id
+                AND rd.on_date = h.holiday_date
+                AND rd.shift_code IS NOT NULL
+          -- Or put there by the pattern they are on.
+          LEFT JOIN roster_assignment ra
+                 ON ra.operator_id = o.operator_id
+                AND ra.effective_from <= h.holiday_date
+                AND (ra.effective_to IS NULL OR ra.effective_to >= h.holiday_date)
+          LEFT JOIN roster_pattern rp ON rp.pattern_id = ra.pattern_id
+         WHERE h.holiday_date BETWEEN :f AND :t
+           -- Working it is the whole test. A pattern that rests them on the
+           -- holiday owes nothing, and neither does a day nobody set.
+           AND (rd.shift_code IS NOT NULL
+                OR (rp.pattern_id IS NOT NULL
+                    AND upper(COALESCE(rp.slots ->> (
+                          ((h.holiday_date - ra.anchor_date) % rp.cycle_days)
+                        ), 'REST')) <> 'REST'))
+         ORDER BY p.legal_name, h.holiday_date
+    """), {"f": start, "t": end}).mappings()]
+
+    by_person: dict[int, dict] = {}
+    for r in rows:
+        who = by_person.setdefault(r["operator_id"], {
+            "operator_id": r["operator_id"], "operator_ref": r["operator_ref"],
+            "person": r["person"], "trade": r["trade"], "earned": 0, "days": []})
+        who["earned"] += 1
+        who["days"].append({"date": r["holiday_date"].isoformat(),
+                            "holiday": r["holiday"], "shift": r["worked_as"],
+                            "by_hand": r["set_by_hand"]})
+
+    people = sorted(by_person.values(), key=lambda x: -x["earned"])
+    return {"from": start.isoformat(), "to": end.isoformat(),
+            "people": people,
+            "owed_in_total": sum(x["earned"] for x in people)}
+
+
 # ── the board ────────────────────────────────────────────────────────────────
 @router.get("/board")
 def roster_board(request: Request,

@@ -21,6 +21,11 @@ export interface DayCell {
    *  a roster made of exceptions looks like one. */
   by_hand?: boolean;
   reason?: string | null;
+  /** The holiday this day falls on, if any — carried even when somebody is
+   *  working it, because that is the case that matters. */
+  hol?: string | null;
+  /** Worked a holiday, so a compensatory off is owed for it. */
+  earns_comp_off?: boolean;
   blocks?: boolean;
 }
 

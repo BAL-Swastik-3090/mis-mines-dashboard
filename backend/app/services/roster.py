@@ -193,13 +193,20 @@ def duty(db: Session, from_date: date, to_date: date,
         for day in span:
             iso = day.isoformat()
 
-            # A closure stops everything, including the people who would
-            # otherwise have been rostered on.
+            # A holiday is something true about the day, not a decision about
+            # who works it.
+            #
+            # This used to stop everything: a holiday overrode the roster and
+            # nobody could be put on shift. That is not how a mine runs. The
+            # plant does not stop for Durga Puja — a crew works it and takes a
+            # compensatory off later, which is the whole reason comp-off
+            # exists. Treating the holiday as a closure made it impossible to
+            # roster the crew who would actually be there.
+            #
+            # So it is read here and applied at the bottom, to whatever the day
+            # turned out to be: somebody rostered on a holiday is working it
+            # and has earned a day back; somebody not rostered has the holiday.
             hol = hols.get(day)
-            if hol and hol["stops_work"]:
-                per_day[iso] = {"state": HOLIDAY, "shift": None,
-                                "label": hol["name"], "kind": hol["kind"]}
-                continue
 
             on_leave = next(
                 (lv for lv in taken if lv["from_date"] <= day <= lv["to_date"]), None)
@@ -225,7 +232,13 @@ def duty(db: Session, from_date: date, to_date: date,
                                     "label": f"{said['shift_code']} shift",
                                     "kind": None, "pattern": None, "by_hand": True,
                                     "reason": said["reason"],
-                                    "hol": hol["name"] if hol else None}
+                                    "hol": hol["name"] if hol else None,
+                                    "earns_comp_off": bool(hol)}
+                elif hol:
+                    # Rested on a holiday is the holiday, said plainly.
+                    per_day[iso] = {"state": HOLIDAY, "shift": None,
+                                    "label": hol["name"], "kind": hol["kind"],
+                                    "by_hand": True}
                 else:
                     per_day[iso] = {"state": OFF, "shift": None,
                                     "label": "rest day", "kind": None,
@@ -240,19 +253,31 @@ def duty(db: Session, from_date: date, to_date: date,
                         if a["effective_from"] <= day
                         and (a["effective_to"] is None or a["effective_to"] >= day)), None)
             if not row:
-                per_day[iso] = {"state": None, "shift": None,
-                                "label": "not on a roster", "kind": None}
+                # Nobody has rostered them. On an ordinary day that is a gap;
+                # on a holiday it is simply their holiday.
+                per_day[iso] = ({"state": HOLIDAY, "shift": None,
+                                 "label": hol["name"], "kind": hol["kind"]}
+                                if hol else
+                                {"state": None, "shift": None,
+                                 "label": "not on a roster", "kind": None})
                 continue
 
             pattern = pats.get(row["pattern_id"])
             slot = _slot_for(pattern, row["anchor_date"], day) if pattern else REST
             if slot == REST:
-                per_day[iso] = {"state": OFF, "shift": None, "label": "rest day",
-                                "kind": None, "pattern": pattern["code"] if pattern else None}
+                per_day[iso] = ({"state": HOLIDAY, "shift": None,
+                                 "label": hol["name"], "kind": hol["kind"],
+                                 "pattern": pattern["code"] if pattern else None}
+                                if hol else
+                                {"state": OFF, "shift": None, "label": "rest day",
+                                 "kind": None,
+                                 "pattern": pattern["code"] if pattern else None})
             else:
                 per_day[iso] = {"state": ON, "shift": slot, "label": f"{slot} shift",
                                 "kind": None, "pattern": pattern["code"] if pattern else None,
-                                "hol": hol["name"] if hol else None}
+                                "hol": hol["name"] if hol else None,
+                                # Worked a holiday: a day back is owed.
+                                "earns_comp_off": bool(hol)}
 
         out[operator_id] = per_day
 

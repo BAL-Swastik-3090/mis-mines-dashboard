@@ -782,11 +782,21 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
                         ? SHIFT_LOOK[shiftBand(cell.shift, startOf[cell.shift ?? ""])]
                         : cell?.state ? DAY_STATE[cell.state] : UNROSTERED;
                       const on = cells.has(cellKey(p.operator_id, iso));
-                      // Leave and closures are not this screen's to overrule,
-                      // so those squares are not offered for selection at all.
-                      const fixed = cell?.state === "LEAVE" || cell?.state === "HOLIDAY";
+                      // Leave is not this screen's to overrule — a man on
+                      // approved leave is not available and typing a shift into
+                      // a box does not bring him back.
+                      //
+                      // A holiday is different and used to be lumped in with
+                      // it. The mine does not stop for Durga Puja: a crew works
+                      // it and takes a compensatory off later. Locking those
+                      // squares made it impossible to roster the people who
+                      // would actually be there, which is the one day you most
+                      // need to know who is.
+                      const fixed = cell?.state === "LEAVE";
                       // "G" on the square, "GENERAL shift" on the hover.
                       const label = (cell?.label || UNROSTERED.label)
+                        + (cell?.hol ? ` · ${cell.hol}` : "")
+                        + (cell?.earns_comp_off ? " · works the holiday, earns a comp off" : "")
                         + (cell?.by_hand ? " · set by hand" : "")
                         + (cell?.reason ? ` — ${cell.reason}` : "");
                       return (
@@ -815,6 +825,13 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
                             {cell?.by_hand && (
                               <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5
                                                rounded-full bg-gold" />
+                            )}
+                            {/* Worked on a holiday. A day back is owed for it,
+                                and a roster that draws it as an ordinary shift
+                                is how the debt goes unnoticed. */}
+                            {cell?.earns_comp_off && (
+                              <span className="absolute -bottom-0.5 -left-0.5 w-1.5 h-1.5
+                                               rounded-full bg-violet ring-1 ring-white" />
                             )}
                           </button>
                         </td>
