@@ -65,4 +65,6 @@ storage/
 backend/storage/
 
 # Claude Code personal settings — not shared with the team
-.claude/settings.local.json
+# Claude Code's own working files: an editor's launch config and local
+# settings, created by whoever happens to be using it. Not the project's.
+.claude/
