@@ -12,6 +12,7 @@
  * believe they are editing attendance, because the difference is the whole
  * reason this needs two people.
  */
+import { matchesSearch } from "@/lib/search";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle, Check, CheckCircle2, Clock, Loader2, Plus, Search,
@@ -161,8 +162,7 @@ export default function CorrectionsPanel({ prefill, onDone }: {
       if (!matches(r.reason, by.reason)) return false;
       if (!matches(r.employer, by.employer)) return false;
       if (!q) return true;
-      return [r.name, r.emp_no, r.reason, r.remarks, r.requested_by_name]
-        .some((v) => (v ?? "").toLowerCase().includes(q));
+      return matchesSearch(q, [r.name, r.emp_no, r.reason, r.remarks, r.requested_by_name]);
     });
   }, [rows, tab, by, query]);
 

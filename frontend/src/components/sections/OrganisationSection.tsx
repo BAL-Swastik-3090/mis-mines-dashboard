@@ -18,6 +18,7 @@
  * against an escalation that nobody chose, and a wrong name is worse than a
  * blank one because a blank asks to be filled.
  */
+import { matchesSearch } from "@/lib/search";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Building2, Check, ChevronRight, CircleAlert, Crown, Loader2, Network,
@@ -185,10 +186,8 @@ export default function OrganisationSection() {
     const ids = new Set(units.map((u) => u.org_unit_id));
     const q = filter.trim().toLowerCase();
     const matches = (u: Unit) =>
-      !q || u.name.toLowerCase().includes(q) || u.code.toLowerCase().includes(q)
-      || (u.sap_labels ?? "").toLowerCase().includes(q)
-      || (u.head_name ?? "").toLowerCase().includes(q)
-      || (u.proposed_head?.name ?? "").toLowerCase().includes(q);
+      matchesSearch(q, [u.name, u.code, u.sap_labels, u.head_name,
+                  u.proposed_head?.name]);
 
     const keep = new Set<number>();
     units.forEach((u) => {

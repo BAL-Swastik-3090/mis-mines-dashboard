@@ -19,6 +19,7 @@
  * department the raiser's access covers, at the server, so a supervisor is
  * never offered somebody they would then be refused.
  */
+import { matchesSearch } from "@/lib/search";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle, Check, CheckSquare, Clock, Loader2, Plus, Search, Square,
@@ -123,7 +124,7 @@ export default function RaiseCorrection({ who, prefill, onRaised, onCancel }: {
       if (!matches(w.trade, by.trade)) return false;
       if (!matches(w.employer, by.employer)) return false;
       if (!q) return true;
-      return [w.name, w.emp_no, w.trade].some((v) => (v ?? "").toLowerCase().includes(q));
+      return matchesSearch(q, [w.name, w.emp_no, w.trade]);
     });
   }, [workers, by, query]);
 

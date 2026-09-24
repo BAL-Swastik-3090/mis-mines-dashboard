@@ -17,6 +17,7 @@
  * a register that asserts absence it cannot evidence is a register that should
  * not be anywhere near a contractor's bill.
  */
+import { matchesSearch } from "@/lib/search";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle, CalendarDays, CheckCircle2, ClipboardCheck, Clock, Download,
@@ -213,8 +214,7 @@ export default function AttendancePanel({ filter }: {
       if (!matches(r.name, by.worker)) return false;
       if (by.state && r.state !== by.state) return false;
       if (!q) return true;
-      return [r.name, r.emp_no, r.operator_ref, r.trade]
-        .some((v) => (v ?? "").toLowerCase().includes(q));
+      return matchesSearch(q, [r.name, r.emp_no, r.operator_ref, r.trade]);
     });
   }, [rows, by, query]);
 

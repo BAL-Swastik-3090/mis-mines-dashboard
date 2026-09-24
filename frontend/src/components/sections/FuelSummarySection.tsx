@@ -1,4 +1,5 @@
 "use client";
+import { matchesSearch } from "@/lib/search";
 import { useMemo, useState } from "react";
 import {
   Fuel, Droplet, AlertTriangle, Gauge, Clock, Route,
@@ -132,7 +133,7 @@ export default function FuelSummarySection() {
     const list = (data?.vehicles ?? []).filter((v) =>
       query.trim() === ""
         ? true
-        : `${v.display_name} ${v.category}`.toLowerCase().includes(query.toLowerCase())
+        : matchesSearch(query, [v.display_name, v.category])
     );
     return [...list].sort((a, b) => {
       const av = a[sortKey], bv = b[sortKey];

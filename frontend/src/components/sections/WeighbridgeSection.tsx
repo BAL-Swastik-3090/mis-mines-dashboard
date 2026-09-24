@@ -22,6 +22,7 @@
  * a bad thing to hide: where the tare is old, the screen says so, because a
  * three-week-old tare quietly inflates every tonne recorded against it.
  */
+import { matchesSearch, rank } from "@/lib/search";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowRight, Clock, Gauge, Hand, Loader2, Plus, Radio, Scale, Search,
@@ -379,8 +380,12 @@ function VehiclePicker({ vehicles, onPick, onTare, disabled }: {
   const rows = useMemo(() => {
     const s = q.trim().toLowerCase();
     if (!s) return vehicles;
-    return vehicles.filter((v) =>
-      [v.vehicle, v.fleet_code, v.transporter].some((x) => (x ?? "").toLowerCase().includes(s)));
+    // Closest match first. Typing a whole fleet code means that truck, so it
+    // should not sit below one that merely contains the same characters.
+    return vehicles
+      .filter((v) => matchesSearch(s, [v.vehicle, v.fleet_code, v.transporter]))
+      .sort((a, b) => rank(s, [a.fleet_code, a.vehicle])
+                    - rank(s, [b.fleet_code, b.vehicle]));
   }, [vehicles, q]);
 
   return (
@@ -923,9 +928,8 @@ function TripTable({ trips, summary, sources, categories }: {
       && (flag !== "STALE" || t.tare_is_stale)
       && (flag !== "OVER" || !!t.overload_kg)
       && (flag !== "STANDING" || t.tare_source === "STANDING")
-      && (!s || [t.trip_no, t.vehicle, t.fleet_code, t.driver, t.material,
-                 t.source, t.destination]
-            .some((v) => (v ?? "").toLowerCase().includes(s))));
+      && matchesSearch(s, [t.trip_no, t.vehicle, t.fleet_code, t.driver,
+                           t.material, t.source, t.destination]));
   }, [trips, q, day, shift, source, material, flag]);
 
   const net = rows.reduce((a, t) => a + (t.net_kg ?? 0), 0) / 1000;

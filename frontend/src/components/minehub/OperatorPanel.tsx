@@ -7,6 +7,7 @@
  * reason: the register is what the screen is for, the queue is work to get
  * through.
  */
+import { matchesSearch } from "@/lib/search";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { toDisplay } from "./DateField";
 import {
@@ -270,9 +271,8 @@ export default function OperatorPanel({ view: viewProp = "register", addOpen,
       // The attendance id is searched because it is the number written on
       // everything else in the mine, and looking somebody up by it is the
       // commonest reason to open this screen.
-      return [o.display_name, o.operator_ref, o.attendance_id, o.designation,
-              o.trade, o.employer]
-        .some((v) => (v ?? "").toLowerCase().includes(q));
+      return matchesSearch(q, [o.display_name, o.operator_ref, o.attendance_id, o.designation,
+              o.trade, o.employer]);
     });
   }, [operators, query, by]);
 

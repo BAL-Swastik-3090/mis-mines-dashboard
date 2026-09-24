@@ -1,5 +1,6 @@
 "use client";
 /** Who can sign in, and what each person may do. */
+import { matchesSearch } from "@/lib/search";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Search, Trash2, Loader2, UserPlus, Check, X } from "lucide-react";
 import api from "@/lib/api";
@@ -78,8 +79,7 @@ export default function UsersPanel() {
     return users.filter((u) => {
       if (roleFilter && !u.roles.some((r) => r.code === roleFilter)) return false;
       if (!q) return true;
-      return [u.name, u.emp_id, u.department, u.designation]
-        .some((v) => (v ?? "").toLowerCase().includes(q));
+      return matchesSearch(q, [u.name, u.emp_id, u.department, u.designation]);
     });
   }, [users, query, roleFilter]);
 

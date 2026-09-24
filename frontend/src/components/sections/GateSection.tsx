@@ -17,6 +17,7 @@
  * neither register has ever seen is described, once, and it is found by its
  * number every time after.
  */
+import { matchesSearch } from "@/lib/search";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle, ArrowRightLeft, Clock, DoorOpen, IdCard, Loader2, LogIn,
@@ -106,8 +107,8 @@ export default function GateSection() {
     const s = q.trim().toLowerCase();
     return vehicles.filter((v) =>
       (!purpose || v.purpose === purpose)
-      && (!s || [v.vehicle, v.fleet_code, v.transporter, v.gate_pass_no, v.contract_ref]
-            .some((x) => (x ?? "").toLowerCase().includes(s))));
+      && matchesSearch(s, [v.vehicle, v.fleet_code, v.transporter,
+                           v.gate_pass_no, v.contract_ref]));
   }, [vehicles, q, purpose]);
 
   const longStays = vehicles.filter((v) => v.days_inside >= 90).length;

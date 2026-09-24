@@ -20,6 +20,7 @@
  * site is quiet is found by comparing it with the rest of the period, and
  * shaded so that one rest day does not read as two hundred absences.
  */
+import { matchesSearch } from "@/lib/search";
 import React, { useMemo, useState } from "react";
 import {
   AlertTriangle, ArrowDownUp, CalendarDays, ChevronLeft, ChevronRight,
@@ -239,7 +240,7 @@ export default function ActivityMatrix({ rows, days, narrowed: narrowedAbove }: 
     const q = query.trim().toLowerCase();
     const out = people.filter((p) => {
       if (!q) return true;
-      return [p.name, p.emp_no, p.trade].some((v) => (v ?? "").toLowerCase().includes(q));
+      return matchesSearch(q, [p.name, p.emp_no, p.trade]);
     });
     return out.sort((a, b) =>
       order === "irregular" ? b.single - a.single || a.name.localeCompare(b.name)

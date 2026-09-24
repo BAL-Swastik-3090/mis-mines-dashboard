@@ -13,6 +13,7 @@
  * because nobody is cleared to sit in it — and merging them hides which of the
  * two problems the supervisor actually has.
  */
+import { matchesSearch } from "@/lib/search";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Cpu, Loader2, Search, RefreshCw, AlertTriangle, Wrench, UserPlus, ArrowLeftRight,
@@ -105,8 +106,7 @@ export default function LiveFleet({ shiftInstanceId, rights, onChanged, onHandov
                                      "COMPLIANCE_HOLD", "PLANNED_DOWN"].includes(m.state);
         return true;
       })
-      .filter((m) => !q || [m.fleet_code, m.nickname, m.asset_type, m.operator, m.asset_ref]
-        .some((v) => (v ?? "").toLowerCase().includes(q)))
+      .filter((m) => !q || matchesSearch(q, [m.fleet_code, m.nickname, m.asset_type, m.operator, m.asset_ref]))
       .sort((a, b) => (MACHINE_STATE[a.state]?.rank ?? 99) - (MACHINE_STATE[b.state]?.rank ?? 99)
         || a.fleet_code.localeCompare(b.fleet_code));
   }, [fleet, query, only]);

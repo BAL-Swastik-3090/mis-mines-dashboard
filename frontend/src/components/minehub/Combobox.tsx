@@ -14,6 +14,7 @@
  * scrolling ancestor can escape it, so the only reliable fix is to leave the
  * container entirely and position against the input's own rectangle.
  */
+import { matchesSearch } from "@/lib/search";
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, Plus, Loader2 } from "lucide-react";
@@ -69,7 +70,7 @@ export default function Combobox({
   const typed = query.trim();
   const options = isStatic
     ? (staticOptions ?? []).filter((o) =>
-        !typed || o.value.toLowerCase().includes(typed.toLowerCase()))
+        matchesSearch(typed, [o.value]))
     : fetched;
 
   /** Where to draw the list: below the input, or above it when the window ends

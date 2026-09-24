@@ -1,4 +1,5 @@
 "use client";
+import { matchesSearch } from "@/lib/search";
 import dynamic from "next/dynamic";
 import { useState } from "react";
 import {
@@ -528,8 +529,7 @@ export default function FuelManagementSection() {
   const categories = Array.from(new Set(vehicles.map(v => v.category))).sort();
 
   const filtered = vehicles.filter(v => {
-    const matchSearch   = v.display_name.toLowerCase().includes(search.toLowerCase()) ||
-                          v.category.toLowerCase().includes(search.toLowerCase());
+    const matchSearch   = matchesSearch(search, [v.display_name, v.category]);
     const matchStatus   = filterStatus === "all"   || v.status   === filterStatus;
     const matchCategory = filterCategory === "all" || v.category === filterCategory;
     return matchSearch && matchStatus && matchCategory;

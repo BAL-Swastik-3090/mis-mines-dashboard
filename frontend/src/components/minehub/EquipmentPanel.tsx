@@ -8,6 +8,7 @@
  * carries the telematics name across, so the common path never involves typing
  * a code twice and then wondering why the join does not work.
  */
+import { matchesSearch } from "@/lib/search";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Search, Link2, Trash2, Check, Loader2, Radio, ChevronDown, ChevronRight,
@@ -371,8 +372,7 @@ export default function EquipmentPanel({ addOpen, onAddOpenChange, onFormOpenCha
       if (propulsion === "EV" && a.propulsion !== "EV" && a.propulsion !== "HYBRID") return false;
       if (propulsion === "NON_EV" && a.propulsion === "EV") return false;
       if (!q) return true;
-      return [a.fleet_code, a.nickname, a.registration_no, a.make, a.model, a.asset_type]
-        .some((v) => (v ?? "").toLowerCase().includes(q));
+      return matchesSearch(q, [a.fleet_code, a.nickname, a.registration_no, a.make, a.model, a.asset_type]);
     });
   }, [assets, query, propulsion, stage, by]);
 

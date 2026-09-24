@@ -23,6 +23,7 @@
  * operators in Automobile" is how the work is actually divided up, and
  * exports, because some of it gets done on paper in the workshop.
  */
+import { matchesSearch } from "@/lib/search";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle, CalendarClock, CheckCircle2, Download, Loader2, Search,
@@ -179,8 +180,7 @@ export default function AssessmentPanel({ onChanged, filter }: {
       if (!matches(p.department, by.department)) return false;
       if (!matches(p.employer, by.employer)) return false;
       if (!q) return true;
-      return [p.display_name, p.operator_ref, p.attendance_id, p.trade, p.designation]
-        .some((v) => (v ?? "").toLowerCase().includes(q));
+      return matchesSearch(q, [p.display_name, p.operator_ref, p.attendance_id, p.trade, p.designation]);
     });
   }, [pool, by, query]);
 
