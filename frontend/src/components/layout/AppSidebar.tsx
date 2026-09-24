@@ -51,7 +51,9 @@ const ORG_ITEM: NavItem =
   { kind: "page", id: "organisation", label: "Organisation", icon: Network };
 
 const PLATFORM_ITEM: NavItem =
-  { kind: "page", id: "minehub", label: "MineHub Platform", icon: Boxes };
+  // The id stays "minehub": roles are granted against it and the router
+  // switches on it. Only what people read changes.
+  { kind: "page", id: "minehub", label: "Equipment 360", icon: Boxes };
 
 const MANPOWER_ITEM: NavItem =
   { kind: "page", id: "manpower", label: "Manpower", icon: Users };

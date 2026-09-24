@@ -48,7 +48,7 @@ export function PageHeader({ lead, rest, subtitle, tone = "gold", actions, icon:
                              joined = false, tuck = false }: {
   lead: string; rest?: string; subtitle?: string; tone?: Tone;
   actions?: React.ReactNode; icon?: React.ElementType;
-  /** The two halves are one word. "MineHub Platform" is two and wants the
+  /** The two halves are one word. "Equipment 360" is two and wants the
    *  gap; "Manpower" is one, and rendering it as "Man power" makes the
    *  heading look like a mistake. */
   joined?: boolean;

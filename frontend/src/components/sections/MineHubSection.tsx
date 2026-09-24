@@ -1,6 +1,11 @@
 "use client";
 /**
- * MineHub Platform — the operational platform.
+ * Equipment 360 — everything known about a machine, on one screen.
+ *
+ * Called MineHub Platform until the name stopped describing it. The screen
+ * is the equipment register and what hangs off it — notes, alerts, activity
+ * and the modules that read it — and "the platform" named the software
+ * rather than the thing the software is about.
  *
  * Where the mine's own work lives: registering equipment, and the operational
  * modules built on top of it. Access administration is a separate screen —
@@ -114,7 +119,7 @@ export default function MineHubSection() {
   return (
     <div className={`py-6 space-y-5 ${formOpen ? "max-w-[1600px]" : "max-w-[1500px]"}`}>
       {!formOpen && <PageHeader
-        lead="MineHub" rest="Platform" tone="gold" icon={Boxes}
+        lead="Equipment" rest="360" tone="gold" icon={Boxes}
         subtitle={active?.hint}
         actions={
           <>

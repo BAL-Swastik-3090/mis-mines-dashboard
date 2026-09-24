@@ -2,7 +2,7 @@
 /**
  * Manpower — the people side of the mine, on its own screen.
  *
- * It was a tab inside MineHub Platform, wedged between the equipment register
+ * It was a tab inside Equipment 360, wedged between the equipment register
  * and the machine alerts. That made sense when the operator register held
  * eleven people and existed mainly so a machine could be handed to somebody.
  * It holds 211 now, covering tipper drivers, fitters, welders, a time keeper

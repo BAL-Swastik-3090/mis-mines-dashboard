@@ -2,7 +2,7 @@
 /**
  * Access Control — administration.
  *
- * Deliberately separate from the MineHub Platform screen. They were merged
+ * Deliberately separate from the Equipment 360 screen. They were merged
  * once and it was wrong: this is an IT concern answered rarely (who may sign
  * in), while MineHub is operational work done daily by the people running the
  * mine. Splitting by audience rather than by convenience keeps each screen
