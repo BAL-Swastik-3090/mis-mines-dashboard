@@ -1174,8 +1174,9 @@ export interface WhyWhyWindow {
   requested_to?:   string;
   /** The global date filter overhung the register and was trimmed to fit. */
   clamped:        boolean;
-  /** The filter missed the register entirely; the full extent is shown. */
-  fell_back:      boolean;
+  /** The filter misses the register entirely. Nothing is shown — the section
+   *  never substitutes a different period for the one that was asked for. */
+  no_overlap:     boolean;
   empty:          boolean;
 }
 
@@ -1255,10 +1256,7 @@ export interface WhyWhyResponse {
     distinct: number;
     max_events: number;
     operator_error_events: number;
-    top: Array<{
-      operator: string; events: number; machines: string[];
-      causes: WhyWhyShare[]; cost: number;
-    }>;
+    top: WhyWhyOperator[];
     /** Ships from the backend so the UI cannot quietly drop it. */
     caveat: string;
   } | null;
@@ -1294,6 +1292,8 @@ export interface WhyWhyMachineDetail {
   causes:          WhyWhyShare[];
   causes_recorded: number;
   modes_to_80pct:  number;
+  /** Enough events for a Pareto to mean anything; below it no verdict is given. */
+  enough_for_pareto: boolean;
   /** Two modes or fewer cover 80% — a fixable pattern rather than scatter. */
   concentrated:    boolean;
 }
@@ -1323,16 +1323,46 @@ export interface WhyWhyOperatorIssues {
   issues:          WhyWhyOperatorIssue[];
 }
 
+/** One operating-error breakdown, with the operator reason the AI read out of
+ *  its Why-Why, the qualification pack that covers the skill, and the training
+ *  topic that would have prevented it. */
+export interface WhyWhyTrainingBreakdown {
+  id:              number;
+  notification_no: string | null;
+  date:            string | null;
+  shift:           string | null;
+  machine:         string;
+  defect:          string | null;
+  family:          string;
+  component:       string | null;
+  hours:           number;
+  cost:            number;
+  why_chain:       string[];
+  /** "recorded" = read from the analysts' own Why-Why chain.
+   *  "inferred" = no chain existed; read from the defect and failure mode. */
+  basis:           "recorded" | "inferred";
+  reason:          string | null;
+  topic:           string | null;
+  /** Resolved from the MACHINE, not chosen by the model — an operator's
+   *  qualification is a property of the machine they drive. Null only when the
+   *  catalogue holds no pack for that machine class, e.g. a telehandler. */
+  pack:            { code: string; name: string; nsqf: number | string } | null;
+  outcomes:        string[];
+  analysed:        boolean;
+}
+
 export interface WhyWhyTrainingResponse {
-  period:   WhyWhyWindow;
-  summary:  Omit<WhyWhyOperatorIssues, "issues"> | null;
-  incidents?: WhyWhyOperatorIssue[];
-  sections: { topics?: string; priority?: string };
-  model:    string | null;
-  tokens:   number | null;
+  period:      WhyWhyWindow;
+  summary:     Omit<WhyWhyOperatorIssues, "issues"> | null;
+  breakdowns:  WhyWhyTrainingBreakdown[];
+  analysed:    number;
+  recorded_basis: number;
+  packs:       number;
+  web:         Array<{ title: string; url: string }>;
+  model:       string | null;
+  tokens:      number | null;
   generated_at: string | null;
-  unverified_numbers: string[];
-  error:    string | null;
+  error:       string | null;
 }
 
 /** Breakdown production loss, taken from the LCM section and split here.
@@ -1369,4 +1399,60 @@ export interface WhyWhyProductionLoss {
     by_cause:   WhyWhyLossSlice[];
   };
   basis: string;
+}
+
+/** One breakdown a named operator was present for. Present, not responsible —
+ *  see WhyWhyResponse.operators.caveat. */
+export interface WhyWhyOperatorBreakdown {
+  date:            string | null;
+  shift:           string | null;
+  machine:         string;
+  defect:          string | null;
+  family:          string;
+  cause:           string | null;
+  hours:           number;
+  cost:            number;
+  notification_no: string | null;
+  why_chain:       string[];
+}
+
+export interface WhyWhyOperator {
+  operator:   string;
+  events:     number;
+  machines:   string[];
+  causes:     WhyWhyShare[];
+  cost:       number;
+  breakdowns: WhyWhyOperatorBreakdown[];
+}
+
+/** One breakdown as recorded, with its 5-Why ladder. Rows with no ladder are
+ *  still listed — 198 of 345 have none, and hiding them would make the
+ *  register look better documented than it is. */
+export interface WhyWhyRegisterRow {
+  id:              number;
+  notification_no: string | null;
+  date:            string | null;
+  shift:           string | null;
+  machine:         string;
+  equipment_desc:  string | null;
+  defect:          string | null;
+  family:          string;
+  cause:           string | null;
+  cause_detail:    string | null;
+  component:       string | null;
+  operator:        string | null;
+  hours:           number;
+  cost:            number;
+  why:             Array<{ level: number; question: string | null; answer: string | null }>;
+  root_cause:      string | null;
+}
+
+export interface WhyWhyRegisterResponse {
+  window:       WhyWhyWindow;
+  rows:         WhyWhyRegisterRow[];
+  machines:     string[];
+  causes:       string[];
+  families:     string[];
+  with_why:     number;
+  without_why:  number;
 }

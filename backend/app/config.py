@@ -80,6 +80,12 @@ class Settings(BaseSettings):
     qwen_api_key:  str = Field(default="")
     qwen_model:    str = Field(default="qwen3-32b")
 
+    # Web search for the training-topic generator. Off unless a key is set:
+    # BAL-AI is on-premise precisely so prompts stay inside, and a search sends
+    # a query out. See services/websearch.py for what is and is not sent.
+    search_provider: str = Field(default="tavily")   # tavily | brave
+    search_api_key:  str = Field(default="")
+
     class Config:
         env_file = str(_ENV_FILE)
         env_file_encoding = "utf-8"

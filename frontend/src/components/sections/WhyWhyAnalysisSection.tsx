@@ -3,13 +3,15 @@ import { useState } from "react";
 import dynamic from "next/dynamic";
 import {
   Wrench, AlertTriangle, Clock, Repeat, Users, Database,
-  Sparkles, RefreshCw, Info, ChevronRight, GraduationCap, Layers, TrendingDown,
+  RefreshCw, Info, ChevronRight, GraduationCap, Layers, TrendingDown,
 } from "lucide-react";
-import { useWhyWhy, useWhyWhyNarrative, useWhyWhyTraining } from "@/hooks/useInsights";
+import { useWhyWhy, useWhyWhyTraining } from "@/hooks/useInsights";
 import { formatIndian } from "@/lib/utils";
+import BreakdownRegisterCard from "@/components/sections/BreakdownRegisterCard";
 import type {
   WhyWhyShare, WhyWhyWatch, WhyWhyMachineDetail, WhyWhyOperatorIssues,
-  WhyWhyProductionLoss, WhyWhyLossSlice,
+  WhyWhyProductionLoss, WhyWhyLossSlice, WhyWhyOperator,
+  WhyWhyTrainingBreakdown,
 } from "@/types";
 
 const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
@@ -17,16 +19,23 @@ const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
 /**
  * Why-Why Analysis — breakdown root causes, read from the MPICC register.
  *
- * Two data sources, deliberately kept apart. The charts and tables come from
- * /insights/why-why, which is pure SQL and always answers. The prose comes from
- * /insights/why-why/narrative, which asks BAL-AI to interpret those same
- * figures and takes ~9 seconds. The narrative is therefore opt-in and its
- * failure is contained: a gateway outage costs one card, not the section.
+ * Everything on this page is computed from the database by /insights/why-why,
+ * which is pure SQL and always answers.
  *
- * The model is never given the underlying rows and is never asked to count
- * anything, so a number it states should already appear in the figures it was
- * handed. The backend checks that and returns anything it cannot account for,
- * which is surfaced here rather than quietly trusted.
+ * THERE IS NO GENERAL AI COMMENTARY HERE, BY DECISION. A card existed that
+ * asked BAL-AI to read these same figures back as findings and risks; it was
+ * removed on 2026-09-22 because it interpreted rather than investigated. It
+ * could only restate what the charts already showed, in prose that shifted
+ * between runs and occasionally carried a figure from the wrong scope. The
+ * numbers are the authority, and a readable paraphrase of them was not worth
+ * the risk of it being quoted as a finding.
+ *
+ * The one generative card that remains is training topics, under operating
+ * issues. That one produces something the data does not already contain — what
+ * to teach, from the incidents themselves — rather than summarising a chart.
+ *
+ * The endpoint GET /insights/why-why/narrative still exists and still works;
+ * nothing calls it. See useWhyWhyNarrative in hooks/useInsights.ts.
  */
 
 const CHART_FONT = { fontSize: 11, color: "#6b7ea8", fontFamily: "IBM Plex Sans" };
@@ -96,37 +105,6 @@ function Prose({ text }: { text: string }) {
         <p key={i} className="text-[12.5px] leading-relaxed text-txt-secondary">
           {line.trim()}
         </p>
-      ))}
-    </div>
-  );
-}
-
-/** Actions arrive pipe-delimited as "what | owner | trigger" — see the prompt. */
-function ActionTable({ text }: { text: string }) {
-  const rows = text.split("\n").map((l) => l.trim()).filter((l) => l.includes("|"))
-    .map((l) => l.split("|").map((c) => c.trim()));
-  if (!rows.length) return <Prose text={text} />;
-  return (
-    <div className="divide-y divide-border-light">
-      {rows.map((c, i) => (
-        <div key={i} className="py-2.5 first:pt-0 last:pb-0">
-          <div className="flex items-start gap-2">
-            <ChevronRight size={14} className="mt-[3px] shrink-0 text-accent" />
-            <span className="text-[12.5px] text-txt-primary leading-snug">{c[0]}</span>
-          </div>
-          <div className="mt-1 pl-[22px] flex flex-wrap gap-x-4 gap-y-1">
-            {c[1] ? (
-              <span className="text-[11px] text-txt-muted">
-                <b className="font-semibold text-txt-secondary">Owner</b> {c[1]}
-              </span>
-            ) : null}
-            {c[2] ? (
-              <span className="text-[11px] text-txt-muted">
-                <b className="font-semibold text-txt-secondary">Trigger</b> {c[2]}
-              </span>
-            ) : null}
-          </div>
-        </div>
       ))}
     </div>
   );
@@ -273,9 +251,15 @@ function ProductionLoss({ d }: { d: WhyWhyProductionLoss }) {
  */
 function MachineDetail({ rows }: { rows: WhyWhyMachineDetail[] }) {
   const [open, setOpen] = useState<string | null>(rows[0]?.machine ?? null);
+  // Every machine that broke down is listed, which on the full register is 38
+  // rows. The long tail is mostly one-offs, so it starts collapsed rather than
+  // pushing the rest of the section off the screen.
+  const [showAll, setShowAll] = useState(false);
+  const VISIBLE = 12;
+  const shown = showAll ? rows : rows.slice(0, VISIBLE);
   return (
     <div className="divide-y divide-border-light">
-      {rows.map((m) => {
+      {shown.map((m) => {
         const isOpen = open === m.machine;
         return (
           <div key={m.machine} className="py-2 first:pt-0 last:pb-0">
@@ -295,17 +279,23 @@ function MachineDetail({ rows }: { rows: WhyWhyMachineDetail[] }) {
               </span>
               <span className="text-[11px] text-txt-muted shrink-0">breakdowns</span>
               {/* Concentration is the actionable bit: two modes covering 80% is a
-                  pattern you can fix, eight is scatter you can only monitor. */}
+                  pattern you can fix, eight is scatter you can only monitor.
+                  Below a handful of events there is no shape to read, and
+                  saying so beats printing a verdict one failure could flip. */}
               <span
                 className={`ml-auto shrink-0 rounded border px-1.5 py-[1px] text-[10.5px] font-semibold ${
-                  m.concentrated
-                    ? "border-success/25 bg-success/10 text-success"
-                    : "border-border bg-bg-subtle text-txt-muted"
+                  !m.enough_for_pareto
+                    ? "border-border bg-transparent text-txt-muted/70"
+                    : m.concentrated
+                      ? "border-success/25 bg-success/10 text-success"
+                      : "border-border bg-bg-subtle text-txt-muted"
                 }`}
               >
-                {m.concentrated
-                  ? `${m.modes_to_80pct} mode${m.modes_to_80pct > 1 ? "s" : ""} = 80%`
-                  : `spread over ${m.modes_to_80pct}`}
+                {!m.enough_for_pareto
+                  ? "too few to read"
+                  : m.concentrated
+                    ? `${m.modes_to_80pct} mode${m.modes_to_80pct > 1 ? "s" : ""} = 80%`
+                    : `spread over ${m.modes_to_80pct}`}
               </span>
               <span className="font-mono text-[11px] text-txt-muted w-[70px] text-right shrink-0">
                 {num(m.hours, 1)} h
@@ -338,61 +328,112 @@ function MachineDetail({ rows }: { rows: WhyWhyMachineDetail[] }) {
           </div>
         );
       })}
+      {rows.length > VISIBLE ? (
+        <button
+          onClick={() => setShowAll(!showAll)}
+          className="w-full pt-2 text-left text-[11.5px] font-semibold text-navy hover:underline"
+        >
+          {showAll
+            ? "Show fewer"
+            : `Show all ${rows.length} machines (${rows.length - VISIBLE} more)`}
+        </button>
+      ) : null}
     </div>
   );
 }
 
-// ── operator issues + training ───────────────────────────────
-/** Topics arrive as TOPIC/WHY/COVER/CHECK lines — see TRAINING_SECTIONS. */
-function TrainingTopics({ text }: { text: string }) {
-  const blocks = text
-    .split(/(?=TOPIC:)/)
-    .map((b) => b.trim())
-    .filter((b) => b.startsWith("TOPIC:"));
-  if (!blocks.length) return <Prose text={text} />;
-
-  const field = (b: string, key: string) => {
-    const m = b.match(new RegExp(`${key}:\\s*(.+?)(?=\\n[A-Z]{3,}:|$)`, "s"));
-    return m ? m[1].trim() : "";
-  };
-
+// -- operator issues + training --------------------------------------------
+/**
+ * One breakdown, its operator reason, its qualification pack and its topic.
+ *
+ * The training suggestion belongs to the breakdown, not to the quarter. An
+ * earlier version grouped all 81 into five fleet topics, which reads well on a
+ * calendar and says nothing about why THIS machine failed on THIS day.
+ *
+ * `basis` is the field to read first. Excavators carry a Why-Why on every
+ * operator-attributed breakdown, so their reason is the analysts' own words.
+ * MAN trucks carry one on 23%, so most of theirs is the model reading a defect
+ * string. Both are shown; only one is evidence.
+ */
+function BreakdownTopic({ b }: { b: WhyWhyTrainingBreakdown }) {
+  const [open, setOpen] = useState(false);
   return (
-    <div className="space-y-3">
-      {blocks.map((b, i) => {
-        const cover = field(b, "COVER").split(";").map((x) => x.trim()).filter(Boolean);
-        return (
-          <div key={i} className="rounded-lg border border-border bg-bg-subtle/40 px-3.5 py-3">
-            <div className="flex items-start gap-2">
-              <span className="mt-[1px] grid h-[18px] w-[18px] shrink-0 place-items-center rounded bg-navy text-[10.5px] font-bold text-white">
-                {i + 1}
+    <div className="rounded-lg border border-border bg-white px-3.5 py-2.5">
+      <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+        <span className="font-mono text-[11.5px] text-navy">{b.machine}</span>
+        <span className="text-[11.5px] text-txt-secondary">{b.defect}</span>
+        <span className="font-mono text-[10.5px] text-txt-muted">{b.date}</span>
+        <span
+          className={`rounded px-1.5 py-[1px] text-[10px] font-semibold ${
+            b.basis === "recorded"
+              ? "bg-success/10 text-success"
+              : "bg-bg-subtle text-txt-muted"
+          }`}
+          title={
+            b.basis === "recorded"
+              ? "Read from the Why-Why chain the analysts wrote"
+              : "No Why-Why chain exists — inferred from the defect and failure mode"
+          }
+        >
+          {b.basis === "recorded" ? "from Why-Why" : "inferred"}
+        </span>
+        <span className="ml-auto font-mono text-[10.5px] text-txt-muted">
+          {b.hours} h{b.cost ? ` · ₹${formatIndian(b.cost)}` : ""}
+        </span>
+      </div>
+
+      {b.reason ? (
+        <p className="mt-1.5 text-[12px] leading-snug text-txt-secondary">
+          <b className="font-semibold text-txt-muted">What the operator did</b> {b.reason}
+        </p>
+      ) : null}
+
+      {b.topic ? (
+        <div className="mt-2 rounded border border-accent/25 bg-accent/5 px-2.5 py-2">
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+            <GraduationCap size={13} className="text-[#c8960c]" />
+            <span className="text-[12.5px] font-bold text-txt-primary">{b.topic}</span>
+            {b.pack ? (
+              <span className="rounded bg-[#5e35b1]/10 px-1.5 py-[1px] text-[10px] font-semibold text-[#5e35b1]">
+                {b.pack.code} · {b.pack.name} · NSQF {b.pack.nsqf}
               </span>
-              <h4 className="text-[13px] font-bold leading-snug text-txt-primary">
-                {field(b, "TOPIC")}
-              </h4>
-            </div>
-            {field(b, "WHY") ? (
-              <p className="mt-1.5 pl-[26px] text-[11.5px] leading-relaxed text-txt-muted">
-                {field(b, "WHY")}
-              </p>
-            ) : null}
-            {cover.length ? (
-              <ul className="mt-2 space-y-1 pl-[26px]">
-                {cover.map((c, j) => (
-                  <li key={j} className="flex gap-1.5 text-[12px] leading-snug text-txt-secondary">
-                    <span className="text-accent">•</span>
-                    <span>{c}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-            {field(b, "CHECK") ? (
-              <p className="mt-2 pl-[26px] text-[11px] text-txt-muted">
-                <b className="font-semibold text-txt-secondary">Check</b> {field(b, "CHECK")}
-              </p>
-            ) : null}
+            ) : (
+              <span className="text-[10px] text-txt-muted">no national pack fits</span>
+            )}
           </div>
-        );
-      })}
+          {b.outcomes.length ? (
+            <ul className="mt-1.5 space-y-[3px]">
+              {b.outcomes.map((o, i) => (
+                <li key={i} className="flex gap-1.5 text-[11.5px] leading-snug text-txt-secondary">
+                  <span className="text-accent">•</span><span>{o}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : (
+        <p className="mt-1.5 text-[11.5px] text-txt-muted">No topic was produced for this breakdown.</p>
+      )}
+
+      {b.why_chain.length ? (
+        <>
+          <button
+            onClick={() => setOpen(!open)}
+            className="mt-1.5 text-[11px] text-txt-muted hover:text-navy"
+          >
+            {open ? "Hide" : "Show"} the {b.why_chain.length}-why chain
+          </button>
+          {open ? (
+            <ol className="mt-1 space-y-[3px] border-l-2 border-border pl-2.5">
+              {b.why_chain.map((w, i) => (
+                <li key={i} className="text-[11px] leading-snug text-txt-muted">
+                  <b>Why {i + 1}</b> {w}
+                </li>
+              ))}
+            </ol>
+          ) : null}
+        </>
+      ) : null}
     </div>
   );
 }
@@ -400,6 +441,7 @@ function TrainingTopics({ text }: { text: string }) {
 function OperatorIssues({ data }: { data: WhyWhyOperatorIssues }) {
   const [showAll, setShowAll] = useState(false);
   const [wantTraining, setWantTraining] = useState(false);
+  const [showAllTopics, setShowAllTopics] = useState(false);
   const tr = useWhyWhyTraining(wantTraining);
   const shown = showAll ? data.issues : data.issues.slice(0, 6);
 
@@ -483,10 +525,10 @@ function OperatorIssues({ data }: { data: WhyWhyOperatorIssues }) {
         {!wantTraining ? (
           <div className="flex flex-col items-start gap-2 pt-2">
             <p className="text-[12px] leading-relaxed text-txt-muted">
-              BAL-AI reads the {data.events} problem statements above and returns a
-              toolbox plan — what to teach, why the data calls for it, and how a
-              supervisor checks it stuck. It is told to train the fleet and never
-              to name or rank an operator.
+              For each of the {data.events} operating-error breakdowns, BAL-AI reads
+              its Why-Why, works out what the operator did, maps it to a national
+              qualification pack and names the training topic that would have
+              prevented it. Takes about two minutes.
             </p>
             <button
               onClick={() => setWantTraining(true)}
@@ -519,22 +561,20 @@ function OperatorIssues({ data }: { data: WhyWhyOperatorIssues }) {
           <p className="py-3 text-[12px] text-txt-muted">{tr.data.error}</p>
         ) : tr.data ? (
           <div className="space-y-3 pt-2.5">
-            {tr.data.unverified_numbers?.length > 0 && (
-              <div className="flex items-start gap-2 rounded border border-danger/25 bg-danger/5 px-3 py-2">
-                <AlertTriangle size={13} className="mt-[2px] shrink-0 text-danger" />
-                <p className="text-[11.5px] leading-snug text-txt-secondary">
-                  <b>Check before quoting.</b> Not in the data given:{" "}
-                  <span className="font-mono">{tr.data.unverified_numbers.join(", ")}</span>.
-                </p>
-              </div>
-            )}
-            {tr.data.sections.topics ? <TrainingTopics text={tr.data.sections.topics} /> : null}
-            {tr.data.sections.priority ? (
-              <div className="rounded border border-border bg-white px-3 py-2">
-                <div className="mb-1 font-condensed text-[10.5px] font-bold uppercase tracking-widest text-txt-muted">
-                  Run this one first
-                </div>
-                <Prose text={tr.data.sections.priority} />
+            {tr.data.breakdowns?.length ? (
+              <div className="space-y-2">
+                {(showAllTopics ? tr.data.breakdowns : tr.data.breakdowns.slice(0, 10))
+                  .map((b) => <BreakdownTopic key={b.id} b={b} />)}
+                {tr.data.breakdowns.length > 10 ? (
+                  <button
+                    onClick={() => setShowAllTopics(!showAllTopics)}
+                    className="w-full rounded border border-border py-1.5 text-[12px] font-semibold text-navy hover:bg-bg-subtle"
+                  >
+                    {showAllTopics
+                      ? "Show fewer"
+                      : `Show all ${tr.data.breakdowns.length} breakdowns`}
+                  </button>
+                ) : null}
               </div>
             ) : null}
             <button
@@ -550,48 +590,242 @@ function OperatorIssues({ data }: { data: WhyWhyOperatorIssues }) {
   );
 }
 
+// -- loading ---------------------------------------------------------------
+/** First load: the shape of what is coming, so the page does not jump. */
+function SectionSkeleton() {
+  return (
+    <div className="space-y-4">
+      <Card icon={<Wrench size={15} className="text-accent" />} title="Why-Why Analysis">
+        <div className="grid grid-cols-2 gap-px md:grid-cols-3 xl:grid-cols-6">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="px-3 py-2.5">
+              <div className="h-[9px] w-16 animate-pulse rounded bg-bg-subtle" />
+              <div className="mt-2 h-[18px] w-20 animate-pulse rounded bg-bg-subtle" />
+              <div className="mt-2 h-[9px] w-24 animate-pulse rounded bg-bg-subtle" />
+            </div>
+          ))}
+        </div>
+      </Card>
+      <div className="grid gap-4 lg:grid-cols-2">
+        {[0, 1].map((k) => (
+          <div key={k} className="rounded-lg border border-border bg-white p-4 shadow-sm">
+            <div className="h-[10px] w-28 animate-pulse rounded bg-bg-subtle" />
+            <div className="mt-4 space-y-3">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i}>
+                  <div className="h-[9px] w-40 animate-pulse rounded bg-bg-subtle" />
+                  <div className="mt-1.5 h-[6px] animate-pulse rounded-full bg-bg-subtle"
+                       style={{ width: `${90 - i * 15}%` }} />
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Refetch veil — shown while a new date range loads over the old figures.
+ *
+ * react-query keeps the previous data on screen during a refetch, which stops
+ * the page collapsing but also means the numbers sit there looking current
+ * when they belong to the range you just navigated away from. The veil says
+ * plainly that they are stale, without throwing the layout away and rebuilding
+ * it, which on a section this tall is worse than waiting.
+ */
+function RefetchVeil() {
+  return (
+    <div className="pointer-events-none absolute inset-0 z-20 flex items-start justify-center
+                    rounded-lg bg-white/65 backdrop-blur-[1px]">
+      <span className="mt-16 flex items-center gap-2 rounded-full border border-border
+                       bg-white px-3.5 py-1.5 shadow-sm">
+        <RefreshCw size={13} className="animate-spin text-accent" />
+        <span className="text-[12px] font-semibold text-txt-secondary">
+          Loading the selected dates…
+        </span>
+      </span>
+    </div>
+  );
+}
+
+// -- operators -------------------------------------------------------------
+/**
+ * Named operators as chips; click one to read the breakdowns behind the count.
+ *
+ * A bare count invites exactly the ranking this data cannot support. Opening a
+ * name shows what actually happened, and usually shows most of it had nothing
+ * to do with the person — the top name here has six events of which one is
+ * recorded as operator error and the rest as ageing. The cause column is the
+ * point of the panel, not a detail in it.
+ */
+function OperatorList({ rows, caveat }: { rows: WhyWhyOperator[]; caveat: string }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const sel = rows.find((r) => r.operator === open) ?? null;
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-1.5">
+        {rows.map((o) => {
+          const isOpen = o.operator === open;
+          return (
+            <button
+              key={o.operator}
+              onClick={() => setOpen(isOpen ? null : o.operator)}
+              aria-expanded={isOpen}
+              title={`${o.machines.join(", ")} · ₹${formatIndian(o.cost)} — click to see the breakdowns`}
+              className={`rounded border px-2 py-1 text-[11.5px] transition-colors ${
+                isOpen
+                  ? "border-navy bg-navy text-white"
+                  : "border-border bg-bg-subtle text-txt-secondary hover:border-navy/40 hover:bg-white"
+              }`}
+            >
+              {o.operator}
+              <span className={`ml-1.5 font-mono font-bold ${isOpen ? "text-white" : "text-navy"}`}>
+                {o.events}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {sel ? (
+        <div className="mt-3 rounded-lg border border-border bg-bg-subtle/40 px-3.5 py-3">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <span className="text-[13px] font-bold text-txt-primary">{sel.operator}</span>
+            <span className="text-[11.5px] text-txt-muted">
+              {sel.events} event{sel.events === 1 ? "" : "s"} · {sel.machines.join(", ")} ·
+              ₹{formatIndian(sel.cost)} in repairs
+            </span>
+            <button onClick={() => setOpen(null)}
+                    className="ml-auto text-[11.5px] text-txt-muted hover:text-navy">
+              Close
+            </button>
+          </div>
+
+          {sel.causes.length ? (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {sel.causes.map((cz) => (
+                <span key={cz.label}
+                      className={`rounded px-1.5 py-[2px] text-[10.5px] font-semibold ${
+                        cz.label === "Operator Error"
+                          ? "bg-[#e65100]/10 text-[#e65100]"
+                          : "bg-navy/5 text-txt-secondary"}`}>
+                  {cz.label} {cz.count}
+                </span>
+              ))}
+            </div>
+          ) : null}
+
+          <div className="mt-2.5 overflow-x-auto">
+            <table className="w-full text-[11.5px]">
+              <thead>
+                <tr className="border-b border-border-light text-txt-muted">
+                  <th className="py-1.5 text-left font-semibold">Date</th>
+                  <th className="py-1.5 text-left font-semibold">Machine</th>
+                  <th className="py-1.5 text-left font-semibold">Defect</th>
+                  <th className="py-1.5 text-left font-semibold">Recorded cause</th>
+                  <th className="py-1.5 text-right font-semibold">Hours</th>
+                  <th className="py-1.5 text-right font-semibold">Repair</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border-light">
+                {sel.breakdowns.map((b, i) => (
+                  <tr key={i} className="align-top">
+                    <td className="py-1.5 whitespace-nowrap font-mono text-txt-muted">
+                      {b.date}{b.shift ? <span className="ml-1">/{b.shift}</span> : null}
+                    </td>
+                    <td className="py-1.5 whitespace-nowrap font-mono text-navy">{b.machine}</td>
+                    <td className="py-1.5 text-txt-secondary">
+                      {b.defect ?? "—"}
+                      {b.why_chain.length ? (
+                        <span className="ml-1.5 text-[10px] text-txt-muted">
+                          ({b.why_chain.length}-why recorded)
+                        </span>
+                      ) : null}
+                    </td>
+                    {/* The column that matters: being named is presence, and
+                        most of these causes are mechanical, not human. */}
+                    <td className="py-1.5">
+                      <span className={b.cause === "Operator Error"
+                        ? "font-semibold text-[#e65100]" : "text-txt-secondary"}>
+                        {b.cause ?? "not recorded"}
+                      </span>
+                    </td>
+                    <td className="py-1.5 text-right font-mono text-txt-muted">{b.hours}</td>
+                    <td className="py-1.5 text-right font-mono text-txt-muted">
+                      {b.cost ? `₹${formatIndian(b.cost)}` : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Shipped by the backend as data, not written here, so it cannot be
+          dropped by a later edit to this file. */}
+      <p className="mt-3 border-t border-border-light pt-2 text-[11px] leading-relaxed text-txt-muted">
+        {caveat}
+      </p>
+    </div>
+  );
+}
+
 // ── section ──────────────────────────────────────────────────
 export default function WhyWhyAnalysisSection() {
-  const { data, isLoading } = useWhyWhy();
-  const [wantNarrative, setWantNarrative] = useState(false);
-  const nar = useWhyWhyNarrative(wantNarrative);
+  const { data, isLoading, isFetching } = useWhyWhy();
 
-  if (isLoading && !data) {
-    return (
-      <Card icon={<Wrench size={15} className="text-accent" />} title="Why-Why Analysis">
-        <div className="h-40 animate-pulse rounded bg-bg-subtle" />
-      </Card>
-    );
-  }
+  if (isLoading && !data) return <SectionSkeleton />;
 
   const h = data?.headline;
   const w = data?.window;
   if (!data || !h || !w || w.empty || h.breakdowns === 0) {
+    // Empty is an answer, not a failure — but it has to say which period was
+    // asked for and which period the register actually holds, or it reads as
+    // a broken section.
     return (
+      <div className="relative">
+        {isFetching ? <RefetchVeil /> : null}
       <Card icon={<Wrench size={15} className="text-accent" />} title="Why-Why Analysis">
-        <p className="py-6 text-center text-[12.5px] text-txt-muted">
-          No breakdown analyses recorded for this period.
-        </p>
+        <div className="py-7 text-center">
+          <p className="text-[12.5px] text-txt-secondary">
+            No Why-Why analyses recorded for the selected dates
+            {w?.requested_from && w?.requested_to
+              ? <> (<b>{w.requested_from}</b> to <b>{w.requested_to}</b>)</>
+              : null}.
+          </p>
+          {w?.extent_from && w?.extent_to ? (
+            <p className="mt-1.5 text-[11.5px] text-txt-muted">
+              The register currently runs {w.extent_from} to {w.extent_to}.
+              Change the date filter to see it.
+            </p>
+          ) : null}
+        </div>
       </Card>
+      </div>
     );
   }
 
   const hourMax = Math.max(...(data.timing?.by_hour ?? []).map((x) => x.count), 1);
 
   return (
-    <div className="space-y-4">
+    // `relative` so the refetch veil can cover the whole section rather than
+    // one card — a date change invalidates every figure below, not just some.
+    <div className="relative space-y-4">
+      {isFetching ? <RefetchVeil /> : null}
       {/* Which period is actually on screen. The register covers a fixed span,
           so a filter outside it shows the whole extent rather than nothing —
           said plainly instead of leaving the reader to wonder. */}
-      {(w.clamped || w.fell_back) && (
+      {w.clamped && (
         <div className="flex items-start gap-2 rounded-lg border border-accent/25 bg-accent/5 px-3.5 py-2.5">
           <Info size={14} className="mt-[2px] shrink-0 text-[#c8960c]" />
           <p className="text-[12px] leading-snug text-txt-secondary">
-            {w.fell_back
-              ? <>The selected dates fall outside the Why-Why register, which runs{" "}
-                  <b>{w.extent_from} to {w.extent_to}</b>. Showing the full register.</>
-              : <>Trimmed to the register, which runs <b>{w.extent_from} to {w.extent_to}</b>.
-                  Showing <b>{w.from} to {w.to}</b>.</>}
+            Your date filter runs past the Why-Why register, which holds{" "}
+            <b>{w.extent_from} to {w.extent_to}</b>. Showing the overlap,{" "}
+            <b>{w.from} to {w.to}</b>.
           </p>
         </div>
       )}
@@ -781,7 +1015,7 @@ export default function WhyWhyAnalysisSection() {
       {data.machine_detail?.length > 0 && (
         <Card icon={<Layers size={15} className="text-navy" />}
               title="Equipment-wise failure mode & root cause"
-              note="machines with 4+ breakdowns">
+              note={`${data.machine_detail.length} machines · click to expand`}>
           <MachineDetail rows={data.machine_detail} />
         </Card>
       )}
@@ -790,21 +1024,7 @@ export default function WhyWhyAnalysisSection() {
       {data.operators && data.operators.named_events > 0 && (
         <Card icon={<Users size={15} className="text-[#5e35b1]" />} title="Operators named on the record"
               note={`${data.operators.named_events} of ${h.breakdowns} events`}>
-          <div className="flex flex-wrap gap-1.5">
-            {data.operators.top.map((o) => (
-              <span key={o.operator}
-                    className="rounded border border-border bg-bg-subtle px-2 py-1 text-[11.5px] text-txt-secondary"
-                    title={`${o.machines.join(", ")} · ₹${formatIndian(o.cost)}`}>
-                {o.operator}
-                <span className="ml-1.5 font-mono font-bold text-navy">{o.events}</span>
-              </span>
-            ))}
-          </div>
-          {/* Shipped by the backend as data, not written here, so it cannot be
-              dropped by a later edit to this file. */}
-          <p className="mt-3 border-t border-border-light pt-2 text-[11px] leading-relaxed text-txt-muted">
-            {data.operators.caveat}
-          </p>
+          <OperatorList rows={data.operators.top} caveat={data.operators.caveat} />
         </Card>
       )}
 
@@ -817,90 +1037,8 @@ export default function WhyWhyAnalysisSection() {
         </Card>
       )}
 
-      {/* ── narrative ── */}
-      <Card
-        icon={<Sparkles size={15} className="text-[#c8960c]" />}
-        title="AI reading of these figures"
-        note={nar.data?.model ? `${nar.data.model} · ${nar.data.generated_at}` : undefined}
-      >
-        {!wantNarrative ? (
-          <div className="flex flex-col items-center gap-2.5 py-5">
-            <p className="max-w-lg text-center text-[12px] leading-relaxed text-txt-muted">
-              BAL-AI reads the figures above — never the underlying records — and
-              returns findings, risks and actions. Takes about ten seconds.
-            </p>
-            <button
-              onClick={() => setWantNarrative(true)}
-              className="flex items-center gap-1.5 rounded-md bg-navy px-3.5 py-1.5 text-[12px] font-semibold text-white hover:bg-navy/90"
-            >
-              <Sparkles size={13} /> Generate analysis
-            </button>
-          </div>
-        ) : nar.isLoading ? (
-          <div className="flex items-center justify-center gap-2 py-8 text-[12.5px] text-txt-muted">
-            <RefreshCw size={14} className="animate-spin" /> Reading the figures…
-          </div>
-        ) : nar.isError ? (
-          <div className="flex items-start gap-2 py-4">
-            <AlertTriangle size={15} className="mt-[2px] shrink-0 text-danger" />
-            <div>
-              <p className="text-[12.5px] text-txt-secondary">
-                {(nar.error as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-                  ?? "Could not reach the BAL-AI gateway."}
-              </p>
-              <button onClick={() => nar.refetch()}
-                      className="mt-2 flex items-center gap-1.5 text-[12px] font-semibold text-navy hover:underline">
-                <RefreshCw size={12} /> Try again
-              </button>
-              <p className="mt-2 text-[11px] text-txt-muted">
-                Everything above is computed from the database and is unaffected.
-              </p>
-            </div>
-          </div>
-        ) : nar.data ? (
-          <div className="space-y-4">
-            {/* Numbers the model stated that were not in the figures it was
-                given. Usually empty; shown when not, because a wrong figure
-                nobody can check is the one failure this design guards against. */}
-            {nar.data.unverified_numbers?.length > 0 && (
-              <div className="flex items-start gap-2 rounded border border-danger/25 bg-danger/5 px-3 py-2">
-                <AlertTriangle size={13} className="mt-[2px] shrink-0 text-danger" />
-                <p className="text-[11.5px] leading-snug text-txt-secondary">
-                  <b>Check before quoting.</b> These figures appear in the text below
-                  but not in the data it was given:{" "}
-                  <span className="font-mono">{nar.data.unverified_numbers.join(", ")}</span>.
-                </p>
-              </div>
-            )}
-            {([
-              ["findings", "Findings"],
-              ["risks",    "Risks"],
-              ["gaps",     "What this data still cannot answer"],
-            ] as const).map(([key, label]) =>
-              nar.data!.sections[key] ? (
-                <div key={key}>
-                  <div className="mb-1.5 font-condensed text-[11px] font-bold uppercase tracking-widest text-txt-muted">
-                    {label}
-                  </div>
-                  <Prose text={nar.data!.sections[key]} />
-                </div>
-              ) : null
-            )}
-            {nar.data.sections.actions ? (
-              <div>
-                <div className="mb-1.5 font-condensed text-[11px] font-bold uppercase tracking-widest text-txt-muted">
-                  Actions
-                </div>
-                <ActionTable text={nar.data.sections.actions} />
-              </div>
-            ) : null}
-            <button onClick={() => nar.refetch()}
-                    className="flex items-center gap-1.5 border-t border-border-light pt-2.5 text-[11.5px] text-txt-muted hover:text-navy">
-              <RefreshCw size={12} /> Regenerate
-            </button>
-          </div>
-        ) : null}
-      </Card>
+      {/* ── the rows behind every figure above ── */}
+      <BreakdownRegisterCard />
 
       {/* ── completeness ── */}
       {data.completeness && (

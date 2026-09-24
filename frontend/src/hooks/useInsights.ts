@@ -4,7 +4,7 @@ import api from "@/lib/api";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import type { RealityCheckResponse, InsightsResponse,
               WhyWhyResponse, WhyWhyNarrativeResponse,
-              WhyWhyTrainingResponse } from "@/types";
+              WhyWhyTrainingResponse, WhyWhyRegisterResponse } from "@/types";
 
 // ── Reality Check (pure computation, polls every 5 min) ───────
 export function useRealityCheck() {
@@ -62,6 +62,9 @@ export function useWhyWhy() {
 }
 
 // ── Why-Why: BAL-AI narrative (slow, may fail, on demand) ─────
+// UNUSED since 2026-09-22 — the "AI reading of these figures" card was removed
+// because it interpreted rather than investigated. Kept because the endpoint is
+// live and the wiring is correct if a use for it appears; delete both together.
 // Separate query on purpose. The charts must not wait ~9s for prose, and a
 // gateway outage must cost the narrative card only, never the section.
 export function useWhyWhyNarrative(enabled: boolean) {
@@ -102,5 +105,25 @@ export function useWhyWhyTraining(enabled: boolean) {
     placeholderData: keepPreviousData,
     enabled:         enabled && Boolean(apiFrom && apiTo),
     retry:           1,
+  });
+}
+
+// ── Why-Why: the breakdown register (heavy, loaded on demand) ─
+// ~220 KB for 345 records, so it is not folded into useWhyWhy, which refetches
+// on every date change. `enabled` keeps it off the wire until the register card
+// is actually opened.
+export function useWhyWhyRegister(enabled: boolean) {
+  const { apiFrom, apiTo } = useDateFilter();
+  return useQuery<WhyWhyRegisterResponse>({
+    queryKey: ["insights", "why-why", "register", apiFrom, apiTo],
+    queryFn: async () => {
+      const res = await api.get("/insights/why-why/register", {
+        params: { from_date: apiFrom, to_date: apiTo },
+      });
+      return res.data;
+    },
+    staleTime:       10 * 60_000,
+    placeholderData: keepPreviousData,
+    enabled:         enabled && Boolean(apiFrom && apiTo),
   });
 }

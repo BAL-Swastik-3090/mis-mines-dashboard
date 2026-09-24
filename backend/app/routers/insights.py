@@ -65,16 +65,32 @@ def why_why_analysis(
 ):
     """Why-Why analysis points — pure DB computation, no LLM.
 
-    Driven by the dashboard's global date filter like every other section, but
-    the register only covers a fixed span, so the service clamps the requested
-    range to the data it has and reports in `window` whether it did. A month
-    outside the register returns the full extent flagged `fell_back` rather than
-    an empty section that looks broken.
+    Driven by the dashboard's global date filter and nothing else. Where the
+    filter overlaps the register the overlap is returned and `window.clamped`
+    says so; where it does not overlap at all the response is empty with
+    `window.no_overlap`, and the UI names the register's range. The section
+    never substitutes a different period for the one that was asked for.
 
     Deliberately separate from the narrative endpoint: this is fast and always
     succeeds, so the charts render even when the LLM gateway is down.
     """
     return ww_svc.compute_whywhy(db, from_date, to_date)
+
+
+@router.get("/why-why/register", tags=["Insights"])
+def why_why_register(
+    from_date: date = None,
+    to_date:   date = None,
+    db: Session = Depends(get_db),
+):
+    """Every breakdown in the window with its Why-Why ladder and recorded cause.
+
+    Its own endpoint rather than part of /why-why: the analysis payload is
+    refetched on every date change and must stay small, while this is ~143 KB
+    for 345 records and is only wanted once somebody opens the register.
+    Filtering is done in the browser after it loads.
+    """
+    return ww_svc.breakdown_register(db, from_date, to_date)
 
 
 @router.get("/why-why/narrative", tags=["Insights"])

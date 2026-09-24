@@ -29,6 +29,7 @@ WHAT THE DATA WILL NOT SUPPORT, and is therefore not reported:
 """
 from __future__ import annotations
 
+import logging
 import re
 import statistics
 from collections import Counter, defaultdict
@@ -40,6 +41,8 @@ from sqlalchemy.orm import Session
 SCHEMA = "balmpicc"
 ANALYSIS = f"{SCHEMA}.mpicc_whywhy_analysis"
 ROWS = f"{SCHEMA}.mpicc_whywhy_rows"
+
+logger = logging.getLogger(__name__)
 
 # Failure modes are free text typed by the maintenance crew — 200+ distinct
 # spellings over 345 rows, which Paretos into noise. These families are keyword
@@ -116,29 +119,38 @@ def data_extent(db: Session) -> tuple[date | None, date | None]:
 def resolve_window(db: Session, from_date: date | None, to_date: date | None) -> dict:
     """Intersect the caller's range with the range the register actually covers.
 
-    The dashboard's global date filter drives this section like every other, but
-    the register is a retrospective bulk load covering a fixed span. Asking for a
-    month outside it would render an empty section that looks broken rather than
-    empty. So the requested range is clamped to the data, and when there is no
-    overlap at all the full extent is returned with a flag saying so — the UI
-    says which period it is showing instead of silently showing nothing.
+    The section follows the dashboard's global date filter and only that. Where
+    the filter overlaps the register the overlap is shown, and `clamped` says so
+    — picking August to October shows August, which is the filter's own data.
+
+    Where there is NO overlap the section reports empty. It deliberately does
+    NOT substitute another period. An earlier version fell back to the whole
+    register, which meant a September filter quietly rendered April-to-August
+    figures under a September heading; the banner said so but the numbers were
+    read first. Showing nothing and naming the register's range is the honest
+    answer to "what happened in September" when the register has no September.
     """
     lo, hi = data_extent(db)
     if lo is None:
         return {
             "from": None, "to": None, "extent_from": None, "extent_to": None,
-            "clamped": False, "fell_back": False, "empty": True,
+            "clamped": False, "no_overlap": False, "empty": True,
         }
     rf, rt = from_date or lo, to_date or hi
     f, t = max(rf, lo), min(rt, hi)
-    fell_back = f > t
-    if fell_back:
-        f, t = lo, hi
+    if f > t:
+        # Outside the register entirely — report the request back so the UI can
+        # say which period was asked for and which period exists.
+        return {
+            "from": None, "to": None, "extent_from": lo, "extent_to": hi,
+            "requested_from": rf, "requested_to": rt,
+            "clamped": False, "no_overlap": True, "empty": True,
+        }
     return {
         "from": f, "to": t, "extent_from": lo, "extent_to": hi,
         "requested_from": rf, "requested_to": rt,
-        "clamped": (not fell_back) and ((rf, rt) != (f, t)),
-        "fell_back": fell_back, "empty": False,
+        "clamped": (rf, rt) != (f, t),
+        "no_overlap": False, "empty": False,
     }
 
 
@@ -154,6 +166,12 @@ def _records(db: Session, f: date, t: date) -> list[dict]:
                TRIM(COALESCE(w.why3_a, '')) AS why3,
                TRIM(COALESCE(w.why4_a, '')) AS why4,
                TRIM(COALESCE(w.why5_a, '')) AS why5,
+               TRIM(COALESCE(w.why1_q, '')) AS why1q,
+               TRIM(COALESCE(w.why2_q, '')) AS why2q,
+               TRIM(COALESCE(w.why3_q, '')) AS why3q,
+               TRIM(COALESCE(w.why4_q, '')) AS why4q,
+               TRIM(COALESCE(w.why5_q, '')) AS why5q,
+               TRIM(COALESCE(w.item_examined, '')) AS item_examined,
                TRIM(COALESCE(w.final_verdict, '')) AS verdict
         FROM {ANALYSIS} a
         LEFT JOIN {ROWS} w ON w.whywhy_id = a.id
@@ -419,6 +437,30 @@ def _operators(recs: list[dict], limit: int = 15) -> dict:
             "machines": sorted({_machine_key(r["equipment_desc"]) for r in mine}),
             "causes": _share(Counter(r["rca_category"] for r in mine if r["rca_category"]), n),
             "cost": round(sum(_f(r["total_cost"]) for r in mine), 0),
+            # The breakdowns themselves, newest first, so a name can be opened
+            # and read rather than only counted. A bare count invites the
+            # ranking this data cannot support; the events show what actually
+            # happened, and usually show the cause was nothing to do with the
+            # person who happened to be on the machine.
+            "breakdowns": [
+                {
+                    "date": r["breakdown_date"].isoformat() if r["breakdown_date"] else None,
+                    "shift": r["shift"],
+                    "machine": _machine_key(r["equipment_desc"]),
+                    "defect": (r["breakdown_description"] or "").strip() or None,
+                    "family": family_of(r["breakdown_description"]),
+                    "cause": r["rca_category"],
+                    "hours": round(_f(r["breakdown_duration_hr"]), 1),
+                    "cost": round(_f(r["total_cost"]), 0),
+                    "notification_no": r["notification_no"],
+                    "why_chain": _why_chain(r),
+                }
+                for r in sorted(
+                    mine,
+                    key=lambda x: (x["breakdown_date"] is None, x["breakdown_date"]),
+                    reverse=True,
+                )
+            ],
         })
     blamed = sum(1 for r in named if (r["rca_category"] or "") == "Operator Error")
     return {
@@ -471,8 +513,10 @@ def _completeness(recs: list[dict]) -> dict:
 
 
 
-# A machine needs a handful of events before its own Pareto says anything. Below
-# this, one failure is 100% of the chart and the reader draws a false conclusion.
+# A machine needs a handful of events before its own Pareto says anything: with
+# one failure, that failure is 100% of the chart. This no longer HIDES a machine
+# — hiding them meant a single-month filter showed 2 of 25 machines and looked
+# broken — it only decides whether a concentration verdict is offered for it.
 MIN_EVENTS_FOR_MACHINE_PARETO = 4
 
 # Which recorded cause counts as an operating problem rather than a mechanical
@@ -480,7 +524,7 @@ MIN_EVENTS_FOR_MACHINE_PARETO = 4
 OPERATOR_CAUSES = {"Operator Error"}
 
 
-def _machine_breakdown(recs: list[dict], limit: int = 10) -> list[dict]:
+def _machine_breakdown(recs: list[dict]) -> list[dict]:
     """Per machine: its own failure-mode Pareto and its own cause split.
 
     The fleet-wide Pareto says tyres are the biggest failure mode; it does not
@@ -491,15 +535,21 @@ def _machine_breakdown(recs: list[dict], limit: int = 10) -> list[dict]:
     Ordered by breakdown count rather than by rate: this table answers "what is
     wrong with this machine", and the rate table above already answers "which
     machine is worst".
+
+    EVERY machine that broke down appears. An earlier version required four
+    events and returned only the top ten, which was calibrated against the full
+    five-month register; on a one-month filter it showed 2 machines out of 25
+    and read as a bug rather than as a threshold. A machine with two failures
+    still has two failures worth seeing. What the event count now governs is
+    only whether a concentration verdict is offered — `enough_for_pareto` — so
+    a thin machine is shown without a shape being claimed for it.
     """
     g: dict[str, list[dict]] = defaultdict(list)
     for r in recs:
         g[_machine_key(r["equipment_desc"])].append(r)
 
     out = []
-    for m, v in sorted(g.items(), key=lambda kv: -len(kv[1])):
-        if len(v) < MIN_EVENTS_FOR_MACHINE_PARETO:
-            continue
+    for m, v in sorted(g.items(), key=lambda kv: (-len(kv[1]), kv[0])):
         modes = _share(Counter(family_of(x["breakdown_description"]) for x in v), len(v))
         causes = _share(
             Counter(x["rca_category"] for x in v if x["rca_category"]),
@@ -533,9 +583,11 @@ def _machine_breakdown(recs: list[dict], limit: int = 10) -> list[dict]:
             "causes": causes,
             "causes_recorded": sum(1 for x in v if x["rca_category"]),
             "modes_to_80pct": top_n,
-            "concentrated": top_n <= 2,
+            # Only meaningful once there are enough events for a shape to exist.
+            "enough_for_pareto": len(v) >= MIN_EVENTS_FOR_MACHINE_PARETO,
+            "concentrated": len(v) >= MIN_EVENTS_FOR_MACHINE_PARETO and top_n <= 2,
         })
-    return out[:limit]
+    return out
 
 
 def _problem_statement(r: dict) -> str:
@@ -555,7 +607,29 @@ def _why_chain(r: dict) -> list[str]:
     return [r[f"why{i}"] for i in range(1, 6) if (r.get(f"why{i}") or "").strip()]
 
 
-def _operator_issues(recs: list[dict], limit: int = 40) -> dict:
+
+def _family_totals(issues: list[dict]) -> list[dict]:
+    """Component groups with their hours and cost, not just a count.
+
+    The generator was quoting totals it had worked out from the incident list —
+    "478.5h, Rs 52,500" — which the number audit correctly flagged as figures it
+    was never given. Giving it the real per-group totals removes the reason to
+    compute, which works better than telling it not to.
+    """
+    hrs: dict[str, float] = defaultdict(float)
+    cost: dict[str, float] = defaultdict(float)
+    for r in issues:
+        fam = family_of(r["breakdown_description"])
+        hrs[fam] += _f(r["breakdown_duration_hr"])
+        cost[fam] += _f(r["total_cost"])
+    rows = _share(Counter(family_of(r["breakdown_description"]) for r in issues), len(issues))
+    for x in rows:
+        x["hours"] = round(hrs[x["label"]], 1)
+        x["cost"] = round(cost[x["label"]], 0)
+    return rows
+
+
+def _operator_issues(recs: list[dict]) -> dict:
     """Breakdowns whose recorded cause is an operating error, stated in full.
 
     This is the input to training, so it carries the problem statement and the
@@ -568,9 +642,14 @@ def _operator_issues(recs: list[dict], limit: int = 40) -> dict:
     """
     issues = [r for r in recs if (r["rca_category"] or "") in OPERATOR_CAUSES]
     rows = []
-    for r in sorted(issues, key=lambda x: -_f(x["total_cost"]))[:limit]:
+    # Every operating-error breakdown, not a top slice. The cap was fine when
+    # this fed a summary; it is wrong now that each breakdown gets its own
+    # training topic, because 41 of 81 never reached the analysis.
+    for r in sorted(issues, key=lambda x: -_f(x["total_cost"])):
         who = (r["problem_who"] or "").strip()
         rows.append({
+            "id": r["id"],
+            "notification_no": r["notification_no"],
             "machine": _machine_key(r["equipment_desc"]),
             "date": r["breakdown_date"].isoformat() if r["breakdown_date"] else None,
             "shift": r["shift"],
@@ -589,9 +668,7 @@ def _operator_issues(recs: list[dict], limit: int = 40) -> dict:
         "named_events": named,
         "hours": round(sum(_f(r["breakdown_duration_hr"]) for r in issues), 1),
         "cost": round(sum(_f(r["total_cost"]) for r in issues), 0),
-        "by_family": _share(
-            Counter(family_of(r["breakdown_description"]) for r in issues), len(issues)
-        ),
+        "by_family": _family_totals(issues),
         "with_why_chain": sum(1 for r in issues if _why_chain(r)),
         "issues": rows,
     }
@@ -658,6 +735,23 @@ def _allocate(recs: list[dict], amount: float | None, tonnes: float | None) -> d
     }
 
 
+# Breakdown production loss is COMPUTED BUT NOT SHOWN.
+#
+# Withheld on the user's instruction, 2026-09-22: the business has not yet
+# signed off the costing, and a Rs 47.74 crore figure nobody can defend in a
+# review is worse than no figure at all. The mechanism is sound - it reuses the
+# LCM section's own valuation rather than inventing a second one - but the
+# LCM method itself apportions the whole plan-vs-actual shortfall across every
+# recorded loss hour, so the crore figure is an attribution, not a measurement.
+# That is the part awaiting confirmation from the business users.
+#
+# Nothing is deleted. Flip this to True and the card returns, the narrative
+# leads with the figure again, and the by-machine / by-mode / by-cause splits
+# come back with it. The frontend already renders the card only when the API
+# sends the block, so this one constant governs both.
+SHOW_PRODUCTION_LOSS = False
+
+
 def _production_loss(db: Session, f: date, t: date, recs: list[dict]) -> dict | None:
     """Breakdown production loss, taken from LCM and split by failure detail.
 
@@ -717,7 +811,9 @@ def compute_whywhy(db: Session, from_date: date | None, to_date: date | None) ->
     win = resolve_window(db, from_date, to_date)
     if win["empty"]:
         return {
-            "window": win, "headline": None, "months": [], "machines": [],
+            "window": {k: (v.isoformat() if isinstance(v, date) else v)
+                       for k, v in win.items()},
+            "headline": None, "months": [], "machines": [],
             "failure_modes": None, "root_causes": None, "timing": None,
             "repeats": [], "watchlist": [], "operators": None,
             "production_loss": None,
@@ -744,12 +840,90 @@ def compute_whywhy(db: Session, from_date: date | None, to_date: date | None) ->
         "repeats": _repeats(recs),
         "watchlist": _watchlist(recs, t),
         "operators": _operators(recs),
-        "production_loss": _production_loss(db, f, t, recs),
+        "production_loss": (
+            _production_loss(db, f, t, recs) if SHOW_PRODUCTION_LOSS else None
+        ),
         "machine_detail": _machine_breakdown(recs),
         "operator_issues": _operator_issues(recs),
         "completeness": _completeness(recs),
     }
 
+
+
+# -- register -----------------------------------------------------------------
+def _why_pairs(r: dict) -> list[dict]:
+    """The 5-Why ladder as question/answer pairs, in order, skipping blanks."""
+    out = []
+    for i in range(1, 6):
+        q = (r.get(f"why{i}q") or "").strip()
+        a = (r.get(f"why{i}") or "").strip()
+        if q or a:
+            out.append({"level": i, "question": q or None, "answer": a or None})
+    return out
+
+
+def breakdown_register(db: Session, from_date: date | None, to_date: date | None) -> dict:
+    """Every breakdown in the window, with its Why-Why ladder and recorded cause.
+
+    Served from its own endpoint rather than folded into /why-why. The analysis
+    payload is read on every date change and must stay small; this is 143 KB for
+    345 records and is only wanted when somebody opens the register. Filtering
+    happens in the browser once it is loaded — 345 rows is nothing to filter
+    client-side, and it avoids a round trip per keystroke.
+
+    Rows carry what was recorded and nothing inferred. Where the 5-Why is
+    missing the row still appears: 198 of 345 have no ladder, and hiding them
+    would misrepresent the register as better documented than it is.
+    """
+    win = resolve_window(db, from_date, to_date)
+    if win["empty"]:
+        return {
+            "window": {k: (v.isoformat() if isinstance(v, date) else v)
+                       for k, v in win.items()},
+            "rows": [], "machines": [], "causes": [], "families": [],
+            "with_why": 0, "without_why": 0,
+        }
+
+    recs = _records(db, win["from"], win["to"])
+    rows = []
+    for r in recs:
+        pairs = _why_pairs(r)
+        rows.append({
+            "id": r["id"],
+            "notification_no": r["notification_no"],
+            "date": r["breakdown_date"].isoformat() if r["breakdown_date"] else None,
+            "shift": r["shift"],
+            "machine": _machine_key(r["equipment_desc"]),
+            "equipment_desc": r["equipment_desc"],
+            "defect": (r["breakdown_description"] or "").strip() or None,
+            "family": family_of(r["breakdown_description"]),
+            "cause": r["rca_category"],
+            "cause_detail": (r["rca_sub_category"] or "").strip() or None,
+            "component": (r.get("item_examined") or "").strip() or None,
+            "operator": ((r["problem_who"] or "").strip() or None)
+                        if (r["problem_who"] or "").strip() != "-" else None,
+            "hours": round(_f(r["breakdown_duration_hr"]), 1),
+            "cost": round(_f(r["total_cost"]), 0),
+            "why": pairs,
+            "root_cause": (r.get("verdict") or "").strip() or None,
+        })
+    # Newest first: the register is read to check recent events far more often
+    # than to browse April.
+    rows.sort(key=lambda x: (x["date"] or "", x["id"]), reverse=True)
+
+    with_why = sum(1 for x in rows if x["why"])
+    return {
+        "window": {k: (v.isoformat() if isinstance(v, date) else v)
+                   for k, v in win.items()},
+        "rows": rows,
+        # Facets for the filter controls, built from what is actually present so
+        # the dropdowns never offer an option that returns nothing.
+        "machines": sorted({x["machine"] for x in rows}),
+        "causes": sorted({x["cause"] for x in rows if x["cause"]}),
+        "families": sorted({x["family"] for x in rows}),
+        "with_why": with_why,
+        "without_why": len(rows) - with_why,
+    }
 
 # -- narrative ----------------------------------------------------------------
 # The model is handed FIGURES, never rows. Everything below exists to make that
@@ -811,6 +985,8 @@ def _facts_block(d: dict) -> str:
         f"REPEAT FAILURES {h['repeat_events']} events ({h['repeat_pct']}%) are a "
         f"machine failing the same way again",
     ]
+    # None while SHOW_PRODUCTION_LOSS is off, so the model is never told the
+    # rupee figure and cannot lead with a number the business has not signed off.
     pl = d.get("production_loss")
     if pl:
         L += [
@@ -1006,131 +1182,292 @@ async def generate_narrative(
 
 
 # -- training -----------------------------------------------------------------
+# ONE TOPIC PER BREAKDOWN, not one per quarter.
+#
+# The earlier version grouped 81 operating-error breakdowns into five fleet-wide
+# topics. Useful for a training calendar, useless at the row: it could not say
+# why THIS failure happened or what THIS operator needed. The mine asked for the
+# other thing — read the Why-Why of each operator-attributed breakdown, work out
+# what the operator actually did, map that to a national qualification pack, and
+# name the topic that would have prevented it.
+#
+# EVIDENCE IS NOT EVEN. Excavators carry a Why-Why on 100% of their
+# operator-cause breakdowns; MAN trucks on 23%. So for an excavator the analysis
+# reads the analysts' own chain, and for most MAN trucks it reads a defect string
+# and a cause label. Both are produced, but every row says which it is —
+# `basis: recorded | inferred` — because a topic derived from "CROSS BROKEN /
+# MISS OPERATION" alone is an informed guess and must not be read as a finding.
 TRAINING_SYSTEM = (
-    "You are a mining equipment trainer writing a toolbox-training plan for "
-    "excavator and tipper operators at a chrome ore mine in Odisha, India.\n\n"
-    "You are given real breakdowns whose recorded root cause was an operating "
-    "error, each with its problem statement and the Why-Why chain the "
-    "maintenance team wrote.\n\n"
+    "You are a mining training officer at a chrome ore mine in Odisha, India.\n\n"
+    "For EACH breakdown you are given, all of which were attributed to operating "
+    "error, you must:\n"
+    "  1. state what the operator actually did or failed to do, from the "
+    "Why-Why chain where one exists, or from the component and failure mode "
+    "where it does not;\n"
+    "  2. name the training topic that would have prevented this breakdown.\n\n"
+    "The qualification pack is already decided for you from the machine and is "
+    "shown with each breakdown. Do not choose one and do not mention codes.\n\n"
     "RULES:\n"
-    "1. Every topic must trace to the incidents given. Do not invent failures, "
-    "do not add generic safety modules nobody's data asked for.\n"
-    "2. Name the machines and defects from the incidents as the evidence.\n"
-    "3. Do NOT name, rank or blame individual operators. Train the fleet, not a "
-    "person. Operator names in the data record who was present, not who is at "
-    "fault, and there is no hours denominator to compare people fairly.\n"
-    "4. Be concrete and physical. 'Do not side-load the bucket when prying' is "
-    "a topic; 'improve operational awareness' is not.\n"
-    "5. Write for a supervisor running a 30-minute session at shift handover."
+    "1. Answer for every breakdown id you are given. Do not merge them, do not "
+    "skip any, do not invent ids.\n"
+    "2. REASON is about the operator's action, not the component's condition. "
+    "'Bucket was side-loaded while prying rock' is a reason; 'bucket shell "
+    "fatigued' is not.\n"
+    "3. Where there is no Why-Why chain, say what the failure mode implies and "
+    "keep it short. Do not manufacture detail you were not given.\n"
+    "4. Keep the topic inside the scope of the qualification shown for that "
+    "machine. A tipper driver is not trained on excavator technique.\n"
+    "5. TOPIC is a course title a coordinator could schedule — a noun phrase, "
+    "not an instruction. 'Bucket Loading Technique and Load Limits' is a topic. "
+    "'Do not side-load the bucket' is not.\n"
+    "6. Do NOT name, rank or blame any operator. Train the skill, not the "
+    "person.\n"
+    "7. Quote no figures. This is about skills, not counts."
 )
 
-TRAINING_SECTIONS = [
-    ("topics", "TOPICS",
-     "4 to 6 training topics, most important first. One per block, in exactly "
-     "this format, each field on its own line:\n"
-     "TOPIC: <short title, max 8 words>\n"
-     "WHY: <the failure pattern in the data that calls for it, with counts and "
-     "machine names>\n"
-     "COVER: <3 specific things to teach or demonstrate, separated by semicolons>\n"
-     "CHECK: <how a supervisor confirms it stuck, one line>\n"),
-    ("priority", "PRIORITY",
-     "Which single topic to run first and why, in 2 sentences, referring to "
-     "cost or downtime from the data."),
+# One call per chunk. 25 breakdowns fit comfortably inside the context alongside
+# the 60-pack catalogue, and a chunk that fails costs 25 rows rather than all 81.
+TRAINING_CHUNK = 25
+
+
+
+# THE MACHINE DECIDES THE PACK, NOT THE MODEL.
+#
+# Letting the model choose gave 68% accuracy over 81 breakdowns: it matched on
+# the failure topic rather than on the machine, so ten MAN tippers with broken
+# leaf springs and hangers became "Loader Operator (Mining)" and eight more
+# became "Excavator Operator" because the defect resembled excavator work.
+#
+# An operator's qualification is a property of the machine they are licensed to
+# drive. A tipper driver needs the tipper pack whatever broke. That is a lookup,
+# and a lookup has no business being inferred. The model now decides only what
+# the operator did and what to teach; the pack is resolved here and is right by
+# construction.
+#
+# Patterns are tried in order, first match wins, so the specific ones come
+# first. A machine with no pack gets None and the UI says no pack fits, which is
+# the truthful answer for a telehandler — the catalogue has no pack for one.
+MACHINE_PACK: list[tuple[str, str]] = [
+    (r"^EX",                        "MIN/IES/Q0103"),   # Excavator Operator
+    (r"Z ?AXIS|LiuGong.*Excavator", "MIN/IES/Q0103"),
+    (r"^MAN|^TATA|TIPPER|HYVA",     "MIN/Q1402"),       # Dumper / Tipper Operator
+    (r"BULL ?DOZER|^CAT DOZER|DOZER", "MIN/Q1401"),     # Bulldozer Operator
+    (r"GRADER",                     "MIN/Q1405"),       # Grader Machine Operator
+    (r"JCB ?3DX|BACKHOE",           "MIN/IES/Q0101"),   # Backhoe Loader Operator
+    (r"HYDRA",                      "MIN/IES/Q0108"),   # Hydra Crane Operator
+    (r"LOADER",                     "MIN/Q1403"),       # Loader Operator (Mining)
+    (r"TANKER",                     "MIN/Q1301"),       # Driver - Special Utility Vehicle
+    (r"DRILL",                      "MIN/Q1206"),       # Drill Operator (DTH / Long Hole)
+    (r"SURFACE MINER",              "MIN/Q1404"),       # Surface Miner Operator
+    (r"SHOVEL",                     "MIN/Q1408"),       # Shovel Operator
 ]
 
-# Enough incidents to teach from, few enough to stay inside a sane prompt. The
-# list is already ordered by repair cost, so a cut here keeps the expensive ones.
-TRAINING_INCIDENT_LIMIT = 25
+
+def pack_for_machine(machine: str, by_code: dict[str, dict]) -> dict | None:
+    """The qualification pack for whoever drives this machine.
+
+    Resolved against the live catalogue rather than a hardcoded title, so a code
+    that has been retired or renamed in MineHub stops being offered here rather
+    than being displayed as something the database no longer holds.
+    """
+    name = (machine or "").upper()
+    for pattern, code in MACHINE_PACK:
+        if re.search(pattern, name, re.I):
+            return by_code.get(code)
+    return None
+
+def skill_catalogue(limit: int = 60) -> list[dict]:
+    """The national qualification packs the mine recognises, from MineHub.
+
+    Optional on purpose: if the MineHub Postgres is unreachable the topics are
+    still produced, just without a pack mapping. A training topic without an
+    NSQF code is far more useful than no topic.
+    """
+    try:
+        from sqlalchemy import text as _t
+
+        from app.minehub_db import SessionLocal as PG
+
+        db = PG()
+        try:
+            rows = db.execute(_t(
+                "SELECT code, name, nsqf_level, category FROM skill "
+                "WHERE status = 'ACTIVE' ORDER BY category, nsqf_level DESC, name"
+            )).fetchall()
+        finally:
+            db.close()
+        return [{"code": r[0], "name": r[1],
+                 "nsqf": float(r[2]) if r[2] is not None else None,
+                 "category": r[3]} for r in rows[:limit]]
+    except Exception as exc:
+        logger.warning("skill catalogue unavailable, topics carry no pack: %s", exc)
+        return []
 
 
-def _training_facts(d: dict) -> str:
-    o = d["operator_issues"]
-    L = [
-        f"PERIOD {d['window']['from']} to {d['window']['to']}",
-        f"OPERATING-ERROR BREAKDOWNS {o['events']} of "
-        f"{d['headline']['breakdowns']} total, {o['hours']} hours lost, "
-        f"Rs {o['cost']:,.0f} in repairs",
-        "",
-        "BY COMPONENT GROUP:",
-    ]
-    L += [f"  {x['label']}: {x['count']} ({x['pct']}%)" for x in o["by_family"]]
-    L += ["", f"INCIDENTS (the {min(len(o['issues']), TRAINING_INCIDENT_LIMIT)} "
-              f"most expensive):"]
-    for i in o["issues"][:TRAINING_INCIDENT_LIMIT]:
-        L.append(f"  - {i['problem_statement']} "
-                 f"[{i['family']}, {i['hours']}h, Rs {i['cost']:,.0f}]")
-        for n, c in enumerate(i["why_chain"], 1):
-            L.append(f"      Why {n}: {c}")
+def _pack_block(packs: list[dict]) -> str:
+    if not packs:
+        return ("NO QUALIFICATION LIST IS AVAILABLE. Write PACK: NONE on every "
+                "breakdown. Do not invent codes.")
+    L = ["QUALIFICATION PACKS. Choose exactly one code per breakdown, or NONE:"]
+    cat = None
+    for p in packs:
+        if p["category"] != cat:
+            cat = p["category"]
+            L.append(f"  [{cat}]")
+        L.append(f"    {p['code']} | {p['name']} | NSQF {p['nsqf']}")
     return "\n".join(L)
+
+
+def _incident_block(items: list[dict], packs_by_machine: dict[str, dict]) -> str:
+    L = []
+    for i in items:
+        L.append(f"BREAKDOWN {i['id']}")
+        L.append(f"  machine: {i['machine']}   defect: {i['defect']}   "
+                 f"component group: {i['family']}")
+        p = packs_by_machine.get(i["machine"])
+        L.append(f"  qualification: {p['code']} {p['name']} (NSQF {p['nsqf']})"
+                 if p else "  qualification: none in the catalogue covers this machine")
+        if i.get("component"):
+            L.append(f"  component examined: {i['component']}")
+        if i.get("sub_category"):
+            L.append(f"  recorded as: {i['sub_category']}")
+        if i["why_chain"]:
+            for n, c in enumerate(i["why_chain"], 1):
+                L.append(f"  Why {n}: {c}")
+        else:
+            L.append("  (no Why-Why chain recorded — infer from the failure mode)")
+        L.append("")
+    return "\n".join(L)
+
+
+_PB_FIELD = re.compile(r"^(BREAKDOWN|REASON|TOPIC|OUTCOME)\s*:\s*(.*)$", re.I)
+
+
+def _parse_per_breakdown(text: str) -> dict[int, dict]:
+    """Blocks keyed by breakdown id. The pack is not parsed — it is looked up."""
+    out: dict[int, dict] = {}
+    for block in re.split(r"^(?=BREAKDOWN\s*:)", text, flags=re.M | re.I):
+        f: dict[str, str] = {}
+        outcomes: list[str] = []
+        for line in block.splitlines():
+            m = _PB_FIELD.match(line.strip())
+            if not m:
+                continue
+            k, v = m.group(1).lower(), m.group(2).strip()
+            if k == "outcome":
+                outcomes.append(v)
+            else:
+                f[k] = v
+        raw_id = re.sub(r"[^0-9]", "", f.get("breakdown", ""))
+        if not raw_id:
+            continue
+        out[int(raw_id)] = {
+            "reason": f.get("reason") or None,
+            "topic": f.get("topic") or None,
+            "outcomes": outcomes,
+        }
+    return out
 
 
 async def generate_training(
     db: Session, from_date: date | None, to_date: date | None
 ) -> dict:
-    """Training topics derived from the operating-error breakdowns themselves.
-
-    Kept apart from the main narrative because it answers a different question
-    for a different reader: the narrative tells a manager what the fleet is
-    doing, this tells a supervisor what to teach on Monday. It also needs the
-    incident text in the prompt, which the narrative deliberately does without.
-    """
+    """A training topic for every operating-error breakdown in the window."""
     from openai import AsyncOpenAI
 
     from app.config import get_settings
+    from app.services import websearch
 
     facts = compute_whywhy(db, from_date, to_date)
     issues = facts.get("operator_issues")
     if not issues or issues["events"] == 0:
-        return {
-            "period": facts["window"], "summary": issues, "sections": {},
-            "model": None, "tokens": None, "generated_at": None,
-            "unverified_numbers": [],
-            "error": "No breakdowns with a recorded operating-error cause in this period.",
-        }
+        return {"period": facts["window"], "summary": None, "breakdowns": [],
+                "packs": 0, "web": [], "model": None, "tokens": None,
+                "generated_at": None, "error":
+                "No breakdowns with a recorded operating-error cause in this period."}
 
-    spec = "\n".join(f"---{tag}---\n{desc}" for _, tag, desc in TRAINING_SECTIONS)
-    prompt = (
-        f"{_training_facts(facts)}\n\n"
-        "Write the following sections, each preceded by its marker exactly as "
-        "shown. Do not add any other text.\n\n"
-        f"{spec}\n---END---"
-    )
+    packs = skill_catalogue()
+    by_code = {p["code"]: p for p in packs}
+    items = issues["issues"]
+    # Resolved once, from the machine, before anything is asked of the model.
+    packs_by_machine = {
+        i["machine"]: pack_for_machine(i["machine"], by_code) for i in items
+    }
+
+    web = await websearch.search(
+        websearch.build_queries([x["label"] for x in issues["by_family"]],
+                                [p["name"] for p in packs])
+    ) if websearch.configured() else []
+    ctx = websearch.as_context(web)
 
     st = get_settings()
-    client = AsyncOpenAI(
-        base_url=st.qwen_base_url + "/v1", api_key=st.qwen_api_key, timeout=120.0
-    )
-    resp = await client.chat.completions.create(
-        model=st.qwen_model,
-        messages=[
-            {"role": "system", "content": TRAINING_SYSTEM},
-            {"role": "user", "content": prompt},
-        ],
-        temperature=0.3,
-        max_tokens=2000,
-    )
-    raw = resp.choices[0].message.content or ""
+    client = AsyncOpenAI(base_url=st.qwen_base_url + "/v1",
+                         api_key=st.qwen_api_key, timeout=180.0)
 
-    tags = [t for _, t, _ in TRAINING_SECTIONS] + ["END"]
-    sections: dict[str, str] = {}
-    for (key, tag, _), nxt in zip(TRAINING_SECTIONS, tags[1:]):
-        start = raw.find(f"---{tag}---")
-        if start == -1:
-            sections[key] = ""
-            continue
-        start += len(tag) + 6
-        end = raw.find(f"---{nxt}---", start)
-        sections[key] = (raw[start:end] if end != -1 else raw[start:]).strip()
+    spec = (
+        "For EVERY breakdown above, output one block in exactly this format, "
+        "with a blank line between blocks and no other text:\n"
+        "BREAKDOWN: <the id>\n"
+        "REASON: <what the operator did or failed to do, one sentence>\n"
+        "TOPIC: <course title, 3-8 words, a noun phrase>\n"
+        "OUTCOME: <one thing the attendee can do afterwards, starting with a verb>\n"
+        "OUTCOME: <a second one>"
+    )
+
+    parsed: dict[int, dict] = {}
+    tokens = 0
+    model = None
+    for k in range(0, len(items), TRAINING_CHUNK):
+        chunk = items[k:k + TRAINING_CHUNK]
+        prompt = (f"{_incident_block(chunk, packs_by_machine)}\n\n"
+                  + (f"{ctx}\n\n" if ctx else "") + spec)
+        try:
+            resp = await client.chat.completions.create(
+                model=st.qwen_model,
+                messages=[{"role": "system", "content": TRAINING_SYSTEM},
+                          {"role": "user", "content": prompt}],
+                temperature=0.3, max_tokens=3600,
+            )
+            raw = resp.choices[0].message.content or ""
+            parsed.update(_parse_per_breakdown(raw))
+            tokens += resp.usage.total_tokens if resp.usage else 0
+            model = resp.model
+        except Exception as exc:
+            # A failed chunk costs its own rows, never the whole run.
+            logger.warning("training chunk %d failed: %s", k // TRAINING_CHUNK, exc)
+
+    rows = []
+    for i in items:
+        a = parsed.get(i["id"]) or {}
+        rows.append({
+            "id": i["id"],
+            "notification_no": i["notification_no"],
+            "date": i["date"], "shift": i["shift"],
+            "machine": i["machine"], "defect": i["defect"],
+            "family": i["family"], "component": i.get("component"),
+            "hours": i["hours"], "cost": i["cost"],
+            "why_chain": i["why_chain"],
+            # Says how much the topic rests on. A chain is the analysts' own
+            # words; without one the model is reading a defect string.
+            "basis": "recorded" if i["why_chain"] else "inferred",
+            "reason": a.get("reason"),
+            "topic": a.get("topic"),
+            "pack": packs_by_machine.get(i["machine"]),
+            "outcomes": a.get("outcomes") or [],
+            "analysed": bool(a.get("topic")),
+        })
 
     return {
         "period": facts["window"],
         "summary": {k: issues[k] for k in
                     ("events", "named_events", "hours", "cost", "by_family", "with_why_chain")},
-        "incidents": issues["issues"][:TRAINING_INCIDENT_LIMIT],
-        "sections": sections,
-        "model": resp.model,
-        "tokens": resp.usage.total_tokens if resp.usage else None,
+        "breakdowns": rows,
+        "analysed": sum(1 for r in rows if r["analysed"]),
+        "recorded_basis": sum(1 for r in rows if r["basis"] == "recorded"),
+        "packs": len(packs),
+        "web": [{"title": h["title"], "url": h["url"]} for h in web],
+        "model": model,
+        "tokens": tokens or None,
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "unverified_numbers": audit_numbers(raw, prompt),
         "error": None,
     }
