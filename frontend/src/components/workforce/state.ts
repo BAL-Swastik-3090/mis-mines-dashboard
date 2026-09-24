@@ -47,8 +47,12 @@ export const DAY_STATE: Record<string, { label: string; tone: Tone; cell: string
  * the mapping is by start time first and by code only as a fallback.
  */
 export const SHIFT_LOOK: Record<string, { cell: string; dot: string; label: string }> = {
-  MORNING: { cell: "bg-amber/15 text-amber border-amber/40",
-             dot: "bg-amber", label: "Morning" },
+  // Gold, not amber. Amber is leave, everywhere in this application, and the
+  // morning shift being the same colour meant the two were told apart only by
+  // the letter in the square — which is the thing colour is there to save you
+  // reading. Gold is the sunrise end of the same warmth.
+  MORNING: { cell: "bg-gold/15 text-gold-dark border-gold/40",
+             dot: "bg-gold", label: "Morning" },
   AFTERNOON: { cell: "bg-sky/15 text-sky border-sky/40",
                dot: "bg-sky", label: "Afternoon" },
   NIGHT:   { cell: "bg-indigo/15 text-indigo border-indigo/40",

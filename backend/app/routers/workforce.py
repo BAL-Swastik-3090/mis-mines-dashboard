@@ -840,6 +840,41 @@ def remove_holiday(holiday_id: int, request: Request,
 EXPORT_STATE = {"REST": "REST", "LEAVE": "LEAVE", "HOLIDAY": "HOL"}
 EXPORT_UNKNOWN = "-"
 
+# The workbook's colours, matching the board's, because a roster printed out and
+# a roster on screen are the same roster and a supervisor should not have to
+# learn it twice. Morning is gold, the afternoon sky, the night indigo, the
+# general shift teal — and leave stays amber, which is why morning is not.
+#
+# Paler than the screen's: Excel has no opacity, and a fill that reads as a tint
+# at 15% on a monitor is a solid block on paper.
+SHIFT_FILL = {
+    "MORNING":   "FDF3D6",
+    "AFTERNOON": "DCEEF9",
+    "NIGHT":     "E2E3F7",
+    "GENERAL":   "D6F0EC",
+    "OTHER":     "DCF2E6",
+}
+
+
+def _shift_band(code: str | None, start_time=None) -> str:
+    """Which part of the day a shift belongs to — the same rule as the screen.
+
+    By the clock first, so a mine calling its shifts 1, 2 and 3 is coloured the
+    same as one calling them A, B and C.
+    """
+    c = (code or "").upper()
+    if c.startswith("GEN"):
+        return "GENERAL"
+    if start_time is not None:
+        hour = getattr(start_time, "hour", None)
+        if hour is not None:
+            if 4 <= hour < 12:
+                return "MORNING"
+            if 12 <= hour < 19:
+                return "AFTERNOON"
+            return "NIGHT"
+    return {"A": "MORNING", "B": "AFTERNOON", "C": "NIGHT"}.get(c, "OTHER")
+
 
 @router.get("/export")
 def export_roster(request: Request,
@@ -917,17 +952,30 @@ def export_roster(request: Request,
                      person["designation"] or "",
                      person["pattern_code"] or "NOT ROSTERED"] + cells)
 
+    shift_hours = {r["code"].upper(): r["start_time"] for r in db.execute(text(
+        "SELECT DISTINCT ON (code) code, start_time FROM shift_calendar "
+        "ORDER BY code, valid_from DESC")).mappings()}
+    fills = {band: PatternFill("solid", fgColor=colour)
+             for band, colour in SHIFT_FILL.items()}
+
     for r in range(3, 3 + len(people)):
         for c in range(5, 5 + len(days)):
             cell = grid.cell(row=r, column=c)
             cell.alignment = centre
             cell.border = thin
-            if cell.value == "REST":
+            value = str(cell.value or "")
+            if value == "REST":
                 cell.fill = grey
-            elif cell.value == "LEAVE":
+            elif value == "LEAVE":
                 cell.fill = amber
-            elif cell.value == "HOL":
+            elif value == "HOL":
                 cell.fill = violet
+            elif value and value != EXPORT_UNKNOWN:
+                # A working day. Coloured by which shift it is, so a fortnight
+                # of the night crew is one band down the page rather than
+                # fourteen letters to read.
+                cell.fill = fills[_shift_band(value, shift_hours.get(value.upper()))]
+                cell.font = Font(bold=True, size=10)
 
     for col, width in zip("ABCD", (26, 15, 20, 14)):
         grid.column_dimensions[col].width = width
@@ -950,7 +998,53 @@ def export_roster(request: Request,
         edit.column_dimensions[col].width = width
     edit.freeze_panes = "A2"
 
-    # Sheet three: what the codes mean, so the file explains itself once it is
+    # Sheet three: the days set by hand, which is how this mine actually
+    # rosters. Assignments edits a pattern; this edits a square.
+    #
+    # Every day in the window for everybody would be two hundred rows times
+    # thirty and nobody edits that. Only the days somebody has decided are
+    # listed — plus, when there are none, one example row so the sheet shows
+    # its own shape instead of being an empty grid with a header.
+    day_sheet = wb.create_sheet("Days")
+    day_sheet.append(["Operator reference", "Name", "Date", "Shift"])
+    for cell in day_sheet[1]:
+        cell.font = head
+        cell.fill = navy
+
+    by_hand = [dict(r) for r in db.execute(text("""
+        SELECT o.operator_ref, p.display_name, rd.on_date, rd.shift_code
+          FROM roster_day rd
+          JOIN operator o ON o.operator_id = rd.operator_id
+          JOIN party p    ON p.party_id = o.party_id
+         WHERE rd.on_date BETWEEN :f AND :t
+         ORDER BY p.display_name, rd.on_date
+    """), {"f": start, "t": end}).mappings()]
+
+    for row in by_hand:
+        day_sheet.append([row["operator_ref"] or "", row["display_name"],
+                          row["on_date"], row["shift_code"] or "REST"])
+        cell = day_sheet.cell(row=day_sheet.max_row, column=4)
+        cell.alignment = centre
+        if row["shift_code"]:
+            cell.fill = fills[_shift_band(row["shift_code"],
+                                          shift_hours.get(row["shift_code"].upper()))]
+        else:
+            cell.fill = grey
+
+    if not by_hand and people:
+        example = people[0]
+        day_sheet.append([example["operator_ref"] or "", example["display_name"],
+                          start, sorted(shift_hours)[0] if shift_hours else "A"])
+        note = day_sheet.cell(row=day_sheet.max_row, column=6)
+        note.value = ("Example row — change it or delete it. "
+                      "Nothing here has been applied.")
+        note.font = Font(italic=True, size=9, color="8A94A6")
+
+    for col, width in zip("ABCD", (22, 26, 14, 12)):
+        day_sheet.column_dimensions[col].width = width
+    day_sheet.freeze_panes = "A2"
+
+    # Sheet four: what the codes mean, so the file explains itself once it is
     # away from the application that made it.
     key = wb.create_sheet("Key")
     key.append(["This file", ""])
@@ -958,6 +1052,13 @@ def export_roster(request: Request,
     key.append(["Assignments", "The editable sheet. Change the pattern code or "
                                "the dates and import this file back."])
     key.append(["", "Rows are matched on the operator reference, never the name."])
+    key.append(["Days", "The other editable sheet, one row per day set by hand. "
+                        "Put a shift code in the Shift column, or REST for a "
+                        "rest day, or leave it empty to take the decision off "
+                        "that day entirely."])
+    key.append(["", "Add rows to roster more days. Delete a row and nothing "
+                    "happens to that day - deleting from a spreadsheet is too "
+                    "easy to do by accident to be how a roster is undone."])
     key.append([])
     key.append(["Patterns defined", ""])
     for r in db.execute(text(
@@ -1002,6 +1103,100 @@ def _as_date(value, fallback):
         return fallback
 
 
+def _read_day_sheet(sheet, db) -> tuple[list[dict], list[dict]]:
+    """Read a Days sheet: reference, name, date, shift.
+
+    Returns what would change and what cannot be read, and writes nothing. The
+    caller decides whether this is a dry run — the same rule the rest of the
+    import follows, because nobody is ever certain about a spreadsheet that has
+    been round the office.
+    """
+    people = {r["operator_ref"].strip().upper(): dict(r) for r in db.execute(text("""
+        SELECT o.operator_id, o.operator_ref, p.display_name
+          FROM operator o JOIN party p ON p.party_id = o.party_id
+         WHERE o.profile_status = 'ACTIVE' AND o.operator_ref IS NOT NULL
+    """)).mappings()}
+    known_shifts = {r[0].upper() for r in db.execute(
+        text("SELECT code FROM shift_calendar")).all()}
+
+    existing = {(r["operator_id"], r["on_date"]): r["shift_code"]
+                for r in db.execute(text(
+                    "SELECT operator_id, on_date, shift_code FROM roster_day")).mappings()}
+
+    rows, problems = [], []
+    for n, raw in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
+        if raw is None or all(v in (None, "") for v in raw[:4]):
+            continue
+        ref, name, when, shift = (list(raw) + [None] * 4)[:4]
+        ref = str(ref or "").strip().upper()
+        person = people.get(ref)
+        if not person:
+            problems.append({"row": n, "ref": ref or "(blank)",
+                             "why": "No active operator has that reference."})
+            continue
+
+        on_date = when.date() if isinstance(when, datetime) else when
+        if isinstance(on_date, str):
+            try:
+                on_date = date.fromisoformat(on_date.strip()[:10])
+            except ValueError:
+                on_date = None
+        if not isinstance(on_date, date):
+            problems.append({"row": n, "ref": ref,
+                             "why": f"{when!r} is not a date this can read. "
+                                    "Use a real date cell, or YYYY-MM-DD."})
+            continue
+
+        code = str(shift or "").strip().upper()
+        if code in ("", "-", "BLANK", "NONE"):
+            wanted = "CLEAR"
+        elif code == "REST":
+            wanted = None
+        elif code in known_shifts:
+            wanted = code
+        else:
+            problems.append({"row": n, "ref": ref,
+                             "why": f"This mine has no shift called {code}. "
+                                    f"It runs: {', '.join(sorted(known_shifts))}, "
+                                    "or REST, or leave the cell empty."})
+            continue
+
+        was = existing.get((person["operator_id"], on_date), "__none__")
+        already = (was == "__none__" and wanted == "CLEAR") or (was == wanted)
+        if already:
+            continue
+
+        rows.append({"row": n, "ref": ref, "display_name": person["display_name"],
+                     "operator_id": person["operator_id"],
+                     "on_date": on_date.isoformat(),
+                     "from_shift": None if was == "__none__" else (was or "REST"),
+                     "to_shift": "blank" if wanted == "CLEAR" else (wanted or "REST")})
+    return rows, problems
+
+
+def _apply_day_rows(rows: list[dict], request: Request, db) -> None:
+    """Write what _read_day_sheet found, through the same paths the screen uses."""
+    setting = [r for r in rows if r["to_shift"] != "blank"]
+    clearing = [r for r in rows if r["to_shift"] == "blank"]
+
+    by_shift: dict[str, list[dict]] = {}
+    for r in setting:
+        by_shift.setdefault(r["to_shift"], []).append(r)
+
+    for shift, group in by_shift.items():
+        set_days(request, body={
+            "cells": [{"operator_id": r["operator_id"], "date": r["on_date"]}
+                      for r in group],
+            "shift": None if shift == "REST" else shift,
+            "reason": "imported from a workbook",
+        }, db=db)
+
+    if clearing:
+        clear_days(request, body={
+            "cells": [{"operator_id": r["operator_id"], "date": r["on_date"]}
+                      for r in clearing]}, db=db)
+
+
 @router.post("/import")
 async def import_roster(request: Request, file: UploadFile = File(...),
                         dry_run: bool = Query(True),
@@ -1029,6 +1224,26 @@ async def import_roster(request: Request, file: UploadFile = File(...),
         wb = load_workbook(BytesIO(raw), data_only=True)
     except Exception:                                  # noqa: BLE001
         raise HTTPException(400, "That does not open as an Excel workbook.")
+
+    # A workbook carrying a Days sheet is a roster edited square by square,
+    # which is how this mine works before it has any patterns. Both sheets may
+    # be present and both are read: they change different things and a file
+    # that has been round the office will have whichever the last person used.
+    day_rows, day_problems = [], []
+    if "Days" in wb.sheetnames:
+        day_rows, day_problems = _read_day_sheet(wb["Days"], db)
+
+    if "Assignments" not in wb.sheetnames and day_rows:
+        # A Days-only workbook. Nothing to do on the pattern side, and falling
+        # through to wb.active would read the Days sheet as assignments and
+        # report every row as a problem.
+        if not dry_run:
+            _apply_day_rows(day_rows, request, db)
+            db.commit()
+        return {"dry_run": dry_run, "file": file.filename, "sheet": "Days",
+                "changes": [], "problems": day_problems,
+                "unchanged": 0, "summary": {},
+                "day_changes": day_rows, "days_applied": 0 if dry_run else len(day_rows)}
 
     sheet = wb["Assignments"] if "Assignments" in wb.sheetnames else wb.active
 
@@ -1120,11 +1335,24 @@ async def import_roster(request: Request, file: UploadFile = File(...),
                         "rejected": len(problems)})
         db.commit()
 
+    # A workbook may carry both sheets, and both are honoured. Applied after
+    # the assignments, so a file that moves somebody onto a pattern and then
+    # sets one of their days by hand ends with the day winning — which is the
+    # order the two mean when they disagree.
+    if not dry_run and day_rows:
+        _apply_day_rows(day_rows, request, db)
+        db.commit()
+
     return {
         "dry_run": dry_run, "file": file.filename, "sheet": sheet.title,
-        "changes": changes, "problems": problems, "unchanged": unchanged,
+        "changes": changes, "problems": problems + day_problems,
+        "unchanged": unchanged,
+        "day_changes": day_rows,
+        "days_applied": 0 if dry_run else len(day_rows),
         "summary": {"would_change" if dry_run else "changed": len(changes),
-                    "rejected": len(problems), "already_right": unchanged},
+                    "days" if dry_run else "days changed": len(day_rows),
+                    "rejected": len(problems) + len(day_problems),
+                    "already_right": unchanged},
     }
 
 
