@@ -52,6 +52,12 @@ interface Person {
   days: Record<string, DayCell>;
 }
 
+/** A shift code short enough for a grid square: "GENERAL" reads as "G". */
+function shortShift(code: string | null | undefined): string {
+  if (!code) return "";
+  return code.length <= 2 ? code : code[0];
+}
+
 interface ShiftOption {
   code: string; name: string; start_time: string; end_time: string;
   planned_hours: number; crosses_midnight: boolean;
@@ -113,6 +119,7 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
   const [lastCell, setLastCell] = useState<{ op: number; iso: string } | null>(null);
   const [shifts, setShifts] = useState<ShiftOption[]>([]);
   const [cellBusy, setCellBusy] = useState(false);
+  const [shiftsError, setShiftsError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [importing, setImporting] = useState(false);
   const [preview, setPreview] = useState<ImportReport | null>(null);
@@ -149,12 +156,28 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
 
   // The shifts a cell may be set to come from the mine's own calendar, so one
   // that stops running stops being offered without anybody editing this file.
-  useEffect(() => {
-    void (async () => {
-      try { setShifts((await api.get("/workforce/shifts")).data ?? []); }
-      catch { /* the picker simply offers rest and clear */ }
-    })();
+  //
+  // The failure is kept, not swallowed. Catching it and carrying on left a bar
+  // offering "Rest" and nothing else, with no way to tell that the shifts were
+  // missing rather than nonexistent — which is precisely what happened the
+  // first time this shipped, against a backend that did not yet have the route.
+  const loadShifts = useCallback(async () => {
+    try {
+      setShifts((await api.get("/workforce/shifts")).data ?? []);
+      setShiftsError(null);
+    } catch {
+      setShiftsError("The shifts this mine runs could not be read.");
+    }
   }, []);
+
+  useEffect(() => { void loadShifts(); }, [loadShifts]);
+
+  // And tried again when the bar opens, so a backend that was restarting when
+  // the page loaded does not leave the screen half-useful until somebody
+  // thinks to reload it.
+  useEffect(() => {
+    if (cells.size > 0 && shifts.length === 0) void loadShifts();
+  }, [cells.size, shifts.length, loadShifts]);
 
   // A drag ends wherever the mouse is let go, which is frequently not over the
   // grid. Without this the board stays in drag mode and the next click selects
@@ -166,6 +189,13 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
   }, []);
 
   const cellKey = (op: number, iso: string) => `${op}|${iso}`;
+
+  /** A shift code that fits the square it has to be read in.
+   *
+   *  The grid gives a day 28 pixels, which is right for A, B and C and hopeless
+   *  for GENERAL — and GENERAL is exactly the one a fitter or a clerk is on.
+   *  The mine calls it G when it is speaking, so the board does too, and the
+   *  full name stays on the hover. */
 
   /** Pick a square, or extend from the last one.
    *
@@ -549,9 +579,21 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
               <Button key={sh.code} size="sm" disabled={cellBusy}
                       onClick={() => void applyToCells(sh.code)}
                       title={`${sh.name} · ${sh.start_time?.slice(0, 5)}–${sh.end_time?.slice(0, 5)}`}>
-                {sh.code}
+                {shortShift(sh.code)}
+                <span className="text-[10.5px] font-normal text-txt-muted ml-0.5">
+                  {sh.start_time?.slice(0, 5)}
+                </span>
               </Button>
             ))}
+
+            {shifts.length === 0 && (
+              <span className="inline-flex items-center gap-2 text-[12px] text-rose">
+                {shiftsError ?? "No shifts are defined in the shift calendar."}
+                <Button size="sm" variant="ghost" onClick={() => void loadShifts()}>
+                  Try again
+                </Button>
+              </span>
+            )}
 
             <Button size="sm" disabled={cellBusy} onClick={() => void applyToCells(null)}
                     title="A rest day given on purpose — it stays on the record">
@@ -662,6 +704,7 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
                       // Leave and closures are not this screen's to overrule,
                       // so those squares are not offered for selection at all.
                       const fixed = cell?.state === "LEAVE" || cell?.state === "HOLIDAY";
+                      // "G" on the square, "GENERAL shift" on the hover.
                       const label = (cell?.label || UNROSTERED.label)
                         + (cell?.by_hand ? " · set by hand" : "")
                         + (cell?.reason ? ` — ${cell.reason}` : "");
@@ -681,7 +724,7 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
                                         ${look.cell}
                                         ${mayManage && !fixed ? "cursor-pointer hover:ring-1 hover:ring-gold/60" : ""}
                                         ${on ? "ring-2 ring-gold ring-offset-1" : ""}`}>
-                            {cell?.state === "ON" ? cell.shift
+                            {cell?.state === "ON" ? shortShift(cell.shift)
                               : cell?.state === "LEAVE" ? (cell.half_day ? "½" : "L")
                               : cell?.state === "HOLIDAY" ? "H"
                               : cell?.state === "REST" ? "·" : ""}
@@ -774,7 +817,7 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
                     <span key={i} className={`w-7 h-6 rounded border text-[10.5px] font-bold
                       inline-flex items-center justify-center
                       ${slot === "REST" ? DAY_STATE.REST.cell : DAY_STATE.ON.cell}`}>
-                      {slot === "REST" ? "·" : slot}
+                      {slot === "REST" ? "·" : shortShift(slot)}
                     </span>
                   ))}
               </div>
