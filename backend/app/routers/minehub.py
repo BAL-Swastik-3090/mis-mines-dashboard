@@ -49,6 +49,13 @@ ASSET_FIELDS = (
     "sap_equipment_no", "contract_no", "service_po_no", "po_valid_from", "po_valid_to",
     "purchase_date", "purchase_cost", "hire_rate", "hire_rate_uom",
     "rated_output_per_hr", "rated_fuel_lph", "fuel_type", "propulsion", "tank_capacity_l",
+    # What the machine may carry, as against `capacity`, which is what its
+    # engine produces. Both are "capacity" in English and they are not the same
+    # number: a tipper rated 320 HP carries 25 tonnes. Without this on the form
+    # there was nowhere to put the load, so people typed the horsepower into
+    # `capacity` and the weighbridge's overload check — which reads this column
+    # — could never fire.
+    "payload_capacity_kg",
     "battery_kwh", "range_km", "charging_type", "charge_time_hrs",
     "reading_uom", "current_reading", "reading_as_on",
     "home_location_id", "org_unit_id", "commissioned_on", "status",
@@ -57,7 +64,7 @@ ASSET_FIELDS = (
 NUMERIC_FIELDS = {"year_of_make", "capacity", "purchase_cost", "hire_rate",
                   "rated_output_per_hr", "rated_fuel_lph", "tank_capacity_l",
                   "battery_kwh", "range_km", "charge_time_hrs", "current_reading",
-                  "tyre_count", "seating_capacity", "asset_type_id",
+                  "tyre_count", "seating_capacity", "asset_type_id", "payload_capacity_kg",
                   "owner_party_id", "supplier_party_id", "home_location_id", "org_unit_id"}
 ASSET_STATUS = ("ACTIVE", "MAINTENANCE", "STANDBY", "IDLE", "DISPOSED")
 LOCATION_TYPES = ("SITE", "PIT", "BENCH", "PLANT", "WORKSHOP",

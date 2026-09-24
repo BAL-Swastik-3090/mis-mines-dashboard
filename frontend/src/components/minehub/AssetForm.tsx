@@ -434,8 +434,13 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
   };
   const isElectric = f.fuel_type === "ELECTRIC" || f.fuel_type === "HYBRID";
   // The picker shows a name; the form stores the id it resolves to.
-  const typeName = types.find((t) => String(t.asset_type_id) === f.asset_type_id)?.name ?? "";
+  const chosenType = types.find((t) => String(t.asset_type_id) === f.asset_type_id);
+  const typeName = chosenType?.name ?? "";
   const isHired = f.ownership === "HIRED";
+  // Haulage is the category that carries something across a weighbridge — the
+  // tippers, trailers and dumpers. An excavator's load is in its bucket and is
+  // never weighed, and a drill has no load at all.
+  const carriesALoad = chosenType?.category === "HAULAGE";
 
   // The stage only needs explaining when it actually moves. Asking for a
   // reason on every save would train people to type a full stop.
@@ -530,8 +535,15 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
     items.push(isElectric
       ? { label: "Battery kWh", done: has("battery_kwh"), needed: false }
       : { label: "Tank capacity", done: has("tank_capacity_l"), needed: false });
+    // Only for things that carry a load. A drill has no payload and listing it
+    // as outstanding on every rig teaches people to ignore the checklist. On a
+    // tipper it is the number the weighbridge needs to call a trip overloaded,
+    // so its absence is worth showing.
+    if (carriesALoad) {
+      items.push({ label: "Max load", done: has("payload_capacity_kg"), needed: false });
+    }
     return items;
-  }, [f, isHired, isElectric]);
+  }, [f, isHired, isElectric, carriesALoad]);
 
   const doneCount = checklist.filter((i) => i.done).length;
   const filled = Math.round((doneCount / checklist.length) * 100);
@@ -1143,7 +1155,7 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
           hint="Rated figures drive every utilisation and capacity-gap number the platform reports"
           right={isElectric ? <Chip tone="emerald">Electric</Chip> : undefined} />
         <Sheet>
-          <Row label="Capacity">
+          <Row label="Capacity" hint="What the machine is rated at — 320 HP, or 25 MT for a bucket. What a truck carries goes in Max load below.">
             <input id="af-cap" type="number" className={cellInput} value={f.capacity ?? ""}
               onChange={(e) => set("capacity", e.target.value)} placeholder="25" />
           </Row>
@@ -1151,6 +1163,29 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
             <div className="px-1.5 py-1">
               <Combobox id="af-capuom" category="CAPACITY_UOM" value={f.capacity_uom ?? ""}
                 onChange={(v) => set("capacity_uom", v)} placeholder="MT, m³…" />
+            </div>
+          </Row>
+          {/* Separate from Capacity on purpose. Both are "capacity" in English
+              and they are not the same number: a tipper rated 320 HP carries 25
+              tonnes. With nowhere to put the load, people typed the horsepower
+              into Capacity, and the weighbridge's overload check — which reads
+              this and nothing else — could never fire. */}
+          <Row label="Max load (kg)"
+               hint="What it may carry, not what the engine makes. The weighbridge flags any trip heavier than this.">
+            <div className="flex items-center gap-2">
+              <input id="af-payload" type="number" className={cellInput}
+                value={f.payload_capacity_kg ?? ""}
+                onChange={(e) => set("payload_capacity_kg", e.target.value)}
+                placeholder="25000" />
+              {/* A mine talks in tonnes and this column is kilograms. Showing
+                  the conversion as it is typed is what catches the missing
+                  nought before it becomes a tipper rated 25kg. */}
+              {Number(f.payload_capacity_kg) > 0 && (
+                <span className="text-[11.5px] text-txt-light whitespace-nowrap tabular-nums">
+                  = {(Number(f.payload_capacity_kg) / 1000).toLocaleString("en-IN",
+                      { maximumFractionDigits: 2 })} tonnes
+                </span>
+              )}
             </div>
           </Row>
           <Row label="Rated output / hr" hint="Sets every capacity-gap figure — leave blank until signed off">
