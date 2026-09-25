@@ -24,7 +24,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Gauge, Loader2, Truck, Settings2, AlertTriangle, ArrowRight,
-  TrendingDown, Boxes, Copy, X, Plus,
+  TrendingDown, Boxes, Copy, X, Plus, History, Pencil,
 } from "lucide-react";
 import api from "@/lib/api";
 import { formatIndian } from "@/lib/utils";
@@ -101,7 +101,13 @@ function Cum({ v, bold }: { v: number; bold?: boolean }) {
   );
 }
 
-type TabId = "plan" | "machines" | "model";
+interface Activity {
+  event_id: string; event_type: string; occurred_at: string;
+  by: string | null; asset_id: number | null; fleet_code: string | null;
+  on_date: string | null; said: string;
+}
+
+type TabId = "plan" | "machines" | "model" | "activity";
 
 export default function CapacitySection() {
   const day = useDateFilter((s) => s.apiTo);
@@ -117,16 +123,20 @@ export default function CapacitySection() {
   const [adding, setAdding] = useState(false);
   const [editingCycle, setEditingCycle] = useState<Machine | null>(null);
   const [addingClass, setAddingClass] = useState(false);
+  const [editingFace, setEditingFace] = useState<Face | null>(null);
+  const [log, setLog] = useState<Activity[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [p, m, a, q] = await Promise.all([
+      const [p, m, a, q, act] = await Promise.all([
         api.get("/productivity/plan", { params: { on: day } }),
         api.get("/productivity/machines"),
         api.get("/productivity/assumptions"),
         api.get("/productivity/data-quality").catch(() => ({ data: null })),
+        api.get("/productivity/activity", { params: { days: 30, limit: 200 } })
+          .catch(() => ({ data: [] })),
       ]);
       // The API is a claim, not a guarantee: a missing faces array would
       // otherwise take the whole page down on .map.
@@ -136,6 +146,7 @@ export default function CapacitySection() {
       setMachines(m.data ?? []);
       setModel(a.data ?? null);
       setQuality(q.data ?? null);
+      setLog(act.data ?? []);
     } finally {
       setLoading(false);
     }
@@ -199,6 +210,9 @@ export default function CapacitySection() {
       hint: "The bucket each machine is running, and what that comes to per hour." },
     { id: "model", label: "The model", icon: Settings2, tone: "violet" as Tone,
       hint: "Fill factor, swell and the eight parts of a cycle. Change one and every figure moves." },
+    { id: "activity", label: log.length ? `Activity · ${log.length}` : "Activity",
+      icon: History, tone: "slate" as Tone,
+      hint: "Every change to this plan, who made it and what it said before." },
   ];
   const active = TABS.find((t) => t.id === tab);
 
@@ -411,6 +425,9 @@ export default function CapacitySection() {
                         </span>
                       )}
                     </Td>
+                    {/* The place and the material are corrected here rather
+                        than by deleting the row and typing it again. Deleting
+                        loses the row's history along with its mistake. */}
                     <Td className="text-[12px]">{f.location}</Td>
                     <Td className="text-[12px] text-txt-muted">{f.material}</Td>
                     <Td className="text-right text-[12px]">
@@ -465,7 +482,13 @@ export default function CapacitySection() {
                         </span>
                       )}
                     </Td>
-                    <Td className="text-right">
+                    <Td className="text-right whitespace-nowrap">
+                      <button type="button" disabled={busy}
+                        title={`Correct where ${f.fleet_code} is working`}
+                        onClick={() => setEditingFace(f)}
+                        className="rounded p-1 text-txt-light hover:text-navy hover:bg-bg-light">
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
                       <button type="button" disabled={busy}
                         title={`Take ${f.fleet_code} off ${f.location}`}
                         onClick={() => {
@@ -508,6 +531,8 @@ export default function CapacitySection() {
                     { plan_name: name }))} />
       )}
 
+      {!loading && tab === "activity" && <ActivityTab log={log} />}
+
       {!loading && tab === "model" && model && (
         <ModelTab model={model} classes={classes} onSave={saveModel} busy={busy}
           onAddClass={() => setAddingClass(true)}
@@ -515,10 +540,11 @@ export default function CapacitySection() {
             api.put(`/productivity/tipper-classes/${id}`, patch))} />
       )}
 
-      {adding && (
+      {(adding || editingFace) && (
         <AddFace day={day} machines={machines} classes={classes}
-          onClose={() => setAdding(false)}
-          onSaved={() => { setAdding(false); void load(); }} />
+          face={editingFace}
+          onClose={() => { setAdding(false); setEditingFace(null); }}
+          onSaved={() => { setAdding(false); setEditingFace(null); void load(); }} />
       )}
 
       {editingCycle && model && (
@@ -807,6 +833,95 @@ function ModelTab({ model, classes, onSave, onAddClass, onEditClass, busy }: {
   );
 }
 
+/* ── every change, and what it said before ─────────────────────────────── */
+
+function ActivityTab({ log }: { log: Activity[] }) {
+  const [who, setWho] = useState("");
+  const [what, setWhat] = useState("");
+
+  const people = useMemo(
+    () => [...new Set(log.map((e) => e.by).filter(Boolean) as string[])].sort(),
+    [log]);
+  const kinds = useMemo(
+    () => [...new Set(log.map((e) => e.event_type))].sort(), [log]);
+
+  const shown = log.filter((e) =>
+    (!who || e.by === who) && (!what || e.event_type === what));
+
+  // Grouped by day, because "what changed on Tuesday" is how somebody asks.
+  const days = useMemo(() => {
+    const m = new Map<string, Activity[]>();
+    for (const e of shown) {
+      const d = String(e.occurred_at).slice(0, 10);
+      m.set(d, [...(m.get(d) ?? []), e]);
+    }
+    return [...m.entries()];
+  }, [shown]);
+
+  return (
+    <Card>
+      <CardHeader icon={History} tone="slate" title="Every change to this plan"
+        subtitleOnIcon
+        subtitle="Read from the event log, not from the rows. The rows say what the plan is now; only this can say who typed it and what it said before."
+        actions={
+          <span className="flex flex-wrap items-center gap-1.5">
+            <SearchSelect value={who} onChange={setWho} allLabel="Anybody"
+              narrow options={people} searchPlaceholder="Type a name…" />
+            <SearchSelect value={what} onChange={setWhat} allLabel="Any change"
+              narrow searchPlaceholder="Type a kind…"
+              options={kinds.map((k) => ({
+                value: k,
+                label: k.replace("CAPACITY_", "").replace(/_/g, " ").toLowerCase(),
+              }))} />
+          </span>
+        } />
+
+      {shown.length === 0 && (
+        <p className="px-5 py-6 text-[12.5px] text-txt-muted">
+          {log.length === 0
+            ? "Nothing has been changed here in the last thirty days."
+            : "No change matches those filters."}
+        </p>
+      )}
+
+      {days.map(([d, events]) => (
+        <div key={d}>
+          <div className="sticky top-0 bg-bg-soft border-y border-border-light
+                          px-5 py-1.5 text-[11px] font-bold text-txt-secondary
+                          tracking-wide">
+            {d.split("-").reverse().join("-")}
+            <span className="font-normal text-txt-light ml-2">
+              {events.length} change{events.length === 1 ? "" : "s"}
+            </span>
+          </div>
+          {events.map((e) => (
+            <div key={e.event_id}
+              className="px-5 py-2 border-b border-border-light last:border-0
+                         flex items-start gap-3 hover:bg-bg-soft/50">
+              <span className="text-[11px] font-mono text-txt-light tabular-nums
+                               shrink-0 pt-0.5 w-[46px]">
+                {new Date(e.occurred_at).toLocaleTimeString("en-IN", {
+                  hour: "2-digit", minute: "2-digit", hour12: false })}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[12.5px] text-txt-primary">{e.said}</span>
+                <span className="block text-[10.5px] text-txt-light">
+                  {e.by ?? "unknown"}
+                  {e.on_date && ` · plan for ${String(e.on_date).slice(0, 10)
+                    .split("-").reverse().join("-")}`}
+                </span>
+              </span>
+              <Chip tone="slate" dot={false}>
+                {e.event_type.replace("CAPACITY_", "").replace(/_/g, " ").toLowerCase()}
+              </Chip>
+            </div>
+          ))}
+        </div>
+      ))}
+    </Card>
+  );
+}
+
 /* ── a panel for the two things that are added rather than chosen ──────── */
 
 function Panel({ title, hint, busy, canSave, saveLabel, onClose, onSave, children }: {
@@ -1061,11 +1176,21 @@ function AddTipperClass({ onClose, onSaved }: {
 
 /* ── putting a machine on a face ───────────────────────────────────────── */
 
-function AddFace({ day, machines, classes, onClose, onSaved }: {
+function AddFace({ day, machines, classes, face, onClose, onSaved }: {
   day: string; machines: Machine[]; classes: TipperClass[];
+  /** The row being corrected, or null to put a new machine on a face. */
+  face?: Face | null;
   onClose: () => void; onSaved: () => void;
 }) {
-  const [f, setF] = useState({
+  const editing = Boolean(face);
+  const [f, setF] = useState(() => face ? {
+    asset_id: String(face.asset_id), location: face.location,
+    material: face.material, running_hours: String(face.running_hours),
+    tippers: String(face.tippers),
+    tipper_class_id: String(
+      classes.find((c) => c.code === face.tipper_class)?.tipper_class_id
+      ?? classes[0]?.tipper_class_id ?? ""),
+  } : {
     asset_id: "", location: "", material: "", running_hours: "20",
     tippers: "0", tipper_class_id: String(classes[0]?.tipper_class_id ?? ""),
   });
@@ -1081,11 +1206,17 @@ function AddFace({ day, machines, classes, onClose, onSaved }: {
       <div className="w-full max-w-[520px] bg-bg-base rounded-2xl shadow-xl
                       border border-border-light overflow-hidden">
         <div className="px-5 py-3 border-b border-border-light">
-          <h2 className="text-[14px] font-bold text-navy">Put a machine on a face</h2>
+          <h2 className="text-[14px] font-bold text-navy">
+            {editing ? `Correct ${face?.fleet_code}` : "Put a machine on a face"}
+          </h2>
           <p className="text-[11.5px] text-txt-muted">
-            For {day.split("-").reverse().join("-")}. One machine can work more than
-            one face in a day — the workbook splits a long boom across bund
-            preparation and ore.
+            {editing
+              ? "Corrected in place rather than deleted and typed again — "
+                + "deleting loses the row's history along with its mistake. "
+                + "Every change is recorded with what it said before."
+              : `For ${day.split("-").reverse().join("-")}. One machine can work `
+                + "more than one face in a day — the workbook splits a long boom "
+                + "across bund preparation and ore."}
           </p>
         </div>
         <div className="p-5 space-y-3">
@@ -1098,7 +1229,7 @@ function AddFace({ day, machines, classes, onClose, onSaved }: {
               Machine
             </span>
             <SearchSelect field value={f.asset_id} placeholder="Choose an excavator…"
-              searchPlaceholder="Type a fleet code…"
+              searchPlaceholder="Type a fleet code…" disabled={editing}
               onChange={(v) => setF({ ...f, asset_id: v })}
               options={machines.map((m) => ({
                 value: String(m.asset_id), label: m.fleet_code,
@@ -1107,6 +1238,12 @@ function AddFace({ day, machines, classes, onClose, onSaved }: {
                   ? <span className="text-amber">no bucket</span>
                   : <span className="text-txt-light">{m.cum_per_hour} Cum/hr</span>,
               }))} />
+            {editing && (
+              <span className="block text-[10.5px] text-txt-light mt-1">
+                A different machine is a different deployment — take this row off
+                and add the other one, so this one keeps its own history.
+              </span>
+            )}
           </label>
           <div className="grid sm:grid-cols-2 gap-3">
             <label className="block">
@@ -1160,14 +1297,20 @@ function AddFace({ day, machines, classes, onClose, onSaved }: {
           <Button variant="primary" disabled={!ok || busy}
             onClick={async () => {
               setBusy(true); setErr(null);
+              const body = {
+                location: f.location.trim(), material: f.material.trim(),
+                running_hours: Number(f.running_hours),
+                tippers: Number(f.tippers),
+                tipper_class_id: f.tipper_class_id ? Number(f.tipper_class_id) : null,
+              };
               try {
-                await api.post("/productivity/plan", {
-                  on_date: day, asset_id: Number(f.asset_id),
-                  location: f.location.trim(), material: f.material.trim(),
-                  running_hours: Number(f.running_hours),
-                  tippers: Number(f.tippers),
-                  tipper_class_id: f.tipper_class_id ? Number(f.tipper_class_id) : null,
-                });
+                if (editing && face) {
+                  await api.put(`/productivity/plan/${face.face_plan_id}`, body);
+                } else {
+                  await api.post("/productivity/plan", {
+                    ...body, on_date: day, asset_id: Number(f.asset_id),
+                  });
+                }
                 onSaved();
               } catch (e) {
                 const detail = (e as { response?: { data?: { detail?: string } } })
@@ -1175,7 +1318,8 @@ function AddFace({ day, machines, classes, onClose, onSaved }: {
                 setErr(detail ?? "That could not be saved.");
               } finally { setBusy(false); }
             }}>
-            {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Add it"}
+            {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  : editing ? "Save the correction" : "Add it"}
           </Button>
         </div>
       </div>

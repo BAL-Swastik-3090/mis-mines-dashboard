@@ -52,6 +52,42 @@ def _day(value: str | None) -> date:
     return date.fromisoformat(value) if value else date.today()
 
 
+def _event(db: Session, request: Request, event_type: str, *,
+           asset_id: int | None = None, day: date | None = None,
+           payload: dict | None = None) -> None:
+    """Record a change to the plan.
+
+    Written into the same event table the roster uses, so "what happened on
+    this machine" can be answered across both without joining two logs.
+
+    The payload carries before and after rather than only after. Anything less
+    produces a log that says a number changed and cannot say from what, which
+    is exactly the thing somebody is trying to find out.
+    """
+    db.execute(text("""
+        INSERT INTO event (event_type, occurred_at, recorded_at, source,
+                           asset_id, production_day, payload, recorded_by)
+        VALUES (:t, now(), now(), 'WEB', :a, CAST(:d AS date),
+                CAST(:pl AS jsonb), :by)
+    """), {"t": event_type, "a": asset_id, "d": day,
+           "pl": json.dumps(payload or {}, default=str), "by": _actor(request)})
+
+
+def _changed(before: dict, after: dict, fields: list[str]) -> dict:
+    """Only what actually moved, as {field: [was, now]}.
+
+    A diff that lists every field makes the one that changed hard to find, and
+    a log nobody can scan is a log nobody reads.
+    """
+    out: dict = {}
+    for f in fields:
+        was, now = before.get(f), after.get(f)
+        if now is None or str(was) == str(now):
+            continue
+        out[f] = [was, now]
+    return out
+
+
 def _assumptions(db: Session) -> dict:
     """The set in force. Exactly one row is, and if none is the defaults in the
     migration are what a fresh database gets — so this cannot return nothing."""
@@ -134,6 +170,9 @@ def set_assumptions(request: Request, body: dict = Body(...),
                ({', '.join(fields)}, note, created_by)
         VALUES ({', '.join(':' + f for f in fields)}, :note, :by)
     """), {**merged, "note": body.get("note"), "by": _actor(request)})
+    _event(db, request, "CAPACITY_ASSUMPTIONS_CHANGED",
+           payload={"changed": _changed(a, merged, fields),
+                    "note": body.get("note")})
     db.commit()
     return assumptions(request, db)
 
@@ -208,6 +247,10 @@ def set_bucket(asset_id: int, request: Request, body: dict = Body(...),
     cum = body.get("fitted_bucket_cum")
     if cum is not None and (float(cum) <= 0 or float(cum) >= 50):
         raise HTTPException(422, "A bucket is between 0 and 50 cubic metres.")
+    was = db.execute(text("""
+        SELECT fleet_code, capacity, fitted_bucket_cum FROM asset WHERE asset_id = :id
+    """), {"id": asset_id}).mappings().first()
+
     done = db.execute(text("""
         UPDATE asset
            SET fitted_bucket_cum = CAST(:cum AS numeric),
@@ -219,6 +262,11 @@ def set_bucket(asset_id: int, request: Request, body: dict = Body(...),
     """), {"cum": cum, "id": asset_id}).first()
     if not done:
         raise HTTPException(404, "That machine is not on the register.")
+    _event(db, request, "CAPACITY_BUCKET_CHANGED", asset_id=asset_id,
+           payload={"fleet_code": was["fleet_code"] if was else None,
+                    "standard_bucket": was["capacity"] if was else None,
+                    "fitted_bucket_cum": [
+                        was["fitted_bucket_cum"] if was else None, cum]})
     db.commit()
     return {"ok": True}
 
@@ -279,6 +327,10 @@ def add_tipper_class(request: Request, body: dict = Body(...),
     except Exception as exc:                        # noqa: BLE001
         db.rollback()
         raise HTTPException(422, f"That could not be saved: {exc}") from exc
+    _event(db, request, "CAPACITY_TRUCK_CLASS_ADDED",
+           payload={"code": code, "label": body.get("label"),
+                    "payload_t": body.get("payload_t"),
+                    "effective_cum": body.get("effective_cum")})
     db.commit()
     return {"ok": True, "tipper_class_id": row[0]}
 
@@ -293,6 +345,9 @@ def edit_tipper_class(tipper_class_id: int, request: Request,
     has to keep existing, or that plan can no longer be explained.
     """
     _require(request, MANAGE, "change a kind of truck")
+    was = db.execute(text(
+        "SELECT * FROM tipper_class WHERE tipper_class_id = :id"),
+        {"id": tipper_class_id}).mappings().first()
     done = db.execute(text("""
         UPDATE tipper_class
            SET label         = COALESCE(:label, label),
@@ -309,6 +364,11 @@ def edit_tipper_class(tipper_class_id: int, request: Request,
            "active": body.get("is_active")}).first()
     if not done:
         raise HTTPException(404, "There is no such kind of truck.")
+    _event(db, request, "CAPACITY_TRUCK_CLASS_CHANGED",
+           payload={"code": was["code"] if was else None,
+                    "changed": _changed(dict(was or {}), body, [
+                        "label", "payload_t", "effective_cum",
+                        "loading_min", "travel_min", "is_active"])})
     db.commit()
     return {"ok": True}
 
@@ -353,6 +413,9 @@ def set_cycle(asset_id: int, request: Request, body: dict = Body(...),
         ON CONFLICT (asset_id) DO UPDATE
            SET {sets}, reason = EXCLUDED.reason, updated_at = now()
     """), {"id": asset_id, **vals, "reason": reason, "by": _actor(request)})
+    _event(db, request, "CAPACITY_CYCLE_SET", asset_id=asset_id,
+           payload={"reason": reason,
+                    "set": {k: v for k, v in vals.items() if v is not None}})
     db.commit()
     return {"ok": True}
 
@@ -362,8 +425,13 @@ def clear_cycle(asset_id: int, request: Request,
                 db: Session = Depends(get_minehub_db)) -> dict:
     """Put a machine back on the shared cycle."""
     _require(request, MANAGE, "change a machine's cycle")
+    was = db.execute(text(
+        "SELECT reason FROM excavator_cycle WHERE asset_id = :id"),
+        {"id": asset_id}).scalar()
     db.execute(text("DELETE FROM excavator_cycle WHERE asset_id = :id"),
                {"id": asset_id})
+    _event(db, request, "CAPACITY_CYCLE_CLEARED", asset_id=asset_id,
+           payload={"was_because": was})
     db.commit()
     return {"ok": True}
 
@@ -394,6 +462,8 @@ def set_plan_name(asset_id: int, request: Request, body: dict = Body(...),
             DELETE FROM asset_identity
              WHERE asset_id = :id AND system = 'BUSINESS_PLAN'
         """), {"id": asset_id})
+        _event(db, request, "CAPACITY_PLAN_NAME_SET", asset_id=asset_id,
+               payload={"plan_name": [None, None], "cleared": True})
         db.commit()
         return {"ok": True, "plan_name": None}
 
@@ -413,6 +483,8 @@ def set_plan_name(asset_id: int, request: Request, body: dict = Body(...),
         ON CONFLICT (system, external_code) DO UPDATE
            SET asset_id = EXCLUDED.asset_id
     """), {"id": asset_id, "n": name, "by": _actor(request)})
+    _event(db, request, "CAPACITY_PLAN_NAME_SET", asset_id=asset_id,
+           payload={"plan_name": name, "taken_from": moved_from})
     db.commit()
     return {"ok": True, "plan_name": name, "taken_from": moved_from}
 
@@ -533,6 +605,12 @@ def add_face(request: Request, body: dict = Body(...),
     except Exception as exc:                        # noqa: BLE001
         db.rollback()
         raise HTTPException(422, f"That row could not be saved: {exc}") from exc
+    _event(db, request, "CAPACITY_FACE_PLANNED", asset_id=body["asset_id"],
+           day=_day(body.get("on_date")),
+           payload={"location": body.get("location"),
+                    "material": body.get("material"),
+                    "running_hours": body.get("running_hours"),
+                    "tippers": body.get("tippers") or 0})
     db.commit()
     return {"ok": True}
 
@@ -542,6 +620,14 @@ def edit_face(face_plan_id: int, request: Request, body: dict = Body(...),
               db: Session = Depends(get_minehub_db)) -> dict:
     """Change the hours or the trucks on a face — the calculator's own handle."""
     _require(request, MANAGE, "change the capacity plan")
+    # Read first. The update is a COALESCE of whatever was sent, so without
+    # the old row the log could only repeat what the caller already knew.
+    was = db.execute(text("""
+        SELECT fp.*, a.fleet_code FROM face_plan fp
+          JOIN asset a ON a.asset_id = fp.asset_id
+         WHERE fp.face_plan_id = :id
+    """), {"id": face_plan_id}).mappings().first()
+
     done = db.execute(text("""
         UPDATE face_plan
            SET running_hours   = COALESCE(:hrs, running_hours),
@@ -559,6 +645,14 @@ def edit_face(face_plan_id: int, request: Request, body: dict = Body(...),
            "note": body.get("note")}).first()
     if not done:
         raise HTTPException(404, "That row is not on the plan.")
+    diff = _changed(dict(was or {}), body, ["location", "material", "running_hours", "tippers", "tipper_class_id", "note"])
+    if diff:
+        _event(db, request, "CAPACITY_FACE_CHANGED",
+               asset_id=was["asset_id"] if was else None,
+               day=was["on_date"] if was else None,
+               payload={"fleet_code": was["fleet_code"] if was else None,
+                        "location": was["location"] if was else None,
+                        "changed": diff})
     db.commit()
     return {"ok": True}
 
@@ -567,8 +661,20 @@ def edit_face(face_plan_id: int, request: Request, body: dict = Body(...),
 def drop_face(face_plan_id: int, request: Request,
               db: Session = Depends(get_minehub_db)) -> dict:
     _require(request, MANAGE, "change the capacity plan")
+    was = db.execute(text("""
+        SELECT fp.*, a.fleet_code FROM face_plan fp
+          JOIN asset a ON a.asset_id = fp.asset_id
+         WHERE fp.face_plan_id = :id
+    """), {"id": face_plan_id}).mappings().first()
     db.execute(text("DELETE FROM face_plan WHERE face_plan_id = :id"),
                {"id": face_plan_id})
+    if was:
+        _event(db, request, "CAPACITY_FACE_REMOVED", asset_id=was["asset_id"],
+               day=was["on_date"],
+               payload={"fleet_code": was["fleet_code"],
+                        "location": was["location"], "material": was["material"],
+                        "running_hours": was["running_hours"],
+                        "tippers": was["tippers"]})
     db.commit()
     return {"ok": True}
 
@@ -594,8 +700,152 @@ def copy_day(request: Request, body: dict = Body(...),
           FROM face_plan WHERE on_date = CAST(:frm AS date)
         ON CONFLICT (on_date, asset_id, location, material) DO NOTHING
     """), {"frm": frm, "to": to, "by": _actor(request)}).rowcount
+    _event(db, request, "CAPACITY_DAY_COPIED", day=to,
+           payload={"from_date": frm.isoformat(), "rows": n})
     db.commit()
     return {"ok": True, "copied": n}
+
+
+# Every kind of change this screen can make. Named here rather than matched on
+# a prefix so a new event type has to be added deliberately — a log that
+# silently widens is a log that starts showing things nobody meant it to.
+CAPACITY_EVENTS = [
+    "CAPACITY_FACE_PLANNED", "CAPACITY_FACE_CHANGED", "CAPACITY_FACE_REMOVED",
+    "CAPACITY_DAY_COPIED", "CAPACITY_BUCKET_CHANGED", "CAPACITY_CYCLE_SET",
+    "CAPACITY_CYCLE_CLEARED", "CAPACITY_PLAN_NAME_SET",
+    "CAPACITY_ASSUMPTIONS_CHANGED", "CAPACITY_TRUCK_CLASS_ADDED",
+    "CAPACITY_TRUCK_CLASS_CHANGED",
+]
+
+# What each field is called out loud. "running_hours" is what the column is
+# named; "hours" is what the person who changed it would say.
+_SAID = {
+    "running_hours": "hours", "tippers": "trucks",
+    "tipper_class_id": "kind of truck", "fitted_bucket_cum": "fitted bucket",
+    "location": "place", "material": "material", "note": "note",
+    "fill_factor": "fill factor", "swell_factor": "swell factor",
+    "operating_hours": "operating hours", "ore_t_per_cum": "ore density",
+    "dig_sec": "digging", "lift_sec": "lifting", "swing_sec": "swing",
+    "lower_sec": "lowering", "tilt_sec": "tilting", "wait_sec": "waiting",
+    "unload_sec": "unloading", "return_sec": "return",
+    "payload_t": "payload", "effective_cum": "effective capacity",
+    "loading_min": "loading time", "travel_min": "road time",
+    "is_active": "in use", "label": "name",
+}
+
+
+def _said(field: str) -> str:
+    return _SAID.get(field, field.replace("_", " "))
+
+
+def _sentence(event_type: str, p: dict) -> str:
+    """One line a person can read without knowing the schema."""
+    fleet = p.get("fleet_code") or ""
+    where = p.get("location") or ""
+    at = f" at {where}" if where else ""
+
+    if event_type == "CAPACITY_FACE_PLANNED":
+        return (f"Put {fleet or 'a machine'} on {p.get('location') or 'a face'} "
+                f"for {p.get('material') or 'work'} — {p.get('running_hours')} "
+                f"hours, {p.get('tippers')} trucks")
+    if event_type == "CAPACITY_FACE_REMOVED":
+        return (f"Took {fleet} off {where}"
+                f" ({p.get('running_hours')} hours, {p.get('tippers')} trucks)")
+    if event_type == "CAPACITY_DAY_COPIED":
+        return f"Started the day from {p.get('from_date')} — {p.get('rows')} rows"
+    if event_type == "CAPACITY_CYCLE_SET":
+        return f"Gave {fleet or 'a machine'} its own cycle: {p.get('reason') or ''}"
+    if event_type == "CAPACITY_CYCLE_CLEARED":
+        return f"Put {fleet or 'a machine'} back on the shared cycle"
+    if event_type == "CAPACITY_PLAN_NAME_SET":
+        if p.get("cleared"):
+            return "Cleared what the plan calls this machine"
+        taken = p.get("taken_from")
+        return (f"The plan calls this machine {p.get('plan_name')}"
+                + (f", taken from {taken}" if taken else ""))
+    if event_type == "CAPACITY_TRUCK_CLASS_ADDED":
+        return (f"Added a kind of truck: {p.get('label') or p.get('code')} — "
+                f"{p.get('payload_t')} t, {p.get('effective_cum')} Cum")
+    if event_type == "CAPACITY_BUCKET_CHANGED":
+        pair = p.get("fitted_bucket_cum") or [None, None]
+        was, now = pair[0], pair[1] if len(pair) > 1 else None
+        if now is None:
+            return (f"{fleet or 'A machine'} is back on its standard bucket"
+                    f" ({p.get('standard_bucket')} Cum)")
+        return f"Fitted bucket on {fleet or 'a machine'}: {was or '—'} to {now} Cum"
+
+    # Everything that carries a diff reads the same way, so a new one needs no
+    # new sentence here.
+    changed = p.get("changed") or {}
+    if changed:
+        parts = [f"{_said(k)} {v[0]} to {v[1]}" for k, v in changed.items()
+                 if isinstance(v, list) and len(v) == 2]
+        head = {"CAPACITY_FACE_CHANGED": f"{fleet}{at}",
+                "CAPACITY_ASSUMPTIONS_CHANGED": "The model",
+                "CAPACITY_TRUCK_CLASS_CHANGED": p.get("code") or "A kind of truck",
+                }.get(event_type, "Changed")
+        return f"{head}: " + ", ".join(parts) if parts else f"{head} changed"
+    return event_type.replace("CAPACITY_", "").replace("_", " ").lower()
+
+
+@router.get("/activity")
+def activity(request: Request, days: int = Query(30, ge=1, le=365),
+             asset_id: int | None = Query(None),
+             limit: int = Query(200, ge=1, le=1000),
+             db: Session = Depends(get_minehub_db)) -> list[dict]:
+    """Every change to the capacity plan, newest first.
+
+    Read from the event log rather than from the rows. The rows say what the
+    plan is now; they cannot say who typed it, when, or what it said before —
+    and "who put four trucks on the Sany" is a question about people.
+
+    The events are narrowed to this screen's own kinds first, in their own
+    step, before anything is joined or cast. The roster does the same thing for
+    the same reason: a payload from some other adapter holding a word where
+    this expects a number would otherwise fail the whole query.
+    """
+    _require(request, VIEW, "see the capacity plan")
+
+    rows = db.execute(text("""
+        WITH mine AS (
+            SELECT e.event_id, e.event_type, e.occurred_at, e.recorded_by,
+                   e.asset_id, e.production_day, e.payload
+              FROM event e
+             WHERE e.event_type = ANY(:types)
+               AND e.occurred_at > now() - make_interval(days => :days)
+        )
+        SELECT m.event_id, m.event_type, m.occurred_at, m.recorded_by,
+               m.asset_id, m.production_day, m.payload,
+               a.fleet_code, a.nickname
+          FROM mine m
+          LEFT JOIN asset a ON a.asset_id = m.asset_id
+         WHERE (CAST(:aid AS bigint) IS NULL
+                OR m.asset_id = CAST(:aid AS bigint))
+         ORDER BY m.occurred_at DESC
+         LIMIT :lim
+    """), {"types": CAPACITY_EVENTS, "days": days, "aid": asset_id,
+           "lim": limit}).mappings().all()
+
+    out = []
+    for r in rows:
+        payload = dict(r["payload"] or {})
+        # The machine's real fleet code beats whatever was in the payload when
+        # the event was written: a machine can be renamed, and the log should
+        # read as the register reads today.
+        if r["fleet_code"]:
+            payload["fleet_code"] = r["fleet_code"]
+        out.append({
+            "event_id": str(r["event_id"]),
+            "event_type": r["event_type"],
+            "occurred_at": r["occurred_at"],
+            "by": r["recorded_by"],
+            "asset_id": r["asset_id"],
+            "fleet_code": r["fleet_code"],
+            "on_date": r["production_day"],
+            "said": _sentence(r["event_type"], payload),
+            "payload": payload,
+        })
+    return out
 
 
 @router.get("/data-quality")
