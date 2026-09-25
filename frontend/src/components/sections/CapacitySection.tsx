@@ -34,6 +34,7 @@ import {
   inputClass, type Tone,
 } from "@/components/minehub/ui";
 import SearchSelect from "@/components/minehub/SearchSelect";
+import Combobox from "@/components/minehub/Combobox";
 
 interface Face {
   face_plan_id: number; asset_id: number; fleet_code: string;
@@ -69,6 +70,8 @@ interface Machine {
   cycle_sec: number; cycles_per_hour: number; cum_per_scoop: number;
   cum_per_hour: number; cycle_is_overridden: boolean;
   override_reason: string | null; needs_bucket: boolean;
+  /** Why this machine cannot be planned, in words. */
+  bucket_problem: string | null;
 }
 interface Assumptions {
   productivity_assumption_id: number;
@@ -79,7 +82,8 @@ interface Assumptions {
   cycle_sec: number; cycles_per_hour: number; overrides: number;
 }
 interface Quality {
-  no_bucket: { fleet_code: string; nickname: string | null; ownership: string | null }[];
+  no_bucket: { fleet_code: string; nickname: string | null;
+    ownership: string | null; problem: string | null }[];
   same_machine_twice: { ex: string; rows: { asset_id: number; fleet_code: string;
     nickname: string | null; make: string | null }[] }[];
   not_in_the_plan: { fleet_code: string; nickname: string | null }[];
@@ -125,6 +129,13 @@ export default function CapacitySection() {
   const [addingClass, setAddingClass] = useState(false);
   const [editingFace, setEditingFace] = useState<Face | null>(null);
   const [log, setLog] = useState<Activity[]>([]);
+  // What the mine has actually called its faces and its materials before.
+  // Offered, not enforced: a place list that did not already hold
+  // "Stack Yard / LG Dump / ETP" would make the planner choose between the
+  // truth and the dropdown. But having them there stops "North East" and
+  // "North-East" quietly becoming two places.
+  const [known, setKnown] = useState<{ locations: string[]; materials: string[] }>(
+    { locations: [], materials: [] });
   const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -143,6 +154,8 @@ export default function CapacitySection() {
       setFaces(p.data?.faces ?? []);
       setSummary(p.data?.summary ?? null);
       setClasses(p.data?.tipper_classes ?? []);
+      setKnown({ locations: p.data?.known_locations ?? [],
+                 materials: p.data?.known_materials ?? [] });
       setMachines(m.data ?? []);
       setModel(a.data ?? null);
       setQuality(q.data ?? null);
@@ -349,8 +362,15 @@ export default function CapacitySection() {
                   {quality.no_bucket.length === 1 ? " has" : "s have"} no bucket recorded
                 </span>
                 <span className="text-txt-muted">
-                  {" — "}{quality.no_bucket.slice(0, 6).map((m) => m.fleet_code).join(", ")}
-                  {quality.no_bucket.length > 6 && ` and ${quality.no_bucket.length - 6} more`}.
+                  {" — "}
+                  {quality.no_bucket.slice(0, 4).map((m) => (
+                    <span key={m.fleet_code}>
+                      {m.fleet_code}
+                      {m.problem ? ` (${m.problem})` : ""}
+                      {"; "}
+                    </span>
+                  ))}
+                  {quality.no_bucket.length > 4 && `and ${quality.no_bucket.length - 4} more. `}
                   They can be planned for nothing until somebody says.
                 </span>
               </div>
@@ -541,7 +561,7 @@ export default function CapacitySection() {
       )}
 
       {(adding || editingFace) && (
-        <AddFace day={day} machines={machines} classes={classes}
+        <AddFace day={day} machines={machines} classes={classes} known={known}
           face={editingFace}
           onClose={() => { setAdding(false); setEditingFace(null); }}
           onSaved={() => { setAdding(false); setEditingFace(null); void load(); }} />
@@ -645,7 +665,9 @@ function MachinesTab({ machines, onBucket, onCycle, onPlanName, busy }: {
                 </Td>
                 <Td className="text-right text-[12px]">
                   {m.needs_bucket
-                    ? <span className="text-amber text-[11px]">no bucket recorded</span>
+                    ? <span className="text-amber text-[11px]" title={m.bucket_problem ?? ""}>
+                        {m.bucket_problem ?? "no bucket recorded"}
+                      </span>
                     : <Cum v={m.cum_per_hour} bold />}
                 </Td>
                 <Td className="text-right">
@@ -1176,8 +1198,9 @@ function AddTipperClass({ onClose, onSaved }: {
 
 /* ── putting a machine on a face ───────────────────────────────────────── */
 
-function AddFace({ day, machines, classes, face, onClose, onSaved }: {
+function AddFace({ day, machines, classes, known, face, onClose, onSaved }: {
   day: string; machines: Machine[]; classes: TipperClass[];
+  known: { locations: string[]; materials: string[] };
   /** The row being corrected, or null to put a new machine on a face. */
   face?: Face | null;
   onClose: () => void; onSaved: () => void;
@@ -1246,21 +1269,25 @@ function AddFace({ day, machines, classes, face, onClose, onSaved }: {
             )}
           </label>
           <div className="grid sm:grid-cols-2 gap-3">
+            {/* Chosen from what the mine has said before, or typed if this
+                face is new. Combobox already does exactly this job for the
+                equipment and operator registers, so it does it here too
+                rather than a third control being invented. */}
             <label className="block">
               <span className="block text-[11px] font-semibold text-txt-secondary mb-1">
                 Where
               </span>
-              <input className={inputClass} value={f.location}
-                placeholder="Bottom, North East, Stack Yard…"
-                onChange={(e) => setF({ ...f, location: e.target.value })} />
+              <Combobox value={f.location} placeholder="Bottom, North East, Stack Yard…"
+                options={known.locations.map((v) => ({ value: v }))}
+                onChange={(v) => setF({ ...f, location: v })} />
             </label>
             <label className="block">
               <span className="block text-[11px] font-semibold text-txt-secondary mb-1">
                 What
               </span>
-              <input className={inputClass} value={f.material}
-                placeholder="Ore, OB, Rehandling…"
-                onChange={(e) => setF({ ...f, material: e.target.value })} />
+              <Combobox value={f.material} placeholder="Ore, OB, Rehandling…"
+                options={known.materials.map((v) => ({ value: v }))}
+                onChange={(v) => setF({ ...f, material: v })} />
             </label>
             <label className="block">
               <span className="block text-[11px] font-semibold text-txt-secondary mb-1">
@@ -1279,18 +1306,42 @@ function AddFace({ day, machines, classes, face, onClose, onSaved }: {
                 onChange={(e) => setF({ ...f, tippers: e.target.value })} />
             </label>
           </div>
-          <label className="block">
+          {/* Two or three options, all of them visible: a dropdown here hid
+              the thing being compared. What a truck carries a day is the
+              number the choice is actually made on, so it is on the option
+              rather than behind it. */}
+          <div>
             <span className="block text-[11px] font-semibold text-txt-secondary mb-1">
               Kind of truck
             </span>
-            <SearchSelect field value={f.tipper_class_id}
-              onChange={(v) => setF({ ...f, tipper_class_id: v })}
-              options={classes.map((c) => ({
-                value: String(c.tipper_class_id), label: c.label,
-                hint: `${c.effective_cum} Cum a trip`,
-                meta: <span className="text-txt-light">{c.cum_per_day} Cum/day</span>,
-              }))} />
-          </label>
+            <div className="flex flex-wrap gap-2">
+              {classes.map((c) => {
+                const on = f.tipper_class_id === String(c.tipper_class_id);
+                return (
+                  <label key={c.tipper_class_id}
+                    className={`flex-1 min-w-[150px] cursor-pointer rounded-lg border
+                                px-3 py-2 transition-colors ${
+                      on ? "border-gold bg-gold/[0.07]"
+                         : "border-border hover:border-slate-300"}`}>
+                    <span className="flex items-center gap-2">
+                      <input type="radio" name="tipper-class"
+                        checked={on} className="accent-navy cursor-pointer"
+                        onChange={() => setF({
+                          ...f, tipper_class_id: String(c.tipper_class_id) })} />
+                      <span className={`text-[12.5px] font-semibold ${
+                        on ? "text-navy" : "text-txt-secondary"}`}>{c.label}</span>
+                    </span>
+                    <span className="block text-[10.5px] text-txt-light mt-0.5 pl-6">
+                      {c.payload_t} t · {c.effective_cum} Cum a trip ·{" "}
+                      <span className="font-semibold text-txt-muted">
+                        {c.cum_per_day} Cum/day
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
         </div>
         <div className="px-5 py-3 border-t border-border-light flex justify-end gap-2">
           <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>

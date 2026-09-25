@@ -103,6 +103,48 @@ def _assumptions(db: Session) -> dict:
     return dict(row)
 
 
+# A bucket is in cubic metres or it is not a bucket. asset.capacity is a
+# general-purpose number — six excavators hold engine power in it, with HP in
+# capacity_uom — and reading it without its unit turned 320 horsepower into a
+# 320 cubic metre bucket and 9,216 Cum an hour.
+#
+# Spelled loosely on purpose: the register holds CUM, and an import that
+# writes "Cum" or "m3" tomorrow should not silently put a machine back to
+# having no bucket.
+BUCKET_UOM = {"CUM", "M3", "M^3", "CU.M", "CUM.", "CBM"}
+
+# And a sanity bound, because a unit can be missing as easily as it can be
+# wrong. The largest mining shovels in the world are around 60 cubic metres
+# and nothing at Kaliapani is close, so anything above this is a number that
+# wandered in from another column.
+MAX_SANE_BUCKET_CUM = 50.0
+
+
+def _bucket_of(o: dict) -> tuple[float, bool, str | None]:
+    """The bucket to plan this machine with, and why, if there is none.
+
+    Returns (cum, is_fitted, problem). A fitted bucket always wins: it is
+    entered on this screen, in cubic metres, by somebody saying what is on the
+    machine now.
+    """
+    fitted = o.get("fitted_bucket_cum")
+    if fitted is not None:
+        return float(fitted), True, None
+
+    standard = o.get("standard_bucket")
+    if standard is None:
+        return 0.0, False, "no bucket recorded"
+
+    uom = (o.get("capacity_uom") or "").strip().upper()
+    if uom and uom not in BUCKET_UOM:
+        return 0.0, False, f"the register holds {standard:g} {uom}, which is not a bucket"
+    if float(standard) > MAX_SANE_BUCKET_CUM:
+        return 0.0, False, f"{standard:g} is too large to be a bucket"
+    if float(standard) <= 0:
+        return 0.0, False, "the recorded bucket is zero"
+    return float(standard), False, None
+
+
 def _cycle_for(a: dict, o: dict | None) -> tuple[Cycle, float, float, bool]:
     """The cycle this machine actually runs: the shared row, with any override.
 
@@ -207,9 +249,9 @@ def machines(request: Request, db: Session = Depends(get_minehub_db)) -> list[di
     for r in rows:
         o = dict(r)
         cycle, fill, swell, overridden = _cycle_for(a, o)
+        bucket, is_fitted, problem = _bucket_of(o)
         fitted = o["fitted_bucket_cum"]
         standard = o["standard_bucket"]
-        bucket = float(fitted if fitted is not None else (standard or 0))
         per_scoop = bucket * fill * swell
         out.append({
             "asset_id": o["asset_id"], "fleet_code": o["fleet_code"],
@@ -220,7 +262,10 @@ def machines(request: Request, db: Session = Depends(get_minehub_db)) -> list[di
             "fitted_bucket_cum": float(fitted) if fitted is not None else None,
             "fitted_bucket_since": o["fitted_bucket_since"],
             "bucket_used": bucket or None,
-            "bucket_is_fitted": fitted is not None,
+            "bucket_is_fitted": is_fitted,
+            # Why this machine cannot be planned, in words, rather than a
+            # figure worked out from a number that is not a bucket.
+            "bucket_problem": problem,
             "fill_factor": fill, "swell_factor": swell,
             "cycle_sec": cycle.total_sec,
             "cycles_per_hour": round(cycle.per_hour, 4),
@@ -228,8 +273,8 @@ def machines(request: Request, db: Session = Depends(get_minehub_db)) -> list[di
             "cum_per_hour": round(cycle.per_hour * per_scoop, 3),
             "cycle_is_overridden": overridden,
             "override_reason": o["override_reason"],
-            # A machine with no bucket recorded cannot be planned, and saying
-            # so on the row is better than showing it as capable of nothing.
+            # A machine with no usable bucket cannot be planned, and saying so
+            # on the row is better than a figure derived from the wrong column.
             "needs_bucket": bucket <= 0,
         })
     return out
@@ -506,7 +551,7 @@ def plan(request: Request, on: str | None = Query(None),
         SELECT fp.face_plan_id, fp.asset_id, fp.location, fp.material,
                fp.running_hours, fp.tippers, fp.tipper_class_id, fp.note,
                a.fleet_code, a.nickname, a.capacity AS standard_bucket,
-               a.fitted_bucket_cum,
+               a.capacity_uom, a.fitted_bucket_cum,
                (SELECT i.external_code FROM asset_identity i
                  WHERE i.asset_id = a.asset_id AND i.system = 'BUSINESS_PLAN'
                  LIMIT 1) AS plan_name,
@@ -524,8 +569,7 @@ def plan(request: Request, on: str | None = Query(None),
     for r in rows:
         o = dict(r)
         cycle, fill, swell, overridden = _cycle_for(a, o)
-        fitted, standard = o["fitted_bucket_cum"], o["standard_bucket"]
-        bucket = float(fitted if fitted is not None else (standard or 0))
+        bucket, is_fitted, _problem = _bucket_of(o)
         cls = classes.get(o["tipper_class_id"]) or default_class
         faces.append(Face(
             face_plan_id=o["face_plan_id"], asset_id=o["asset_id"],
@@ -533,7 +577,7 @@ def plan(request: Request, on: str | None = Query(None),
             location=o["location"], material=o["material"],
             running_hours=float(o["running_hours"]), tippers=int(o["tippers"]),
             tipper_class=cls["code"] if cls else None,
-            bucket_cum=bucket, bucket_is_fitted=fitted is not None,
+            bucket_cum=bucket, bucket_is_fitted=is_fitted,
             cycle=cycle, fill_factor=fill, swell_factor=swell,
             cycle_is_overridden=overridden,
             per_tipper_cum_day=cls["cum_per_day"] if cls else 0.0,
@@ -575,6 +619,22 @@ def plan(request: Request, on: str | None = Query(None),
             "ore_mt": round(s.ore_mt, 2),
         },
         "tipper_classes": list(classes.values()),
+        # What has been typed into these before, so the next person picks
+        # rather than retypes. Free text stays free — a location master that
+        # did not already hold "Stack Yard / LG Dump / ETP" would force the
+        # planner to choose between the truth and the dropdown — but a list of
+        # what the mine actually calls its faces stops "North East" and
+        # "North-East" becoming two places.
+        "known_locations": [r[0] for r in db.execute(text("""
+            SELECT DISTINCT location FROM face_plan
+             WHERE location IS NOT NULL AND btrim(location) <> ''
+             ORDER BY location
+        """)).all()],
+        "known_materials": [r[0] for r in db.execute(text("""
+            SELECT DISTINCT material FROM face_plan
+             WHERE material IS NOT NULL AND btrim(material) <> ''
+             ORDER BY material
+        """)).all()],
     }
 
 
@@ -859,14 +919,22 @@ def data_quality(request: Request, db: Session = Depends(get_minehub_db)) -> dic
     """
     _require(request, VIEW, "see the capacity plan")
 
-    no_bucket = db.execute(text("""
-        SELECT a.fleet_code, a.nickname, a.ownership
+    # Asked through the same reading the rest of the screen uses, so the panel
+    # cannot disagree with the table above it.
+    no_bucket = []
+    for r in db.execute(text("""
+        SELECT a.fleet_code, a.nickname, a.ownership, a.capacity AS standard_bucket,
+               a.capacity_uom, a.fitted_bucket_cum
           FROM asset a JOIN asset_type t ON t.asset_type_id = a.asset_type_id
          WHERE t.name ILIKE '%%excavat%%'
            AND a.status NOT IN ('DISPOSED','SCRAPPED','CANNIBALISED')
-           AND a.capacity IS NULL AND a.fitted_bucket_cum IS NULL
          ORDER BY a.fleet_code
-    """)).mappings().all()
+    """)).mappings().all():
+        _cum, _fit, problem = _bucket_of(dict(r))
+        if problem:
+            no_bucket.append({"fleet_code": r["fleet_code"],
+                              "nickname": r["nickname"],
+                              "ownership": r["ownership"], "problem": problem})
 
     # Two rows describing one machine: a bare EX-n beside one whose nickname
     # names the same number. Reported, not merged — which row survives is a

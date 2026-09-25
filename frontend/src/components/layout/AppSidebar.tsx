@@ -28,7 +28,6 @@ type NavItem =
 
 const NAV_ITEMS: NavItem[] = [
   { kind: "page", id: "mis",             label: "MIS Dashboard",              icon: LayoutDashboard },
-  { kind: "page", id: "capacity",        label: "Capacity",                   icon: Gauge           },
   { kind: "page", id: "weather",         label: "Weather Forecast",           icon: CloudSun        },
   { kind: "page", id: "oee",             label: "OEE / LCM",                  icon: Activity        },
   { kind: "page", id: "intelligence",    label: "Intelligence",               icon: Sparkles        },
@@ -56,6 +55,12 @@ const PLATFORM_ITEM: NavItem =
   // The id stays "minehub": roles are granted against it and the router
   // switches on it. Only what people read changes.
   { kind: "page", id: "minehub", label: "Equipment 360", icon: Boxes };
+
+const CAPACITY_ITEM: NavItem =
+  // Between the machines and the people, because it is about both: what the
+  // fleet can move depends on the buckets in Equipment 360 and the crews in
+  // Manpower.
+  { kind: "page", id: "capacity", label: "Capacity", icon: Gauge };
 
 const MANPOWER_ITEM: NavItem =
   { kind: "page", id: "manpower", label: "Manpower", icon: Users };
@@ -112,6 +117,7 @@ export default function AppSidebar() {
     // learn to scroll past.
     ...(canOpen(user, "organisation") ? [ORG_ITEM] : []),
     ...(canOpen(user, "minehub") ? [PLATFORM_ITEM] : []),
+    ...(canOpen(user, "capacity") ? [CAPACITY_ITEM] : []),
     ...(canOpen(user, "manpower") ? [MANPOWER_ITEM] : []),
     ...(canOpen(user, "gate") ? [GATE_ITEM] : []),
     ...(canOpen(user, "weighbridge") ? [WEIGHBRIDGE_ITEM] : []),

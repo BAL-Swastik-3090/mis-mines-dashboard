@@ -97,6 +97,10 @@ const LANDING_RANK: Record<AppPage, number> = {
   // held against a department, so the department is the thing to see first.
   "organisation": 55,
   "minehub": 60,
+  // Between the machines and the people. It is about both — what the fleet
+  // can move depends on the buckets in Equipment 360 and the crews in
+  // Manpower — so it belongs where somebody would look for it.
+  "capacity": 62,
   "manpower": 65,
   // With the operational screens, not the registers: the weighbridge is
   // run all shift by the person sitting at it.
@@ -104,9 +108,6 @@ const LANDING_RANK: Record<AppPage, number> = {
   "weighbridge": 68,
   "operations": 70,
   "workforce": 80,
-  // Next to the roster: both answer "what can we do tomorrow", one about
-  // people and one about machines.
-  "capacity": 82,
   // Below the dashboards on purpose: it is open to everyone, so ranking it
   // first would land every user on the weather map instead of their own work.
   "weather": 85,
