@@ -60,6 +60,47 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ---
 
+## Deployed — 2026-09-25 (third): off the rolls, said out loud
+
+Released commit `70052cd` (branch `release-25-09-2026`) to mines.balasorealloys.in.
+Backup: `~/mines_dashboard-backup-20260925-1300.tar.gz`.
+
+**What changed**
+
+- The Manpower bar says "7 off the rolls", and saying it is the button. A
+  filter is somewhere you look when you already know what you want; nobody
+  opens one to find out whether anything is behind it.
+- `/operators/summary` takes the same `standing` and every count in it follows
+  the population being shown. The tiles counted the whole table, so with the
+  register at 204 they still described 211 — and "Awaiting approval" could be
+  answered by approving the paperwork of somebody who retired in February.
+- The crew of a machine, on "Who runs what" and in its export, now excludes
+  anybody off the rolls. No assignment is held by one of the seven today, so
+  nothing changed on screen, but an assignment left open when a man retires
+  would have kept him named on the tipper.
+
+**Audited all 39 queries that list people.** The pickers were already sound —
+the roster, the shift board's deploy list, the assessment panel and the "who
+can run what" candidates all filter on ACTIVE. The queries that do not filter
+read a record back (a shift plan, a HOTO, a completed trip) and are right to
+name whoever was on it; history does not change when somebody retires.
+
+Verified inside the production container:
+`ON_ROLL 204 · OFF_ROLL 7 · ALL 211`, and the new bundle is the one served.
+
+### A STALE BUNDLE LOOKS LIKE A MISSING FEATURE
+
+After the previous release the standing control appeared to be absent from the
+bar, while the count beside it had correctly changed from 211 to 204. Both
+facts were true at once because the filter is in the BACKEND: a browser still
+running yesterday's JavaScript sends no `standing`, gets the default, and
+displays the new number through the old UI.
+
+So when a change is half-visible after a deploy, check whether the visible half
+comes from the API before looking for a bug. A hard reload settles it.
+
+---
+
 ## Deployed — 2026-09-25 (second): the register is who works here
 
 Released commit `539895c` (branch `release-25-09-2026`) to mines.balasorealloys.in.
