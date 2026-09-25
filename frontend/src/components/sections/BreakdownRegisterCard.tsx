@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { useWhyWhyRegister } from "@/hooks/useInsights";
 import { formatIndian } from "@/lib/utils";
+import { useExporting } from "@/contexts/useExportMode";
 import type { WhyWhyRegisterRow } from "@/types";
 
 /**
@@ -34,8 +35,10 @@ const CAUSE_FALLBACK = "bg-bg-subtle text-txt-muted";
 const PAGE = 25;
 
 function Row({ r }: { r: WhyWhyRegisterRow }) {
+  const exporting = useExporting();
   const [open, setOpen] = useState(false);
   const hasWhy = r.why.length > 0;
+  const expanded = exporting || open;
 
   return (
     <div className="border-b border-border-light last:border-b-0">
@@ -46,7 +49,7 @@ function Row({ r }: { r: WhyWhyRegisterRow }) {
         <ChevronRight
           size={13}
           className={`mt-[3px] shrink-0 transition-transform ${
-            open ? "rotate-90 text-navy" : "text-txt-muted"
+            expanded ? "rotate-90 text-navy" : "text-txt-muted"
           } ${hasWhy ? "" : "opacity-30"}`}
         />
         <span className="w-[86px] shrink-0 font-mono text-[11.5px] text-txt-muted">
@@ -77,7 +80,7 @@ function Row({ r }: { r: WhyWhyRegisterRow }) {
         </span>
       </button>
 
-      {open ? (
+      {expanded ? (
         <div className="px-1 pb-3 pl-[22px]">
           <div className="rounded-lg border border-border bg-bg-subtle/40 px-3.5 py-3">
             <div className="flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-txt-muted">
@@ -128,8 +131,13 @@ function Row({ r }: { r: WhyWhyRegisterRow }) {
 }
 
 export default function BreakdownRegisterCard() {
-  const [opened, setOpened] = useState(false);
-  const { data, isLoading, isFetching } = useWhyWhyRegister(opened);
+  // Every row, unpaged, when the page is being captured — a register exported
+  // 25 rows deep out of 345 is worse than no register.
+  const exporting = useExporting();
+  // Loaded with the section. It was behind a button because it is ~220 KB and
+  // that felt worth a click; in use the click was pure friction — the register
+  // is the thing people came to read.
+  const { data, isLoading, isFetching } = useWhyWhyRegister(true);
   const [q, setQ] = useState("");
   const [machine, setMachine] = useState("");
   const [cause, setCause] = useState("");
@@ -158,7 +166,7 @@ export default function BreakdownRegisterCard() {
     });
   }, [data, q, machine, cause, onlyWhy]);
 
-  const shown = rows.slice(0, page * PAGE);
+  const shown = exporting ? rows : rows.slice(0, page * PAGE);
   const filtered = Boolean(q || machine || cause || onlyWhy);
 
   const reset = () => {
@@ -180,21 +188,7 @@ export default function BreakdownRegisterCard() {
       </div>
 
       <div className="px-4 py-3">
-        {!opened ? (
-          <div className="flex flex-col items-center gap-2.5 py-5">
-            <p className="max-w-xl text-center text-[12px] leading-relaxed text-txt-muted">
-              Every breakdown in the selected period, with the cause recorded
-              against it and the 5-Why the maintenance team wrote. Searchable,
-              and the place to check any figure above against its own rows.
-            </p>
-            <button
-              onClick={() => setOpened(true)}
-              className="flex items-center gap-1.5 rounded-md bg-navy px-3.5 py-1.5 text-[12px] font-semibold text-white hover:bg-navy/90"
-            >
-              <ListTree size={13} /> Open the register
-            </button>
-          </div>
-        ) : isLoading ? (
+        {isLoading ? (
           <div className="flex items-center justify-center gap-2 py-8 text-[12.5px] text-txt-muted">
             <RefreshCw size={14} className="animate-spin" /> Loading the register…
           </div>
@@ -266,7 +260,7 @@ export default function BreakdownRegisterCard() {
               {shown.map((r) => <Row key={r.id} r={r} />)}
             </div>
 
-            {shown.length < rows.length ? (
+            {shown.length < rows.length && !exporting ? (
               <button
                 onClick={() => setPage(page + 1)}
                 className="mt-2.5 w-full rounded border border-border py-1.5 text-[12px] font-semibold text-navy hover:bg-bg-subtle"

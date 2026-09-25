@@ -3,6 +3,16 @@ export interface DownloadDashboardOptions {
   dateRange: string;
   /** Short period tag, e.g. "MTD" | "YTD" | "TODAY" */
   periodLabel: string;
+  /**
+   * What to export. Omitted, it takes the whole page, which is what the MIS
+   * tab bar has always done. A selector lets a page export one section — the
+   * same snapshot machinery, a smaller root.
+   */
+  rootSelector?: string;
+  /** Names the export in the banner and the filename. */
+  title?: string;
+  /** Filename stem; the date is appended. Defaults from the title. */
+  fileStem?: string;
 }
 
 /**
@@ -12,9 +22,14 @@ export interface DownloadDashboardOptions {
  * - Adds a branded export header with date range
  */
 export async function downloadDashboard(opts: DownloadDashboardOptions): Promise<void> {
-  const { dateRange, periodLabel } = opts;
+  const {
+    dateRange, periodLabel,
+    rootSelector = "main > div",
+    title = "MIS Dashboard",
+    fileStem = "mines-dashboard",
+  } = opts;
   // ── 1. Locate the live content element ──────────────────────
-  const contentEl = document.querySelector("main > div") as HTMLElement | null;
+  const contentEl = document.querySelector(rootSelector) as HTMLElement | null;
   if (!contentEl) return;
 
   // ── 2. Deep-clone so we never mutate the live DOM ───────────
@@ -65,7 +80,7 @@ export async function downloadDashboard(opts: DownloadDashboardOptions): Promise
   const dateStr  = now.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
   const timeStr  = `${pad(now.getHours())}:${pad(now.getMinutes())} IST`;
   const fileDate = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-  const filename = `mines-dashboard-${fileDate}.html`;
+  const filename = `${fileStem}-${fileDate}.html`;
 
   // ── 6. Assemble the final HTML document ─────────────────────
   const html = `<!DOCTYPE html>
@@ -73,7 +88,7 @@ export async function downloadDashboard(opts: DownloadDashboardOptions): Promise
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Kaliapani Chromite Mines — MIS Dashboard · ${dateStr}</title>
+  <title>Kaliapani Chromite Mines — ${title} · ${dateStr}</title>
   <style>
 ${css}
   </style>
@@ -87,7 +102,7 @@ ${css}
         Balasore Alloys Limited
       </div>
       <div style="color:#ffffff;font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:800;letter-spacing:.01em;line-height:1.2;">
-        Kaliapani Chromite Mines — MIS Dashboard
+        Kaliapani Chromite Mines — ${title}
       </div>
     </div>
 

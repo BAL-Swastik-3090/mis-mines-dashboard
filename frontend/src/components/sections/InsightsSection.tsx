@@ -1,7 +1,6 @@
 "use client";
-import { useState } from "react";
 import { Brain, RefreshCw, AlertCircle, Droplets, ShieldAlert, Truck, HardHat, CalendarClock, Zap } from "lucide-react";
-import { useInsightsGenerate } from "@/hooks/useInsights";
+import { useInsightsStream } from "@/hooks/useInsightsStream";
 import { useDateFilter } from "@/contexts/useDateFilter";
 
 // ── Markdown-lite renderer (bold, bullets) ────────────────────
@@ -69,11 +68,29 @@ function SkeletonCard({ title, accent, icon }: { title: string; accent: string; 
   );
 }
 
+/** Every field a card reads, so a partial stream renders without guards. */
+const EMPTY_INSIGHTS = {
+  generated_at: "",
+  model_used: "",
+  reality_check_narrative: "",
+  dewatering_observations: "",
+  equipment_cob_status: "",
+  stock_despatch_summary: "",
+  key_risks_and_actions: "",
+  shift_snapshot: "",
+  cached: false,
+} as const;
+
 // ── Main section ──────────────────────────────────────────────
 export default function InsightsSection() {
   const { periodLabel } = useDateFilter();
-  const [triggered, setTriggered] = useState(false);
-  const { data, isLoading, isError, error, refetch, isFetching } = useInsightsGenerate(triggered);
+  // Loads as soon as the section opens rather than waiting for a click. The
+  // query is still cached for 10 minutes, so revisiting the page costs nothing
+  // and only a genuinely new date range calls the gateway again.
+  // Streamed, so neither the ~10-106s of database work nor the ~24s of
+  // generation can hit a request timeout — see useInsightsStream.
+  const { data, partial, phase, isLoading, isError, error, refetch, isFetching } =
+    useInsightsStream(true);
 
   // The backend classifies the failure — gateway down vs bad key vs a model the
   // gateway does not serve. Show that instead of the old hardcoded "may be
@@ -83,14 +100,12 @@ export default function InsightsSection() {
       ?.response?.data?.detail;
 
   const busy = isLoading || isFetching;
+  // One source for the cards: the completed answer if it exists, otherwise the
+  // sections streamed so far. Everything below reads `view` and does not care
+  // which it got.
+  const view = data ?? (partial ? { ...EMPTY_INSIGHTS, ...partial } : null);
 
-  const handleGenerate = () => {
-    if (!triggered) {
-      setTriggered(true);
-    } else {
-      refetch();
-    }
-  };
+  const handleGenerate = () => refetch();
 
   return (
     <section className="space-y-4">
@@ -101,6 +116,8 @@ export default function InsightsSection() {
         Operational Insights · AI Analysis
 
         <span className="ml-auto flex items-center gap-2 normal-case tracking-normal font-normal text-[11px]">
+          {/* Provenance belongs to the finished answer, not a partial one:
+              a half-streamed reply has no generated_at yet. */}
           {data && (
             <span className="text-txt-light font-mono text-[10px] flex items-center gap-1.5">
               {data.cached && (
@@ -117,7 +134,11 @@ export default function InsightsSection() {
             className="flex items-center gap-1.5 bg-accent text-white text-[11px] font-bold px-3 py-1 rounded tracking-wide hover:bg-navy transition-colors disabled:opacity-60"
           >
             <RefreshCw size={11} className={busy ? "animate-spin" : ""} />
-            {busy ? "Generating…" : triggered ? "Regenerate" : "Generate Insights"}
+            {phase === "gathering"
+              ? "Reading data…"
+              : phase === "generating"
+                ? "Writing…"
+                : "Regenerate"}
           </button>
           <span className="bg-navy text-white text-[10px] font-bold px-2 py-0.5 rounded tracking-wider">
             {periodLabel}
@@ -125,25 +146,9 @@ export default function InsightsSection() {
         </span>
       </div>
 
-      {/* Not yet triggered */}
-      {!triggered && (
-        <div className="bg-white border border-border rounded-lg shadow-sm p-8 text-center">
-          <Brain size={32} className="mx-auto text-accent/30 mb-3" />
-          <p className="text-txt-muted text-[13px] mb-1">AI insights are generated on demand</p>
-          <p className="text-txt-light text-[11px] mb-4">
-            Analyses month-end feasibility, 7-day production trends, equipment BD cost impact, revenue projection, dewatering, COB quality, stock and despatch split using Claude. Pre-generated at 7 AM daily.
-          </p>
-          <button
-            onClick={handleGenerate}
-            className="bg-accent text-white text-[12px] font-bold px-5 py-2 rounded hover:bg-navy transition-colors"
-          >
-            Generate Insights
-          </button>
-        </div>
-      )}
-
-      {/* Loading */}
-      {triggered && busy && (
+      {/* Loading — skeletons only until the first words arrive, then the
+          real cards fill in section by section as the model writes them. */}
+      {busy && !partial && (
         <div className="space-y-4">
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
             <SkeletonCard title="Month-End Feasibility Narrative" accent="text-navy" icon={<AlertCircle size={13} />} />
@@ -159,7 +164,7 @@ export default function InsightsSection() {
       )}
 
       {/* Error */}
-      {triggered && isError && !busy && (
+      {isError && !busy && (
         <div className="bg-white border border-danger/30 rounded-lg p-6 text-center">
           <p className="text-danger text-[13px] font-semibold mb-2">Failed to generate insights</p>
           <p className="text-txt-muted text-[11px] mb-3 max-w-[560px] mx-auto leading-relaxed">
@@ -174,30 +179,31 @@ export default function InsightsSection() {
         </div>
       )}
 
-      {/* Results */}
-      {triggered && data && !busy && (
+      {/* Results — `view` is the finished response, or the partial one still
+          arriving, so the same cards render in both states. */}
+      {view && (
         <div className="space-y-4">
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
             <InsightCard icon={<AlertCircle size={13} className="text-navy" />} title="Month-End Feasibility Narrative" accent="text-navy">
-              <Prose text={data.reality_check_narrative} />
+              <Prose text={view.reality_check_narrative} />
             </InsightCard>
             <InsightCard icon={<Droplets size={13} className="text-accent" />} title="Critical Observations — Dewatering" accent="text-accent">
-              <Prose text={data.dewatering_observations} />
+              <Prose text={view.dewatering_observations} />
             </InsightCard>
             <InsightCard icon={<HardHat size={13} className="text-warning" />} title="Equipment & COB Plant Status" accent="text-warning">
-              <Prose text={data.equipment_cob_status} />
+              <Prose text={view.equipment_cob_status} />
             </InsightCard>
           </div>
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
             <InsightCard icon={<Truck size={13} className="text-success" />} title="Stock, Despatch & Revenue" accent="text-success">
-              <Prose text={data.stock_despatch_summary} />
+              <Prose text={view.stock_despatch_summary} />
             </InsightCard>
             <InsightCard icon={<ShieldAlert size={13} className="text-danger" />} title="Key Risks & Recommended Actions" accent="text-danger">
-              <Prose text={data.key_risks_and_actions} />
+              <Prose text={view.key_risks_and_actions} />
             </InsightCard>
-            {data.shift_snapshot && (
+            {view.shift_snapshot && (
               <InsightCard icon={<CalendarClock size={13} className="text-purple-600" />} title="Today vs Yesterday Snapshot" accent="text-purple-600">
-                <Prose text={data.shift_snapshot} />
+                <Prose text={view.shift_snapshot} />
               </InsightCard>
             )}
           </div>

@@ -13,10 +13,15 @@ Enhancements active:
   #6  Scheduled digest — cached result served until next refresh
   #1  Today vs Yesterday comparison (shift proxy)
 """
-from datetime import date, datetime, timedelta
+import asyncio
 import calendar
-import re
 import json
+import logging
+import re
+from datetime import date, datetime, timedelta
+from typing import AsyncIterator
+
+import httpx
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
@@ -38,6 +43,9 @@ _insights_cache: dict[str, dict] = {}
 
 
 # ── helpers ────────────────────────────────────────────────────
+
+logger = logging.getLogger(__name__)
+
 
 def _f(v) -> float:
     return float(v or 0)
@@ -691,19 +699,19 @@ def classify_llm_error(e: Exception, model: str, base_url: str) -> str:
     return f"{name}: {msg}"
 
 
-async def generate_insights(
-    db: Session, from_date: date, to_date: date,
-    use_cache: bool = True,
-) -> InsightsResponse:
-    settings = get_settings()
+def build_insights_context(db: Session, from_date: date, to_date: date) -> str:
+    """Everything the model is told, assembled from the database.
 
-    # ── check cache first (Enhancement #6) ──────────────────
-    cache_key = f"insights:{to_date}"
-    if use_cache:
-        cached = get_cached_insights(cache_key)
-        if cached:
-            return InsightsResponse(**{**cached, "cached": True})
+    Pulled out of generate_insights so the streaming path builds the identical
+    prompt rather than a parallel one that could drift from it.
 
+    The prompt does NOT grow with the date range: the daily-row queries are
+    capped (LIMIT 12 on production, LIMIT 10 on dewatering, a 7-day trend
+    window), so a five-month filter sends the same payload as a two-week one.
+    Generation time is therefore a function of max_tokens, not of how much data
+    the user selected — which is why a bigger window never made this slower and
+    why the old 25s ceiling failed at every window size equally.
+    """
     # ── gather data ──────────────────────────────────────────
     first, last = _month_bounds(to_date)
     total_days  = (last - first).days + 1
@@ -913,11 +921,195 @@ Format your response EXACTLY as:
 [2-3 sentences]
 """
 
+    return context
+
+
+# ── section markers the model is asked to emit ───────────────────────────────
+_SECTION_MARKERS = [
+    ("reality_check_narrative", "---SECTION1---", "---SECTION2---"),
+    ("dewatering_observations", "---SECTION2---", "---SECTION3---"),
+    ("equipment_cob_status",    "---SECTION3---", "---SECTION4---"),
+    ("stock_despatch_summary",  "---SECTION4---", "---SECTION5---"),
+    ("key_risks_and_actions",   "---SECTION5---", "---SECTION6---"),
+    ("shift_snapshot",          "---SECTION6---", "---END---"),
+]
+
+
+def parse_insight_sections(raw: str) -> dict[str, str]:
+    """Split the model's reply on its markers.
+
+    Tolerates a missing trailing marker, which is what a partially streamed
+    reply looks like: the last section simply runs to the end of what has
+    arrived so far. That is what makes the same function usable for rendering
+    mid-stream and for the finished result.
+    """
+    out: dict[str, str] = {}
+    for key, start_m, end_m in _SECTION_MARKERS:
+        start = raw.find(start_m)
+        if start == -1:
+            out[key] = ""
+            continue
+        start += len(start_m)
+        end = raw.find(end_m, start)
+        out[key] = (raw[start:end] if end != -1 else raw[start:]).strip()
+    return out
+
+
+def assemble_insights(raw: str, model: str) -> InsightsResponse:
+    """The parsed reply as the response the UI already knows how to render."""
+    sec = parse_insight_sections(raw)
+    return InsightsResponse(
+        generated_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
+        model_used=model,
+        # Falling back to the whole reply keeps a mis-marked answer visible
+        # rather than showing an empty card.
+        reality_check_narrative=sec["reality_check_narrative"] or raw,
+        dewatering_observations=sec["dewatering_observations"],
+        equipment_cob_status=sec["equipment_cob_status"],
+        stock_despatch_summary=sec["stock_despatch_summary"],
+        key_risks_and_actions=sec["key_risks_and_actions"],
+        shift_snapshot=sec["shift_snapshot"],
+        cached=False,
+    )
+
+
+
+# ── streaming ────────────────────────────────────────────────────────────────
+# WHY THIS EXISTS. The non-streaming call holds one HTTP request open for the
+# whole job: ~10s of database work to build the prompt, then ~24s of generation.
+# Any ceiling below that total fails, and the old one was 25s — which is why the
+# panel errored on first load and worked on retry. Raising the ceiling only
+# moves the cliff; on a shared GPU under contention the same job can take twice
+# as long and fail again.
+#
+# Streaming removes the class of failure rather than widening it. Bytes leave
+# the server continuously — a heartbeat during the database phase, then tokens —
+# so no idle timeout anywhere in the chain (client, Next proxy, nginx) has an
+# idle period to expire on. The reader also sees the first section at ~11s
+# instead of a spinner for 34.
+#
+# Events, all newline-delimited SSE:
+#   status    phase = gathering | generating           progress, no content
+#   sections  the parsed sections so far               rendered as they arrive
+#   done      the complete InsightsResponse            terminal, cached
+#   error     a classified, human-readable failure     terminal
+HEARTBEAT_SECONDS = 5.0
+# How often the partially parsed sections are pushed. Every token would be
+# needless traffic for text a person reads at a fraction of that rate.
+SECTION_PUSH_SECONDS = 0.4
+
+
+def _sse(event: str, payload: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload, default=str)}\n\n"
+
+
+async def stream_insights(
+    db: Session, from_date: date, to_date: date, use_cache: bool = True,
+) -> AsyncIterator[str]:
+    """Generate insights as Server-Sent Events. Never raises into the response.
+
+    Errors become an `error` event, because once a 200 and the first byte have
+    gone out there is no status code left to change — a half-sent stream that
+    dies silently looks to the browser exactly like a successful empty answer.
+    """
+    settings = get_settings()
+    cache_key = f"insights:{to_date}"
+
+    try:
+        if use_cache:
+            cached = get_cached_insights(cache_key)
+            if cached:
+                yield _sse("done", {**cached, "cached": True})
+                return
+
+        # ── phase 1: the prompt, which is ~10s of SQL ───────────────────────
+        yield _sse("status", {"phase": "gathering"})
+        loop = asyncio.get_running_loop()
+        # Sync SQLAlchemy would block the event loop for those 10 seconds and
+        # stall every other request on this worker, heartbeats included.
+        task = loop.run_in_executor(
+            None, build_insights_context, db, from_date, to_date
+        )
+        while not task.done():
+            done_set, _ = await asyncio.wait({task}, timeout=HEARTBEAT_SECONDS)
+            if not done_set:
+                # A comment frame: keeps proxies from closing an idle connection
+                # and is ignored by EventSource.
+                yield ": keep-alive\n\n"
+        context = await task
+
+        # ── phase 2: generation ─────────────────────────────────────────────
+        yield _sse("status", {"phase": "generating"})
+        client = AsyncOpenAI(
+            base_url=settings.qwen_base_url + "/v1",
+            api_key=settings.qwen_api_key,
+            # Per-read, not per-job: with tokens arriving this never trips, but
+            # it still ends a genuinely dead connection rather than hanging.
+            timeout=httpx.Timeout(180.0, connect=10.0, read=60.0),
+            max_retries=2,
+        )
+        stream = await client.chat.completions.create(
+            model=settings.qwen_model,
+            messages=[{"role": "user", "content": context}],
+            temperature=0.3,
+            max_tokens=2400,
+            stream=True,
+        )
+
+        raw = ""
+        last_push = 0.0
+        async for chunk in stream:
+            if not chunk.choices:
+                continue
+            piece = chunk.choices[0].delta.content or ""
+            if not piece:
+                continue
+            raw += piece
+            now = loop.time()
+            if now - last_push >= SECTION_PUSH_SECONDS:
+                last_push = now
+                yield _sse("sections", parse_insight_sections(raw))
+
+        if not raw.strip():
+            yield _sse("error", {"detail":
+                "The model returned an empty response. Try again."})
+            return
+
+        result = assemble_insights(raw, settings.qwen_model)
+        set_cached_insights(cache_key, result.model_dump(mode="json"))
+        yield _sse("done", result.model_dump(mode="json"))
+
+    except asyncio.CancelledError:
+        # The reader navigated away. Nothing to report to nobody.
+        raise
+    except Exception as exc:
+        logger.exception("insights stream failed")
+        yield _sse("error", {"detail": classify_llm_error(
+            exc, settings.qwen_model, settings.qwen_base_url)})
+
+async def generate_insights(
+    db: Session, from_date: date, to_date: date,
+    use_cache: bool = True,
+) -> InsightsResponse:
+    settings = get_settings()
+
+    # ── check cache first (Enhancement #6) ──────────────────
+    cache_key = f"insights:{to_date}"
+    if use_cache:
+        cached = get_cached_insights(cache_key)
+        if cached:
+            return InsightsResponse(**{**cached, "cached": True})
+
+    context = build_insights_context(db, from_date, to_date)
+
     # ── call BAL-AI (Qwen) ────────────────────────────────────
     client = AsyncOpenAI(
         base_url=settings.qwen_base_url + "/v1",
         api_key=settings.qwen_api_key,
-        timeout=25.0,
+        # Measured at 24s against Qwen 3 32B for the August prompt — 25s was
+        # sized for the previous gateway and now fails on ordinary variance,
+        # which is why the panel errored on first load and worked on retry.
+        timeout=90.0,
     )
 
     response = await client.chat.completions.create(
@@ -929,33 +1121,7 @@ Format your response EXACTLY as:
 
     raw = response.choices[0].message.content or ""
 
-    # ── parse sections ────────────────────────────────────────
-    def _extract(text: str, marker: str, next_marker: str) -> str:
-        start = text.find(marker)
-        if start == -1:
-            return ""
-        start += len(marker)
-        end = text.find(next_marker, start)
-        return text[start:end].strip() if end != -1 else text[start:].strip()
-
-    narrative  = _extract(raw, "---SECTION1---", "---SECTION2---")
-    dewatering = _extract(raw, "---SECTION2---", "---SECTION3---")
-    equip_cob  = _extract(raw, "---SECTION3---", "---SECTION4---")
-    stock_desp = _extract(raw, "---SECTION4---", "---SECTION5---")
-    risks      = _extract(raw, "---SECTION5---", "---SECTION6---")
-    shift_snap = _extract(raw, "---SECTION6---", "---END---")
-
-    result = InsightsResponse(
-        generated_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
-        model_used=settings.qwen_model,
-        reality_check_narrative=narrative or raw,
-        dewatering_observations=dewatering,
-        equipment_cob_status=equip_cob,
-        stock_despatch_summary=stock_desp,
-        key_risks_and_actions=risks,
-        shift_snapshot=shift_snap,
-        cached=False,
-    )
+    result = assemble_insights(raw, settings.qwen_model)
 
     # ── cache the result (Enhancement #6) ────────────────────
     set_cached_insights(cache_key, result.model_dump(mode="json"))

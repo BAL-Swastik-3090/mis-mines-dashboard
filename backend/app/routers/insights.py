@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from datetime import date
 
@@ -139,6 +140,41 @@ async def why_why_training(
             status_code=502,
             detail=svc.classify_llm_error(e, cfg.qwen_model, cfg.qwen_base_url),
         )
+
+
+@router.get("/generate/stream", tags=["Insights"])
+async def generate_insights_stream(
+    from_date: date = None,
+    to_date:   date = None,
+    force_refresh: bool = Query(default=False, description="Bypass cache and regenerate"),
+    db: Session = Depends(get_db),
+):
+    """AI insights as Server-Sent Events — the path the UI uses.
+
+    The non-streaming sibling holds one request open for the whole job: ~10s of
+    SQL to build the prompt, then ~24s of generation. Every fixed ceiling below
+    that total fails, and widening it only moves the cliff — on a shared GPU a
+    contended job takes twice as long and fails again.
+
+    Streaming keeps bytes moving the entire time, so no idle timeout anywhere in
+    the chain has an idle period to expire on, whatever the load. Errors arrive
+    as an `error` event rather than a status code, because by then the 200 has
+    already gone out.
+
+    The headers matter as much as the body: without them nginx buffers the whole
+    response and hands it over in one piece at the end, which is precisely the
+    behaviour being designed out.
+    """
+    return StreamingResponse(
+        svc.stream_insights(db, from_date or _mstart(), to_date or _today(),
+                            use_cache=not force_refresh),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",   # nginx: stream, do not buffer
+        },
+    )
 
 
 @router.post("/cache/invalidate", tags=["Insights"])

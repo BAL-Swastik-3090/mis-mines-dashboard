@@ -1,5 +1,5 @@
 "use client";
-import { Activity, Boxes, CalendarRange, DoorOpen, Network, Scale, ChevronLeft, ChevronRight, ClipboardList, ExternalLink, Gauge, LayoutDashboard, LineChart, Radar, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
+import { Activity, Boxes, CalendarRange, ChevronLeft, ChevronRight, ClipboardList, CloudSun, DoorOpen, ExternalLink, Gauge, LayoutDashboard, LineChart, Network, Radar, Scale, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { canOpen } from "@/contexts/pageAccess";
 import { useSidebar }               from "@/contexts/useSidebar";
@@ -28,6 +28,7 @@ type NavItem =
 
 const NAV_ITEMS: NavItem[] = [
   { kind: "page", id: "mis",             label: "MIS Dashboard",              icon: LayoutDashboard },
+  { kind: "page", id: "weather",         label: "Weather Forecast",           icon: CloudSun        },
   { kind: "page", id: "oee",             label: "OEE / LCM",                  icon: Activity        },
   { kind: "page", id: "intelligence",    label: "Intelligence",               icon: Sparkles        },
   { kind: "page", id: "market",          label: "Market Watch",               icon: LineChart       },

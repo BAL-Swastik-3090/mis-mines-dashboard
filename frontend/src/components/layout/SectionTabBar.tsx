@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import {
-  Cloud, Package, Building2, BarChart3,
+  Package, Building2, BarChart3,
   Layers, FlaskConical, Wrench, Droplets,
   Download, Check,
 } from "lucide-react";
@@ -11,7 +11,6 @@ import { useSidebar }         from "@/contexts/useSidebar";
 import { downloadDashboard }  from "@/utils/downloadDashboard";
 
 const TABS = [
-  { id: "weather",        label: "Weather",        icon: Cloud        },
   { id: "stock",          label: "Stock",           icon: Package      },
   { id: "plant",          label: "Plant",           icon: Building2    },
   { id: "production",     label: "Production",      icon: BarChart3    },

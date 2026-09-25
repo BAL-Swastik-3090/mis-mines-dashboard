@@ -1,5 +1,5 @@
 "use client";
-import WeatherSection      from "@/components/sections/WeatherSection";
+import PrevDayVarianceTable from "@/components/tables/PrevDayVarianceTable";
 import StockSection        from "@/components/sections/StockSection";
 import PlantSection        from "@/components/sections/PlantSection";
 import ProductionSection   from "@/components/sections/ProductionSection";
@@ -15,8 +15,8 @@ export default function HomePage() {
   return (
     <div className="space-y-8">
 
-      <section id="weather" className={S}>
-        <WeatherSection />
+      <section id="prev-day" className={S}>
+        <PrevDayVarianceTable />
       </section>
 
       <section id="stock" className={S}>

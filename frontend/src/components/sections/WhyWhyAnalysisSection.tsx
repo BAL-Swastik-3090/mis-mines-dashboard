@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { useWhyWhy, useWhyWhyTraining } from "@/hooks/useInsights";
 import { formatIndian } from "@/lib/utils";
+import { useExporting } from "@/contexts/useExportMode";
 import BreakdownRegisterCard from "@/components/sections/BreakdownRegisterCard";
 import type {
   WhyWhyShare, WhyWhyWatch, WhyWhyMachineDetail, WhyWhyOperatorIssues,
@@ -250,17 +251,18 @@ function ProductionLoss({ d }: { d: WhyWhyProductionLoss }) {
  * aggregate hides the thing the plan needs.
  */
 function MachineDetail({ rows }: { rows: WhyWhyMachineDetail[] }) {
+  const exporting = useExporting();
   const [open, setOpen] = useState<string | null>(rows[0]?.machine ?? null);
   // Every machine that broke down is listed, which on the full register is 38
   // rows. The long tail is mostly one-offs, so it starts collapsed rather than
   // pushing the rest of the section off the screen.
   const [showAll, setShowAll] = useState(false);
   const VISIBLE = 12;
-  const shown = showAll ? rows : rows.slice(0, VISIBLE);
+  const shown = showAll || exporting ? rows : rows.slice(0, VISIBLE);
   return (
     <div className="divide-y divide-border-light">
       {shown.map((m) => {
-        const isOpen = open === m.machine;
+        const isOpen = exporting || open === m.machine;
         return (
           <div key={m.machine} className="py-2 first:pt-0 last:pb-0">
             <button
@@ -328,7 +330,7 @@ function MachineDetail({ rows }: { rows: WhyWhyMachineDetail[] }) {
           </div>
         );
       })}
-      {rows.length > VISIBLE ? (
+      {rows.length > VISIBLE && !exporting ? (
         <button
           onClick={() => setShowAll(!showAll)}
           className="w-full pt-2 text-left text-[11.5px] font-semibold text-navy hover:underline"
@@ -356,7 +358,9 @@ function MachineDetail({ rows }: { rows: WhyWhyMachineDetail[] }) {
  * string. Both are shown; only one is evidence.
  */
 function BreakdownTopic({ b }: { b: WhyWhyTrainingBreakdown }) {
+  const exporting = useExporting();
   const [open, setOpen] = useState(false);
+  const showChain = exporting || open;
   return (
     <div className="rounded-lg border border-border bg-white px-3.5 py-2.5">
       <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
@@ -417,13 +421,15 @@ function BreakdownTopic({ b }: { b: WhyWhyTrainingBreakdown }) {
 
       {b.why_chain.length ? (
         <>
-          <button
-            onClick={() => setOpen(!open)}
-            className="mt-1.5 text-[11px] text-txt-muted hover:text-navy"
-          >
-            {open ? "Hide" : "Show"} the {b.why_chain.length}-why chain
-          </button>
-          {open ? (
+          {!exporting ? (
+            <button
+              onClick={() => setOpen(!open)}
+              className="mt-1.5 text-[11px] text-txt-muted hover:text-navy"
+            >
+              {open ? "Hide" : "Show"} the {b.why_chain.length}-why chain
+            </button>
+          ) : null}
+          {showChain ? (
             <ol className="mt-1 space-y-[3px] border-l-2 border-border pl-2.5">
               {b.why_chain.map((w, i) => (
                 <li key={i} className="text-[11px] leading-snug text-txt-muted">
@@ -440,10 +446,13 @@ function BreakdownTopic({ b }: { b: WhyWhyTrainingBreakdown }) {
 
 function OperatorIssues({ data }: { data: WhyWhyOperatorIssues }) {
   const [showAll, setShowAll] = useState(false);
-  const [wantTraining, setWantTraining] = useState(false);
   const [showAllTopics, setShowAllTopics] = useState(false);
-  const tr = useWhyWhyTraining(wantTraining);
-  const shown = showAll ? data.issues : data.issues.slice(0, 6);
+  const exportingAll = useExporting();
+  // Runs when the section opens. It is the slowest thing on the page — four
+  // batched calls, about two minutes — so it starts immediately rather than
+  // two minutes after somebody notices the button.
+  const tr = useWhyWhyTraining(true);
+  const shown = showAll || exportingAll ? data.issues : data.issues.slice(0, 6);
 
   return (
     <div className="space-y-4">
@@ -498,7 +507,7 @@ function OperatorIssues({ data }: { data: WhyWhyOperatorIssues }) {
             </div>
           ))}
         </div>
-        {data.issues.length > 6 && (
+        {data.issues.length > 6 && !exportingAll && (
           <button
             onClick={() => setShowAll(!showAll)}
             className="mt-2 text-[11.5px] font-semibold text-navy hover:underline"
@@ -522,22 +531,7 @@ function OperatorIssues({ data }: { data: WhyWhyOperatorIssues }) {
           ) : null}
         </div>
 
-        {!wantTraining ? (
-          <div className="flex flex-col items-start gap-2 pt-2">
-            <p className="text-[12px] leading-relaxed text-txt-muted">
-              For each of the {data.events} operating-error breakdowns, BAL-AI reads
-              its Why-Why, works out what the operator did, maps it to a national
-              qualification pack and names the training topic that would have
-              prevented it. Takes about two minutes.
-            </p>
-            <button
-              onClick={() => setWantTraining(true)}
-              className="flex items-center gap-1.5 rounded-md bg-navy px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-navy/90"
-            >
-              <GraduationCap size={13} /> Suggest training topics
-            </button>
-          </div>
-        ) : tr.isLoading ? (
+        {tr.isLoading ? (
           <div className="flex items-center gap-2 py-5 text-[12.5px] text-txt-muted">
             <RefreshCw size={14} className="animate-spin" /> Reading the incidents…
           </div>
@@ -563,9 +557,9 @@ function OperatorIssues({ data }: { data: WhyWhyOperatorIssues }) {
           <div className="space-y-3 pt-2.5">
             {tr.data.breakdowns?.length ? (
               <div className="space-y-2">
-                {(showAllTopics ? tr.data.breakdowns : tr.data.breakdowns.slice(0, 10))
+                {(showAllTopics || exportingAll ? tr.data.breakdowns : tr.data.breakdowns.slice(0, 10))
                   .map((b) => <BreakdownTopic key={b.id} b={b} />)}
-                {tr.data.breakdowns.length > 10 ? (
+                {tr.data.breakdowns.length > 10 && !exportingAll ? (
                   <button
                     onClick={() => setShowAllTopics(!showAllTopics)}
                     className="w-full rounded border border-border py-1.5 text-[12px] font-semibold text-navy hover:bg-bg-subtle"
@@ -661,8 +655,11 @@ function RefetchVeil() {
  * point of the panel, not a detail in it.
  */
 function OperatorList({ rows, caveat }: { rows: WhyWhyOperator[]; caveat: string }) {
+  const exporting = useExporting();
   const [open, setOpen] = useState<string | null>(null);
-  const sel = rows.find((r) => r.operator === open) ?? null;
+  // Exporting one operator's table and none of the others would misrepresent
+  // the section, so the export carries every named person's breakdowns.
+  const shown = exporting ? rows : rows.filter((r) => r.operator === open);
 
   return (
     <div>
@@ -690,18 +687,21 @@ function OperatorList({ rows, caveat }: { rows: WhyWhyOperator[]; caveat: string
         })}
       </div>
 
-      {sel ? (
-        <div className="mt-3 rounded-lg border border-border bg-bg-subtle/40 px-3.5 py-3">
+      {shown.map((sel) => (
+        <div key={sel.operator}
+             className="mt-3 rounded-lg border border-border bg-bg-subtle/40 px-3.5 py-3">
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
             <span className="text-[13px] font-bold text-txt-primary">{sel.operator}</span>
             <span className="text-[11.5px] text-txt-muted">
               {sel.events} event{sel.events === 1 ? "" : "s"} · {sel.machines.join(", ")} ·
               ₹{formatIndian(sel.cost)} in repairs
             </span>
-            <button onClick={() => setOpen(null)}
-                    className="ml-auto text-[11.5px] text-txt-muted hover:text-navy">
-              Close
-            </button>
+            {!exporting ? (
+              <button onClick={() => setOpen(null)}
+                      className="ml-auto text-[11.5px] text-txt-muted hover:text-navy">
+                Close
+              </button>
+            ) : null}
           </div>
 
           {sel.causes.length ? (
@@ -763,7 +763,7 @@ function OperatorList({ rows, caveat }: { rows: WhyWhyOperator[]; caveat: string
             </table>
           </div>
         </div>
-      ) : null}
+      ))}
 
       {/* Shipped by the backend as data, not written here, so it cannot be
           dropped by a later edit to this file. */}

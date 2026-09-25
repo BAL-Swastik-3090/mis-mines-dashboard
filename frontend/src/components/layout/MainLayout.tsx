@@ -1,6 +1,7 @@
 "use client";
 import AppSidebar              from "./AppSidebar";
 import SectionTabBar           from "./SectionTabBar";
+import IntelligenceTabBar      from "./IntelligenceTabBar";
 import FuelManagementSection   from "@/components/sections/FuelManagementSection";
 import ElectricVehiclesSection from "@/components/sections/ElectricVehiclesSection";
 import OEESection              from "@/components/sections/OEESection";
@@ -13,6 +14,7 @@ import MarketSection           from "@/components/sections/MarketSection";
 import OrganisationSection     from "@/components/sections/OrganisationSection";
 import WeighbridgeSection      from "@/components/sections/WeighbridgeSection";
 import GateSection             from "@/components/sections/GateSection";
+import WeatherForecastPage     from "@/components/sections/WeatherForecastPage";
 import AccessControlSection    from "@/components/sections/AccessControlSection";
 import { useAppPage }          from "@/contexts/useAppPage";
 import { useSidebar }          from "@/contexts/useSidebar";
@@ -31,6 +33,9 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
   const mayOpen  = canOpen(user, page);
   const anywhere = openablePages(user).length > 0;
   const isMis    = page === "mis" && mayOpen;
+  // Intelligence carries its own section bar, so it needs the same
+  // 115px offset the MIS page uses rather than the plain header height.
+  const isIntel  = page === "intelligence" && mayOpen;
 
   const sideW = collapsed ? "56px" : "200px";
 
@@ -38,6 +43,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
     <>
       <AppSidebar />
       {isMis && <SectionTabBar />}
+      {isIntel && <IntelligenceTabBar />}
 
       <main
         style={{ marginLeft: sideW }}
@@ -45,7 +51,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           min-h-screen pb-8
           px-4 sm:px-6 xl:px-8
           transition-[margin-left,padding-top] duration-300 ease-in-out
-          ${isMis ? "pt-[115px]" : "pt-[76px]"}
+          ${isMis || isIntel ? "pt-[115px]" : "pt-[76px]"}
         `}
       >
         <div className="max-w-[1920px] mx-auto">
@@ -84,6 +90,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           {page === "organisation"     && <OrganisationSection />}
           {page === "gate"             && <GateSection />}
           {page === "weighbridge"      && <WeighbridgeSection />}
+          {page === "weather"          && <WeatherForecastPage />}
             </>
           )}
         </div>

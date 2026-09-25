@@ -26,6 +26,19 @@
  */
 import type { AppPage } from "./useAppPage";
 
+/**
+ * Pages open to anyone signed in.
+ *
+ * A THIRD kind, alongside the dashboards (granted by `allowed_pages`) and the
+ * platform screens (granted by permission). Weather reads no protected API at
+ * all — Windy and Open-Meteo are both fetched by the browser directly — so
+ * there is nothing behind it to protect. Gating it on a `dashboard.*`
+ * permission would mean inventing a permission, seeding it against every role
+ * in the database, and still guarding nothing; and whoever was missed would
+ * simply lose the forecast for no reason.
+ */
+const OPEN_PAGES: ReadonlySet<AppPage> = new Set<AppPage>(["weather"]);
+
 /** What each platform screen needs. The dashboards are not here — they come
  *  from the server as allowed_pages.
  *
@@ -88,6 +101,9 @@ const LANDING_RANK: Record<AppPage, number> = {
   "weighbridge": 68,
   "operations": 70,
   "workforce": 80,
+  // Below the dashboards on purpose: it is open to everyone, so ranking it
+  // first would land every user on the weather map instead of their own work.
+  "weather": 85,
   "access-control": 90,
 };
 
@@ -101,6 +117,9 @@ export interface AccessLike {
 
 export function canOpen(user: AccessLike | null | undefined, page: AppPage): boolean {
   if (!user) return false;
+
+  // Signed in is the whole requirement here.
+  if (OPEN_PAGES.has(page)) return true;
 
   const needed = PAGE_PERMISSION[page];
   if (needed) {
