@@ -42,7 +42,9 @@ interface Face {
   activity: string; face_activity_id: number; reports_as: string;
   material_id: number | null;
   running_hours: number; tippers: number; tipper_class: string | null;
+  nickname: string | null; ownership: string | null; owner: string | null;
   bucket_cum: number; bucket_is_fitted: boolean;
+  standard_bucket: number | null; capacity_uom: string | null;
   cycle_sec: number; cycle_is_overridden: boolean;
   cum_per_hour: number; excavator_cum_day: number; tipper_cum_day: number;
   effective_cum_day: number; limited_by: string; lost_cum_day: number;
@@ -89,7 +91,8 @@ interface Machine {
   ownership: string | null; plan_name: string | null;
   standard_bucket: number | null; capacity_uom: string | null;
   fitted_bucket_cum: number | null; bucket_used: number | null;
-  bucket_is_fitted: boolean; fill_factor: number; swell_factor: number;
+  bucket_is_fitted: boolean; owner: string | null;
+  fill_factor: number; swell_factor: number;
   cycle_sec: number; cycles_per_hour: number; cum_per_scoop: number;
   cum_per_hour: number; cycle_is_overridden: boolean;
   override_reason: string | null; needs_bucket: boolean;
@@ -111,6 +114,8 @@ interface Quality {
     nickname: string | null; make: string | null }[] }[];
   not_in_the_plan: { fleet_code: string; nickname: string | null }[];
   plan_names_with_no_machine: string[];
+  looks_like: { plan_name: string; asset_id: number;
+    fleet_code: string; nickname: string | null }[];
 }
 
 const SAID: Record<string, string> = {"fill_factor": "fill factor", "swell_factor": "swell factor", "operating_hours": "operating hours", "ore_t_per_cum": "ore density", "dig_sec": "digging", "lift_sec": "lifting", "swing_sec": "swing", "lower_sec": "lowering", "tilt_sec": "tilting", "wait_sec": "waiting", "unload_sec": "unloading", "return_sec": "return"};
@@ -381,11 +386,23 @@ export default function CapacitySection() {
               <div>
                 <span className="font-semibold text-navy">
                   The plan works {quality.plan_names_with_no_machine.join(", ")},
-                  and the register has no such machine
+                  and no machine carries that name
                 </span>
                 <span className="text-txt-muted">
                   {" — "}left out of the totals above rather than attributed to a guess.
                 </span>
+                {/* Offered, not done. The nicknames now carry the plan's own
+                    numbering, which is enough to suggest a match and nowhere
+                    near enough to make one: a screen that guessed this would
+                    guess wrong once and be believed. */}
+                {quality.looks_like.map((g) => (
+                  <span key={g.plan_name} className="block text-txt-muted mt-0.5">
+                    {g.plan_name} looks like{" "}
+                    <span className="font-semibold text-navy">{g.fleet_code}</span>
+                    {g.nickname ? ` — "${g.nickname}"` : ""}. Set it on the
+                    Machines tab if that is right.
+                  </span>
+                ))}
               </div>
             )}
             {quality.no_bucket.length > 0 && (
@@ -470,11 +487,23 @@ export default function CapacitySection() {
                 {faces.map((f) => (
                   <tr key={f.face_plan_id}
                     className="border-t border-border-light hover:bg-bg-soft/50">
+                    {/* The fleet code is a code. "TATA-HITACHI-350" does not
+                        say whether that is the mine's machine or a
+                        contractor's, and the owner is who to ring when it
+                        stops. The nickname is what people actually say. */}
                     <Td>
                       <span className="font-semibold text-navy">{f.fleet_code}</span>
-                      {f.plan_name && (
-                        <span className="block text-[10.5px] text-txt-light">
-                          plan calls it {f.plan_name}
+                      <span className="block text-[10.5px] text-txt-light truncate
+                                       max-w-[240px]">
+                        {f.nickname || "no nickname"}
+                        {f.plan_name && (
+                          <span className="text-violet"> · {f.plan_name}</span>
+                        )}
+                      </span>
+                      {f.owner && (
+                        <span className="block text-[10px] text-txt-light">
+                          ({f.owner}
+                          {f.ownership === "HIRED" ? " — hired" : ""})
                         </span>
                       )}
                     </Td>
@@ -499,14 +528,40 @@ export default function CapacitySection() {
                         reports as {f.reports_as.toLowerCase()}
                       </span>
                     </Td>
-                    <Td className="text-right text-[12px]">
-                      <span className="font-mono">{f.bucket_cum}</span>
-                      {/* A bucket that is not the machine's standard one is
-                          worth marking: it is the single number every figure
-                          on the row multiplies out from. */}
-                      {f.bucket_is_fitted && (
-                        <span className="block text-[9.5px] text-gold-dark">fitted</span>
-                      )}
+                    {/* Changed here, not on another tab. It is the single
+                        number every figure on the row multiplies out from, so
+                        the place it is questioned is the place it should be
+                        correctable.
+
+                        "Fitted" means somebody said what is on the machine
+                        now; "standard" means it is running what the register
+                        says it came with. Emptying the box goes back to the
+                        standard one, which is why the standard is the
+                        placeholder rather than a second field. */}
+                    <Td className="text-right">
+                      <input type="number" min={0} max={50} step={0.05}
+                        defaultValue={f.bucket_is_fitted ? f.bucket_cum : ""}
+                        disabled={busy}
+                        placeholder={f.standard_bucket != null
+                          ? String(f.standard_bucket) : "—"}
+                        title={f.bucket_is_fitted
+                          ? `Fitted bucket. Empty the box to go back to the `
+                            + `standard ${f.standard_bucket ?? "—"} `
+                            + `${f.capacity_uom ?? ""}`
+                          : "The machine's standard bucket. Type one to record "
+                            + "what is actually on it now."}
+                        onBlur={(e) => {
+                          const raw = e.target.value.trim();
+                          const v = raw === "" ? null : Number(raw);
+                          const had = f.bucket_is_fitted ? f.bucket_cum : null;
+                          if (v !== had) void setBucket(f.asset_id, v);
+                        }}
+                        className={`${inputClass} w-[72px] py-1 text-[12px] text-right ${
+                          f.bucket_is_fitted ? "border-gold" : ""}`} />
+                      <span className={`block text-[9.5px] ${
+                        f.bucket_is_fitted ? "text-gold-dark" : "text-txt-light"}`}>
+                        {f.bucket_is_fitted ? "fitted" : "standard"}
+                      </span>
                     </Td>
                     <Td className="text-right text-[12px]"><Cum v={f.cum_per_hour} /></Td>
                     <Td className="text-right">
@@ -668,6 +723,11 @@ function MachinesTab({ machines, onBucket, onCycle, onPlanName, busy }: {
                   {m.nickname && (
                     <span className="block text-[10.5px] text-txt-light truncate max-w-[220px]">
                       {m.nickname}
+                    </span>
+                  )}
+                  {m.owner && (
+                    <span className="block text-[10px] text-txt-light">
+                      ({m.owner})
                     </span>
                   )}
                 </Td>
@@ -1435,7 +1495,8 @@ function AddFace({ day, machines, classes, choices, face, onChanged,
               onChange={(v) => setF({ ...f, asset_id: v })}
               options={machines.map((m) => ({
                 value: String(m.asset_id), label: m.fleet_code,
-                hint: m.plan_name ? `plan calls it ${m.plan_name}` : (m.nickname ?? undefined),
+                hint: [m.nickname, m.plan_name, m.owner ? `(${m.owner})` : null]
+                  .filter(Boolean).join(" · ") || undefined,
                 meta: m.needs_bucket
                   ? <span className="text-amber">no bucket</span>
                   : <span className="text-txt-light">{m.cum_per_hour} Cum/hr</span>,

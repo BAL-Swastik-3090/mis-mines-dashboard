@@ -227,6 +227,7 @@ def machines(request: Request, db: Session = Depends(get_minehub_db)) -> list[di
 
     rows = db.execute(text("""
         SELECT a.asset_id, a.fleet_code, a.nickname, a.ownership, a.status,
+               COALESCE(own.display_name, sup.display_name) AS owner,
                a.capacity AS standard_bucket, a.capacity_uom,
                a.fitted_bucket_cum, a.fitted_bucket_since,
                t.name AS asset_type,
@@ -238,6 +239,8 @@ def machines(request: Request, db: Session = Depends(get_minehub_db)) -> list[di
                ec.unload_sec, ec.return_sec, ec.reason AS override_reason
           FROM asset a
           JOIN asset_type t ON t.asset_type_id = a.asset_type_id
+          LEFT JOIN party own ON own.party_id = a.owner_party_id
+          LEFT JOIN party sup ON sup.party_id = a.supplier_party_id
           LEFT JOIN excavator_cycle ec ON ec.asset_id = a.asset_id
          WHERE t.name ILIKE '%%excavat%%'
            AND a.status NOT IN ('DISPOSED', 'SCRAPPED', 'CANNIBALISED')
@@ -256,6 +259,7 @@ def machines(request: Request, db: Session = Depends(get_minehub_db)) -> list[di
         out.append({
             "asset_id": o["asset_id"], "fleet_code": o["fleet_code"],
             "nickname": o["nickname"], "ownership": o["ownership"],
+            "owner": o["owner"],
             "status": o["status"], "plan_name": o["plan_name"],
             "standard_bucket": float(standard) if standard is not None else None,
             "capacity_uom": o["capacity_uom"],
@@ -732,7 +736,9 @@ def plan(request: Request, on: str | None = Query(None),
                fp.face_activity_id, fa.label AS activity, fa.reports_as,
                fp.material_id, m.name AS material, m.code AS material_code,
                fp.running_hours, fp.tippers, fp.tipper_class_id, fp.note,
-               a.fleet_code, a.nickname, a.capacity AS standard_bucket,
+               a.fleet_code, a.nickname, a.ownership,
+               COALESCE(own.display_name, sup.display_name) AS owner,
+               a.capacity AS standard_bucket,
                a.capacity_uom, a.fitted_bucket_cum,
                (SELECT i.external_code FROM asset_identity i
                  WHERE i.asset_id = a.asset_id AND i.system = 'BUSINESS_PLAN'
@@ -742,6 +748,8 @@ def plan(request: Request, on: str | None = Query(None),
                ec.unload_sec, ec.return_sec
           FROM face_plan fp
           JOIN asset a ON a.asset_id = fp.asset_id
+          LEFT JOIN party own ON own.party_id = a.owner_party_id
+          LEFT JOIN party sup ON sup.party_id = a.supplier_party_id
           JOIN location l ON l.location_id = fp.location_id
           JOIN face_activity fa ON fa.face_activity_id = fp.face_activity_id
           LEFT JOIN material m ON m.material_id = fp.material_id
@@ -781,6 +789,13 @@ def plan(request: Request, on: str | None = Query(None),
         "faces": [{
             "face_plan_id": f.face_plan_id, "asset_id": f.asset_id,
             "fleet_code": f.fleet_code, "plan_name": f.plan_name,
+            "nickname": by_id[f.face_plan_id]["nickname"],
+            "ownership": by_id[f.face_plan_id]["ownership"],
+            "owner": by_id[f.face_plan_id]["owner"],
+            "standard_bucket": (
+                float(by_id[f.face_plan_id]["standard_bucket"])
+                if by_id[f.face_plan_id]["standard_bucket"] is not None else None),
+            "capacity_uom": by_id[f.face_plan_id]["capacity_uom"],
             "location": f.location, "location_id": by_id[f.face_plan_id]["location_id"],
             "location_type": by_id[f.face_plan_id]["location_type"],
             "activity": by_id[f.face_plan_id]["activity"],
@@ -1189,11 +1204,49 @@ def data_quality(request: Request, db: Session = Depends(get_minehub_db)) -> dic
          ORDER BY a.fleet_code
     """)).mappings().all()
 
+    # Plan names the workbook works that no machine carries. Listed rather
+    # than hard-coded, so resolving one makes it disappear from here.
+    PLAN_NAMES = ["470-2", "470-7", "370-4", "370-5", "220-8",
+                  "490", "Sany", "Ex 350", "Ex 210"]
+    mapped = {r[0] for r in db.execute(text("""
+        SELECT external_code FROM asset_identity WHERE system = 'BUSINESS_PLAN'
+    """)).all()}
+    missing = [n for n in PLAN_NAMES if n not in mapped]
+
+    # A machine whose nickname contains the number the plan uses. "370-5"
+    # squashed to "3705" appears in "EX-370-5 (EXCAVATOR)" squashed the same
+    # way, which is enough to offer and nowhere near enough to assume.
+    def squash(t: str) -> str:
+        return "".join(ch for ch in (t or "").lower() if ch.isalnum())
+
+    unmapped_rows = db.execute(text("""
+        SELECT a.asset_id, a.fleet_code, a.nickname
+          FROM asset a JOIN asset_type t ON t.asset_type_id = a.asset_type_id
+         WHERE t.name ILIKE '%%excavat%%'
+           AND a.status NOT IN ('DISPOSED','SCRAPPED','CANNIBALISED')
+           AND NOT EXISTS (SELECT 1 FROM asset_identity i
+                            WHERE i.asset_id = a.asset_id
+                              AND i.system = 'BUSINESS_PLAN')
+    """)).mappings().all()
+    looks_like = []
+    for name in missing:
+        key = squash(name)
+        for r in unmapped_rows:
+            if key and key in squash(r["nickname"] or ""):
+                looks_like.append({"plan_name": name, "asset_id": r["asset_id"],
+                                   "fleet_code": r["fleet_code"],
+                                   "nickname": r["nickname"]})
+                break
+
     return {
         "no_bucket": [dict(r) for r in no_bucket],
         "same_machine_twice": [{"ex": r["n"], "rows": r["rows"]} for r in twins],
         "not_in_the_plan": [dict(r) for r in unmapped],
-        # Named here rather than derived: the plan works a second Zaxis 370 and
-        # the register does not hold one. Nobody should map it by guessing.
-        "plan_names_with_no_machine": ["370-5"],
+        "plan_names_with_no_machine": missing,
+        # Not a mapping, a suggestion. The nicknames now carry the plan's own
+        # numbering — EX-5 reads "EX-370-5 (EXCAVATOR)" — so the match can be
+        # offered without being made. Whose machine 370-5 is remains a question
+        # for somebody who knows the pit, and a screen that guessed it would be
+        # a screen that guessed wrong once and was believed.
+        "looks_like": looks_like,
     }
