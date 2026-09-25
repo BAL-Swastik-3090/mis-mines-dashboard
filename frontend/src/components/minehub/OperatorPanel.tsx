@@ -45,6 +45,8 @@ const OP_SORT_WORDS: Record<OpSortKey, [string, string]> = {
 interface Operator {
   operator_id: number; operator_ref: string | null; display_name: string;
   approval_status: string; profile_status: string; employment_type: string | null;
+  /** The day employment ended. Null for everybody still on the rolls. */
+  employment_end?: string | null;
   designation: string | null; phone: string | null; blood_group: string | null;
   employer: string | null; department: string | null; plant: string | null;
   exp_total_months: number | null; exp_hemm_months: number | null;
@@ -143,6 +145,7 @@ export default function OperatorPanel({ view: viewProp = "register", addOpen,
   filter?: ManpowerFilter;
 }) {
   const plantId = filter?.plantId ?? "";
+  const standing = filter?.standing ?? "ON_ROLL";
   const can = useAuth((s) => s.can);
   const mayManage = can("platform.operators.manage");
   const mayAssess = can("platform.operators.assess");
@@ -205,7 +208,8 @@ export default function OperatorPanel({ view: viewProp = "register", addOpen,
     setLoading(true);
     try {
       const [list, queue, sum, dueList, needList] = await Promise.all([
-        api.get("/operators", { params: plantId ? { plant_id: plantId } : {} }),
+        api.get("/operators", { params: { standing,
+          ...(plantId ? { plant_id: plantId } : {}) } }),
         api.get("/operators/unregistered"),
         api.get("/operators/summary"),
         api.get("/operators/meta/due").catch(() => ({ data: [] })),
@@ -221,7 +225,7 @@ export default function OperatorPanel({ view: viewProp = "register", addOpen,
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(d ?? "Could not load the operator register.");
     } finally { setLoading(false); }
-  }, [plantId]);
+  }, [plantId, standing]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -459,8 +463,13 @@ export default function OperatorPanel({ view: viewProp = "register", addOpen,
           which is the tab that is about them. */}
       {view === "register" && summary && (
         <StatBar items={[
-          { label: "On strength", value: operators.length, tone: "sky", icon: Users,
-            hint: `${new Set(operators.map((o) => o.employer ?? "BAL")).size} employer(s)` },
+          { label: standing === "OFF_ROLL" ? "Off the rolls"
+                 : standing === "ALL" ? "Ever registered" : "On strength",
+            value: operators.length,
+            tone: standing === "ON_ROLL" ? "sky" : "slate", icon: Users,
+            hint: standing === "ON_ROLL"
+              ? `${new Set(operators.map((o) => o.employer ?? "BAL")).size} employer(s)`
+              : "change this in the bar above" },
           { label: "Approved", value: summary.approved ?? 0,
             tone: (summary.approved ?? 0) ? "emerald" : "amber", icon: Check,
             hint: `${operators.length - (summary.approved ?? 0)} still draft`,
@@ -670,6 +679,23 @@ export default function OperatorPanel({ view: viewProp = "register", addOpen,
                     {o.years_served != null ? `${o.years_served} yr` : "—"}
                   </Td>
                   <Td className="text-right">
+                    {/* Why this person is off the rolls, above the approval
+                        state of their paperwork. Those are two different
+                        things and the column used to show only the second, so
+                        a man who died in January and a man who started on
+                        Monday both read "draft" and nothing else. */}
+                    {o.profile_status !== "ACTIVE" && (
+                      <span className="block mb-0.5">
+                        <Chip tone={o.profile_status === "SUSPENDED" ? "rose" : "slate"}>
+                          {o.profile_status.toLowerCase()}
+                        </Chip>
+                        {o.employment_end && (
+                          <span className="block text-[10px] text-txt-light">
+                            {o.employment_end.slice(0, 10).split("-").reverse().join("-")}
+                          </span>
+                        )}
+                      </span>
+                    )}
                     <Chip tone={APPROVAL_TONE[o.approval_status] ?? "slate"}>
                       {o.approval_status.replace("_", " ").toLowerCase()}
                     </Chip>

@@ -30,6 +30,9 @@ import ColumnFilter, { optionsFrom } from "@/components/minehub/ColumnFilter";
 export interface ManpowerFilter {
   plantId: string; plantName: string | null;
   employer: string; department: string; trade: string; worker: string;
+  /** ON_ROLL (the default), OFF_ROLL, or ALL. Not a narrowing filter like the
+   *  others — it decides which population the whole screen is about. */
+  standing: string;
 }
 import OperatorPanel from "@/components/minehub/OperatorPanel";
 import AssessmentPanel from "@/components/minehub/AssessmentPanel";
@@ -82,8 +85,21 @@ export default function ManpowerSection() {
   // one question, and re-answering it on each of five tabs is how two of the
   // five end up showing something else.
   const [by, setBy] = useState({ employer: "", department: "", trade: "", worker: "" });
+
+  // Who counts as here.
+  //
+  // It used to be everybody ever registered, which put a man who retired in
+  // February and a man who died in January on the register at full strength,
+  // indistinguishable from the 204 people who actually work here. The count
+  // read 211.
+  //
+  // Nobody is deleted — "Off the rolls" is one click away and carries the date
+  // and the reason each person left. They are simply not in the list you read
+  // when you are deciding who works today.
+  const [standing, setStanding] = useState("ON_ROLL");
   const set = (k: keyof typeof by) => (v: string) => setBy((b) => ({ ...b, [k]: v }));
-  const narrowed = Boolean(plantId) || Object.values(by).some(Boolean);
+  const narrowed = Boolean(plantId) || standing !== "ON_ROLL"
+    || Object.values(by).some(Boolean);
 
   // The options are master data, not whatever rows happen to be loaded.
   // Contractors come from the party master, departments from org_unit, trades
@@ -105,12 +121,13 @@ export default function ManpowerSection() {
       api.get("/minehub/parties", { params: { party_type: "ORGANISATION" } }).catch(() => nil),
       api.get("/minehub/org-units").catch(() => nil),
       api.get("/minehub/trades").catch(() => nil),
-      api.get("/operators", { params: plantId ? { plant_id: plantId } : {} }).catch(() => nil),
+      api.get("/operators", { params: { standing,
+        ...(plantId ? { plant_id: plantId } : {}) } }).catch(() => nil),
     ]).then(([pa, ou, tr, op]) => setMasters({
       parties: pa.data ?? [], orgUnits: ou.data ?? [],
       trades: tr.data ?? [], people: op.data ?? [],
     }));
-  }, [plantId, changed]);
+  }, [plantId, standing, changed]);
 
   const menus = useMemo(() => {
     const { parties, orgUnits, trades, people } = masters;
@@ -141,7 +158,7 @@ export default function ManpowerSection() {
 
   const people = masters.people;
 
-  const filter: ManpowerFilter = { plantId, plantName, ...by };
+  const filter: ManpowerFilter = { plantId, plantName, standing, ...by };
   useEffect(() => {
     void api.get("/minehub/plants")
       // Only plants that actually have people. Five plants exist as SAP
@@ -218,9 +235,23 @@ export default function ManpowerSection() {
               value={by.trade} options={menus.trade} onChange={set("trade")} />
             <ColumnFilter variant="control" label="Worker" allLabel="Everybody"
               value={by.worker} options={menus.worker} onChange={set("worker")} />
+            {/* Not a ColumnFilter: those all mean "narrow what is shown", and
+                this one changes which population is being shown at all. It has
+                no "all" row for the same reason — leaving it unset has to mean
+                the people who work here, not everybody who ever did. */}
+            <SearchSelect value={standing} onChange={setStanding}
+              className="px-2.5 py-1.5 text-[12px] font-semibold"
+              options={[
+                { value: "ON_ROLL",  label: "On strength",
+                  hint: "People who work here today" },
+                { value: "OFF_ROLL", label: "Off the rolls",
+                  hint: "Retired, deceased, or otherwise no longer employed" },
+                { value: "ALL",      label: "Everybody ever",
+                  hint: "Both, for reconciling against an old list" },
+              ]} />
             {narrowed && (
               <button type="button"
-                onClick={() => { setPlantId("");
+                onClick={() => { setPlantId(""); setStanding("ON_ROLL");
                                  setBy({ employer: "", department: "", trade: "", worker: "" }); }}
                 className="inline-flex items-center gap-1 text-[11.5px] font-semibold
                            text-gold-dark hover:underline underline-offset-2">
@@ -228,7 +259,10 @@ export default function ManpowerSection() {
               </button>
             )}
             <span className="ml-auto text-[11.5px] text-txt-light tabular-nums">
-              {people.length} on strength
+              {people.length}{" "}
+              {standing === "OFF_ROLL" ? "off the rolls"
+                : standing === "ALL" ? "ever registered"
+                : "on strength"}
             </span>
           </div>
         </>

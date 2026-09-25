@@ -226,13 +226,42 @@ def _activity(db, request: Request, event_type: str, operator_id: int | None = N
 
 
 # ── the register ─────────────────────────────────────────────────────────────
+# Who is on the rolls, and who is no longer.
+#
+# profile_status is free text with no constraint, so the safe test is ACTIVE
+# and not-ACTIVE rather than a list of the ways somebody can have left — a
+# status nobody thought of here would otherwise quietly count as employed.
+ON_ROLL = "o.profile_status = 'ACTIVE'"
+OFF_ROLL = "o.profile_status <> 'ACTIVE'"
+
+
 @router.get("")
 def list_operators(q: str = Query(""), status: str = Query(""),
                    asset_type_id: int | None = Query(None),
                    plant_id: int | None = Query(None),
+                   standing: str = Query("ON_ROLL"),
                    db: Session = Depends(get_minehub_db)) -> list[dict]:
-    """The register. One row per person, with enough to judge them at a glance."""
+    """The register. One row per person, with enough to judge them at a glance.
+
+    STANDING DEFAULTS TO ON_ROLL, and that default is the point. A man who
+    retired in February and a man who died in January were both being returned
+    by every caller of this endpoint — so they sat in the register at full
+    strength, in the shift board's list of people to deploy, and in the
+    assessment panel. The register read 211 on strength when 204 people work
+    here.
+
+    Nobody is deleted. OFF_ROLL asks for exactly those people and ALL asks for
+    both, so the leavers remain reachable, with the date and the reason they
+    left. They are simply not offered where somebody is picking who works
+    today.
+    """
     where, params = ["1=1"], {}
+    if standing.upper() == "ON_ROLL":
+        where.append(ON_ROLL)
+    elif standing.upper() == "OFF_ROLL":
+        where.append(OFF_ROLL)
+    elif standing.upper() != "ALL":
+        raise HTTPException(422, "standing must be ON_ROLL, OFF_ROLL or ALL")
     if q.strip():
         where.append("(p.display_name ILIKE :q OR o.operator_ref ILIKE :q "
                      "OR o.designation ILIKE :q OR EXISTS (SELECT 1 FROM party_identity i "
@@ -251,7 +280,7 @@ def list_operators(q: str = Query(""), status: str = Query(""),
 
     rows = db.execute(text(f"""
         SELECT o.operator_id, o.operator_ref, o.approval_status, o.profile_status,
-               o.employment_type, o.designation, o.version,
+               o.employment_type, o.designation, o.version, o.employment_end,
                o.exp_total_months, o.exp_hemm_months, o.joined_on,
                p.party_id, p.display_name, p.phone, p.photo_ref, p.blood_group,
                p.date_of_birth, p.gender, p.father_name, p.marital_status,
