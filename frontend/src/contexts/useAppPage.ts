@@ -12,7 +12,7 @@ import { persist } from "zustand/middleware";
 // "weather" is its own screen rather than a strip on the MIS dashboard: it is
 // consulted before a shift is planned, by people who are not otherwise reading
 // production figures, and a full-height map cannot share a page with anything.
-export type AppPage = "mis" | "weather" | "fuel-management" | "ev-tracking" | "oee" | "intelligence" | "access-control" | "minehub" | "manpower" | "operations" | "workforce" | "market" | "organisation" | "weighbridge" | "gate";
+export type AppPage = "mis" | "weather" | "fuel-management" | "ev-tracking" | "oee" | "intelligence" | "access-control" | "minehub" | "manpower" | "operations" | "workforce" | "market" | "organisation" | "weighbridge" | "gate" | "capacity";
 
 interface AppPageStore {
   page: AppPage;

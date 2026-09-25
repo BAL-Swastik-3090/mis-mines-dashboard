@@ -62,6 +62,9 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   // weighs loads. Gating the gate on wb.view would mean handing the
   // whole weighbridge to the man on the boundary.
   "gate": ["wb.gate"],
+  // Capacity reads the same machines and faces the roster does, and is read
+  // by the same people planning the day.
+  "capacity": ["ops.roster.view"],
 };
 
 /**
@@ -101,6 +104,9 @@ const LANDING_RANK: Record<AppPage, number> = {
   "weighbridge": 68,
   "operations": 70,
   "workforce": 80,
+  // Next to the roster: both answer "what can we do tomorrow", one about
+  // people and one about machines.
+  "capacity": 82,
   // Below the dashboards on purpose: it is open to everyone, so ranking it
   // first would land every user on the weather map instead of their own work.
   "weather": 85,

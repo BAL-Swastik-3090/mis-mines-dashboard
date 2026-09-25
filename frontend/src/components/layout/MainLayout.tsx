@@ -15,6 +15,7 @@ import OrganisationSection     from "@/components/sections/OrganisationSection";
 import WeighbridgeSection      from "@/components/sections/WeighbridgeSection";
 import GateSection             from "@/components/sections/GateSection";
 import WeatherForecastPage     from "@/components/sections/WeatherForecastPage";
+import CapacitySection         from "@/components/sections/CapacitySection";
 import AccessControlSection    from "@/components/sections/AccessControlSection";
 import { useAppPage }          from "@/contexts/useAppPage";
 import { useSidebar }          from "@/contexts/useSidebar";
@@ -91,6 +92,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           {page === "gate"             && <GateSection />}
           {page === "weighbridge"      && <WeighbridgeSection />}
           {page === "weather"          && <WeatherForecastPage />}
+          {page === "capacity"         && <CapacitySection />}
             </>
           )}
         </div>

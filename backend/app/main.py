@@ -182,6 +182,9 @@ _PERMISSION_RULES: tuple[tuple[str, str], ...] = (
     # The roster says where people will be on days they have not worked yet, so
     # it sits behind its own permission rather than the shift board's.
     ("/api/workforce", "ops.roster.view"),
+    # Capacity reads the roster's machines and faces, and says what the fleet
+    # can move. Same audience as the roster, so the same permission.
+    ("/api/productivity", "ops.roster.view"),
     # Notes are readable by anybody who can open the platform at all — writing
     # is what carries a permission, checked inside the router.
 )
@@ -317,7 +320,7 @@ from app.routers import weighbridge
 from app.routers import fields
 from app.routers import checklists, operators_analytics
 from app.routers import prev_day_actual
-from app.routers import production, stock, cob, plant, ob, despatch, equipment, dewatering, insights, live_tracking, fuel_management, ev_tracking, auth, oee, roles, minehub, access, operators, operations, workforce, comments
+from app.routers import production, stock, cob, plant, ob, despatch, equipment, dewatering, insights, live_tracking, fuel_management, ev_tracking, auth, oee, roles, minehub, access, operators, operations, workforce, productivity, comments
 app.include_router(production.router,      prefix="/api/production",    tags=["Production"])
 app.include_router(stock.router,           prefix="/api/stock",         tags=["Stock"])
 app.include_router(cob.router,             prefix="/api/cob",           tags=["COB Plant"])
@@ -347,6 +350,7 @@ app.include_router(operators_analytics.router)
 app.include_router(operators.router)
 app.include_router(operations.router)
 app.include_router(workforce.router)
+app.include_router(productivity.router)
 app.include_router(comments.router)
 app.include_router(roles.router)
 app.include_router(minehub.router)
