@@ -890,7 +890,14 @@ export default function OperatorForm({ operatorId, openAt, prefill, onSaved, onD
               <Row label="Profile status">
                 <select id="op-status" className={cellInput} value={f.profile_status ?? "ACTIVE"}
                   onChange={(e) => set("profile_status", e.target.value)}>
-                  {["ACTIVE", "INACTIVE", "SUSPENDED", "RETIRED"].map((x) => (
+                  {/* Deceased is its own state, not a flavour of inactive.
+                      A retired man may be re-engaged; this one cannot be, and
+                      nobody should ever be prompted to ring him. Three of the
+                      register's people are in it. Without it here the value
+                      the database holds matches no option and the field renders
+                      blank, which is how a status quietly gets overwritten by
+                      whoever next opens the profile. */}
+                  {["ACTIVE", "INACTIVE", "SUSPENDED", "RETIRED", "DECEASED"].map((x) => (
                     <option key={x} value={x}>{x[0] + x.slice(1).toLowerCase()}</option>
                   ))}
                 </select>

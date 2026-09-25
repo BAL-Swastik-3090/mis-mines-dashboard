@@ -36,6 +36,7 @@ export const OPERATOR_STATE: Record<string, { label: string; tone: Tone }> = {
   SUSPENDED:          { label: "Suspended",       tone: "rose" },
   INACTIVE:           { label: "Inactive",        tone: "slate" },
   RETIRED:            { label: "Retired",         tone: "slate" },
+  DECEASED:           { label: "Deceased",        tone: "slate" },
 };
 
 export const READINESS: Record<string, { label: string; tone: Tone }> = {
