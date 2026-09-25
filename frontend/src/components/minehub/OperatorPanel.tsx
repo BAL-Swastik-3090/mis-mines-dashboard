@@ -2,10 +2,14 @@
 /**
  * The people who run the machines.
  *
- * The register first, then the queue of people the mine's own records name who
- * have no profile here yet — the same arrangement as equipment, for the same
- * reason: the register is what the screen is for, the queue is work to get
- * through.
+ * The register, and nothing else. It used to carry a queue underneath it — the
+ * people the driver master names who have no profile here yet — on the
+ * argument that the register is what the screen is for and the queue is work
+ * to get through. It was removed on request: fourteen rows of somebody else's
+ * list sitting under the register read as part of it.
+ *
+ * /api/operators/unregistered still answers, so the comparison between the
+ * driver master and the register is not lost, only unshown.
  */
 import { matchesSearch } from "@/lib/search";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
@@ -97,11 +101,6 @@ interface Coverage {
   category: string | null; asset_type: string | null; holders: number; lapsed: number;
 }
 
-interface Waiting {
-  name: string; code: string | null; machine: string | null;
-  grade: string | null; last_seen: string | null; source: string;
-}
-
 const APPROVAL_TONE: Record<string, Tone> = {
   DRAFT: "slate", SUBMITTED: "amber", SENT_BACK: "rose", APPROVED: "emerald",
 };
@@ -168,7 +167,6 @@ export default function OperatorPanel({ view: viewProp = "register", addOpen,
   };
   const operators = useMemo(() => keep(allOperators), [allOperators, filter]);
 
-  const [waiting, setWaiting] = useState<Waiting[]>([]);
   const [summary, setSummary] = useState<Record<string, number> | null>(null);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
@@ -179,7 +177,6 @@ export default function OperatorPanel({ view: viewProp = "register", addOpen,
   // this person" are different errands, and the first one should not begin with
   // a scroll past nine sections.
   const [openAt, setOpenAt] = useState<string | undefined>(undefined);
-  const [allWaiting, setAllWaiting] = useState(false);
 
   // Which of the section's two register tabs is showing. It used to be local
   // state with its own switcher directly under the section's tab strip — two
@@ -207,16 +204,14 @@ export default function OperatorPanel({ view: viewProp = "register", addOpen,
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [list, queue, sum, dueList, needList] = await Promise.all([
+      const [list, sum, dueList, needList] = await Promise.all([
         api.get("/operators", { params: { standing,
           ...(plantId ? { plant_id: plantId } : {}) } }),
-        api.get("/operators/unregistered"),
         api.get("/operators/summary", { params: { standing } }),
         api.get("/operators/meta/due").catch(() => ({ data: [] })),
         api.get("/operators/meta/training-needs").catch(() => ({ data: [] })),
       ]);
       setOperators(list.data ?? []);
-      setWaiting(queue.data ?? []);
       setSummary(sum.data ?? null);
       setDue(dueList.data ?? []);
       setNeeds(needList.data ?? []);
@@ -403,8 +398,8 @@ export default function OperatorPanel({ view: viewProp = "register", addOpen,
       `manpower-register-${new Date().toISOString().slice(0, 10)}.csv`);
   };
 
-  const startRegister = (from?: Waiting) => {
-    setPrefill(from ? { display_name: from.name, code: from.code ?? undefined } : {});
+  const startRegister = () => {
+    setPrefill({});
     setEditingId(null);
     onAddOpenChange?.(true);
   };
@@ -719,53 +714,6 @@ export default function OperatorPanel({ view: viewProp = "register", addOpen,
         </div>
       </Card>
 
-      {/* The queue */}
-      {waiting.length > 0 && (
-        <Card tone="amber">
-          <CardHeader title={`${waiting.length} people in mine records with no profile`}
-            icon={HardHat} tone="amber"
-            subtitle="From the driver master. Registering one carries their name and code into the form, so the list is worked through rather than imported blind."
-            actions={waiting.length > 8 && (
-              <Button size="sm" variant="secondary" onClick={() => setAllWaiting((v) => !v)}>
-                {allWaiting ? "Show fewer" : `Show all ${waiting.length}`}
-              </Button>
-            )} />
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[620px]">
-              <thead>
-                <tr><Th>Name</Th><Th>Code</Th><Th>Recorded against</Th>
-                    <Th>Last seen</Th><Th className="text-right">Action</Th></tr>
-              </thead>
-              <tbody>
-                {(allWaiting ? waiting : waiting.slice(0, 8)).map((w, i) => (
-                  <tr key={`${w.code ?? w.name}-${i}`} className="hover:bg-bg-light transition-colors">
-                    <Td className="font-semibold text-navy">{w.name}</Td>
-                    <Td className="font-mono text-[12px]">
-                      {w.code ?? <span className="text-rose">no code</span>}
-                    </Td>
-                    <Td className="text-txt-muted font-mono text-[12px]">{w.machine || "—"}</Td>
-                    <Td className="text-txt-muted">{toDisplay(String(w.last_seen ?? "").slice(0, 10))}</Td>
-                    <Td className="text-right">
-                      {mayManage && (
-                        <Button size="sm" variant="primary" onClick={() => startRegister(w)}>
-                          <Plus className="w-3.5 h-3.5" /> Register
-                        </Button>
-                      )}
-                    </Td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {!allWaiting && waiting.length > 8 && (
-            <button type="button" onClick={() => setAllWaiting(true)}
-              className="w-full px-5 py-3 text-[12.5px] font-semibold text-gold-dark
-                         border-t border-border-light hover:bg-gold/[0.05] transition-colors">
-              {waiting.length - 8} more waiting
-            </button>
-          )}
-        </Card>
-      )}
       </>)}
     </div>
   );
