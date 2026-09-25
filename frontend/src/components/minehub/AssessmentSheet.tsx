@@ -22,6 +22,7 @@
  * TWO COLUMNS, because fifteen rows in one is a screen and a half, and an
  * assessor works down a page rather than scrolling it.
  */
+import SearchSelect from "@/components/minehub/SearchSelect";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { toDisplay } from "./DateField";
 import DateField from "./DateField";
@@ -383,13 +384,11 @@ export default function AssessmentSheet({ operatorId, onDone, onSaved, onManageF
             <span className="block text-[11px] font-semibold text-txt-secondary mb-1">
               Machine class <span className="text-rose">*</span>
             </span>
-            <select id="as-type" value={typeId} onChange={(e) => changeType(e.target.value)}
-              className={cellInput}>
-              <option value="">Choose a machine class…</option>
-              {types.map((t) => (
-                <option key={t.asset_type_id} value={t.asset_type_id}>{t.name}</option>
-              ))}
-            </select>
+            <SearchSelect value={typeId} onChange={changeType} className={cellInput}
+              placeholder="Choose a machine class…" searchPlaceholder="Type a class…"
+              options={types.map((t) => ({
+                value: String(t.asset_type_id), label: t.name,
+              }))} />
           </label>
           <label className="block">
             <span className="block text-[11px] font-semibold text-txt-secondary mb-1">

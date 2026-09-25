@@ -22,6 +22,7 @@
  * a bad thing to hide: where the tare is old, the screen says so, because a
  * three-week-old tare quietly inflates every tonne recorded against it.
  */
+import SearchSelect from "@/components/minehub/SearchSelect";
 import { matchesSearch, rank } from "@/lib/search";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -903,10 +904,11 @@ function TareDialog({ vehicle, bridges, onClose, onDone, onError }: {
         )}
         {usable.length > 1 && (
           <Field label="Bridge">
-            <select value={bridgeId ?? ""} onChange={(e) => setBridgeId(Number(e.target.value))}
-                    className={inputClass}>
-              {usable.map((b) => <option key={b.weighbridge_id} value={b.weighbridge_id}>{b.name}</option>)}
-            </select>
+            <SearchSelect field value={String(bridgeId ?? "")}
+              onChange={(v) => setBridgeId(Number(v))} placeholder="Choose a bridge…"
+              options={usable.map((b) => ({
+                value: String(b.weighbridge_id), label: b.name,
+              }))} />
           </Field>
         )}
       </div>
@@ -980,20 +982,18 @@ function TripTable({ trips, summary, sources, categories }: {
           <option value="A">Shift A</option><option value="B">Shift B</option>
           <option value="C">Shift C</option>
         </select>
-        <select value={source} onChange={(e) => setSource(e.target.value)}
-                className={`${inputClass} w-[180px]`}>
-          <option value="">Every source</option>
-          {sourcePlaces.map((l) =>
-            <option key={l.location_id} value={l.name}>{l.group} — {l.name}</option>)}
-        </select>
-        <select value={material} onChange={(e) => setMaterial(e.target.value)}
-                className={`${inputClass} w-[190px]`}>
-          <option value="">Every material</option>
-          {materialNames.map((n) => {
-            const name = n.split(" · ")[1];
-            return <option key={n} value={name}>{n}</option>;
-          })}
-        </select>
+        <SearchSelect value={source} onChange={setSource} allLabel="Every source"
+          className="w-[180px] px-3 py-2 text-[13px]"
+          searchPlaceholder="Type a pit or a stack…"
+          options={sourcePlaces.map((l) => ({
+            value: l.name, label: l.name, hint: l.group,
+          }))} />
+        <SearchSelect value={material} onChange={setMaterial} allLabel="Every material"
+          className="w-[190px] px-3 py-2 text-[13px]"
+          searchPlaceholder="Type a material…"
+          options={materialNames.map((n) => ({
+            value: n.split(" · ")[1], label: n,
+          }))} />
         <select value={flag} onChange={(e) => setFlag(e.target.value)}
                 className={`${inputClass} w-[210px]`}>
           <option value="">Everything</option>
@@ -1198,10 +1198,11 @@ function RegisterAgent({ bridges, onClose, onIssued, onError }: {
                  className={inputClass} autoFocus />
         </Field>
         <Field label="Bridge" required>
-          <select value={bridgeId ?? ""} onChange={(e) => setBridgeId(Number(e.target.value))}
-                  className={inputClass}>
-            {bridges.map((b) => <option key={b.weighbridge_id} value={b.weighbridge_id}>{b.name}</option>)}
-          </select>
+          <SearchSelect field value={String(bridgeId ?? "")}
+            onChange={(v) => setBridgeId(Number(v))} placeholder="Choose a bridge…"
+            options={bridges.map((b) => ({
+              value: String(b.weighbridge_id), label: b.name,
+            }))} />
         </Field>
         <Field label="File the indicator writes" required
                hint="The same file SAP GUI asks permission to read. The agent only reads it.">

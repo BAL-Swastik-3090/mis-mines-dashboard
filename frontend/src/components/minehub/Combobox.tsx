@@ -13,6 +13,11 @@
  * options ran under the next section and could not be reached. Nothing inside a
  * scrolling ancestor can escape it, so the only reliable fix is to leave the
  * container entirely and position against the input's own rectangle.
+ *
+ * NOT `SearchSelect`, which sits next to it in this folder. That one replaces a
+ * <select>: a closed list of rows from a table — an operator, a machine, a
+ * plant — that you search but cannot add to. Use this one where the value is
+ * allowed to be new.
  */
 import { matchesSearch } from "@/lib/search";
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";

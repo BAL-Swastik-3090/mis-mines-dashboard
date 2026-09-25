@@ -26,6 +26,7 @@
  * This is what makes rostering possible at all before any pattern exists,
  * which is the state this mine is actually in: 204 people on no pattern.
  */
+import SearchSelect from "@/components/minehub/SearchSelect";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import DateField from "@/components/minehub/DateField";
 import {
@@ -933,15 +934,13 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
           {/* What is being decided */}
           <div className="space-y-3">
           <Field label="Pattern" required>
-            <select className={inputClass} value={form.pattern_id}
-                    onChange={(e) => setForm({ ...form, pattern_id: e.target.value })}>
-              <option value="">Choose a pattern</option>
-              {patterns.filter((p) => p.is_active).map((p) => (
-                <option key={p.pattern_id} value={p.pattern_id}>
-                  {p.code} — {p.name} ({p.cycle_days}-day cycle)
-                </option>
-              ))}
-            </select>
+            <SearchSelect field value={form.pattern_id} placeholder="Choose a pattern"
+              onChange={(v) => setForm({ ...form, pattern_id: v })}
+              searchPlaceholder="Type a pattern…"
+              options={patterns.filter((p) => p.is_active).map((p) => ({
+                value: String(p.pattern_id), label: `${p.code} — ${p.name}`,
+                hint: `${p.cycle_days}-day cycle`,
+              }))} />
           </Field>
           <Field label="From" required
                  hint="They start at the first day of the cycle on this date.">

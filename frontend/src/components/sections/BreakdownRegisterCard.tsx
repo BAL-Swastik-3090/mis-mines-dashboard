@@ -1,4 +1,5 @@
 "use client";
+import SearchSelect from "@/components/minehub/SearchSelect";
 import { useMemo, useState } from "react";
 import {
   ListTree, Search, ChevronRight, RefreshCw, AlertTriangle, X,
@@ -215,14 +216,9 @@ export default function BreakdownRegisterCard() {
                              text-txt-primary placeholder:text-txt-muted focus:border-navy focus:outline-none"
                 />
               </div>
-              <select
-                value={machine}
-                onChange={(e) => { setMachine(e.target.value); setPage(1); }}
-                className="rounded border border-border bg-white px-2 py-1.5 text-[12px] text-txt-secondary focus:border-navy focus:outline-none"
-              >
-                <option value="">All machines</option>
-                {data.machines.map((m) => <option key={m} value={m}>{m}</option>)}
-              </select>
+              <SearchSelect value={machine} allLabel="All machines" options={data.machines}
+                searchPlaceholder="Type a fleet code…"
+                onChange={(v) => { setMachine(v); setPage(1); }} />
               <select
                 value={cause}
                 onChange={(e) => { setCause(e.target.value); setPage(1); }}

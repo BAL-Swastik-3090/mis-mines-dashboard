@@ -1,4 +1,5 @@
 "use client";
+import SearchSelect from "@/components/minehub/SearchSelect";
 import React, { useState, useEffect } from "react";
 import dynamic from "next/dynamic";
 import {
@@ -636,17 +637,15 @@ export default function ElectricVehiclesSection() {
               {/* Vehicle selector inside Work Analysis tab */}
               <div className="flex items-center gap-2">
                 <span className="text-[11px] font-condensed font-bold text-txt-secondary uppercase">Select Vehicle:</span>
-                <select
-                  value={selectedEvId || ""}
-                  onChange={(e) => setSelectedEvId(Number(e.target.value))}
-                  className="bg-white border border-border rounded text-[11.5px] text-txt-secondary px-2.5 py-1.5 outline-none focus:border-gold transition-colors cursor-pointer font-condensed font-bold shadow-sm"
-                >
-                  {overview.vehicles.map(v => (
-                    <option key={v.ev_equipment_id} value={v.ev_equipment_id}>
-                      {v.serial_no} ({v.equipment_type})
-                    </option>
-                  ))}
-                </select>
+                <SearchSelect value={String(selectedEvId || "")}
+                  onChange={(v) => setSelectedEvId(Number(v))}
+                  placeholder="Choose a vehicle…"
+                  searchPlaceholder="Type a serial number…"
+                  className="bg-white text-[11.5px] px-2.5 py-1.5 font-condensed font-bold shadow-sm"
+                  options={overview.vehicles.map((v) => ({
+                    value: String(v.ev_equipment_id), label: v.serial_no,
+                    hint: v.equipment_type,
+                  }))} />
               </div>
             </div>
 

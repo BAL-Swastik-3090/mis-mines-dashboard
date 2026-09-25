@@ -24,6 +24,7 @@
  * was read from, because that document is the authority and this is a
  * convenience over it.
  */
+import SearchSelect from "@/components/minehub/SearchSelect";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle, ExternalLink, FileWarning, Gauge, Gavel, Landmark, Loader2,
@@ -683,19 +684,17 @@ export default function MarketSection() {
                   {worked.rows.map((r) => (
                     <tr key={r.id} className="border-b border-border-light">
                       <td className="px-2 py-1.5">
-                        <select className={input + " min-w-[210px]"} value={r.grade}
-                          onChange={(e) => {
-                            const g = e.target.value;
+                        <SearchSelect className={input + " min-w-[210px]"} value={r.grade}
+                          allLabel="Something else" searchPlaceholder="Type a grade…"
+                          options={royalty.rows.map((x) => ({
+                            value: x.grade, label: x.grade,
+                          }))}
+                          onChange={(g) => {
                             const src = royalty.rows.find((x) => x.grade === g);
                             setLines((ls) => ls.map((l) => l.id === r.id
                               ? { ...l, grade: g, asp: src ? String(src.asp) : l.asp }
                               : l));
-                          }}>
-                          {royalty.rows.map((x) => (
-                            <option key={x.grade} value={x.grade}>{x.grade}</option>
-                          ))}
-                          <option value="">Something else</option>
-                        </select>
+                          }} />
                       </td>
                       <td className="px-2 py-1.5">
                         <input className={input + " w-[110px] text-right"} inputMode="decimal"

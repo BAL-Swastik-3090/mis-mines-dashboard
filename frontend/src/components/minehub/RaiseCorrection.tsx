@@ -19,6 +19,7 @@
  * department the raiser's access covers, at the server, so a supervisor is
  * never offered somebody they would then be refused.
  */
+import SearchSelect from "@/components/minehub/SearchSelect";
 import { matchesSearch } from "@/lib/search";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -426,11 +427,9 @@ export default function RaiseCorrection({ who, prefill, onRaised, onCancel }: {
           <label className="block">
             <span className={lbl}>Reason <span className="text-rose">*</span></span>
             <span className="flex items-center gap-2">
-              <select id="rc-reason" value={reason}
-                onChange={(e) => setReason(e.target.value)} className={input}>
-                <option value="">Choose a reason…</option>
-                {reasons.map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
-              </select>
+              <SearchSelect value={reason} onChange={setReason} className={input}
+                placeholder="Choose a reason…" searchPlaceholder="Type a reason…"
+                options={reasons.map((r) => ({ value: r.code, label: r.label }))} />
               {who.may_edit_reasons && !newReason && (
                 <Button size="sm" variant="secondary"
                   onClick={() => setNewReason({ label: "", help: "" })}

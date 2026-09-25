@@ -15,6 +15,7 @@
  * check completeness only at submission, mark the fields that blocked it, keep
  * the trail beside the sheet, and never let one person both submit and approve.
  */
+import SearchSelect from "@/components/minehub/SearchSelect";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DateField from "./DateField";
 import {
@@ -962,13 +963,12 @@ export default function OperatorForm({ operatorId, openAt, prefill, onSaved, onD
                 </div>
               </Row>
               <Row label="Plant" required invalid={invalid.has("plant_id")}>
-                <select id="op-plant" className={cellInput} value={f.plant_id ?? ""}
-                  onChange={(e) => set("plant_id", e.target.value)}>
-                  <option value="">Select…</option>
-                  {plants.map((p) => (
-                    <option key={p.plant_id} value={p.plant_id}>{p.code} · {p.name}</option>
-                  ))}
-                </select>
+                <SearchSelect value={String(f.plant_id ?? "")} placeholder="Select…"
+                  onChange={(v) => set("plant_id", v)} width={280}
+                  className={`${cellInput} border-0 rounded`} searchPlaceholder="Type a plant…"
+                  options={plants.map((p) => ({
+                    value: String(p.plant_id), label: `${p.code} · ${p.name}`,
+                  }))} />
               </Row>
               <Row label="Department" hint="Not on the list? Type it and it is added">
                 <div className="px-1.5 py-1">
@@ -1093,15 +1093,13 @@ export default function OperatorForm({ operatorId, openAt, prefill, onSaved, onD
             <Band title="What they can run, and how well they understand it"
                   hint="Training is not competency. A level here means someone assessed them, and every assessment is kept"
                   right={
-                    <select value={compType} onChange={(e) => setCompType(e.target.value)}
-                      className="bg-white/10 border border-white/20 rounded-lg px-2.5 py-1 text-[12px] text-white">
-                      <option value="" className="text-navy">Choose equipment class…</option>
-                      {types.map((t) => (
-                        <option key={t.asset_type_id} value={t.asset_type_id} className="text-navy">
-                          {t.name}
-                        </option>
-                      ))}
-                    </select>
+                    <SearchSelect value={compType} onChange={setCompType}
+                      placeholder="Choose equipment class…"
+                      searchPlaceholder="Type a class…" width={260}
+                      className="bg-white/10 border-white/20 text-white hover:border-white/40"
+                      options={types.map((t) => ({
+                        value: String(t.asset_type_id), label: t.name,
+                      }))} />
                   } />
             <div className="border border-t-0 border-border-light rounded-b-xl bg-bg-base p-4">
               {compType && rights.may_assess && editing && (
@@ -1782,15 +1780,13 @@ function AssignmentSection({ assets, assignments, disabled, onAssign }: {
       <div className="border border-t-0 border-border-light rounded-b-xl bg-bg-base p-4 space-y-3">
         {!disabled && (
           <div className="flex flex-wrap items-end gap-2">
-            <select value={assetId} onChange={(e) => setAssetId(e.target.value)}
-              className="bg-bg-base border border-border rounded-lg px-3 py-2 text-[13px] min-w-[220px]">
-              <option value="">Choose a machine…</option>
-              {assets.map((a) => (
-                <option key={a.asset_id} value={a.asset_id}>
-                  {a.fleet_code}{a.nickname ? ` · ${a.nickname}` : ""}
-                </option>
-              ))}
-            </select>
+            <SearchSelect value={assetId} onChange={setAssetId}
+              placeholder="Choose a machine…" className="px-3 py-2 text-[13px] min-w-[220px]"
+              searchPlaceholder="Type a fleet code…"
+              options={assets.map((a) => ({
+                value: String(a.asset_id), label: a.fleet_code,
+                hint: a.nickname ?? undefined,
+              }))} />
             <select value={shift} onChange={(e) => setShift(e.target.value)}
               className="bg-bg-base border border-border rounded-lg px-3 py-2 text-[13px]">
               {["A", "B", "C", "GENERAL"].map((s) => <option key={s} value={s}>Shift {s}</option>)}

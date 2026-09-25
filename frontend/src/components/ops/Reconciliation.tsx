@@ -12,6 +12,7 @@
  * telematics name is joined to a machine none of the rest of this can work —
  * and linking is one click from here rather than a trip to another screen.
  */
+import SearchSelect from "@/components/minehub/SearchSelect";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import DateField from "@/components/minehub/DateField";
 import {
@@ -338,15 +339,15 @@ export default function Reconciliation({ rights, onChanged }: {
         Once linked, this feed's hours join that machine everywhere — reconciliation,
         utilisation, and the meter reading at handover. The link is a statement of
         fact, so it is worth being sure.
-        <select value={linkTo} onChange={(e) => setLinkTo(e.target.value)}
-          className="mt-2.5 w-full bg-bg-base border border-border rounded-lg px-3 py-2 text-[13px]">
-          <option value="">Choose the machine…</option>
-          {machines.map((m) => (
-            <option key={m.asset_id} value={m.asset_id}>
-              {m.fleet_code}{m.nickname ? ` · ${m.nickname}` : ""}
-            </option>
-          ))}
-        </select>
+        <div className="mt-2.5">
+          <SearchSelect field value={linkTo} onChange={setLinkTo}
+            placeholder="Choose the machine…"
+            searchPlaceholder="Type a fleet code…"
+            options={machines.map((m) => ({
+              value: String(m.asset_id), label: m.fleet_code,
+              hint: m.nickname ?? undefined,
+            }))} />
+        </div>
       </Dialog>
     </div>
   );

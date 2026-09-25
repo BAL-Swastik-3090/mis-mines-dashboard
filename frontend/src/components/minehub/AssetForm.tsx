@@ -12,6 +12,7 @@
  * click and never refused; the aim is that picking is easier than typing, not
  * that typing is blocked.
  */
+import SearchSelect from "@/components/minehub/SearchSelect";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import DateField from "./DateField";
 import { Plus, Trash2, Check, Loader2, Info, ArrowLeft, Send, CheckCircle2, Undo2, Copy, Pencil } from "lucide-react";
@@ -1251,13 +1252,12 @@ export default function AssetForm({ assetId, prefill, onSaved, onDone, onCancel 
         <Sheet>
           <Row label="Plant" required invalid={invalid.has("plant_id")}
                hint="The SAP plant this machine belongs to. Kaliapani machines are 1200">
-            <select id="af-plant" className={cellInput} value={f.plant_id ?? ""}
-              onChange={(e) => set("plant_id", e.target.value)}>
-              <option value="">Select…</option>
-              {plants.map((pl) => (
-                <option key={pl.plant_id} value={pl.plant_id}>{pl.code} · {pl.name}</option>
-              ))}
-            </select>
+            <SearchSelect value={String(f.plant_id ?? "")} placeholder="Select…"
+              onChange={(v) => set("plant_id", v)} width={280}
+              className={`${cellInput} border-0 rounded`} searchPlaceholder="Type a plant…"
+              options={plants.map((pl) => ({
+                value: String(pl.plant_id), label: `${pl.code} · ${pl.name}`,
+              }))} />
           </Row>
           <Row label="Department" required invalid={invalid.has("org_unit_id")}
                hint="Who answers for it day to day. Not on the list? Type it and it is added">

@@ -1,4 +1,5 @@
 "use client";
+import SearchSelect from "@/components/minehub/SearchSelect";
 import { matchesSearch } from "@/lib/search";
 import dynamic from "next/dynamic";
 import { useState } from "react";
@@ -881,14 +882,10 @@ export default function FuelManagementSection() {
                 </div>
 
                 {/* Category filter */}
-                <select
-                  value={filterCategory}
-                  onChange={e => setFilterCategory(e.target.value)}
-                  className="bg-bg-section border border-border rounded text-[11px] text-txt-secondary px-2.5 py-1.5 outline-none focus:border-[#c8960c] transition-colors cursor-pointer"
-                >
-                  <option value="all">All Types</option>
-                  {categories.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
+                <SearchSelect value={filterCategory} onChange={setFilterCategory}
+                  allLabel="All Types" allValue="all" options={categories}
+                  searchPlaceholder="Type a category…"
+                  className="bg-bg-section text-[11px] text-txt-secondary px-2.5 py-1.5" />
 
                 {/* Status filter */}
                 <select

@@ -11,6 +11,7 @@
  * puts the machine on inspection hold, because a shift change must not become
  * the way an unsafe machine gets back to work.
  */
+import SearchSelect from "@/components/minehub/SearchSelect";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowLeftRight, Loader2, Check, X, AlertTriangle, ShieldAlert, Gauge, Clock,
@@ -272,16 +273,18 @@ export default function HotoCentre({ openId, onOpened, rights, onChanged }: {
               </label>
               <label className="text-[12px] flex-1 min-w-[200px]">
                 <span className="block font-semibold text-txt-secondary mb-1">Taking over</span>
-                <select value={incoming} onChange={(e) => setIncoming(e.target.value)}
-                  className="w-full bg-bg-base border border-border rounded-lg px-3 py-1.5 text-[13px]">
-                  <option value="">Nobody yet — machine stands idle</option>
-                  {candidates.map((c) => (
-                    <option key={c.operator_id} value={c.operator_id}>
-                      {c.display_name} · L{c.level ?? 0}
-                      {c.readiness !== "READY" ? ` — ${c.blockers[0] ?? "has warnings"}` : ""}
-                    </option>
-                  ))}
-                </select>
+                <SearchSelect field value={incoming} onChange={setIncoming}
+                  allLabel="Nobody yet — machine stands idle"
+                  searchPlaceholder="Type a name…"
+                  options={candidates.map((c) => ({
+                    value: String(c.operator_id), label: c.display_name,
+                    hint: c.readiness !== "READY"
+                      ? (c.blockers[0] ?? "has warnings") : undefined,
+                    meta: <span className={c.readiness === "READY"
+                                           ? "text-emerald" : "text-amber"}>
+                            L{c.level ?? 0}
+                          </span>,
+                  }))} />
               </label>
             </div>
 

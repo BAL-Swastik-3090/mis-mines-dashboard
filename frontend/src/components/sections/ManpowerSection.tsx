@@ -19,6 +19,7 @@
  *               at a time is the wrong shape for it.
  *   ANALYTICS   the shape of the workforce, and the gaps in it.
  */
+import SearchSelect from "@/components/minehub/SearchSelect";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { BarChart3, CalendarCheck, Grid3x3, HardHat, Plus, ShieldCheck, Users } from "lucide-react";
 import api from "@/lib/api";
@@ -200,17 +201,13 @@ export default function ManpowerSection() {
             {plants.length > 1 && (
               <label className="flex items-center gap-1.5 text-[12px] text-txt-muted">
                 <Factory className="w-3.5 h-3.5 text-txt-light" />
-                <select value={plantId} onChange={(e) => setPlantId(e.target.value)}
-                  className="bg-bg-base border border-border rounded-lg px-2.5 py-1.5
-                             text-[12px] font-semibold text-txt-secondary
-                             focus:outline-none focus:border-gold">
-                  <option value="">All plants</option>
-                  {plants.map((p) => (
-                    <option key={p.plant_id} value={p.plant_id}>
-                      {p.code} · {p.name} · {p.operators}
-                    </option>
-                  ))}
-                </select>
+                <SearchSelect value={plantId} onChange={setPlantId} allLabel="All plants"
+                  searchPlaceholder="Type a plant…"
+                  className="px-2.5 py-1.5 text-[12px] font-semibold text-txt-secondary"
+                  options={plants.map((p) => ({
+                    value: String(p.plant_id), label: `${p.code} · ${p.name}`,
+                    meta: <span className="text-txt-light">{p.operators}</span>,
+                  }))} />
               </label>
             )}
             <ColumnFilter variant="control" label="Contractor" allLabel="All contractors"

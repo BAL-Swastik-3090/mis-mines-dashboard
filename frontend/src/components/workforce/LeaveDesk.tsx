@@ -11,6 +11,7 @@
  * because pulling an operator off a running excavator is not a decision a leave
  * form should be making quietly.
  */
+import SearchSelect from "@/components/minehub/SearchSelect";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import DateField from "@/components/minehub/DateField";
 import {
@@ -331,26 +332,22 @@ export default function LeaveDesk({ mayApply, mayApprove, mayManage, onChanged,
         <div className="space-y-3">
           <div className="grid sm:grid-cols-2 gap-3">
             <Field label="Who" required>
-              <select className={inputClass} value={form.operator_id}
-                      onChange={(e) => setForm({ ...form, operator_id: e.target.value })}>
-                <option value="">Choose an operator</option>
-                {people.map((p) => (
-                  <option key={p.operator_id} value={p.operator_id}>
-                    {p.display_name}{p.operator_ref ? ` — ${p.operator_ref}` : ""}
-                  </option>
-                ))}
-              </select>
+              <SearchSelect field value={form.operator_id} placeholder="Choose an operator"
+                searchPlaceholder="Type a name or a ticket number…"
+                onChange={(v) => setForm({ ...form, operator_id: v })}
+                options={people.map((p) => ({
+                  value: String(p.operator_id), label: p.display_name,
+                  hint: p.operator_ref ?? undefined,
+                }))} />
             </Field>
             <Field label="Kind of leave" required>
-              <select className={inputClass} value={form.leave_type_id}
-                      onChange={(e) => setForm({ ...form, leave_type_id: e.target.value })}>
-                <option value="">Choose</option>
-                {types.filter((t) => t.is_active).map((t) => (
-                  <option key={t.leave_type_id} value={t.leave_type_id}>
-                    {t.name} ({t.code}){t.is_paid ? "" : " — unpaid"}
-                  </option>
-                ))}
-              </select>
+              <SearchSelect field value={form.leave_type_id} placeholder="Choose"
+                onChange={(v) => setForm({ ...form, leave_type_id: v })}
+                searchPlaceholder="Type a kind of leave…"
+                options={types.filter((t) => t.is_active).map((t) => ({
+                  value: String(t.leave_type_id), label: `${t.name} (${t.code})`,
+                  hint: t.is_paid ? undefined : "unpaid",
+                }))} />
             </Field>
             <Field label="From" required>
               <DateField className={inputClass} value={form.from_date} onChange={(v) => setForm({ ...form, from_date: v, to_date: v > form.to_date ? v : form.to_date })} />

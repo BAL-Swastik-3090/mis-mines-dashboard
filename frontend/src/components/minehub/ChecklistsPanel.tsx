@@ -23,6 +23,7 @@
  * The screen says how many answers stand behind each item so that decision is
  * made with the number in view.
  */
+import SearchSelect from "@/components/minehub/SearchSelect";
 import React, { useCallback, useEffect, useState } from "react";
 import {
   AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, Check, ClipboardCheck, Loader2,
@@ -245,17 +246,12 @@ export default function ChecklistsPanel({ kind: initial = "COMPETENCY", onBack }
                 <span className="block text-[11px] font-semibold text-txt-secondary mb-1">
                   Which machines
                 </span>
-                <select id="cl-type" value={newItem.asset_type_id}
-                  onChange={(e) => setNewItem({ ...newItem, asset_type_id: e.target.value })}
-                  className="w-full bg-bg-base border border-border rounded-lg px-3 py-2
-                             text-[13px] focus:outline-none focus:border-gold">
-                  <option value="">Every machine class</option>
-                  {types.map((t) => (
-                    <option key={t.asset_type_id} value={t.asset_type_id}>
-                      Only {t.name}
-                    </option>
-                  ))}
-                </select>
+                <SearchSelect field value={newItem.asset_type_id}
+                  onChange={(v) => setNewItem({ ...newItem, asset_type_id: v })}
+                  allLabel="Every machine class" searchPlaceholder="Type a class…"
+                  options={types.map((t) => ({
+                    value: String(t.asset_type_id), label: `Only ${t.name}`,
+                  }))} />
               </label>
             </div>
             <label className="block">

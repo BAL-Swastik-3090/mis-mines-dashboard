@@ -18,6 +18,7 @@
  * against an escalation that nobody chose, and a wrong name is worse than a
  * blank one because a blank asks to be filled.
  */
+import SearchSelect from "@/components/minehub/SearchSelect";
 import { matchesSearch } from "@/lib/search";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -857,10 +858,11 @@ function AccountabilityDialog({ unitId, unitName, posts, onClose, onDone, onErro
           </Field>
         </div>
         <Field label="Answered by" hint="Leave as the head of department unless somebody narrower holds it.">
-          <select value={postId} onChange={(e) => setPostId(e.target.value)} className={inputClass}>
-            <option value="">The head of department</option>
-            {posts.map((p) => <option key={p.post_id} value={p.post_id}>{p.title}</option>)}
-          </select>
+          <SearchSelect field value={postId} onChange={setPostId}
+            allLabel="The head of department" searchPlaceholder="Type a post…"
+            options={posts.map((p) => ({
+              value: String(p.post_id), label: p.title,
+            }))} />
         </Field>
         <Field label="Note">
           <textarea value={description} onChange={(e) => setDescription(e.target.value)}
@@ -915,12 +917,11 @@ function NewUnit({ units, onDone }: { units: Unit[]; onDone: (msg: string) => vo
                 </select>
               </Field>
               <Field label="Reports to">
-                <select value={parent} onChange={(e) => setParent(e.target.value)} className={inputClass}>
-                  <option value="">Nothing above it</option>
-                  {units.map((u) => (
-                    <option key={u.org_unit_id} value={u.org_unit_id}>{u.name}</option>
-                  ))}
-                </select>
+                <SearchSelect field value={parent} onChange={setParent}
+                  allLabel="Nothing above it" searchPlaceholder="Type a unit…"
+                  options={units.map((u) => ({
+                    value: String(u.org_unit_id), label: u.name,
+                  }))} />
               </Field>
             </div>
             <p className="text-[11.5px] text-txt-muted leading-relaxed">

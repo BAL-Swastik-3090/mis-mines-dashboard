@@ -19,6 +19,7 @@
  * person should not need the right to read their medical record — and joined
  * here, at the only place that wants both.
  */
+import SearchSelect from "@/components/minehub/SearchSelect";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import DateField from "@/components/minehub/DateField";
 import {
@@ -469,13 +470,12 @@ export default function OperatorDashboard({ operatorId, onClose, mayApply, onCha
         onConfirm={() => void apply()} onCancel={() => setApplying(false)}>
         <div className="space-y-3">
           <Field label="Kind of leave" required>
-            <select className={inputClass} value={form.leave_type_id}
-                    onChange={(e) => setForm({ ...form, leave_type_id: e.target.value })}>
-              <option value="">Choose</option>
-              {types.filter((t) => t.is_active).map((t) => (
-                <option key={t.leave_type_id} value={t.leave_type_id}>{t.name}</option>
-              ))}
-            </select>
+            <SearchSelect field value={form.leave_type_id} placeholder="Choose"
+              onChange={(v) => setForm({ ...form, leave_type_id: v })}
+              searchPlaceholder="Type a kind of leave…"
+              options={types.filter((t) => t.is_active).map((t) => ({
+                value: String(t.leave_type_id), label: t.name,
+              }))} />
           </Field>
           <div className="grid sm:grid-cols-2 gap-3">
             <Field label="From" required>
