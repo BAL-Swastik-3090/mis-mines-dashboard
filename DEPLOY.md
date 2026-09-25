@@ -60,6 +60,66 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ---
 
+## Deployed — 2026-09-25: Weather page, previous-day actuals, and a searchable dropdown
+
+Released commit `df85d26` (branch `release-25-09-2026`) to mines.balasorealloys.in.
+Backup: `~/mines_dashboard-backup-20260925-0951.tar.gz`.
+
+**What changed**
+
+- Swastik's `Weather-and-Est-Actual-25-09-2026` merged in: Windy on its own
+  page open to anyone signed in, previous-day plan against a hand-entered
+  actual, the AI insights panel streamed so no timeout can fail it, and a tab
+  bar on Intelligence.
+- `SearchSelect` — a dropdown you type into, replacing the native select in
+  26 places where the list is long (operators, machines, bridges, plants,
+  grades, machine classes). Not the fixed lists.
+- The previous-day panel follows the header's date, shows that date where it
+  can be read, and gained a "Both Days" view that sets an estimate against
+  what SAP eventually posted.
+
+**No database change.** `scripts/sql/004_mines_prev_day_actual.sql` creates
+`mines_prev_day_actual` in balcorpdb — it already existed, created
+2026-09-24 15:51. Nothing was run against the shared database.
+
+### THE DEPLOY METHOD DOES NOT DELETE FILES — READ THIS BEFORE THE NEXT RELEASE
+
+The first build failed:
+
+```
+./src/hooks/useWeather.ts:3:26
+Type error: Module '"@/lib/weatherConfig"' has no exported member 'WEATHER_API_URL'.
+```
+
+The same tree built cleanly twice locally. The cause is the deploy method
+itself: `git archive | tar -x` over the existing project directory **adds and
+overwrites, and never removes**. This release DELETED three files, and all
+three were still sitting on the server from the previous release, being
+compiled against a `weatherConfig` that no longer exports what they import:
+
+```
+frontend/src/components/sections/HourlyForecastStrip.tsx
+frontend/src/components/sections/WeatherSection.tsx
+frontend/src/hooks/useWeather.ts
+```
+
+Removed by hand, then the build passed. **Before every deployment, list what
+the release deletes and remove those files on the server:**
+
+```bash
+# locally — <deployed> is the commit named in the previous DEPLOY.md entry
+git diff --diff-filter=D --name-only <deployed> <releasing>
+
+# on the server, after extracting
+cd ~/mines_dashboard && rm -f <each path above>
+```
+
+A rename is a delete plus an add, so a renamed file leaves its old name behind
+too — and the old name usually still compiles, which is worse than this case:
+it builds, ships, and nothing tells you the dead copy is there.
+
+---
+
 ## Deployed — 2026-09-24: Search that matches how people type, and a gate that can undo
 
 Released commit `67e5457` to mines.balasorealloys.in, by the usual method.
