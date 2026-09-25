@@ -9,7 +9,10 @@ import { persist } from "zustand/middleware";
 // workforce register are different people doing different work, and a section
 // somebody has to enter through somebody else's screen is a section they stop
 // visiting.
-export type AppPage = "mis" | "fuel-management" | "ev-tracking" | "oee" | "intelligence" | "access-control" | "minehub" | "manpower" | "operations" | "workforce" | "market";
+// "weather" is its own screen rather than a strip on the MIS dashboard: it is
+// consulted before a shift is planned, by people who are not otherwise reading
+// production figures, and a full-height map cannot share a page with anything.
+export type AppPage = "mis" | "weather" | "fuel-management" | "ev-tracking" | "oee" | "intelligence" | "access-control" | "minehub" | "manpower" | "operations" | "workforce" | "market";
 
 interface AppPageStore {
   page: AppPage;
