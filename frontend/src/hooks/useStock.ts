@@ -5,7 +5,7 @@ import { useDateFilter } from "@/contexts/useDateFilter";
 import type { StockPositionResponse } from "@/types";
 
 /**
- * Mines stock position from IMOS entry (`mines_stock`).
+ * Mines stock position from `mines_stock_entry`, filled in on this dashboard.
  *
  * Passes the filter's end date as `as_on`: the table is a snapshot per
  * Stock_Date rather than a daily series, so the server returns the latest

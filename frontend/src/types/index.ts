@@ -49,7 +49,7 @@ export interface KpiValue {
   pct_vs_plan: number | null;
 }
 
-// ── Stock (mines_stock — IMOS entry) ──────────────────────────
+// ── Stock (mines_stock_entry — dashboard entry) ───────────────
 export interface StockGradeRow {
   grade_key:   "HG" | "MG" | "LG" | "COB";
   grade_label: string;

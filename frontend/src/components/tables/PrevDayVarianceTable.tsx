@@ -33,7 +33,7 @@ import { CalendarCheck } from "lucide-react";
 import api from "@/lib/api";
 import { formatIndian } from "@/lib/utils";
 import PrevDayEntryModal, { type StoredValue } from "@/components/tables/PrevDayEntryModal";
-import { usePrevDayEntry } from "@/contexts/usePrevDayEntry";
+import { useEntryDialog } from "@/contexts/useEntryDialog";
 import {
   ORE_T_PER_M3, buildRows, dayLabel, targetDayISO, type KpiRow,
 } from "@/lib/prevDay";
@@ -65,8 +65,8 @@ export default function PrevDayVarianceTable() {
   const qc = useQueryClient();
   const [day, setDay] = useState(targetDayISO);
   const [view, setView] = useState<View>("actual");
-  const entryOpen = usePrevDayEntry((s) => s.open);
-  const setEntryOpen = usePrevDayEntry((s) => s.setOpen);
+  const dialog = useEntryDialog((s) => s.which);
+  const closeDialog = useEntryDialog((s) => s.close);
 
   // Roll over without a reload. Polling beats a timeout to midnight: background
   // tabs have their timers throttled and a sleeping laptop stops them
@@ -253,8 +253,8 @@ export default function PrevDayVarianceTable() {
       </div>
 
       <PrevDayEntryModal
-        open={entryOpen}
-        onClose={() => setEntryOpen(false)}
+        open={dialog === "prev-day"}
+        onClose={closeDialog}
         defaultDay={day}
         onSaved={refetchEntries}
       />
