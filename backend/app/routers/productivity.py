@@ -250,6 +250,173 @@ def tipper_classes(request: Request, db: Session = Depends(get_minehub_db)) -> l
     return out
 
 
+@router.post("/tipper-classes")
+def add_tipper_class(request: Request, body: dict = Body(...),
+                     db: Session = Depends(get_minehub_db)) -> dict:
+    """A kind of truck the mine did not have before.
+
+    The fleet arrives in kinds, not in one kind. A 25-tonne dumper turning up
+    on hire is a different number of trips and a different number of trucks per
+    face, and a screen that offers only the two classes somebody seeded it with
+    is a screen that gets abandoned the first time a third arrives.
+    """
+    _require(request, MANAGE, "add a kind of truck")
+    code = (body.get("code") or "").strip().upper().replace(" ", "_")
+    if not code:
+        raise HTTPException(422, "A kind of truck needs a short code.")
+    try:
+        row = db.execute(text("""
+            INSERT INTO tipper_class (code, label, payload_t, effective_cum,
+                                      loading_min, travel_min)
+            VALUES (:code, :label, :pay, :cum,
+                    COALESCE(:load, 5), COALESCE(:travel, 35))
+            RETURNING tipper_class_id
+        """), {"code": code,
+               "label": (body.get("label") or "").strip() or code.title(),
+               "pay": body.get("payload_t"), "cum": body.get("effective_cum"),
+               "load": body.get("loading_min"),
+               "travel": body.get("travel_min")}).first()
+    except Exception as exc:                        # noqa: BLE001
+        db.rollback()
+        raise HTTPException(422, f"That could not be saved: {exc}") from exc
+    db.commit()
+    return {"ok": True, "tipper_class_id": row[0]}
+
+
+@router.put("/tipper-classes/{tipper_class_id}")
+def edit_tipper_class(tipper_class_id: int, request: Request,
+                      body: dict = Body(...),
+                      db: Session = Depends(get_minehub_db)) -> dict:
+    """Correct what a kind of truck carries, or retire it.
+
+    Retired rather than deleted: a class a face was planned against last month
+    has to keep existing, or that plan can no longer be explained.
+    """
+    _require(request, MANAGE, "change a kind of truck")
+    done = db.execute(text("""
+        UPDATE tipper_class
+           SET label         = COALESCE(:label, label),
+               payload_t     = COALESCE(:pay, payload_t),
+               effective_cum = COALESCE(:cum, effective_cum),
+               loading_min   = COALESCE(:load, loading_min),
+               travel_min    = COALESCE(:travel, travel_min),
+               is_active     = COALESCE(CAST(:active AS boolean), is_active)
+         WHERE tipper_class_id = :id
+        RETURNING tipper_class_id
+    """), {"id": tipper_class_id, "label": body.get("label"),
+           "pay": body.get("payload_t"), "cum": body.get("effective_cum"),
+           "load": body.get("loading_min"), "travel": body.get("travel_min"),
+           "active": body.get("is_active")}).first()
+    if not done:
+        raise HTTPException(404, "There is no such kind of truck.")
+    db.commit()
+    return {"ok": True}
+
+
+@router.put("/machines/{asset_id}/cycle")
+def set_cycle(asset_id: int, request: Request, body: dict = Body(...),
+              db: Session = Depends(get_minehub_db)) -> dict:
+    """Give one machine a cycle of its own.
+
+    THE TABLE THIS WRITES WAS PREVIOUSLY UNREACHABLE. excavator_cycle was read
+    on every request and written by nothing, so every machine silently ran the
+    shared cycle and a screen that showed "its own" could never say it.
+
+    Every field is optional and falls back to the shared row, so changing the
+    digging time does not mean restating the other seven — restating them is
+    how the seven drift. A reason is not optional: an override nobody
+    explained cannot be told from a typo six months later.
+    """
+    _require(request, MANAGE, "change a machine's cycle")
+    reason = (body.get("reason") or "").strip()
+    if not reason:
+        raise HTTPException(
+            422, "Say why this machine differs. An unexplained override "
+                 "cannot be told from a mistake later.")
+
+    fields = ["fill_factor", "swell_factor", "dig_sec", "lift_sec", "swing_sec",
+              "lower_sec", "tilt_sec", "wait_sec", "unload_sec", "return_sec"]
+    vals = {f: body.get(f) for f in fields}
+    if all(v is None for v in vals.values()):
+        raise HTTPException(
+            422, "An override that changes nothing is not an override. "
+                 "Clear it instead if this machine runs the shared cycle.")
+
+    if not db.execute(text("SELECT 1 FROM asset WHERE asset_id = :id"),
+                      {"id": asset_id}).first():
+        raise HTTPException(404, "That machine is not on the register.")
+
+    sets = ", ".join(f"{f} = EXCLUDED.{f}" for f in fields)
+    db.execute(text(f"""
+        INSERT INTO excavator_cycle (asset_id, {', '.join(fields)}, reason, created_by)
+        VALUES (:id, {', '.join(':' + f for f in fields)}, :reason, :by)
+        ON CONFLICT (asset_id) DO UPDATE
+           SET {sets}, reason = EXCLUDED.reason, updated_at = now()
+    """), {"id": asset_id, **vals, "reason": reason, "by": _actor(request)})
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/machines/{asset_id}/cycle")
+def clear_cycle(asset_id: int, request: Request,
+                db: Session = Depends(get_minehub_db)) -> dict:
+    """Put a machine back on the shared cycle."""
+    _require(request, MANAGE, "change a machine's cycle")
+    db.execute(text("DELETE FROM excavator_cycle WHERE asset_id = :id"),
+               {"id": asset_id})
+    db.commit()
+    return {"ok": True}
+
+
+@router.put("/machines/{asset_id}/plan-name")
+def set_plan_name(asset_id: int, request: Request, body: dict = Body(...),
+                  db: Session = Depends(get_minehub_db)) -> dict:
+    """Record what the business plan calls this machine.
+
+    Without this the mapping could only ever be set by running a script, which
+    means "370-5" stays unresolved for as long as nobody runs one — and the
+    864 Cum/day behind it stays missing from the totals with no way for the
+    person who knows the pit to fix it.
+
+    A plan name belongs to one machine. Moving it says the earlier row was
+    wrong, which is the usual reason for touching this at all, so the old link
+    is replaced rather than refused.
+    """
+    _require(request, MANAGE, "change what the plan calls a machine")
+    name = (body.get("plan_name") or "").strip()
+
+    if not db.execute(text("SELECT 1 FROM asset WHERE asset_id = :id"),
+                      {"id": asset_id}).first():
+        raise HTTPException(404, "That machine is not on the register.")
+
+    if not name:
+        db.execute(text("""
+            DELETE FROM asset_identity
+             WHERE asset_id = :id AND system = 'BUSINESS_PLAN'
+        """), {"id": asset_id})
+        db.commit()
+        return {"ok": True, "plan_name": None}
+
+    moved_from = db.execute(text("""
+        SELECT a.fleet_code FROM asset_identity i JOIN asset a ON a.asset_id = i.asset_id
+         WHERE i.system = 'BUSINESS_PLAN' AND i.external_code = :n
+           AND i.asset_id <> :id
+    """), {"n": name, "id": asset_id}).scalar()
+
+    db.execute(text("""
+        DELETE FROM asset_identity
+         WHERE asset_id = :id AND system = 'BUSINESS_PLAN'
+    """), {"id": asset_id})
+    db.execute(text("""
+        INSERT INTO asset_identity (asset_id, system, external_code, created_by)
+             VALUES (:id, 'BUSINESS_PLAN', :n, :by)
+        ON CONFLICT (system, external_code) DO UPDATE
+           SET asset_id = EXCLUDED.asset_id
+    """), {"id": asset_id, "n": name, "by": _actor(request)})
+    db.commit()
+    return {"ok": True, "plan_name": name, "taken_from": moved_from}
+
+
 @router.get("/plan")
 def plan(request: Request, on: str | None = Query(None),
          db: Session = Depends(get_minehub_db)) -> dict:
