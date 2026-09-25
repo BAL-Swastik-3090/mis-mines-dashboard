@@ -7,5 +7,7 @@ export const WEATHER_CONFIG = {
   timezone: "Asia/Kolkata",
 } as const;
 
-// Open-Meteo API — free, no key required, CORS enabled
-export const WEATHER_API_URL = "https://api.open-meteo.com/v1/forecast";
+// WEATHER_CONFIG is still the single source for the mine's coordinates: the
+// Windy embed centres on them and labels itself from them. The Open-Meteo
+// endpoint that used to live here went with the compact forecast strip, which
+// the Windy page replaced.
