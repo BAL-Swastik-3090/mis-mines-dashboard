@@ -21,7 +21,7 @@
  */
 import SearchSelect from "@/components/minehub/SearchSelect";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { BarChart3, CalendarCheck, Grid3x3, HardHat, Plus, ShieldCheck, Users } from "lucide-react";
+import { BarChart3, CalendarCheck, Grid3x3, HardHat, Plus, ShieldCheck, UserMinus, Users } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
 import { Button, Card, PageHeader, Tabs, type Tone } from "@/components/minehub/ui";
@@ -97,6 +97,15 @@ export default function ManpowerSection() {
   // and the reason each person left. They are simply not in the list you read
   // when you are deciding who works today.
   const [standing, setStanding] = useState("ON_ROLL");
+
+  // How many people are off the rolls, so the screen can say so rather than
+  // waiting to be asked. Counted once, not with every keystroke.
+  const [offRoll, setOffRoll] = useState(0);
+  useEffect(() => {
+    void api.get("/operators/summary", { params: { standing: "OFF_ROLL" } })
+      .then((r) => setOffRoll(r.data?.operators ?? 0))
+      .catch(() => setOffRoll(0));
+  }, [changed]);
   const set = (k: keyof typeof by) => (v: string) => setBy((b) => ({ ...b, [k]: v }));
   const narrowed = Boolean(plantId) || standing !== "ON_ROLL"
     || Object.values(by).some(Boolean);
@@ -256,6 +265,25 @@ export default function ManpowerSection() {
                 className="inline-flex items-center gap-1 text-[11.5px] font-semibold
                            text-gold-dark hover:underline underline-offset-2">
                 <X className="w-3 h-3" /> Clear
+              </button>
+            )}
+            {/* The way to the people who have left, stated rather than
+                hidden behind a filter nobody has a reason to open. */}
+            {standing === "ON_ROLL" && offRoll > 0 && (
+              <button type="button" onClick={() => setStanding("OFF_ROLL")}
+                title="Retired, deceased, or otherwise no longer employed"
+                className="inline-flex items-center gap-1 text-[11.5px] font-semibold
+                           text-txt-muted hover:text-navy underline underline-offset-2
+                           decoration-dotted">
+                <UserMinus className="w-3.5 h-3.5" />
+                {offRoll} off the rolls
+              </button>
+            )}
+            {standing !== "ON_ROLL" && (
+              <button type="button" onClick={() => setStanding("ON_ROLL")}
+                className="inline-flex items-center gap-1 text-[11.5px] font-semibold
+                           text-gold-dark hover:underline underline-offset-2">
+                <Users className="w-3.5 h-3.5" /> Back to who works here
               </button>
             )}
             <span className="ml-auto text-[11.5px] text-txt-light tabular-nums">

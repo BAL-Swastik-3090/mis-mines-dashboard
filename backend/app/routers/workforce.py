@@ -678,7 +678,9 @@ def export_crews(request: Request,
           LEFT JOIN org_unit ou ON ou.org_unit_id = a.org_unit_id
           LEFT JOIN operator_assignment oa
                  ON oa.asset_id = a.asset_id AND oa.status = 'ACTIVE'
+          -- Same rule as the screen this exports: off the rolls is not crew.
           LEFT JOIN operator o ON o.operator_id = oa.operator_id
+                              AND o.profile_status = 'ACTIVE' 
           LEFT JOIN party p ON p.party_id = o.party_id
          WHERE a.status NOT IN ('DISPOSED', 'SCRAPPED', 'CANNIBALISED')
          ORDER BY t.name, a.fleet_code, oa.role, p.legal_name
@@ -899,6 +901,11 @@ def who_can_run(request: Request,
                    JOIN party cp ON cp.party_id = co.party_id
                   WHERE oa.asset_id = a.asset_id
                     AND oa.status = 'ACTIVE'
+                    -- Somebody off the rolls is not crew, whatever the
+                    -- assignment still says. An assignment left open when a
+                    -- man retires would otherwise keep him on the machine,
+                    -- and a plan is read as a statement of who will drive it.
+                    AND co.profile_status = 'ACTIVE'
                     AND oa.valid_from <= :on
                     AND (oa.valid_to IS NULL OR oa.valid_to >= :on)
                ), '[]'::json) AS crew

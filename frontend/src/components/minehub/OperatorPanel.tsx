@@ -211,7 +211,7 @@ export default function OperatorPanel({ view: viewProp = "register", addOpen,
         api.get("/operators", { params: { standing,
           ...(plantId ? { plant_id: plantId } : {}) } }),
         api.get("/operators/unregistered"),
-        api.get("/operators/summary"),
+        api.get("/operators/summary", { params: { standing } }),
         api.get("/operators/meta/due").catch(() => ({ data: [] })),
         api.get("/operators/meta/training-needs").catch(() => ({ data: [] })),
       ]);

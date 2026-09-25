@@ -346,28 +346,59 @@ def list_operators(q: str = Query(""), status: str = Query(""),
 
 
 @router.get("/summary")
-def summary(db: Session = Depends(get_minehub_db)) -> dict:
-    """What the register looks like as a whole."""
-    row = db.execute(text("""
-        SELECT (SELECT count(*) FROM operator)                                    AS operators,
-               (SELECT count(*) FROM operator WHERE approval_status = 'APPROVED') AS approved,
-               (SELECT count(*) FROM operator WHERE approval_status = 'SUBMITTED') AS awaiting,
-               (SELECT count(*) FROM operator_competency
-                 WHERE dimension = 'OVERALL' AND level >= 2)                      AS competencies,
-               (SELECT count(*) FROM operator_alert WHERE severity = 'EXPIRED')   AS expired,
-               (SELECT count(*) FROM operator_alert WHERE severity = 'DUE')       AS due,
+def summary(standing: str = Query("ON_ROLL"),
+            db: Session = Depends(get_minehub_db)) -> dict:
+    """What the register looks like as a whole, for the same people it shows.
+
+    Every count here used to be over the whole table. With the register down
+    to the 204 who work here, the tiles beside it were still describing 211 —
+    and "Awaiting approval" could be answered by approving the paperwork of
+    somebody who retired in February.
+    """
+    if standing.upper() == "ON_ROLL":
+        keep = ON_ROLL
+    elif standing.upper() == "OFF_ROLL":
+        keep = OFF_ROLL
+    elif standing.upper() == "ALL":
+        keep = "TRUE"
+    else:
+        raise HTTPException(422, "standing must be ON_ROLL, OFF_ROLL or ALL")
+
+    # The competency and alert counts are over other tables, so each one has to
+    # reach back to the operator to know whose row it is.
+    of_ours = (f"EXISTS (SELECT 1 FROM operator o WHERE o.operator_id = %s "
+               f"AND {keep})")
+
+    row = db.execute(text(f"""
+        SELECT (SELECT count(*) FROM operator o WHERE {keep})                     AS operators,
+               (SELECT count(*) FROM operator o
+                 WHERE {keep} AND o.approval_status = 'APPROVED')                 AS approved,
+               (SELECT count(*) FROM operator o
+                 WHERE {keep} AND o.approval_status = 'SUBMITTED')                AS awaiting,
+               (SELECT count(*) FROM operator_competency c
+                 WHERE c.dimension = 'OVERALL' AND c.level >= 2
+                   AND {of_ours % 'c.operator_id'})                               AS competencies,
+               (SELECT count(*) FROM operator_alert al
+                 WHERE al.severity = 'EXPIRED'
+                   AND {of_ours % 'al.operator_id'})                              AS expired,
+               (SELECT count(*) FROM operator_alert al
+                 WHERE al.severity = 'DUE'
+                   AND {of_ours % 'al.operator_id'})                              AS due,
                -- Improvement and decline, counted from the level a person was at
                -- last time. The second number is the one worth a phone call.
-               (SELECT count(*) FROM operator_competency
-                 WHERE dimension = 'OVERALL' AND previous_level IS NOT NULL
-                   AND level > previous_level)                                    AS improved,
-               (SELECT count(*) FROM operator_competency
-                 WHERE dimension = 'OVERALL' AND previous_level IS NOT NULL
-                   AND level < previous_level)                                    AS declined,
-               (SELECT round(avg(rating), 1) FROM operator_competency
-                 WHERE dimension = 'OVERALL' AND rating IS NOT NULL)              AS avg_rating,
+               (SELECT count(*) FROM operator_competency c
+                 WHERE c.dimension = 'OVERALL' AND c.previous_level IS NOT NULL
+                   AND c.level > c.previous_level
+                   AND {of_ours % 'c.operator_id'})                               AS improved,
+               (SELECT count(*) FROM operator_competency c
+                 WHERE c.dimension = 'OVERALL' AND c.previous_level IS NOT NULL
+                   AND c.level < c.previous_level
+                   AND {of_ours % 'c.operator_id'})                               AS declined,
+               (SELECT round(avg(c.rating), 1) FROM operator_competency c
+                 WHERE c.dimension = 'OVERALL' AND c.rating IS NOT NULL
+                   AND {of_ours % 'c.operator_id'})                               AS avg_rating,
                (SELECT count(*) FROM operator o
-                 WHERE o.profile_status = 'ACTIVE'
+                 WHERE {keep}
                    AND NOT EXISTS (SELECT 1 FROM operator_competency c
                                     WHERE c.operator_id = o.operator_id
                                       AND c.dimension = 'OVERALL'))               AS never_assessed
