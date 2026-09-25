@@ -34,17 +34,40 @@ import {
   inputClass, type Tone,
 } from "@/components/minehub/ui";
 import SearchSelect from "@/components/minehub/SearchSelect";
-import Combobox from "@/components/minehub/Combobox";
 
 interface Face {
   face_plan_id: number; asset_id: number; fleet_code: string;
   plan_name: string | null; location: string; material: string;
+  location_id: number; location_type: string | null;
+  activity: string; face_activity_id: number; reports_as: string;
+  material_id: number | null;
   running_hours: number; tippers: number; tipper_class: string | null;
   bucket_cum: number; bucket_is_fitted: boolean;
   cycle_sec: number; cycle_is_overridden: boolean;
   cum_per_hour: number; excavator_cum_day: number; tipper_cum_day: number;
   effective_cum_day: number; limited_by: string; lost_cum_day: number;
 }
+interface Place {
+  location_id: number; code: string; name: string;
+  location_type: string; within: string | null;
+}
+interface Job {
+  face_activity_id: number; code: string; label: string;
+  reports_as: string; needs_material: boolean;
+}
+interface Stuff {
+  material_id: number; code: string; name: string;
+  material_class: string | null; uom: string | null;
+}
+interface AssumptionSet {
+  productivity_assumption_id: number; effective_from: string;
+  effective_to: string | null; in_force: boolean; note: string | null;
+  by: string | null; cycle_sec: number;
+  changed: Record<string, [unknown, unknown]> | null;
+  fill_factor: number; swell_factor: number; operating_hours: number;
+  ore_t_per_cum: number;
+}
+
 interface Where {
   fleet_code: string; location: string; material: string;
   gap_cum_day: number; tippers_short?: number; tippers_spare?: number;
@@ -90,6 +113,8 @@ interface Quality {
   plan_names_with_no_machine: string[];
 }
 
+const SAID: Record<string, string> = {"fill_factor": "fill factor", "swell_factor": "swell factor", "operating_hours": "operating hours", "ore_t_per_cum": "ore density", "dig_sec": "digging", "lift_sec": "lifting", "swing_sec": "swing", "lower_sec": "lowering", "tilt_sec": "tilting", "wait_sec": "waiting", "unload_sec": "unloading", "return_sec": "return"};
+
 const LIMIT_TONE: Record<string, Tone> = {
   TIPPERS: "amber", EXCAVATOR: "sky", NEITHER: "emerald",
 };
@@ -134,32 +159,40 @@ export default function CapacitySection() {
   // "Stack Yard / LG Dump / ETP" would make the planner choose between the
   // truth and the dropdown. But having them there stops "North East" and
   // "North-East" quietly becoming two places.
-  const [known, setKnown] = useState<{ locations: string[]; materials: string[] }>(
-    { locations: [], materials: [] });
+  const [choices, setChoices] = useState<{
+    locations: Place[]; activities: Job[]; materials: Stuff[] }>(
+    { locations: [], activities: [], materials: [] });
+  const [history, setHistory] = useState<AssumptionSet[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [p, m, a, q, act] = await Promise.all([
+      const [p, m, a, q, act, ch, hist] = await Promise.all([
         api.get("/productivity/plan", { params: { on: day } }),
         api.get("/productivity/machines"),
         api.get("/productivity/assumptions"),
         api.get("/productivity/data-quality").catch(() => ({ data: null })),
         api.get("/productivity/activity", { params: { days: 30, limit: 200 } })
           .catch(() => ({ data: [] })),
+        api.get("/productivity/choices")
+          .catch(() => ({ data: { locations: [], activities: [], materials: [] } })),
+        api.get("/productivity/assumptions/history").catch(() => ({ data: [] })),
       ]);
       // The API is a claim, not a guarantee: a missing faces array would
       // otherwise take the whole page down on .map.
       setFaces(p.data?.faces ?? []);
       setSummary(p.data?.summary ?? null);
       setClasses(p.data?.tipper_classes ?? []);
-      setKnown({ locations: p.data?.known_locations ?? [],
-                 materials: p.data?.known_materials ?? [] });
+
       setMachines(m.data ?? []);
       setModel(a.data ?? null);
       setQuality(q.data ?? null);
       setLog(act.data ?? []);
+      setChoices({ locations: ch.data?.locations ?? [],
+                   activities: ch.data?.activities ?? [],
+                   materials: ch.data?.materials ?? [] });
+      setHistory(hist.data ?? []);
     } finally {
       setLoading(false);
     }
@@ -416,7 +449,7 @@ export default function CapacitySection() {
             <table className="w-full min-w-[980px]">
               <thead>
                 <tr>
-                  <Th>Machine</Th><Th>Where</Th><Th>What</Th>
+                  <Th>Machine</Th><Th>Where</Th><Th>Doing</Th>
                   <Th className="text-right">Bucket</Th>
                   <Th className="text-right">Cum/hr</Th>
                   <Th className="text-right">Hours</Th>
@@ -445,11 +478,27 @@ export default function CapacitySection() {
                         </span>
                       )}
                     </Td>
-                    {/* The place and the material are corrected here rather
-                        than by deleting the row and typing it again. Deleting
-                        loses the row's history along with its mistake. */}
-                    <Td className="text-[12px]">{f.location}</Td>
-                    <Td className="text-[12px] text-txt-muted">{f.material}</Td>
+                    {/* The place, the job and the material are corrected here
+                        rather than by deleting the row and typing it again.
+                        Deleting loses the row's history with its mistake. */}
+                    <Td className="text-[12px]">
+                      {f.location}
+                      {f.location_type && (
+                        <span className="block text-[9.5px] text-txt-light">
+                          {f.location_type.toLowerCase()}
+                        </span>
+                      )}
+                    </Td>
+                    <Td className="text-[12px] text-txt-muted">
+                      {f.activity}
+                      {/* What this job counts as in the morning report. Ore is
+                          reported in tonnes and everything else in cubic
+                          metres, and that is a property of the job. */}
+                      <span className="block text-[9.5px] text-txt-light">
+                        {f.material ? `${f.material} · ` : ""}
+                        reports as {f.reports_as.toLowerCase()}
+                      </span>
+                    </Td>
                     <Td className="text-right text-[12px]">
                       <span className="font-mono">{f.bucket_cum}</span>
                       {/* A bucket that is not the machine's standard one is
@@ -554,15 +603,16 @@ export default function CapacitySection() {
       {!loading && tab === "activity" && <ActivityTab log={log} />}
 
       {!loading && tab === "model" && model && (
-        <ModelTab model={model} classes={classes} onSave={saveModel} busy={busy}
+        <ModelTab model={model} classes={classes} history={history}
+          onSave={saveModel} busy={busy}
           onAddClass={() => setAddingClass(true)}
           onEditClass={(id, patch) => void write(() =>
             api.put(`/productivity/tipper-classes/${id}`, patch))} />
       )}
 
       {(adding || editingFace) && (
-        <AddFace day={day} machines={machines} classes={classes} known={known}
-          face={editingFace}
+        <AddFace day={day} machines={machines} classes={classes}
+          choices={choices} onChanged={load} face={editingFace}
           onClose={() => { setAdding(false); setEditingFace(null); }}
           onSaved={() => { setAdding(false); setEditingFace(null); void load(); }} />
       )}
@@ -693,9 +743,11 @@ function MachinesTab({ machines, onBucket, onCycle, onPlanName, busy }: {
 
 /* ── the assumptions everything is derived from ────────────────────────── */
 
-function ModelTab({ model, classes, onSave, onAddClass, onEditClass, busy }: {
+function ModelTab({ model, classes, history, onSave, onAddClass, onEditClass,
+                   busy }: {
   model: Assumptions;
   classes: TipperClass[];
+  history: AssumptionSet[];
   onSave: (patch: Record<string, unknown>) => void;
   onAddClass: () => void;
   onEditClass: (id: number, patch: Record<string, unknown>) => void;
@@ -783,6 +835,71 @@ function ModelTab({ model, classes, onSave, onAddClass, onEditClass, busy }: {
         </div>
       </Card>
 
+{/* The rows already superseded rather than overwrote — a capacity agreed
+          in a meeting has to stay explicable afterwards — but nothing could
+          read them back, so the history existed and was invisible. */}
+      <Card>
+        <CardHeader icon={History} tone="slate" subtitleOnIcon
+          title={`Every set of assumptions, ${history.length} so far`}
+          subtitle="Changing these supersedes rather than overwrites, so a figure worked out last month can still be explained. What changed each time is worked out from the rows, not stored beside them." />
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[760px]">
+            <thead>
+              <tr>
+                <Th>In force</Th>
+                <Th className="text-right">Cycle</Th>
+                <Th className="text-right">Fill</Th>
+                <Th className="text-right">Swell</Th>
+                <Th className="text-right">Hours</Th>
+                <Th>What changed</Th>
+                <Th>By</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.map((h) => (
+                <tr key={h.productivity_assumption_id}
+                  className={`border-t border-border-light ${
+                    h.in_force ? "bg-gold/[0.05]" : ""}`}>
+                  <Td className="text-[12px]">
+                    <span className="font-semibold text-navy">
+                      {h.effective_from.split("-").reverse().join("-")}
+                    </span>
+                    <span className="block text-[10.5px] text-txt-light">
+                      {h.in_force ? "in force now"
+                        : `until ${String(h.effective_to).split("-").reverse().join("-")}`}
+                    </span>
+                  </Td>
+                  <Td className="text-right text-[12px] font-mono">{h.cycle_sec}s</Td>
+                  <Td className="text-right text-[12px] font-mono">{h.fill_factor}</Td>
+                  <Td className="text-right text-[12px] font-mono">{h.swell_factor}</Td>
+                  <Td className="text-right text-[12px] font-mono">{h.operating_hours}</Td>
+                  <Td className="text-[11.5px] text-txt-muted">
+                    {h.changed
+                      ? Object.entries(h.changed).map(([k, v]) => (
+                          <span key={k} className="block">
+                            {SAID[k] ?? k.replace(/_/g, " ")}{" "}
+                            <span className="font-mono">{String(v[0])}</span>
+                            {" to "}
+                            <span className="font-mono font-semibold text-navy">
+                              {String(v[1])}
+                            </span>
+                          </span>
+                        ))
+                      : <span className="text-txt-light">the first set</span>}
+                    {h.note && (
+                      <span className="block text-[10.5px] text-txt-light italic mt-0.5">
+                        {h.note}
+                      </span>
+                    )}
+                  </Td>
+                  <Td className="text-[11px] text-txt-light">{h.by ?? "—"}</Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
       <Card>
         <CardHeader icon={Truck} tone="teal" title="What a truck carries in a day"
           subtitleOnIcon
@@ -852,6 +969,58 @@ function ModelTab({ model, classes, onSave, onAddClass, onEditClass, busy }: {
         </div>
       </Card>
     </div>
+  );
+}
+
+/* ── adding to a master from the form that needed it ───────────────────── */
+
+function AddTo({ label, value, onValue, placeholder, onAdd }: {
+  label: string; value: string; onValue: (v: string) => void;
+  placeholder: string; onAdd: () => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Folded away until wanted. A field that is usually empty sitting under
+  // every picker turns a two-field form into a six-field one, and the common
+  // case is choosing something that already exists.
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)}
+        className="mt-1 text-[10.5px] text-gold-dark hover:underline underline-offset-2">
+        + {label}
+      </button>
+    );
+  }
+  return (
+    <span className="mt-1 block">
+      <span className="flex items-center gap-1.5">
+        <input autoFocus value={value} placeholder={placeholder}
+          onChange={(e) => onValue(e.target.value)}
+          className={`${inputClass} py-1 text-[12px]`} />
+        <Button size="sm" variant="secondary" disabled={!value.trim() || busy}
+          onClick={async () => {
+            setBusy(true); setErr(null);
+            try { await onAdd(); setOpen(false); }
+            catch (e) {
+              const d = (e as { response?: { data?: { detail?: string } } })
+                ?.response?.data?.detail;
+              setErr(d ?? "That could not be added.");
+            } finally { setBusy(false); }
+          }}>
+          {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : "Add"}
+        </Button>
+        <button type="button" onClick={() => { setOpen(false); setErr(null); }}
+          className="rounded p-1 text-txt-light hover:text-txt-primary">
+          <X className="w-3 h-3" />
+        </button>
+      </span>
+      {err && <span className="block text-[10.5px] text-rose mt-0.5">{err}</span>}
+      <span className="block text-[10px] text-txt-light mt-0.5">
+        Added to the master the whole platform reads, not to this screen alone.
+      </span>
+    </span>
   );
 }
 
@@ -1198,30 +1367,40 @@ function AddTipperClass({ onClose, onSaved }: {
 
 /* ── putting a machine on a face ───────────────────────────────────────── */
 
-function AddFace({ day, machines, classes, known, face, onClose, onSaved }: {
+function AddFace({ day, machines, classes, choices, face, onChanged,
+                   onClose, onSaved }: {
   day: string; machines: Machine[]; classes: TipperClass[];
-  known: { locations: string[]; materials: string[] };
+  choices: { locations: Place[]; activities: Job[]; materials: Stuff[] };
   /** The row being corrected, or null to put a new machine on a face. */
   face?: Face | null;
+  /** Reload the masters after one of them is added to. */
+  onChanged: () => void;
   onClose: () => void; onSaved: () => void;
 }) {
   const editing = Boolean(face);
   const [f, setF] = useState(() => face ? {
-    asset_id: String(face.asset_id), location: face.location,
-    material: face.material, running_hours: String(face.running_hours),
-    tippers: String(face.tippers),
+    asset_id: String(face.asset_id), location_id: String(face.location_id),
+    face_activity_id: String(face.face_activity_id),
+    material_id: face.material_id ? String(face.material_id) : "",
+    running_hours: String(face.running_hours), tippers: String(face.tippers),
     tipper_class_id: String(
       classes.find((c) => c.code === face.tipper_class)?.tipper_class_id
       ?? classes[0]?.tipper_class_id ?? ""),
   } : {
-    asset_id: "", location: "", material: "", running_hours: "20",
-    tippers: "0", tipper_class_id: String(classes[0]?.tipper_class_id ?? ""),
+    asset_id: "", location_id: "", face_activity_id: "", material_id: "",
+    running_hours: "20", tippers: "0",
+    tipper_class_id: String(classes[0]?.tipper_class_id ?? ""),
   });
+  const [addingPlace, setAddingPlace] = useState("");
+  const [addingJob, setAddingJob] = useState("");
+
+  const job = choices.activities.find(
+    (a) => String(a.face_activity_id) === f.face_activity_id);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const ok = f.asset_id && f.location.trim() && f.material.trim()
-    && Number(f.running_hours) > 0;
+  const ok = Boolean(f.asset_id && f.location_id && f.face_activity_id
+    && Number(f.running_hours) > 0);
 
   return (
     <div className="fixed inset-0 z-[10001] flex items-center justify-center p-4 bg-navy/40"
@@ -1269,25 +1448,58 @@ function AddFace({ day, machines, classes, known, face, onClose, onSaved }: {
             )}
           </label>
           <div className="grid sm:grid-cols-2 gap-3">
-            {/* Chosen from what the mine has said before, or typed if this
-                face is new. Combobox already does exactly this job for the
-                equipment and operator registers, so it does it here too
-                rather than a third control being invented. */}
+            {/* From the location master the gate and the weighbridge use, not
+                a list this screen keeps for itself. The type is on every row
+                because the master holds "North" twice on purpose — the north
+                pit and the north stockpile are two places, and a picker
+                showing the bare name would make that a coin toss. */}
             <label className="block">
               <span className="block text-[11px] font-semibold text-txt-secondary mb-1">
-                Where
+                Where <span className="text-rose">*</span>
               </span>
-              <Combobox value={f.location} placeholder="Bottom, North East, Stack Yard…"
-                options={known.locations.map((v) => ({ value: v }))}
-                onChange={(v) => setF({ ...f, location: v })} />
+              <SearchSelect field value={f.location_id} placeholder="Choose a place…"
+                searchPlaceholder="Type a place…"
+                onChange={(v) => setF({ ...f, location_id: v })}
+                options={choices.locations.map((l) => ({
+                  value: String(l.location_id), label: l.name,
+                  hint: l.within ? `${l.location_type.toLowerCase()} · ${l.within}`
+                                 : l.location_type.toLowerCase(),
+                }))} />
+              <AddTo label="place not on the list"
+                value={addingPlace} onValue={setAddingPlace}
+                placeholder="North East Extension"
+                onAdd={async () => {
+                  const r = await api.post("/productivity/choices/location",
+                    { name: addingPlace, location_type: "PIT" });
+                  setF((x) => ({ ...x, location_id: String(r.data.location_id) }));
+                  setAddingPlace(""); onChanged();
+                }} />
             </label>
+
+            {/* The job, separate from the material, because three of the six
+                values this replaced were jobs and not materials — and because
+                the report is written by job while capacity depends on the
+                material. */}
             <label className="block">
               <span className="block text-[11px] font-semibold text-txt-secondary mb-1">
-                What
+                Doing <span className="text-rose">*</span>
               </span>
-              <Combobox value={f.material} placeholder="Ore, OB, Rehandling…"
-                options={known.materials.map((v) => ({ value: v }))}
-                onChange={(v) => setF({ ...f, material: v })} />
+              <SearchSelect field value={f.face_activity_id}
+                placeholder="Choose a job…" searchPlaceholder="Type a job…"
+                onChange={(v) => setF({ ...f, face_activity_id: v })}
+                options={choices.activities.map((a) => ({
+                  value: String(a.face_activity_id), label: a.label,
+                  hint: `reports as ${a.reports_as.toLowerCase()}`,
+                }))} />
+              <AddTo label="job not on the list"
+                value={addingJob} onValue={setAddingJob}
+                placeholder="Drain cutting"
+                onAdd={async () => {
+                  const r = await api.post("/productivity/choices/activity",
+                    { label: addingJob, reports_as: "OTHER" });
+                  setF((x) => ({ ...x, face_activity_id: String(r.data.face_activity_id) }));
+                  setAddingJob(""); onChanged();
+                }} />
             </label>
             <label className="block">
               <span className="block text-[11px] font-semibold text-txt-secondary mb-1">
@@ -1306,6 +1518,25 @@ function AddFace({ day, machines, classes, known, face, onClose, onSaved }: {
                 onChange={(e) => setF({ ...f, tippers: e.target.value })} />
             </label>
           </div>
+          {/* Asked only where the job has one. Bund preparation moves
+              whatever is in the way and books none of it, so a required
+              material there would be a field filled in to get past it. */}
+          {job?.needs_material && (
+            <label className="block">
+              <span className="block text-[11px] font-semibold text-txt-secondary mb-1">
+                Material
+              </span>
+              <SearchSelect field value={f.material_id} allLabel="Not specified"
+                searchPlaceholder="Type a material…"
+                onChange={(v) => setF({ ...f, material_id: v })}
+                options={choices.materials.map((m) => ({
+                  value: String(m.material_id), label: m.name,
+                  hint: m.code,
+                  meta: <span className="text-txt-light">{m.material_class}</span>,
+                }))} />
+            </label>
+          )}
+
           {/* Two or three options, all of them visible: a dropdown here hid
               the thing being compared. What a truck carries a day is the
               number the choice is actually made on, so it is on the option
@@ -1349,7 +1580,12 @@ function AddFace({ day, machines, classes, known, face, onClose, onSaved }: {
             onClick={async () => {
               setBusy(true); setErr(null);
               const body = {
-                location: f.location.trim(), material: f.material.trim(),
+                location_id: Number(f.location_id),
+                face_activity_id: Number(f.face_activity_id),
+                // Null, not omitted: a job that names no material has to be
+                // able to clear one set earlier, and an absent key means keep.
+                material_id: job?.needs_material && f.material_id
+                  ? Number(f.material_id) : null,
                 running_hours: Number(f.running_hours),
                 tippers: Number(f.tippers),
                 tipper_class_id: f.tipper_class_id ? Number(f.tipper_class_id) : null,

@@ -534,6 +534,185 @@ def set_plan_name(asset_id: int, request: Request, body: dict = Body(...),
     return {"ok": True, "plan_name": name, "taken_from": moved_from}
 
 
+@router.get("/choices")
+def choices(request: Request, db: Session = Depends(get_minehub_db)) -> dict:
+    """The places, jobs and materials a face can be described with.
+
+    From the masters the rest of the platform already uses, not from what
+    somebody typed here before. A planning screen with its own list of place
+    names means the plan can never be set against what actually moved.
+
+    Locations carry their type because the master holds "North" twice on
+    purpose — the north pit and the north stockpile are two places — and a
+    picker showing the bare name would make that a coin toss.
+    """
+    _require(request, VIEW, "see the capacity plan")
+    return {
+        "locations": [dict(r) for r in db.execute(text("""
+            SELECT l.location_id, l.code, l.name, l.location_type,
+                   parent.name AS within
+              FROM location l
+              LEFT JOIN location parent ON parent.location_id = l.parent_id
+             WHERE l.status = 'ACTIVE'
+             ORDER BY CASE l.location_type
+                        WHEN 'PIT' THEN 1 WHEN 'DUMP' THEN 2
+                        WHEN 'STOCKYARD' THEN 3 WHEN 'STOCKPILE' THEN 4 ELSE 5 END,
+                      l.sort_order, l.name
+        """)).mappings().all()],
+        "activities": [dict(r) for r in db.execute(text("""
+            SELECT face_activity_id, code, label, reports_as, needs_material
+              FROM face_activity WHERE is_active
+             ORDER BY sort_order, label
+        """)).mappings().all()],
+        "materials": [dict(r) for r in db.execute(text("""
+            SELECT m.material_id, m.code, m.name, m.material_class, m.uom
+              FROM material m WHERE m.status = 'ACTIVE'
+             ORDER BY m.sort_order, m.name
+        """)).mappings().all()],
+    }
+
+
+@router.post("/choices/location")
+def add_location(request: Request, body: dict = Body(...),
+                 db: Session = Depends(get_minehub_db)) -> dict:
+    """A face the master did not hold yet.
+
+    Added to the location master itself rather than to a list of this screen's
+    own, so the gate and the weighbridge know the same place by the same name.
+
+    The code is generated from the name and the type. The master is keyed on
+    code, and asking a planner to invent one is asking for PIT-NW and PITNW to
+    be the same face twice.
+    """
+    _require(request, MANAGE, "add a place")
+    name = (body.get("name") or "").strip()
+    kind = (body.get("location_type") or "PIT").strip().upper()
+    if not name:
+        raise HTTPException(422, "A place needs a name.")
+
+    existing = db.execute(text("""
+        SELECT location_id, name, location_type FROM location
+         WHERE lower(btrim(name)) = lower(:n) AND location_type = :k
+           AND status = 'ACTIVE'
+    """), {"n": name, "k": kind}).mappings().first()
+    if existing:
+        # Not an error. Somebody typing a name that already exists means they
+        # want that place, and handing it back is the whole point of asking.
+        return {"ok": True, "location_id": existing["location_id"],
+                "name": existing["name"], "already_existed": True}
+
+    import re as _re
+    stem = _re.sub(r"[^A-Z0-9]+", "-", name.upper()).strip("-")[:28]
+    code = f"{kind[:4]}-{stem}"[:40]
+    n = 1
+    while db.execute(text("SELECT 1 FROM location WHERE code = :c"),
+                     {"c": code}).first():
+        n += 1
+        code = f"{kind[:4]}-{stem}-{n}"[:40]
+
+    row = db.execute(text("""
+        INSERT INTO location (code, name, location_type, parent_id, status,
+                              created_by, sort_order)
+        VALUES (:c, :n, :k,
+                (SELECT location_id FROM location WHERE code = 'KALIAPANI'),
+                'ACTIVE', :by, 100)
+        RETURNING location_id
+    """), {"c": code, "n": name, "k": kind, "by": _actor(request)}).first()
+    _event(db, request, "CAPACITY_PLACE_ADDED",
+           payload={"name": name, "location_type": kind, "code": code})
+    db.commit()
+    return {"ok": True, "location_id": row[0], "name": name, "code": code}
+
+
+@router.post("/choices/activity")
+def add_activity(request: Request, body: dict = Body(...),
+                 db: Session = Depends(get_minehub_db)) -> dict:
+    """A job the list did not have.
+
+    reports_as has to be said: it decides whether this shows as ore, as OB or
+    as rehandling in the morning report, and a job that reports as nothing is
+    a job whose output disappears from the figures.
+    """
+    _require(request, MANAGE, "add a job")
+    label = (body.get("label") or "").strip()
+    reports = (body.get("reports_as") or "OTHER").strip().upper()
+    if not label:
+        raise HTTPException(422, "A job needs a name.")
+    if reports not in ("ORE", "OB", "REHANDLING", "OTHER"):
+        raise HTTPException(422, "A job reports as ore, OB, rehandling or other.")
+
+    existing = db.execute(text("""
+        SELECT face_activity_id, label FROM face_activity
+         WHERE lower(btrim(label)) = lower(:l)
+    """), {"l": label}).mappings().first()
+    if existing:
+        return {"ok": True, "face_activity_id": existing["face_activity_id"],
+                "label": existing["label"], "already_existed": True}
+
+    import re as _re
+    code = _re.sub(r"[^A-Z0-9]+", "_", label.upper()).strip("_")[:40] or "JOB"
+    n = 1
+    while db.execute(text("SELECT 1 FROM face_activity WHERE code = :c"),
+                     {"c": code}).first():
+        n += 1
+        code = f"{code[:36]}_{n}"
+
+    row = db.execute(text("""
+        INSERT INTO face_activity (code, label, reports_as, needs_material,
+                                   sort_order, created_by)
+        VALUES (:c, :l, :r, :nm, 200, :by)
+        RETURNING face_activity_id
+    """), {"c": code, "l": label, "r": reports,
+           "nm": bool(body.get("needs_material")), "by": _actor(request)}).first()
+    _event(db, request, "CAPACITY_JOB_ADDED",
+           payload={"label": label, "reports_as": reports, "code": code})
+    db.commit()
+    return {"ok": True, "face_activity_id": row[0], "label": label}
+
+
+@router.get("/assumptions/history")
+def assumption_history(request: Request,
+                       db: Session = Depends(get_minehub_db)) -> list[dict]:
+    """Every set of assumptions that has been in force, newest first.
+
+    The rows already superseded rather than overwrote — a capacity agreed in a
+    meeting has to stay explicable afterwards — but nothing could read them
+    back, so the history existed and was invisible. Each entry carries what
+    changed from the one before it, worked out here rather than stored, so the
+    comparison cannot drift from the rows.
+    """
+    _require(request, VIEW, "see the capacity plan")
+    rows = [dict(r) for r in db.execute(text("""
+        SELECT * FROM productivity_assumption
+         ORDER BY effective_from DESC, productivity_assumption_id DESC
+    """)).mappings().all()]
+
+    fields = ["fill_factor", "swell_factor", "dig_sec", "lift_sec", "swing_sec",
+              "lower_sec", "tilt_sec", "wait_sec", "unload_sec", "return_sec",
+              "operating_hours", "ore_t_per_cum"]
+    out = []
+    for i, r in enumerate(rows):
+        older = rows[i + 1] if i + 1 < len(rows) else None
+        cycle = sum(int(r[f]) for f in fields if f.endswith("_sec"))
+        out.append({
+            "productivity_assumption_id": r["productivity_assumption_id"],
+            "effective_from": r["effective_from"],
+            "effective_to": r["effective_to"],
+            "in_force": r["effective_to"] is None,
+            "note": r["note"], "by": r["created_by"],
+            "cycle_sec": cycle,
+            "cum_per_hour_per_cum_bucket": round(
+                (3600 / cycle) * float(r["fill_factor"]) * float(r["swell_factor"]), 3)
+            if cycle else None,
+            **{f: (float(r[f]) if hasattr(r[f], "quantize") else r[f])
+               for f in fields},
+            # What changed when this set came in. Nothing for the first one,
+            # which is not a change but a beginning.
+            "changed": _changed(older, r, fields) if older else None,
+        })
+    return out
+
+
 @router.get("/plan")
 def plan(request: Request, on: str | None = Query(None),
          db: Session = Depends(get_minehub_db)) -> dict:
@@ -548,7 +727,10 @@ def plan(request: Request, on: str | None = Query(None),
         if classes else None
 
     rows = db.execute(text("""
-        SELECT fp.face_plan_id, fp.asset_id, fp.location, fp.material,
+        SELECT fp.face_plan_id, fp.asset_id,
+               fp.location_id, l.name AS location, l.location_type,
+               fp.face_activity_id, fa.label AS activity, fa.reports_as,
+               fp.material_id, m.name AS material, m.code AS material_code,
                fp.running_hours, fp.tippers, fp.tipper_class_id, fp.note,
                a.fleet_code, a.nickname, a.capacity AS standard_bucket,
                a.capacity_uom, a.fitted_bucket_cum,
@@ -560,9 +742,12 @@ def plan(request: Request, on: str | None = Query(None),
                ec.unload_sec, ec.return_sec
           FROM face_plan fp
           JOIN asset a ON a.asset_id = fp.asset_id
+          JOIN location l ON l.location_id = fp.location_id
+          JOIN face_activity fa ON fa.face_activity_id = fp.face_activity_id
+          LEFT JOIN material m ON m.material_id = fp.material_id
           LEFT JOIN excavator_cycle ec ON ec.asset_id = fp.asset_id
          WHERE fp.on_date = :d
-         ORDER BY fp.location, a.fleet_code
+         ORDER BY l.sort_order, l.name, a.fleet_code
     """), {"d": day}).mappings().all()
 
     faces: list[Face] = []
@@ -574,7 +759,7 @@ def plan(request: Request, on: str | None = Query(None),
         faces.append(Face(
             face_plan_id=o["face_plan_id"], asset_id=o["asset_id"],
             fleet_code=o["fleet_code"], plan_name=o["plan_name"],
-            location=o["location"], material=o["material"],
+            location=o["location"], material=o["activity"],
             running_hours=float(o["running_hours"]), tippers=int(o["tippers"]),
             tipper_class=cls["code"] if cls else None,
             bucket_cum=bucket, bucket_is_fitted=is_fitted,
@@ -582,6 +767,10 @@ def plan(request: Request, on: str | None = Query(None),
             cycle_is_overridden=overridden,
             per_tipper_cum_day=cls["cum_per_day"] if cls else 0.0,
         ).compute())
+
+    # The row behind each face, so the response can carry the ids the form
+    # writes back without the Face dataclass having to learn about them.
+    by_id = {r["face_plan_id"]: dict(r) for r in rows}
 
     s = summarise(faces, default_class["cum_per_day"] if default_class else 0.0,
                   float(a["ore_t_per_cum"]))
@@ -592,7 +781,13 @@ def plan(request: Request, on: str | None = Query(None),
         "faces": [{
             "face_plan_id": f.face_plan_id, "asset_id": f.asset_id,
             "fleet_code": f.fleet_code, "plan_name": f.plan_name,
-            "location": f.location, "material": f.material,
+            "location": f.location, "location_id": by_id[f.face_plan_id]["location_id"],
+            "location_type": by_id[f.face_plan_id]["location_type"],
+            "activity": by_id[f.face_plan_id]["activity"],
+            "face_activity_id": by_id[f.face_plan_id]["face_activity_id"],
+            "reports_as": by_id[f.face_plan_id]["reports_as"],
+            "material": by_id[f.face_plan_id]["material"],
+            "material_id": by_id[f.face_plan_id]["material_id"],
             "running_hours": f.running_hours, "tippers": f.tippers,
             "tipper_class": f.tipper_class,
             "bucket_cum": f.bucket_cum, "bucket_is_fitted": f.bucket_is_fitted,
@@ -619,22 +814,6 @@ def plan(request: Request, on: str | None = Query(None),
             "ore_mt": round(s.ore_mt, 2),
         },
         "tipper_classes": list(classes.values()),
-        # What has been typed into these before, so the next person picks
-        # rather than retypes. Free text stays free — a location master that
-        # did not already hold "Stack Yard / LG Dump / ETP" would force the
-        # planner to choose between the truth and the dropdown — but a list of
-        # what the mine actually calls its faces stops "North East" and
-        # "North-East" becoming two places.
-        "known_locations": [r[0] for r in db.execute(text("""
-            SELECT DISTINCT location FROM face_plan
-             WHERE location IS NOT NULL AND btrim(location) <> ''
-             ORDER BY location
-        """)).all()],
-        "known_materials": [r[0] for r in db.execute(text("""
-            SELECT DISTINCT material FROM face_plan
-             WHERE material IS NOT NULL AND btrim(material) <> ''
-             ORDER BY material
-        """)).all()],
     }
 
 
@@ -645,30 +824,38 @@ def add_face(request: Request, body: dict = Body(...),
     _require(request, MANAGE, "change the capacity plan")
     try:
         db.execute(text("""
-            INSERT INTO face_plan (on_date, asset_id, location, material,
+            INSERT INTO face_plan (on_date, asset_id, location_id,
+                                   face_activity_id, material_id,
                                    running_hours, tippers, tipper_class_id,
                                    note, created_by)
-            VALUES (CAST(:on AS date), :a, :loc, :mat, :hrs, :tip,
-                    CAST(:cls AS bigint), :note, :by)
-            ON CONFLICT (on_date, asset_id, location, material) DO UPDATE
-               SET running_hours = EXCLUDED.running_hours,
-                   tippers = EXCLUDED.tippers,
-                   tipper_class_id = EXCLUDED.tipper_class_id,
-                   note = EXCLUDED.note,
-                   updated_at = now()
+            VALUES (CAST(:on AS date), :a, :loc, :act, CAST(:mat AS bigint),
+                    :hrs, :tip, CAST(:cls AS bigint), :note, :by)
+            ON CONFLICT (on_date, asset_id, location_id, face_activity_id)
+            DO UPDATE SET running_hours = EXCLUDED.running_hours,
+                          tippers = EXCLUDED.tippers,
+                          tipper_class_id = EXCLUDED.tipper_class_id,
+                          material_id = EXCLUDED.material_id,
+                          note = EXCLUDED.note,
+                          updated_at = now()
         """), {"on": body.get("on_date") or date.today().isoformat(),
-               "a": body["asset_id"], "loc": (body.get("location") or "").strip(),
-               "mat": (body.get("material") or "").strip(),
+               "a": body["asset_id"], "loc": body.get("location_id"),
+               "act": body.get("face_activity_id"),
+               "mat": body.get("material_id"),
                "hrs": body.get("running_hours"), "tip": body.get("tippers") or 0,
                "cls": body.get("tipper_class_id"), "note": body.get("note"),
                "by": _actor(request)})
     except Exception as exc:                        # noqa: BLE001
         db.rollback()
         raise HTTPException(422, f"That row could not be saved: {exc}") from exc
+    named = db.execute(text("""
+        SELECT (SELECT name FROM location WHERE location_id = :loc)  AS location,
+               (SELECT label FROM face_activity
+                 WHERE face_activity_id = :act)                     AS activity
+    """), {"loc": body.get("location_id"),
+           "act": body.get("face_activity_id")}).mappings().first()
     _event(db, request, "CAPACITY_FACE_PLANNED", asset_id=body["asset_id"],
            day=_day(body.get("on_date")),
-           payload={"location": body.get("location"),
-                    "material": body.get("material"),
+           payload={"location": named["location"], "material": named["activity"],
                     "running_hours": body.get("running_hours"),
                     "tippers": body.get("tippers") or 0})
     db.commit()
@@ -683,29 +870,54 @@ def edit_face(face_plan_id: int, request: Request, body: dict = Body(...),
     # Read first. The update is a COALESCE of whatever was sent, so without
     # the old row the log could only repeat what the caller already knew.
     was = db.execute(text("""
-        SELECT fp.*, a.fleet_code FROM face_plan fp
+        SELECT fp.*, a.fleet_code, l.name AS location, fa.label AS activity,
+               m.name AS material
+          FROM face_plan fp
           JOIN asset a ON a.asset_id = fp.asset_id
+          JOIN location l ON l.location_id = fp.location_id
+          JOIN face_activity fa ON fa.face_activity_id = fp.face_activity_id
+          LEFT JOIN material m ON m.material_id = fp.material_id
          WHERE fp.face_plan_id = :id
     """), {"id": face_plan_id}).mappings().first()
 
     done = db.execute(text("""
         UPDATE face_plan
-           SET running_hours   = COALESCE(:hrs, running_hours),
-               tippers         = COALESCE(:tip, tippers),
-               tipper_class_id = COALESCE(CAST(:cls AS bigint), tipper_class_id),
-               location        = COALESCE(:loc, location),
-               material        = COALESCE(:mat, material),
-               note            = COALESCE(:note, note),
-               updated_at      = now()
+           SET running_hours    = COALESCE(:hrs, running_hours),
+               tippers          = COALESCE(:tip, tippers),
+               tipper_class_id  = COALESCE(CAST(:cls AS bigint), tipper_class_id),
+               location_id      = COALESCE(CAST(:loc AS bigint), location_id),
+               face_activity_id = COALESCE(CAST(:act AS bigint), face_activity_id),
+               material_id      = CASE WHEN :clear_material THEN NULL
+                                       ELSE COALESCE(CAST(:mat AS bigint), material_id)
+                                  END,
+               note             = COALESCE(:note, note),
+               updated_at       = now()
          WHERE face_plan_id = :id
         RETURNING face_plan_id
     """), {"id": face_plan_id, "hrs": body.get("running_hours"),
            "tip": body.get("tippers"), "cls": body.get("tipper_class_id"),
-           "loc": body.get("location"), "mat": body.get("material"),
+           "loc": body.get("location_id"), "act": body.get("face_activity_id"),
+           "mat": body.get("material_id"),
+           # A job that names no material has to be able to clear one that was
+           # set before, and COALESCE alone can never write a null.
+           "clear_material": body.get("material_id", "keep") is None,
            "note": body.get("note")}).first()
     if not done:
         raise HTTPException(404, "That row is not on the plan.")
-    diff = _changed(dict(was or {}), body, ["location", "material", "running_hours", "tippers", "tipper_class_id", "note"])
+    now = db.execute(text("""
+        SELECT l.name AS location, fa.label AS activity, m.name AS material,
+               fp.running_hours, fp.tippers, fp.tipper_class_id, fp.note
+          FROM face_plan fp
+          JOIN location l ON l.location_id = fp.location_id
+          JOIN face_activity fa ON fa.face_activity_id = fp.face_activity_id
+          LEFT JOIN material m ON m.material_id = fp.material_id
+         WHERE fp.face_plan_id = :id
+    """), {"id": face_plan_id}).mappings().first()
+    # Compared on names rather than ids, because "place 3 to 12" is not a
+    # sentence anybody can read.
+    diff = _changed(dict(was or {}), dict(now or {}),
+                    ["location", "activity", "material", "running_hours",
+                     "tippers", "tipper_class_id", "note"])
     if diff:
         _event(db, request, "CAPACITY_FACE_CHANGED",
                asset_id=was["asset_id"] if was else None,
@@ -722,8 +934,11 @@ def drop_face(face_plan_id: int, request: Request,
               db: Session = Depends(get_minehub_db)) -> dict:
     _require(request, MANAGE, "change the capacity plan")
     was = db.execute(text("""
-        SELECT fp.*, a.fleet_code FROM face_plan fp
+        SELECT fp.*, a.fleet_code, l.name AS location, fa.label AS material
+          FROM face_plan fp
           JOIN asset a ON a.asset_id = fp.asset_id
+          JOIN location l ON l.location_id = fp.location_id
+          JOIN face_activity fa ON fa.face_activity_id = fp.face_activity_id
          WHERE fp.face_plan_id = :id
     """), {"id": face_plan_id}).mappings().first()
     db.execute(text("DELETE FROM face_plan WHERE face_plan_id = :id"),
@@ -752,13 +967,13 @@ def copy_day(request: Request, body: dict = Body(...),
     if frm == to:
         raise HTTPException(422, "Those are the same day.")
     n = db.execute(text("""
-        INSERT INTO face_plan (on_date, asset_id, location, material,
-                               running_hours, tippers, tipper_class_id,
-                               note, created_by)
-        SELECT CAST(:to AS date), asset_id, location, material,
-               running_hours, tippers, tipper_class_id, note, :by
+        INSERT INTO face_plan (on_date, asset_id, location_id, face_activity_id,
+                               material_id, running_hours, tippers,
+                               tipper_class_id, note, created_by)
+        SELECT CAST(:to AS date), asset_id, location_id, face_activity_id,
+               material_id, running_hours, tippers, tipper_class_id, note, :by
           FROM face_plan WHERE on_date = CAST(:frm AS date)
-        ON CONFLICT (on_date, asset_id, location, material) DO NOTHING
+        ON CONFLICT (on_date, asset_id, location_id, face_activity_id) DO NOTHING
     """), {"frm": frm, "to": to, "by": _actor(request)}).rowcount
     _event(db, request, "CAPACITY_DAY_COPIED", day=to,
            payload={"from_date": frm.isoformat(), "rows": n})
@@ -774,13 +989,14 @@ CAPACITY_EVENTS = [
     "CAPACITY_DAY_COPIED", "CAPACITY_BUCKET_CHANGED", "CAPACITY_CYCLE_SET",
     "CAPACITY_CYCLE_CLEARED", "CAPACITY_PLAN_NAME_SET",
     "CAPACITY_ASSUMPTIONS_CHANGED", "CAPACITY_TRUCK_CLASS_ADDED",
-    "CAPACITY_TRUCK_CLASS_CHANGED",
+    "CAPACITY_TRUCK_CLASS_CHANGED", "CAPACITY_PLACE_ADDED",
+    "CAPACITY_JOB_ADDED",
 ]
 
 # What each field is called out loud. "running_hours" is what the column is
 # named; "hours" is what the person who changed it would say.
 _SAID = {
-    "running_hours": "hours", "tippers": "trucks",
+    "running_hours": "hours", "tippers": "trucks", "activity": "job",
     "tipper_class_id": "kind of truck", "fitted_bucket_cum": "fitted bucket",
     "location": "place", "material": "material", "note": "note",
     "fill_factor": "fill factor", "swell_factor": "swell factor",
@@ -823,6 +1039,12 @@ def _sentence(event_type: str, p: dict) -> str:
         taken = p.get("taken_from")
         return (f"The plan calls this machine {p.get('plan_name')}"
                 + (f", taken from {taken}" if taken else ""))
+    if event_type == "CAPACITY_PLACE_ADDED":
+        return (f"Added a place: {p.get('name')} "
+                f"({(p.get('location_type') or '').lower()})")
+    if event_type == "CAPACITY_JOB_ADDED":
+        return (f"Added a job: {p.get('label')} — "
+                f"reports as {(p.get('reports_as') or '').lower()}")
     if event_type == "CAPACITY_TRUCK_CLASS_ADDED":
         return (f"Added a kind of truck: {p.get('label') or p.get('code')} — "
                 f"{p.get('payload_t')} t, {p.get('effective_cum')} Cum")
