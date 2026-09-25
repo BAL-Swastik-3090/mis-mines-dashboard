@@ -1,11 +1,13 @@
 "use client";
 import { format } from "date-fns";
-import { RefreshCw, Bell } from "lucide-react";
-import { useState, useCallback, useEffect } from "react";
+import { RefreshCw, Bell, MoreVertical, PencilLine } from "lucide-react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import DateFilter from "./DateFilter";
 import ProfileMenu from "./ProfileMenu";
 import { useDateFilter } from "@/contexts/useDateFilter";
+import { useAppPage } from "@/contexts/useAppPage";
+import { usePrevDayEntry } from "@/contexts/usePrevDayEntry";
 import { cn } from "@/lib/utils";
 
 /** True when the selected end-date is today → sensor data is live. */
@@ -131,6 +133,10 @@ export default function Header() {
             </span>
           </button>
 
+          {/* Data-entry actions. Separate from the profile menu, which is about
+              who you are rather than what you can record. */}
+          <ActionsMenu />
+
           {/* Who is signed in. Was at the foot of the sidebar with every role
               spelled out as a badge, which cost half the rail for anybody
               holding more than one. */}
@@ -138,6 +144,69 @@ export default function Header() {
         </div>
       </div>
     </header>
+  );
+}
+
+/**
+ * The three-dot actions menu.
+ *
+ * "Enter Est Actual" also switches to the MIS dashboard, because the dialog is
+ * owned by the previous-day table that holds the plan figures it needs. Opening
+ * it from another page would otherwise set a flag nothing was listening to and
+ * appear to do nothing at all.
+ */
+function ActionsMenu() {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement | null>(null);
+  const setPage = useAppPage((s) => s.setPage);
+  const openEntry = usePrevDayEntry((s) => s.setOpen);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (box.current && !box.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative" ref={box}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        title="More actions"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className="p-2 rounded border border-white/15 text-white/60 hover:text-white hover:border-white/30 transition-colors"
+      >
+        <MoreVertical size={15} />
+      </button>
+
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 mt-1 w-56 bg-white rounded-lg shadow-xl border border-border py-1 z-50"
+        >
+          <button
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              setPage("mis");
+              openEntry(true);
+            }}
+            className="w-full flex items-center gap-2 px-3 py-2 text-left text-[12px] font-semibold text-txt-secondary hover:bg-bg-section hover:text-navy transition-colors"
+          >
+            <PencilLine size={13} className="text-accent shrink-0" />
+            Enter Est Actual
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

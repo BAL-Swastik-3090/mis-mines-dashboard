@@ -143,6 +143,11 @@ PAGE_LABELS = {
 # Longest prefixes first — /api/live-tracking must not be shadowed by a shorter
 # entry, and the lookup takes the first match.
 PREFIX_PAGE: tuple[tuple[str, str], ...] = (
+    # Hand-entered previous-day actuals for the MIS Plan vs Actual table.
+    # Mapped so it needs dashboard.mis: without an entry here an unmapped path
+    # passes the page check entirely and would be reachable by any signed-in
+    # user, including one with no MIS access at all.
+    ("/api/prev-day-actual", "mis"),
     ("/api/fuel-management", "fuel-management"),
     ("/api/ev-tracking", "ev-tracking"),
     ("/api/live-tracking", "mis"),
