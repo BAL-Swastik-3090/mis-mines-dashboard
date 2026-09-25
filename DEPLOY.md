@@ -60,6 +60,41 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ---
 
+## Deployed — 2026-09-25 (second): the register is who works here
+
+Released commit `539895c` (branch `release-25-09-2026`) to mines.balasorealloys.in.
+Backup: `~/mines_dashboard-backup-20260925-1140.tar.gz`.
+
+**What changed**
+
+- Seven people who came off the rolls between January and June are recorded
+  with the date they left and why — four RETIRED, three DECEASED. They had all
+  been marked INACTIVE with employment_end 2026-09-23, the day somebody marked
+  them rather than the day they left.
+- `/api/operators` takes a `standing`, defaulting to `ON_ROLL`. The register
+  reads 204 on strength instead of 211. "Off the rolls" and "Everybody ever"
+  are in the Manpower bar; nobody is deleted.
+- DECEASED exists in the profile-status picker, so those three profiles do not
+  render the field blank and lose their status on the next save.
+
+**No duplicates were removed, because there are none.** Khageswar Mohanta is on
+three rows and Narayan Mohanta on two, and all five are different men —
+different fathers, dates of birth, phones, PANs, Aadhaars and employee codes.
+Swept by shared identifier instead of by name: every identifier in the register
+belongs to exactly one person.
+
+**The data change was already live before the deploy.** That Postgres is shared
+between dev and production, so writing the statuses locally wrote them in
+production. Only the two UI changes needed shipping.
+
+Verified inside the production container after the deploy:
+`ON_ROLL 204 · OFF_ROLL 7 · ALL 211`.
+
+The deletion check from the previous entry was run and came back empty — this
+release deletes nothing, so no files needed removing on the server.
+
+---
+
 ## Deployed — 2026-09-25: Weather page, previous-day actuals, and a searchable dropdown
 
 Released commit `df85d26` (branch `release-25-09-2026`) to mines.balasorealloys.in.
