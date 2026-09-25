@@ -2,7 +2,7 @@
 /**
  * Previous day — Plan vs Actual, one row per KPI.
  *
- * TWO ANSWERS TO THE SAME QUESTION, ONE AT A TIME. The radio chooses which:
+ * TWO ANSWERS TO THE SAME QUESTION. The radio chooses which:
  *
  *   Actual      what SAP and the gate record say. Authoritative, and LATE —
  *               on the morning of 24 September, 23 September's ore and OB both
@@ -11,35 +11,56 @@
  *   Est Actual  what the mine entered by hand that morning, hours before SAP
  *               caught up. Available immediately, and an estimate.
  *
- * They are never shown side by side. The question a reader has is "what
+ * For ONE day they are not shown together. The question a reader has is "what
  * happened yesterday", and two answers to it in one row invites the wrong one
  * to be quoted. Variance follows whichever column is showing, and the footer
  * names which it is.
  *
+ * THE THIRD VIEW, "Both Days", is the exception, and it is a different
+ * question. Est Actual is asserted at nine in the morning, hours before SAP
+ * has anything; whether it can be trusted is answerable only afterwards. So
+ * the day before last is shown beside it with BOTH its figures — what was
+ * estimated, and what was eventually posted. That is the estimate being
+ * marked, which is the one place the two belong in the same row.
+ *
+ * The older day carries no Plan and no Variance. Its plan is already history
+ * and repeating it invites the reader to measure this day's variance against
+ * the wrong row.
+ *
  * READ-ONLY. Entry happens in PrevDayEntryModal, opened from "Enter Est Actual"
  * in the three-dot menu in the header.
  *
- * THE DAY IS ALWAYS YESTERDAY, rolling over at 00:01 — see lib/prevDay.ts. It
- * fetches its own single day rather than following the global date filter, so
- * figures can never be entered against a date somebody is merely browsing, and
- * a stale set never lingers into a new day pretending to be current.
+ * THE DAY FOLLOWS THE HEADER. It is the day before "report as on" — the
+ * header's own date, the one every other screen on this dashboard obeys.
+ *
+ * It used to fetch yesterday and only yesterday, on the argument that a figure
+ * could then never be entered against a date somebody was merely browsing.
+ * That protection belongs where the writing happens, and it is there: the
+ * entry dialog carries its own date and saves against that, not against
+ * whatever this table is showing. What the argument cost was the ordinary
+ * thing: the morning meeting could not look back at the day before last
+ * without the panel snapping to yesterday.
+ *
+ * Two dates on one page is two answers to "which day am I looking at", and the
+ * header's is the one that wins.
  *
  * UNITS follow DaywiseTable: ore, COB and despatch in MT; OB and total
  * excavation in CuM. VARIANCE = shown value - Plan; positive is ahead of plan.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarCheck } from "lucide-react";
 import api from "@/lib/api";
 import { formatIndian } from "@/lib/utils";
 import PrevDayEntryModal, { type StoredValue } from "@/components/tables/PrevDayEntryModal";
 import { usePrevDayEntry } from "@/contexts/usePrevDayEntry";
+import { useDateFilter } from "@/contexts/useDateFilter";
 import {
-  ORE_T_PER_M3, buildRows, dayLabel, targetDayISO, type KpiRow,
+  ORE_T_PER_M3, buildRows, dayBefore, dayLabel, type KpiRow,
 } from "@/lib/prevDay";
 import type { ProductionDaywiseResponse, DespatchDaywiseResponse } from "@/types";
 
-type View = "actual" | "est";
+type View = "actual" | "est" | "both";
 
 function Num({ v, bold = false }: { v: number | null; bold?: boolean }) {
   if (v == null) return <span className="text-txt-light/50">—</span>;
@@ -63,28 +84,21 @@ function Variance({ plan, value }: { plan: number | null; value: number | null }
 
 export default function PrevDayVarianceTable() {
   const qc = useQueryClient();
-  const [day, setDay] = useState(targetDayISO);
+  // "Report as on" is the end of the header's range. This panel is about the
+  // day before it — that is what "previous day" means, whichever day is being
+  // reported on.
+  const asOn = useDateFilter((s) => s.apiTo);
+  const day = useMemo(() => dayBefore(asOn), [asOn]);
+  /** The day before that, for the "Both Days" view. */
+  const older = useMemo(() => dayBefore(day), [day]);
   const [view, setView] = useState<View>("actual");
   const entryOpen = usePrevDayEntry((s) => s.open);
   const setEntryOpen = usePrevDayEntry((s) => s.setOpen);
 
-  // Roll over without a reload. Polling beats a timeout to midnight: background
-  // tabs have their timers throttled and a sleeping laptop stops them
-  // altogether, so a timeout set at 09:00 cannot be trusted to fire at 00:01.
-  // The visibility listener makes the correction immediate on return to the tab
-  // rather than up to a minute later.
-  useEffect(() => {
-    const check = () => setDay((prev) => {
-      const now = targetDayISO();
-      return prev === now ? prev : now;
-    });
-    const id = window.setInterval(check, 30_000);
-    document.addEventListener("visibilitychange", check);
-    return () => {
-      window.clearInterval(id);
-      document.removeEventListener("visibilitychange", check);
-    };
-  }, []);
+  // The midnight rollover timer that used to live here has gone with the
+  // hard-coded day. Rolling this one panel over at 00:01 while the header
+  // above it still said yesterday would have put two different days on one
+  // screen, which is the thing this change exists to stop.
 
   const prod = useQuery<ProductionDaywiseResponse>({
     queryKey: ["prev-day", "production", day],
@@ -108,6 +122,35 @@ export default function PrevDayVarianceTable() {
     staleTime: 30 * 1000,
   });
 
+  // The same three requests for the older day. They are only needed by one of
+  // the three views, so they are not made until it is chosen — a panel that
+  // opens on Actual should not be fetching six things to show three.
+  const wantOlder = view === "both";
+  const olderProd = useQuery<ProductionDaywiseResponse>({
+    queryKey: ["prev-day", "production", older],
+    queryFn: async () => (await api.get("/production/daywise", {
+      params: { from_date: older, to_date: older },
+    })).data,
+    staleTime: 5 * 60 * 1000,
+    enabled: wantOlder,
+  });
+  const olderDesp = useQuery<DespatchDaywiseResponse>({
+    queryKey: ["prev-day", "despatch", older],
+    queryFn: async () => (await api.get("/despatch/daywise", {
+      params: { from_date: older, to_date: older },
+    })).data,
+    staleTime: 5 * 60 * 1000,
+    enabled: wantOlder,
+  });
+  const olderEntries = useQuery<{ values: Record<string, StoredValue> }>({
+    queryKey: ["prev-day", "entered", older],
+    queryFn: async () => (await api.get("/prev-day-actual", {
+      params: { on_date: older },
+    })).data,
+    staleTime: 30 * 1000,
+    enabled: wantOlder,
+  });
+
   const rows: KpiRow[] = useMemo(
     () => buildRows(
       prod.data?.rows?.find((r) => r.date === day),
@@ -116,7 +159,16 @@ export default function PrevDayVarianceTable() {
     [prod.data, desp.data, day],
   );
 
+  const olderRows: KpiRow[] = useMemo(
+    () => buildRows(
+      olderProd.data?.rows?.find((r) => r.date === older),
+      olderDesp.data?.rows?.find((r) => r.date === older),
+    ),
+    [olderProd.data, olderDesp.data, older],
+  );
+
   const stored = entries.data?.values;
+  const olderStored = olderEntries.data?.values;
 
   // Invalidate the day that was actually saved — the dialog may have been on a
   // different date from the one this table is showing.
@@ -126,34 +178,52 @@ export default function PrevDayVarianceTable() {
     [qc],
   );
 
-  const loading = prod.isLoading || desp.isLoading || entries.isLoading;
+  const loading = prod.isLoading || desp.isLoading || entries.isLoading
+    || (wantOlder && (olderProd.isLoading || olderDesp.isLoading
+                      || olderEntries.isLoading));
   const lastEntry = stored
     ? Object.values(stored).sort((a, b) =>
       (b.entered_at ?? "").localeCompare(a.entered_at ?? ""))[0]
     : undefined;
 
-  /** The figure the selected view is asking for. */
+  /** The figure the selected view is asking for. In "Both Days" the estimate
+   *  is the figure on the left, because it is the one being marked. */
   const shown = (r: KpiRow): number | null =>
     view === "actual" ? r.actual : (stored?.[r.key]?.value ?? null);
+
+  const valueLabel = view === "actual" ? "Actual" : "Est Actual";
 
   return (
     <section className="space-y-2">
       <div className="section-title">
         <CalendarCheck size={13} />
         Previous Day — Plan vs Actual
-        <span className="text-[10px] text-txt-light font-medium normal-case tracking-normal ml-1">
-          {dayLabel(day)}
-        </span>
       </div>
 
       <div className="rounded-xl overflow-hidden border border-border shadow-md bg-white">
         {/* ── which figure to show ──────────────────────────────────────── */}
-        <div className="flex items-center gap-4 px-3 py-2 border-b border-border-light bg-bg-soft flex-wrap">
+        <div className="flex items-center gap-3 px-3 py-2 border-b border-border-light bg-bg-soft flex-wrap">
+          {/* The day this table is about, in the row somebody reads immediately
+              before the figures.
+
+              It was beside the title in ten-pixel light grey, which on the
+              meeting-room screen was not readable at all — and a table of
+              yesterday's production whose date cannot be read is a table that
+              gets quoted for the wrong day. It says where to change it, since
+              the control is at the top of the page and not next to it. */}
+          <span className="inline-flex items-center gap-1.5">
+            <span className="text-[12px] font-bold text-navy">{dayLabel(day)}</span>
+            <span className="text-[10px] text-txt-light">· from the date at the top</span>
+          </span>
+          <span className="h-4 w-px bg-border" />
           {([
             ["actual", "Actual",
               "Posted to SAP and the gate record — authoritative, but lags by a day or more"],
             ["est", "Est Actual",
               "Entered by hand on the morning — available immediately, an estimate"],
+            ["both", "Both Days",
+              "This day against the day before it, with that day's estimate beside "
+              + "what was eventually posted — how close the estimate turned out to be"],
           ] as const).map(([val, label, hint]) => (
             <label
               key={val}
@@ -177,7 +247,9 @@ export default function PrevDayVarianceTable() {
           <span className="text-[10px] text-txt-light/70 ml-auto">
             {view === "actual"
               ? "Posted figures — may still be incomplete for yesterday"
-              : "Hand-entered — three-dot menu, Enter Est Actual"}
+              : view === "est"
+                ? "Hand-entered — three-dot menu, Enter Est Actual"
+                : `${dayLabel(older)} on the right — estimate against what was posted`}
           </span>
         </div>
 
@@ -189,26 +261,56 @@ export default function PrevDayVarianceTable() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full border-collapse min-w-[560px]">
+            <table className={`w-full border-collapse ${view === "both" ? "min-w-[800px]" : "min-w-[560px]"}`}>
               <thead>
+                {/* In "Both Days" the columns belong to two different dates, so
+                    the dates are a header row of their own. Five unlabelled
+                    columns, two of them about a day the reader has not been
+                    told about, is a table that gets misread. */}
+                {view === "both" && (
+                  <tr className="bg-navy text-white/90">
+                    <th className="px-3 pt-2 pb-0.5" />
+                    <th colSpan={3}
+                      className="px-3 pt-2 pb-0.5 text-center font-condensed font-bold
+                                 text-[11px] tracking-[.1em] border-b border-white/20">
+                      {dayLabel(day)}
+                    </th>
+                    <th colSpan={2}
+                      className="px-3 pt-2 pb-0.5 text-center font-condensed font-bold
+                                 text-[11px] tracking-[.1em] border-b border-white/20
+                                 border-l border-l-white/30">
+                      {dayLabel(older)}
+                    </th>
+                  </tr>
+                )}
                 <tr className="bg-navy text-white">
                   <th className="px-3 py-2 text-left font-condensed font-extrabold text-[12px] tracking-[.14em]">
                     KPI
                   </th>
+                  <th className="px-3 py-2 text-right font-condensed font-extrabold text-[12px] tracking-[.14em]">Plan</th>
                   <th className="px-3 py-2 text-right font-condensed font-extrabold text-[12px] tracking-[.14em]">
-                    Plan
+                    {view === "both" ? "Est Actual" : valueLabel}
                   </th>
-                  <th className="px-3 py-2 text-right font-condensed font-extrabold text-[12px] tracking-[.14em]">
-                    {view === "actual" ? "Actual" : "Est Actual"}
-                  </th>
-                  <th className="px-3 py-2 text-right font-condensed font-extrabold text-[12px] tracking-[.14em]">
-                    Variance
-                  </th>
+                  <th className="px-3 py-2 text-right font-condensed font-extrabold text-[12px] tracking-[.14em]">Variance</th>
+                  {view === "both" && (
+                    <>
+                      <th className="px-3 py-2 text-right font-condensed font-extrabold text-[12px] tracking-[.14em] border-l border-l-white/30">
+                        Est Actual
+                      </th>
+                      <th className="px-3 py-2 text-right font-condensed font-extrabold text-[12px] tracking-[.14em]">Actual</th>
+                    </>
+                  )}
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => {
+                {rows.map((r, i) => {
                   const value = shown(r);
+                  // Matched by KPI key, not by position: buildRows returns the
+                  // five in a fixed order today, and a lookup that quietly
+                  // depends on that would put OB's figure on the ore row the
+                  // day somebody inserts a sixth.
+                  const old = olderRows.find((o) => o.key === r.key);
+                  const oldEst = olderStored?.[r.key]?.value ?? null;
                   return (
                     <tr
                       key={r.key}
@@ -222,11 +324,28 @@ export default function PrevDayVarianceTable() {
                         <Num v={r.plan} />
                       </td>
                       <td className="px-3 py-2.5 text-right text-[13px]">
-                        <Num v={value} bold />
+                        <Num v={view === "both" ? (stored?.[r.key]?.value ?? null) : value}
+                             bold />
                       </td>
                       <td className="px-3 py-2.5 text-right text-[13px]">
-                        <Variance plan={r.plan} value={value} />
+                        <Variance plan={r.plan}
+                          value={view === "both" ? (stored?.[r.key]?.value ?? null) : value} />
                       </td>
+                      {view === "both" && (
+                        <>
+                          <td className="px-3 py-2.5 text-right text-[13px]
+                                         border-l border-border">
+                            <Num v={oldEst} />
+                          </td>
+                          <td className="px-3 py-2.5 text-right text-[13px]"
+                              title={oldEst != null && old?.actual != null
+                                ? `Estimate was out by ${formatIndian(
+                                    Math.abs(oldEst - old.actual))} ${r.unit}`
+                                : undefined}>
+                            <Num v={old?.actual ?? null} bold />
+                          </td>
+                        </>
+                      )}
                     </tr>
                   );
                 })}
@@ -237,7 +356,8 @@ export default function PrevDayVarianceTable() {
 
         <div className="border-t border-border-light px-3 py-1 flex items-center justify-between flex-wrap gap-1">
           <span className="text-[10px] text-txt-light/60">
-            Variance = {view === "actual" ? "Actual" : "Est Actual"} − Plan · positive is ahead of plan
+            Variance = {view === "both" ? "Est Actual" : valueLabel} − Plan · positive is ahead of plan
+            {view === "both" && " · the right-hand pair is the estimate against what was posted"}
             {view === "est" && lastEntry && (
               <> · last entered by {lastEntry.entered_by}
                 {lastEntry.entered_at

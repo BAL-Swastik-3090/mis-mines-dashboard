@@ -51,6 +51,19 @@ export function targetDayISO(now: Date = new Date()): string {
   return localISO(d);
 }
 
+/**
+ * The day before a YYYY-MM-DD, local.
+ *
+ * Date arithmetic rather than subtracting 86,400,000 milliseconds: the two
+ * days a year on which a local day is not 24 hours long would land this on the
+ * wrong date, and setDate handles month and year ends on its own.
+ */
+export function dayBefore(iso: string): string {
+  const d = new Date(iso + "T00:00:00");
+  d.setDate(d.getDate() - 1);
+  return localISO(d);
+}
+
 /** Today, local. The latest date the entry dialog will accept. */
 export function todayISO(now: Date = new Date()): string {
   return localISO(new Date(now));
