@@ -148,7 +148,7 @@ function DespatchQuality({ day, expected }: {
             · the table above says {formatIndian(expected ?? 0, 2)} MT
           </span>
         )}
-        <span className="ml-auto text-[10px] text-txt-light/70">
+        <span className="ml-auto text-[10px] text-txt-light/70 hidden xl:inline">
           mine&apos;s assay · plant&apos;s underneath where it differs
         </span>
       </div>
@@ -159,7 +159,7 @@ function DespatchQuality({ day, expected }: {
         </p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full border-collapse min-w-[640px]">
+          <table className="w-full border-collapse min-w-[560px]">
             <thead>
               <tr className="bg-navy text-white">
                 <th className="px-3 py-1.5 text-left font-condensed font-extrabold
@@ -427,6 +427,16 @@ export default function PrevDayVarianceTable() {
         Previous Day — Plan vs Actual
       </div>
 
+      {/* Side by side, and the split is not even: the left table is four
+          columns of five digits and the right is eight, four of them assay.
+          An even split would leave the left half padded and scroll the right.
+
+          One column below lg. Two tables of eight columns between them do not
+          fit a laptop half-width, and a side-by-side that has to be scrolled
+          sideways is worse than one under the other. */}
+      <div className={view === "both" ? "" :
+        "grid gap-3 lg:grid-cols-[minmax(0,4fr)_minmax(0,6fr)] items-start"}>
+
       <div className="rounded-xl overflow-hidden border border-border shadow-md bg-white">
         {/* ── which figure to show ──────────────────────────────────────── */}
         <div className="flex items-center gap-3 px-3 py-2 border-b border-border-light bg-bg-soft flex-wrap">
@@ -473,9 +483,9 @@ export default function PrevDayVarianceTable() {
           ))}
           <span className="text-[10px] text-txt-light/70 ml-auto">
             {view === "actual"
-              ? "Posted figures — may still be incomplete for yesterday"
+              ? "Posted — may be incomplete"
               : view === "est"
-                ? "Hand-entered — three-dot menu, Enter Est Actual"
+                ? "Hand-entered · three-dot menu"
                 : `${dayLabel(older)} on the right — estimate against what was posted`}
           </span>
         </div>
@@ -488,7 +498,7 @@ export default function PrevDayVarianceTable() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className={`w-full border-collapse ${view === "both" ? "min-w-[800px]" : "min-w-[560px]"}`}>
+            <table className={`w-full border-collapse ${view === "both" ? "min-w-[800px]" : "min-w-[420px]"}`}>
               <thead>
                 {/* In "Both Days" the columns belong to two different dates, so
                     the dates are a header row of their own. Five unlabelled
@@ -605,6 +615,7 @@ export default function PrevDayVarianceTable() {
           one. Underneath, at its own grain, it is a table rather than an
           apology for one. */}
       {view !== "both" && <DespatchQuality day={day} expected={despatchActual} />}
+      </div>
 
       <PrevDayEntryModal
         open={dialog === "prev-day"}
