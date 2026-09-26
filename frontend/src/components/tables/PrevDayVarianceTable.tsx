@@ -71,6 +71,41 @@ function Num({ v, bold = false }: { v: number | null; bold?: boolean }) {
   );
 }
 
+/** The four the two labs report on, and what to head the column. */
+const QUALITY = [
+  ["moisture", "Mois%"], ["cr2o3", "Cr2O3%"],
+  ["feo", "FeO%"], ["cr_fe", "Cr/Fe"],
+] as const;
+
+/**
+ * The mine's figure, with the plant's underneath where it differs.
+ *
+ * Only where it differs: printing both on every row doubles the ink to say
+ * "the labs agree", which is the ordinary case and not news. A dash means
+ * nobody has assayed it yet — the plant posts its receipt one to three days
+ * after the trucks leave — and a dash is not a zero.
+ */
+function Assay({ mine, plant }: { mine: number | null; plant: number | null }) {
+  if (mine == null && plant == null) {
+    return <span className="text-txt-light/40">—</span>;
+  }
+  const differs = mine != null && plant != null && Math.abs(plant - mine) >= 0.05;
+  return (
+    <span className="inline-block leading-tight">
+      <span className="font-mono text-navy">
+        {mine == null ? "—" : formatIndian(mine, 2)}
+      </span>
+      {differs && (
+        <span className="block text-[9.5px] font-mono text-txt-light"
+          title={`Plant ${formatIndian(plant, 2)} · ${plant > mine ? "+" : ""}`
+                 + `${formatIndian(plant - mine, 2)} against the mine`}>
+          {formatIndian(plant, 2)}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function Variance({ plan, value }: { plan: number | null; value: number | null }) {
   // Either side missing means the variance is unknown, not zero.
   if (plan == null || value == null) return <span className="text-txt-light/50">—</span>;
@@ -114,6 +149,26 @@ export default function PrevDayVarianceTable() {
     })).data,
     staleTime: 5 * 60 * 1000,
   });
+  /**
+   * The assay of what went out that day, weighted by quantity.
+   *
+   * Straight from /quality-e2e with one day on both ends, rather than a second
+   * query written here: that service is verified against the mine's own
+   * workbook, and a second path to the same figure is a second path to a
+   * different figure.
+   *
+   * Both halves come back blank for a despatch the labs have not finished
+   * with — the plant posts its receipt one to three days later — and blank is
+   * the honest answer, not zero.
+   */
+  const assay = useQuery<{ totals: Record<string, number | null> }>({
+    queryKey: ["prev-day", "assay", day],
+    queryFn: async () => (await api.get("/quality-e2e", {
+      params: { from_date: day, to_date: day },
+    })).data,
+    staleTime: 5 * 60 * 1000,
+  });
+
   const entries = useQuery<{ values: Record<string, StoredValue> }>({
     queryKey: ["prev-day", "entered", day],
     queryFn: async () => (await api.get("/prev-day-actual", {
@@ -168,6 +223,7 @@ export default function PrevDayVarianceTable() {
   );
 
   const stored = entries.data?.values;
+  const q = assay.data?.totals;
   const olderStored = olderEntries.data?.values;
 
   // Invalidate the day that was actually saved — the dialog may have been on a
@@ -261,7 +317,7 @@ export default function PrevDayVarianceTable() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className={`w-full border-collapse ${view === "both" ? "min-w-[800px]" : "min-w-[560px]"}`}>
+            <table className={`w-full border-collapse ${view === "both" ? "min-w-[800px]" : "min-w-[760px]"}`}>
               <thead>
                 {/* In "Both Days" the columns belong to two different dates, so
                     the dates are a header row of their own. Five unlabelled
@@ -284,7 +340,8 @@ export default function PrevDayVarianceTable() {
                   </tr>
                 )}
                 <tr className="bg-navy text-white">
-                  <th className="px-3 py-2 text-left font-condensed font-extrabold text-[12px] tracking-[.14em]">
+                  <th className="px-3 py-2 text-left font-condensed font-extrabold
+                                 text-[12px] tracking-[.14em] w-[24%]">
                     KPI
                   </th>
                   <th className="px-3 py-2 text-right font-condensed font-extrabold text-[12px] tracking-[.14em]">Plan</th>
@@ -292,6 +349,17 @@ export default function PrevDayVarianceTable() {
                     {view === "both" ? "Est Actual" : valueLabel}
                   </th>
                   <th className="px-3 py-2 text-right font-condensed font-extrabold text-[12px] tracking-[.14em]">Variance</th>
+                  {/* The assay of the day's despatch. Not in Both Days: that
+                      view already carries two date groups, and four more
+                      columns would push the comparison off the screen. */}
+                  {view !== "both" && QUALITY.map(([, label]) => (
+                    <th key={label}
+                      className="px-2 py-2 text-right font-condensed font-extrabold
+                                 text-[11px] tracking-[.08em] w-[76px]
+                                 first:border-l first:border-white/20">
+                      {label}
+                    </th>
+                  ))}
                   {view === "both" && (
                     <>
                       <th className="px-3 py-2 text-right font-condensed font-extrabold text-[12px] tracking-[.14em] border-l border-l-white/30">
@@ -331,6 +399,18 @@ export default function PrevDayVarianceTable() {
                         <Variance plan={r.plan}
                           value={view === "both" ? (stored?.[r.key]?.value ?? null) : value} />
                       </td>
+                      {view !== "both" && QUALITY.map(([key, label], i) => (
+                        <td key={label}
+                          className={`px-2 py-2.5 text-right text-[12px] ${
+                            i === 0 ? "border-l border-border-light" : ""}`}>
+                          {r.key === "despatch" ? (
+                            <Assay mine={q?.[`mines_${key}`] ?? null}
+                                   plant={q?.[`plant_${key}`] ?? null} />
+                          ) : (
+                            <span className="text-txt-light/30">·</span>
+                          )}
+                        </td>
+                      ))}
                       {view === "both" && (
                         <>
                           <td className="px-3 py-2.5 text-right text-[13px]
@@ -367,6 +447,12 @@ export default function PrevDayVarianceTable() {
             )}
           </span>
           <span className="text-[9px] text-txt-light/50">
+            {/* Where the assay comes from, because a figure whose source is
+                not stated is a figure somebody will re-derive differently. */}
+            {view !== "both" && (
+              <>Assay is the mine's, weighted by quantity, of that day&apos;s
+                despatch; a second line is the plant&apos;s where it differs · </>
+            )}
             Total Excavation = OB + Ore ÷ {ORE_T_PER_M3} t/m³, on both sides
           </span>
         </div>
