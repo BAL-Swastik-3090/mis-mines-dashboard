@@ -26,9 +26,11 @@
  */
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { GitCompareArrows } from "lucide-react";
+import { GitCompareArrows, Search, Download, AlertTriangle, SlidersHorizontal } from "lucide-react";
 import api from "@/lib/api";
 import { formatIndian } from "@/lib/utils";
+import { matchesSearch } from "@/lib/search";
+import { useDateFilter } from "@/contexts/useDateFilter";
 
 interface Side {
   trips: number;
@@ -59,29 +61,56 @@ type Param = (typeof PARAMS)[number];
 /** Cr/Fe is a ratio and moves in the second decimal; the rest are percentages. */
 const DP: Record<Param, number> = { moisture: 2, cr2o3: 2, feo: 2, cr_fe: 2 };
 
-/** Local month bounds. Never toISOString — it shifts the date back in IST. */
-function monthRange(d: Date): { from: string; to: string } {
-  const iso = (x: Date) =>
-    `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
-  return {
-    from: iso(new Date(d.getFullYear(), d.getMonth(), 1)),
-    to: iso(new Date(d.getFullYear(), d.getMonth() + 1, 0)),
-  };
-}
+/**
+ * How far the two labs may differ before it is worth a phone call.
+ *
+ * Measured from this mine's own history — 106 consignments, July to September
+ * 2026 — and set near the ninetieth percentile of the absolute variance:
+ *
+ *     |variance|   median   p90    max
+ *     moisture      0.31    0.56   3.41
+ *     Cr2O3         0.41    0.60   1.86
+ *     FeO           0.17    0.52   1.75
+ *     Cr/Fe         0.02    0.05   0.09
+ *
+ * So about one consignment in ten is flagged: few enough to chase, and above
+ * the noise the two labs make on an ordinary stack.
+ *
+ * A STARTING POINT, NOT A STANDARD. The lab should confirm these, which is why
+ * they are on the screen and editable rather than buried here.
+ */
+const DEFAULT_TOLERANCE: Record<Param, number> = {
+  moisture: 0.60, cr2o3: 0.60, feo: 0.55, cr_fe: 0.05,
+};
 
 function Val({ v, dp = 2 }: { v: number | null; dp?: number }) {
   if (v == null) return <span className="text-txt-light/40">—</span>;
   return <span className="font-mono text-navy">{formatIndian(v, dp)}</span>;
 }
 
-/** Variance cell: green when the plant reads higher, red when lower. */
-function Var({ v, dp = 2 }: { v: number | null; dp?: number }) {
+/**
+ * Variance cell, marked by whether the labs agree rather than by which way.
+ *
+ * It used to be green for positive and red for negative, and that cannot be
+ * right for all four. Variance is Plant minus Mines: on Cr2O3 a positive means
+ * the plant found more chrome than the mine claimed, which is good for the
+ * mine; on moisture a positive means the plant found more water, which means
+ * the mine was paid for weight that was not ore. Green cannot mean both.
+ *
+ * So colour says "these two labs disagree by more than they usually do", and
+ * the sign — still printed — says which way.
+ */
+function Var({ v, dp = 2, tol }: { v: number | null; dp?: number; tol?: number }) {
   if (v == null) return <span className="text-txt-light/40">—</span>;
-  const cls =
-    v > 0 ? "text-success font-mono font-bold"
-      : v < 0 ? "text-danger font-mono font-bold"
-        : "text-txt-muted font-mono";
-  return <span className={cls}>{v > 0 ? "+" : ""}{formatIndian(v, dp)}</span>;
+  const out = tol != null && Math.abs(v) > tol;
+  return (
+    <span className={out
+      ? "font-mono font-bold text-rose bg-rose-bg rounded px-1"
+      : "font-mono text-txt-muted"}
+      title={out ? `Outside the ${tol} tolerance` : undefined}>
+      {v > 0 ? "+" : ""}{formatIndian(v, dp)}
+    </span>
+  );
 }
 
 const HEADS: Record<Param, string> = {
@@ -121,15 +150,16 @@ const STICKY_FOOT = "sticky bottom-0 z-10 bg-bg-section border-t-2 border-navy/2
 const TF = `px-2 py-2 leading-4 text-right text-[12px] whitespace-nowrap ${STICKY_FOOT}`;
 
 export default function QualityE2ETable() {
-  const [month, setMonth] = useState(() => {
-    const n = new Date();
-    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
-  });
+  // The header's range, not a month picker of its own. Two date controls on one
+  // page is two answers to "what am I looking at", and the header's is the one
+  // every other screen here obeys.
+  const from = useDateFilter((x) => x.apiFrom);
+  const to = useDateFilter((x) => x.apiTo);
 
-  const { from, to } = useMemo(() => {
-    const [y, m] = month.split("-").map(Number);
-    return monthRange(new Date(y, m - 1, 1));
-  }, [month]);
+  const [q2, setQ2] = useState("");
+  const [onlyOut, setOnlyOut] = useState(false);
+  const [tol, setTol] = useState<Record<Param, number>>(DEFAULT_TOLERANCE);
+  const [showTol, setShowTol] = useState(false);
 
   const q = useQuery<Resp>({
     queryKey: ["quality-e2e", from, to],
@@ -142,12 +172,69 @@ export default function QualityE2ETable() {
 
   // Newest despatch first — the row people come to this table for is the last
   // one, not the first. The API stays chronological for anything else reading it.
-  const rows = useMemo(
+  const all = useMemo(
     () => [...(q.data?.rows ?? [])].sort(
       (a, b) => b.date.localeCompare(a.date) || a.batch.localeCompare(b.batch)),
     [q.data],
   );
+
+  /** Which parameters this consignment is out on. Empty means the two labs
+   *  agree within tolerance on all four. */
+  const outOn = useMemo(() => {
+    const m = new Map<string, Param[]>();
+    for (const r of all) {
+      m.set(`${r.date}-${r.batch}`, PARAMS.filter((pp) => {
+        const v = r.variance[pp];
+        return v != null && Math.abs(v) > tol[pp];
+      }));
+    }
+    return m;
+  }, [all, tol]);
+
+  const rows = useMemo(() => all.filter((r) => {
+    const key = `${r.date}-${r.batch}`;
+    if (onlyOut && (outOn.get(key)?.length ?? 0) === 0) return false;
+    return matchesSearch(q2, [r.batch, r.grade, r.date]);
+  }), [all, q2, onlyOut, outOn]);
+
+  const flagged = all.filter(
+    (r) => (outOn.get(`${r.date}-${r.batch}`)?.length ?? 0) > 0);
+
+  /** The worst disagreement on each row, for the summary — a consignment out
+   *  on one parameter by a lot matters more than one out on two by a little. */
+  const worst = useMemo(() => [...flagged].sort((a, b) => {
+    const score = (r: Row) => Math.max(...PARAMS.map((pp) => {
+      const v = r.variance[pp];
+      return v == null ? 0 : Math.abs(v) / tol[pp];
+    }));
+    return score(b) - score(a);
+  }).slice(0, 4), [flagged, tol]);
+
   const t = q.data?.totals;
+
+  const download = () => {
+    const head = ["Date", "Stack", "Grade", "Trips", "Qty MT",
+      ...PARAMS.map((pp) => `Mines ${HEADS[pp]}`),
+      ...PARAMS.map((pp) => `Plant ${HEADS[pp]}`),
+      ...PARAMS.map((pp) => `Var ${HEADS[pp]}`), "Out of tolerance on"];
+    const body = rows.map((r) => [
+      r.date, r.batch, r.grade ?? "", r.mines.trips, r.mines.qty,
+      ...PARAMS.map((pp) => r.mines[pp] ?? ""),
+      ...PARAMS.map((pp) => r.plant[pp] ?? ""),
+      ...PARAMS.map((pp) => r.variance[pp] ?? ""),
+      (outOn.get(`${r.date}-${r.batch}`) ?? []).map((pp) => HEADS[pp]).join(" "),
+    ]);
+    // Quoted throughout: a stack number is safe but a grade or a future column
+    // may not be, and a CSV that breaks on one comma breaks silently.
+    const csv = [head, ...body]
+      .map((line) => line.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(","))
+      .join("\r\n");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    a.download = `end-to-end-quality-${from}-to-${to}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
 
   return (
     <section className="space-y-2">
@@ -155,26 +242,125 @@ export default function QualityE2ETable() {
         <GitCompareArrows size={13} />
         End-to-End Quality — Mine Despatch vs Plant Receipt
         <span className="text-[10px] text-txt-light font-medium normal-case tracking-normal ml-1">
-          by stack
+          by stack · {from.split("-").reverse().join("-")} to{" "}
+          {to.split("-").reverse().join("-")} · from the date at the top
         </span>
       </div>
 
-      <div className="rounded-xl overflow-hidden border border-border shadow-md bg-white">
-        <div className="flex items-center gap-3 px-3 py-2 border-b border-border-light bg-bg-soft flex-wrap">
-          <label className="flex items-center gap-1.5">
-            <span className="text-[11px] font-bold tracking-wide uppercase text-txt-muted">
-              Month
+      {/* The answer, before the working.
+          Thirty rows of four variances each is a hundred and twenty numbers,
+          and the question anybody brings to this table is which of them needs
+          a phone call. Leaving that to be found by scanning is what made this
+          a report rather than a tool. */}
+      {!q.isLoading && all.length > 0 && (
+        <div className={`rounded-xl border px-4 py-3 ${
+          flagged.length
+            ? "border-rose-ring bg-rose-bg/40"
+            : "border-emerald-ring bg-emerald-bg/40"}`}>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <AlertTriangle className={`w-4 h-4 ${
+              flagged.length ? "text-rose" : "text-emerald"}`} />
+            <span className="text-[13px] font-bold text-navy">
+              {flagged.length === 0
+                ? `All ${all.length} consignments agree within tolerance`
+                : `${flagged.length} of ${all.length} consignment`
+                  + `${all.length === 1 ? "" : "s"} outside tolerance`}
             </span>
-            <input
-              type="month"
-              value={month}
-              onChange={(e) => setMonth(e.target.value)}
-              className="text-[12px] border border-border rounded px-2 py-0.5 text-navy
-                         focus:outline-none focus:ring-1 focus:ring-navy"
-            />
-          </label>
+            {flagged.length > 0 && (
+              <button type="button" onClick={() => setOnlyOut((v) => !v)}
+                className="text-[11.5px] font-semibold text-gold-dark hover:underline
+                           underline-offset-2">
+                {onlyOut ? "show them all" : "show only those"}
+              </button>
+            )}
+            <button type="button" onClick={() => setShowTol((v) => !v)}
+              className="ml-auto inline-flex items-center gap-1 text-[11px]
+                         text-txt-muted hover:text-navy">
+              <SlidersHorizontal className="w-3.5 h-3.5" />
+              tolerance
+            </button>
+          </div>
+
+          {worst.length > 0 && (
+            <div className="mt-1.5 space-y-0.5">
+              {worst.map((r) => (
+                <div key={`${r.date}-${r.batch}`} className="text-[11.5px]">
+                  <span className="font-mono font-semibold text-navy">{r.batch}</span>
+                  <span className="text-txt-muted">
+                    {" "}on {r.date.split("-").reverse().join("-")}
+                    {r.grade ? ` (${r.grade})` : ""} —{" "}
+                    {(outOn.get(`${r.date}-${r.batch}`) ?? []).map((pp) => {
+                      const v = r.variance[pp] as number;
+                      return `${HEADS[pp]} ${v > 0 ? "+" : ""}${formatIndian(v, DP[pp])}`;
+                    }).join(", ")}
+                  </span>
+                </div>
+              ))}
+              {flagged.length > worst.length && (
+                <div className="text-[11px] text-txt-light">
+                  and {flagged.length - worst.length} more
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Editable, and on the screen rather than buried in the code,
+              because these are measured from this mine's own history and not
+              a standard anybody has signed off. */}
+          {showTol && (
+            <div className="mt-2 pt-2 border-t border-border-light flex flex-wrap
+                            items-end gap-3">
+              {PARAMS.map((pp) => (
+                <label key={pp} className="block">
+                  <span className="block text-[10px] font-semibold text-txt-secondary">
+                    {HEADS[pp]}
+                  </span>
+                  <input type="number" step={0.01} min={0} value={tol[pp]}
+                    onChange={(e) => setTol({ ...tol, [pp]: Number(e.target.value) })}
+                    className="w-[74px] text-[12px] border border-border rounded
+                               px-2 py-0.5 text-navy focus:outline-none
+                               focus:border-gold" />
+                </label>
+              ))}
+              <span className="text-[10.5px] text-txt-light max-w-[440px]">
+                Set near the ninetieth percentile of 106 consignments, July to
+                September 2026 — about one in ten is flagged. A starting point
+                measured here, not a standard; the lab should confirm them.
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="rounded-xl overflow-hidden border border-border shadow-md bg-white">
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-border-light
+                        bg-bg-soft flex-wrap">
+          <span className="relative">
+            <Search className="w-3.5 h-3.5 text-txt-light absolute left-2
+                               top-1/2 -translate-y-1/2" />
+            <input value={q2} onChange={(e) => setQ2(e.target.value)}
+              placeholder="Stack number, grade, date…"
+              className="w-[240px] text-[12px] border border-border rounded
+                         pl-7 pr-2 py-1 text-navy placeholder:text-txt-light
+                         focus:outline-none focus:border-gold" />
+          </span>
+          {(q2 || onlyOut) && (
+            <button type="button"
+              onClick={() => { setQ2(""); setOnlyOut(false); }}
+              className="text-[11.5px] font-semibold text-gold-dark hover:underline">
+              Clear
+            </button>
+          )}
+          <button type="button" onClick={download} disabled={rows.length === 0}
+            title="What is on screen, as a spreadsheet"
+            className="inline-flex items-center gap-1 text-[11.5px] font-semibold
+                       text-txt-muted hover:text-navy disabled:opacity-40">
+            <Download className="w-3.5 h-3.5" /> Export
+          </button>
           <span className="text-[10px] text-txt-light/70 ml-auto">
-            {q.isLoading ? "Loading…" : `${rows.length} consignment${rows.length === 1 ? "" : "s"}`}
+            {q.isLoading ? "Loading…"
+              : `${rows.length}${rows.length !== all.length ? ` of ${all.length}` : ""}`
+                + ` consignment${rows.length === 1 ? "" : "s"}`}
             {" · matched on batch number"}
           </span>
         </div>
@@ -191,7 +377,7 @@ export default function QualityE2ETable() {
           </div>
         ) : rows.length === 0 ? (
           <div className="p-6 text-center text-[12px] text-txt-light">
-            No despatches to Balasore in this month.
+            No despatches to Balasore in this period.
           </div>
         ) : (
           <div
@@ -272,9 +458,9 @@ export default function QualityE2ETable() {
                         <Val v={r.plant[p]} dp={DP[p]} />
                       </td>
                     ))}
-                    {PARAMS.map((p) => (
-                      <td key={`v-${p}`} className={TD}>
-                        <Var v={r.variance[p]} dp={DP[p]} />
+                    {PARAMS.map((pp) => (
+                      <td key={`v-${pp}`} className={TD}>
+                        <Var v={r.variance[pp]} dp={DP[pp]} tol={tol[pp]} />
                       </td>
                     ))}
                   </tr>
