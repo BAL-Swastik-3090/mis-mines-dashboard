@@ -134,6 +134,9 @@ function DespatchQuality({ day, expected }: {
                       border-b border-border-light bg-bg-soft">
         <Truck className="w-3.5 h-3.5 text-gold self-center" />
         <span className="text-[12px] font-bold text-navy">What went out</span>
+        <span className="text-[12px] font-bold text-navy">
+          {dayLabel(day)}
+        </span>
         <span className="text-[11px] text-txt-muted">
           {rows.length === 0
             ? "nothing despatched to Balasore"
@@ -159,9 +162,11 @@ function DespatchQuality({ day, expected }: {
         </p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full border-collapse min-w-[640px]">
+          <table className="w-full border-collapse min-w-[700px]">
             <thead>
               <tr className="bg-navy text-white">
+                <th className="px-3 py-1.5 text-left font-condensed font-extrabold
+                               text-[11px] tracking-[.12em]">Date</th>
                 <th className="px-3 py-1.5 text-left font-condensed font-extrabold
                                text-[11px] tracking-[.12em]">Stack</th>
                 <th className="px-2 py-1.5 text-left font-condensed font-extrabold
@@ -185,6 +190,9 @@ function DespatchQuality({ day, expected }: {
               {rows.map((r) => (
                 <tr key={r.batch}
                   className="border-b border-border-light last:border-0 hover:bg-bg-soft/60">
+                  <td className="px-3 py-2 text-[12px] text-txt-muted whitespace-nowrap">
+                    {r.date.slice(8, 10)}.{r.date.slice(5, 7)}.{r.date.slice(2, 4)}
+                  </td>
                   <td className="px-3 py-2 text-[12px] font-mono font-semibold text-navy
                                  whitespace-nowrap">{r.batch}</td>
                   <td className="px-2 py-2">
@@ -214,7 +222,7 @@ function DespatchQuality({ day, expected }: {
               <tfoot>
                 <tr className="bg-bg-section border-t-2 border-navy/15">
                   <td className="px-3 py-1.5 text-[10.5px] font-condensed font-extrabold
-                                 tracking-[.1em] text-navy" colSpan={2}>
+                                 tracking-[.1em] text-navy" colSpan={3}>
                     WTD AVG
                   </td>
                   <td className="px-2 py-1.5 text-right text-[12px] font-mono text-txt-muted">
