@@ -1,68 +1,64 @@
 """
-Mines stock position — sourced from IMOS data entry, table `mines_stock`.
+Mines stock position — from `mines_stock_entry`, filled in on the dashboard.
 
-Replaces the previous SAP `mm_mb52_inventory_new` source, which was not being
-maintained (the section had been hidden for that reason).
+Replaces the IMOS table `mines_stock`, which in turn replaced the SAP
+`mm_mb52_inventory_new` feed that nobody maintained.
 
-The table is a snapshot per Stock_Date, holding two sections whose COLUMNS MEAN
-DIFFERENT THINGS. This is the single most important thing to know about it:
+── ONE FACT TABLE, NO SECTIONS ──────────────────────────────────────────────
+The IMOS table stored the shape of its own data-entry form: a Section letter, a
+Row_Label, and grade columns whose meaning changed depending on which section
+the row belonged to. HG_QTY meant mine stock in section B and nothing at all in
+section C, where BAL_QTY and SUK_QTY carried the figures instead.
 
-  Section B — mine stock by clearance status.
-      Row_Label = status (Total Stock, Permission in Hand, Awaiting Permission,
-                  Awaiting Verification, Awaiting Stacking)
-      Value     = HG_QTY + MG_QTY + COB_QTY + LG_QTY + LG_FOR_COB_QTY
+`mines_stock_entry` stores the fact rather than the form:
 
-  Section C — stock held at the plants, one row per grade.
-      BAL_QTY / SUK_QTY / LG_FOR_COB_QTY
+    on this Stock_Date, of this Grade, in this Bucket, there is this Qty.
 
-Mine-side stock comes from SECTION B, not Section C. Both the headline Total
-Stock and the Mines location figure are the same quantity — the four clearance
-status rows summed across HG, MG, LG and COB — so they are computed once and
-reported in both places rather than derived twice.
+Seven buckets. Four are positions at the mine, by clearance status, and sum to
+Total Stock; three are stock held elsewhere:
 
-The grade split shown under Mines is that same Section B block read down its
-columns instead of across its rows, which is why the four grades sum back to
-Total Stock exactly.
+    MINE_PERMISSION_IN_HAND     BAL_PLANT
+    MINE_AWAITING_PERMISSION    SUK_PLANT
+    MINE_AWAITING_VERIFICATION  LG_FOR_COB   (Low Grade only)
+    MINE_AWAITING_STACKING
 
-Section A does not exist in the table and is not rendered.
+── NOTHING TOTAL IS STORED ──────────────────────────────────────────────────
+Total Stock, the grade split, the location figures and the grand total are all
+SUMs over that table. The IMOS table stored its totals and they drifted: its
+Total Stock row disagreed with the sum of its own four status rows on 2 of 22
+dates — by +46 MT on 17 August and by 2,841 MT on 18 August. There is now
+nowhere for a total to be stored, so there is nothing for it to disagree with.
 
-The two sections do NOT reconcile with each other and are not meant to: B is
-mine-side stock grouped by clearance status, C is stock across physical
-locations including the plants. They are returned as separate blocks so the UI
-never presents one as a breakdown of the other.
+"Mines" in All Locations is not a separate figure either: it is the mine
+buckets, which is the same SUM as Total Stock. Verified against the IMOS screen
+for 24-09-2026, where the same 1,120 MG and 300 COB appear in both halves.
 """
 from datetime import date
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
-SECTION_STATUS   = "B"
-SECTION_LOCATION = "C"
+TABLE = "mines_stock_entry"
 
-# Section B statuses, in form order. 'Total Stock' is deliberately absent: the
-# stored row is unreliable (it reads 0 while the four statuses carry 1,436 MT on
-# 20 Aug, and on 17 Aug it held figures that were not their sum), so the total is
-# computed from the four statuses instead. Excluding it here also means the total
-# cannot double-count if that row is ever filled in.
-STATUS_ROWS = [
-    "Permission in Hand",
-    "Awaiting Permission",
-    "Awaiting Verification",
-    "Awaiting Stacking",
+# The four positions at the mine. Their sum is Total Stock, and the same rows
+# read per grade give the grade split — two views of one set of facts, so they
+# cannot disagree.
+MINE_BUCKETS = [
+    ("MINE_PERMISSION_IN_HAND",    "Permission in Hand"),
+    ("MINE_AWAITING_PERMISSION",   "Awaiting Permission"),
+    ("MINE_AWAITING_VERIFICATION", "Awaiting Verification"),
+    ("MINE_AWAITING_STACKING",     "Awaiting Stacking"),
 ]
+STATUS_ROWS = [label for _b, label in MINE_BUCKETS]
 
-# Row total for a Section B status: the four grades only. LG_FOR_COB_QTY is
-# deliberately NOT added here — it is a Section C plant column, and the mine's
-# definition of a status row is HG + MG + LG + COB.
-_STATUS_TOTAL = ("COALESCE(HG_QTY,0) + COALESCE(MG_QTY,0) "
-                 "+ COALESCE(LG_QTY,0) + COALESCE(COB_QTY,0)")
-
-# Grade columns, in display order, with the label shown under Mines.
+# Grades in display order, with the label shown under Mines.
 GRADE_COLUMNS = [
-    ("HG",  "HG_QTY",  "High Grade"),
-    ("MG",  "MG_QTY",  "Medium Grade"),
-    ("LG",  "LG_QTY",  "Low Grade"),
-    ("COB", "COB_QTY", "COB / COB Mix Grade"),
+    ("HG",  "High Grade"),
+    ("MG",  "Medium Grade"),
+    ("LG",  "Low Grade"),
+    ("COB", "COB / COB Mix Grade"),
 ]
+
+_MINE_IN = ", ".join(f"'{b}'" for b, _ in MINE_BUCKETS)
 
 
 def _f(v) -> float:
@@ -75,15 +71,15 @@ def _f(v) -> float:
 def _resolve_snapshot_date(db: Session, as_on: date | None) -> date | None:
     """Latest Stock_Date on or before `as_on`.
 
-    Entry is not daily — the table currently holds 17, 18 and 20 Aug — so an
-    exact-date match would render an empty panel on any day nobody filed. Falling
-    back to the most recent earlier snapshot is what the mine means by "stock as
-    on"; the date is returned so the page states which snapshot it is showing.
+    Entry is not daily, so an exact-date match would render an empty panel on
+    any day nobody filed. Falling back to the most recent earlier snapshot is
+    what the mine means by "stock as on"; the date is returned so the page
+    states which snapshot it is showing.
     """
     if as_on is None:
-        return db.execute(text("SELECT MAX(Stock_Date) FROM mines_stock")).scalar()
+        return db.execute(text(f"SELECT MAX(Stock_Date) FROM {TABLE}")).scalar()
     return db.execute(text(
-        "SELECT MAX(Stock_Date) FROM mines_stock WHERE Stock_Date <= :d"
+        f"SELECT MAX(Stock_Date) FROM {TABLE} WHERE Stock_Date <= :d"
     ), {"d": as_on}).scalar()
 
 
@@ -100,55 +96,52 @@ def get_stock_position(db: Session, as_on: date | None = None) -> dict:
                           "lg_for_cob": 0.0, "total": 0.0},
         }
 
-    # ── Section B — mine stock, by status across and by grade down ────────────
-    grade_sel = ", ".join(f"COALESCE(SUM(`{col}`),0) AS g_{key.lower()}"
-                          for key, col, _ in GRADE_COLUMNS)
-    ph = ", ".join(f":s{i}" for i in range(len(STATUS_ROWS)))
-    params = {"d": snap, "sec": SECTION_STATUS}
-    for i, st in enumerate(STATUS_ROWS):
-        params[f"s{i}"] = st
+    # ── everything at the mine, per grade and per status ─────────────────────
+    # One query answers both: the grade split is this grouped by Grade, the
+    # status rows are this grouped by Bucket. Reading them from one result
+    # rather than two queries is also what guarantees they agree.
+    mine_rows = db.execute(text(f"""
+        SELECT Grade, Bucket, SUM(Qty) AS qty
+        FROM   {TABLE}
+        WHERE  Stock_Date = :d AND Bucket IN ({_MINE_IN})
+        GROUP  BY Grade, Bucket
+    """), {"d": snap}).fetchall()
 
-    # Read down the columns for the grade split. Restricted to the four status
-    # rows — the same scope the row totals use — so the grade split and the
-    # status totals are two views of one block and must agree.
-    gr = db.execute(text(f"""
-        SELECT {grade_sel}
-        FROM   mines_stock
-        WHERE  Stock_Date = :d AND Section = :sec AND Row_Label IN ({ph})
-    """), params).fetchone()
+    by_grade: dict[str, float] = {}
+    by_bucket: dict[str, float] = {}
+    for r in mine_rows:
+        q = _f(r.qty)
+        by_grade[r.Grade] = by_grade.get(r.Grade, 0.0) + q
+        by_bucket[r.Bucket] = by_bucket.get(r.Bucket, 0.0) + q
 
     grades = [{
         "grade_key":   key,
         "grade_label": label,
-        "mines":       round(_f(getattr(gr, f"g_{key.lower()}")) if gr else 0.0, 2),
-    } for key, _col, label in GRADE_COLUMNS]
+        "mines":       round(by_grade.get(key, 0.0), 2),
+    } for key, label in GRADE_COLUMNS]
 
-    # Read across the rows for the per-status totals.
-    status_map = {
-        r.lbl: _f(r.qty) for r in db.execute(text(f"""
-            SELECT Row_Label AS lbl, {_STATUS_TOTAL} AS qty
-            FROM   mines_stock
-            WHERE  Stock_Date = :d AND Section = :sec
-        """), {"d": snap, "sec": SECTION_STATUS}).fetchall()
-    }
-    statuses = [{"label": st, "qty": round(status_map.get(st, 0.0), 2)} for st in STATUS_ROWS]
+    statuses = [{
+        "label": label,
+        "qty":   round(by_bucket.get(bucket, 0.0), 2),
+    } for bucket, label in MINE_BUCKETS]
 
-    # Total Stock and the Mines location are the same quantity by definition.
-    total_stock = round(sum(status_map.get(st, 0.0) for st in STATUS_ROWS), 2)
-    mines       = total_stock
+    # Total Stock and the Mines location are the same quantity by definition,
+    # so they are summed once and reported in both places.
+    total_stock = round(sum(by_bucket.values()), 2)
+    mines = total_stock
 
-    # ── Section C — stock held at the plants ──────────────────────────────────
-    loc = db.execute(text("""
-        SELECT COALESCE(SUM(BAL_QTY), 0)        AS bal,
-               COALESCE(SUM(SUK_QTY), 0)        AS suk,
-               COALESCE(SUM(LG_FOR_COB_QTY), 0) AS lg_for_cob
-        FROM   mines_stock
-        WHERE  Stock_Date = :d AND Section = :sec
-    """), {"d": snap, "sec": SECTION_LOCATION}).fetchone()
+    # ── stock held elsewhere ─────────────────────────────────────────────────
+    loc_rows = db.execute(text(f"""
+        SELECT Bucket, SUM(Qty) AS qty
+        FROM   {TABLE}
+        WHERE  Stock_Date = :d AND Bucket NOT IN ({_MINE_IN})
+        GROUP  BY Bucket
+    """), {"d": snap}).fetchall()
+    loc = {r.Bucket: _f(r.qty) for r in loc_rows}
 
-    bal        = _f(loc.bal) if loc else 0.0
-    suk        = _f(loc.suk) if loc else 0.0
-    lg_for_cob = _f(loc.lg_for_cob) if loc else 0.0
+    bal        = loc.get("BAL_PLANT", 0.0)
+    suk        = loc.get("SUK_PLANT", 0.0)
+    lg_for_cob = loc.get("LG_FOR_COB", 0.0)
     grand      = mines + bal + suk + lg_for_cob
 
     days_stale = (as_on - snap).days if as_on else 0

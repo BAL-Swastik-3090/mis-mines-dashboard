@@ -1,6 +1,10 @@
 "use client";
 /**
- * Mines Stock Position — sourced from IMOS entry (`mines_stock`).
+ * Mines Stock Position — from `mines_stock_entry`, filled in on this dashboard.
+ *
+ * Entry lives in MinesStockEntryModal, opened from "Enter Mines Stock" in the
+ * three-dot menu in the header; this section only displays. The modal is
+ * mounted here because this is the section its figures belong to.
  *
  * Mine stock all comes from Section B — the four clearance status rows. The page
  * shows that one quantity three ways, and all three tie back to it:
@@ -13,9 +17,13 @@
  * figures in All Locations come from Section C (BAL_QTY / SUK_QTY), and Mines
  * there is Total Stock again rather than a separate number.
  */
+import { useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Package, AlertTriangle } from "lucide-react";
 import { useStockPosition } from "@/hooks/useStock";
 import { formatIndian } from "@/lib/utils";
+import { useEntryDialog } from "@/contexts/useEntryDialog";
+import MinesStockEntryModal from "@/components/sections/MinesStockEntryModal";
 
 function mt(v: number | null | undefined) {
   return v == null ? "—" : formatIndian(Math.round(v));
@@ -39,15 +47,38 @@ const GRADE_COLOR: Record<string, string> = {
 
 export default function StockSection() {
   const { data, isLoading, isError, error } = useStockPosition();
+  const qc = useQueryClient();
+  const dialog = useEntryDialog((s) => s.which);
+  const closeDialog = useEntryDialog((s) => s.close);
+
+  // A saved position changes what this section shows, so the snapshot query is
+  // refetched rather than waiting for its stale time.
+  const afterSave = useCallback(() => {
+    void qc.invalidateQueries({ queryKey: ["stock"] });
+  }, [qc]);
+
+  const entryModal = (
+    <MinesStockEntryModal
+      open={dialog === "mines-stock"}
+      onClose={closeDialog}
+      onSaved={afterSave}
+    />
+  );
 
   if (isError) {
+    // The dialog renders here too: a failure to READ the position is exactly
+    // when somebody may need to enter one, and an unreachable form would make
+    // the section a dead end.
     return (
-      <div className="p-4 rounded-lg bg-red-50 border border-red-200 flex items-center gap-3">
-        <AlertTriangle size={16} className="text-[#c62828] shrink-0" />
-        <span className="text-[12px] text-[#c62828]">
-          {error instanceof Error ? error.message : "Failed to load stock position"}
-        </span>
-      </div>
+      <>
+        <div className="p-4 rounded-lg bg-red-50 border border-red-200 flex items-center gap-3">
+          <AlertTriangle size={16} className="text-[#c62828] shrink-0" />
+          <span className="text-[12px] text-[#c62828]">
+            {error instanceof Error ? error.message : "Failed to load stock position"}
+          </span>
+        </div>
+        {entryModal}
+      </>
     );
   }
 
@@ -207,10 +238,12 @@ export default function StockSection() {
 
       <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40">
         <p className="text-[9px] font-mono text-success/70 leading-tight">
-          <span className="font-semibold text-success/60">STOCK · </span>IMOS data entry
+          <span className="font-semibold text-success/60">STOCK · </span>dashboard entry
           &nbsp;·&nbsp;snapshot per day, all figures MT
         </p>
       </div>
+
+      {entryModal}
     </div>
   );
 }

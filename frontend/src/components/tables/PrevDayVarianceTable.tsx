@@ -53,7 +53,7 @@ import { CalendarCheck } from "lucide-react";
 import api from "@/lib/api";
 import { formatIndian } from "@/lib/utils";
 import PrevDayEntryModal, { type StoredValue } from "@/components/tables/PrevDayEntryModal";
-import { usePrevDayEntry } from "@/contexts/usePrevDayEntry";
+import { useEntryDialog } from "@/contexts/useEntryDialog";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import {
   ORE_T_PER_M3, buildRows, dayBefore, dayLabel, type KpiRow,
@@ -92,8 +92,8 @@ export default function PrevDayVarianceTable() {
   /** The day before that, for the "Both Days" view. */
   const older = useMemo(() => dayBefore(day), [day]);
   const [view, setView] = useState<View>("actual");
-  const entryOpen = usePrevDayEntry((s) => s.open);
-  const setEntryOpen = usePrevDayEntry((s) => s.setOpen);
+  const dialog = useEntryDialog((s) => s.which);
+  const closeDialog = useEntryDialog((s) => s.close);
 
   // The midnight rollover timer that used to live here has gone with the
   // hard-coded day. Rolling this one panel over at 00:01 while the header
@@ -373,8 +373,8 @@ export default function PrevDayVarianceTable() {
       </div>
 
       <PrevDayEntryModal
-        open={entryOpen}
-        onClose={() => setEntryOpen(false)}
+        open={dialog === "prev-day"}
+        onClose={closeDialog}
         defaultDay={day}
         onSaved={refetchEntries}
       />

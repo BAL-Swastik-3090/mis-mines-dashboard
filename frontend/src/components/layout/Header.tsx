@@ -1,13 +1,13 @@
 "use client";
 import { format } from "date-fns";
-import { RefreshCw, Bell, MoreVertical, PencilLine } from "lucide-react";
+import { RefreshCw, Bell, MoreVertical, PencilLine, Boxes } from "lucide-react";
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import DateFilter from "./DateFilter";
 import ProfileMenu from "./ProfileMenu";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import { useAppPage } from "@/contexts/useAppPage";
-import { usePrevDayEntry } from "@/contexts/usePrevDayEntry";
+import { useEntryDialog } from "@/contexts/useEntryDialog";
 import { cn } from "@/lib/utils";
 
 /** True when the selected end-date is today → sensor data is live. */
@@ -159,7 +159,7 @@ function ActionsMenu() {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement | null>(null);
   const setPage = useAppPage((s) => s.setPage);
-  const openEntry = usePrevDayEntry((s) => s.setOpen);
+  const openDialog = useEntryDialog((s) => s.open);
 
   useEffect(() => {
     if (!open) return;
@@ -192,18 +192,24 @@ function ActionsMenu() {
           role="menu"
           className="absolute right-0 mt-1 w-56 bg-white rounded-lg shadow-xl border border-border py-1 z-50"
         >
-          <button
-            role="menuitem"
-            onClick={() => {
-              setOpen(false);
-              setPage("mis");
-              openEntry(true);
-            }}
-            className="w-full flex items-center gap-2 px-3 py-2 text-left text-[12px] font-semibold text-txt-secondary hover:bg-bg-section hover:text-navy transition-colors"
-          >
-            <PencilLine size={13} className="text-accent shrink-0" />
-            Enter Est Actual
-          </button>
+          {([
+            ["prev-day", "Enter Est Actual", PencilLine],
+            ["mines-stock", "Enter Mines Stock", Boxes],
+          ] as const).map(([which, label, Icon]) => (
+            <button
+              key={which}
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                setPage("mis");
+                openDialog(which);
+              }}
+              className="w-full flex items-center gap-2 px-3 py-2 text-left text-[12px] font-semibold text-txt-secondary hover:bg-bg-section hover:text-navy transition-colors"
+            >
+              <Icon size={13} className="text-accent shrink-0" />
+              {label}
+            </button>
+          ))}
         </div>
       )}
     </div>

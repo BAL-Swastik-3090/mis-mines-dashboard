@@ -1,5 +1,5 @@
 """
-Stock router — mines stock position from IMOS entry (`mines_stock`).
+Stock router — mines stock position from `mines_stock_entry`.
 
 Takes a date because the table is a snapshot per Stock_Date, not a live feed.
 The service resolves the latest snapshot on or before that date.

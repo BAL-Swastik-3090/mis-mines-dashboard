@@ -148,6 +148,10 @@ PREFIX_PAGE: tuple[tuple[str, str], ...] = (
     # passes the page check entirely and would be reachable by any signed-in
     # user, including one with no MIS access at all.
     ("/api/prev-day-actual", "mis"),
+    # Hand-entered mines stock position. Same reasoning as above: an
+    # unmapped path skips the page check and would be reachable by any
+    # signed-in user.
+    ("/api/stock-entry", "mis"),
     ("/api/fuel-management", "fuel-management"),
     ("/api/ev-tracking", "ev-tracking"),
     ("/api/live-tracking", "mis"),

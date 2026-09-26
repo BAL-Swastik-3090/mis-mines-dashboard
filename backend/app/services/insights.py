@@ -475,13 +475,14 @@ def _cob_quality_mtd(db: Session, from_date: date, to_date: date) -> dict:
 def _stock_snapshot(db: Session) -> dict:
     """Current ore + COB stock by grade, from the Stock section's own source.
 
-    Was reading SAP mm_mb52_inventory_new. The Stock section moved to IMOS entry
-    (`mines_stock`), so this now delegates to the same service rather than
-    querying a second source — otherwise the digest and the Stock panel would
-    quote different stock figures on the same screen.
+    Was reading SAP mm_mb52_inventory_new, then IMOS `mines_stock`, and now
+    `mines_stock_entry`. It has always delegated to the Stock section's own
+    service rather than querying the source itself — otherwise the digest and
+    the Stock panel would quote different figures on the same screen, and each
+    change of source would have had to be made twice.
 
-    Grades follow mines_stock: HG, MG, LG, COB. There is no LUMP row in the new
-    source, so LUMP is no longer reported.
+    Grades are HG, MG, LG, COB. There is no LUMP row in this source, so LUMP is
+    no longer reported.
     """
     try:
         from app.services.stock import get_stock_position
