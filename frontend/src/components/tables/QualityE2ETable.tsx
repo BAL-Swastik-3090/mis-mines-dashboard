@@ -200,15 +200,28 @@ export default function QualityE2ETable() {
   const flagged = all.filter(
     (r) => (outOn.get(`${r.date}-${r.batch}`)?.length ?? 0) > 0);
 
-  /** The worst disagreement on each row, for the summary — a consignment out
-   *  on one parameter by a lot matters more than one out on two by a little. */
+  /**
+   * The ones worth ringing somebody about, worst first — and "worst" is how
+   * far out TIMES how much ore it is about.
+   *
+   * Ordering by the variance alone put single-truck tails at the top. A stack
+   * finishing with one truck of 11 MT that assays 2% apart is two labs
+   * disagreeing about one truck; a 68-truck consignment of 800 MT that assays
+   * 0.8% apart is eight hundred tonnes of ore whose grade is in dispute. The
+   * second is the phone call, and it was sitting fourth.
+   */
   const worst = useMemo(() => [...flagged].sort((a, b) => {
     const score = (r: Row) => Math.max(...PARAMS.map((pp) => {
       const v = r.variance[pp];
       return v == null ? 0 : Math.abs(v) / tol[pp];
-    }));
+    })) * (r.mines.qty || 0);
     return score(b) - score(a);
   }).slice(0, 4), [flagged, tol]);
+
+  /** How much ore is under a disagreement. The count of rows says nothing
+   *  about scale: five consignments can be 40 MT or 4,000. */
+  const flaggedQty = flagged.reduce((n, r) => n + (r.mines.qty || 0), 0);
+  const totalQty = all.reduce((n, r) => n + (r.mines.qty || 0), 0);
 
   const t = q.data?.totals;
 
@@ -267,6 +280,13 @@ export default function QualityE2ETable() {
                   + `${all.length === 1 ? "" : "s"} outside tolerance`}
             </span>
             {flagged.length > 0 && (
+              // The tonnage, because the count says nothing about scale.
+              <span className="text-[11.5px] text-txt-muted">
+                {formatIndian(flaggedQty, 2)} MT of {formatIndian(totalQty, 2)}
+                {" "}({Math.round((flaggedQty / (totalQty || 1)) * 100)}%)
+              </span>
+            )}
+            {flagged.length > 0 && (
               <button type="button" onClick={() => setOnlyOut((v) => !v)}
                 className="text-[11.5px] font-semibold text-gold-dark hover:underline
                            underline-offset-2">
@@ -288,7 +308,12 @@ export default function QualityE2ETable() {
                   <span className="font-mono font-semibold text-navy">{r.batch}</span>
                   <span className="text-txt-muted">
                     {" "}on {r.date.split("-").reverse().join("-")}
-                    {r.grade ? ` (${r.grade})` : ""} —{" "}
+                    {r.grade ? ` (${r.grade})` : ""}
+                    {" · "}
+                    <span className="font-semibold text-navy">
+                      {formatIndian(r.mines.qty, 2)} MT
+                    </span>
+                    {" in "}{r.mines.trips} trip{r.mines.trips === 1 ? "" : "s"} —{" "}
                     {(outOn.get(`${r.date}-${r.batch}`) ?? []).map((pp) => {
                       const v = r.variance[pp] as number;
                       return `${HEADS[pp]} ${v > 0 ? "+" : ""}${formatIndian(v, DP[pp])}`;
