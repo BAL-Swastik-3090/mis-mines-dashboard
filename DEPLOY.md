@@ -60,6 +60,54 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ---
 
+## Deployed — 2026-09-26 (second): end-to-end quality
+
+Released commit `5550990` (branch `release-26-09-2026-b`) to
+mines.balasorealloys.in. Backup: `~/mines_dashboard-backup-20260926-1600.tar.gz`.
+
+**What changed**
+
+- Swastik's end-to-end quality screen merged: one row per consignment, the
+  mine's lab against Balasore's on moisture, Cr2O3, FeO and Cr/Fe. Replaces a
+  workbook kept by hand since April 2025.
+- It now leads with the consignments worth arguing about, ordered by how much
+  ore is under the disagreement rather than by how far apart the labs are —
+  single-truck tails were sitting above 800 MT consignments.
+- Colour marks disagreement, not direction. Green-for-positive was wrong for
+  moisture: a positive there means the mine was paid for water.
+- The warning icon opens a reading of the period's own figures — which
+  consignment matters most, how much contained chrome is in dispute, and
+  whether the variances lean one way.
+- The "What went out" card added to the previous-day panel was removed on
+  request; that detail lives on the quality screen.
+
+**Tolerances**, measured from 106 consignments July–September 2026, set near
+the ninetieth percentile: moisture 0.60, Cr2O3 0.60, FeO 0.55, Cr/Fe 0.05. A
+starting point from this mine's history, not a standard — on screen and
+editable so the lab can confirm them.
+
+**No database change.** The quality screen is read-only against SAP tables in
+balcorpdb.
+
+Verified inside the container, against the workbook the feature replaces:
+
+```
+quality   37 consignments, 1305 trips, 15,384.64 MT
+workbook  1-22 Sept: 30 rows, 1167 trips, 13,737.30 MT  -> matches
+capacity  25 Sept: 8 faces, effective 3935.04 Cum/day
+```
+
+The deletion check ran and came back empty.
+
+### WHAT THE SCREEN FOUND ON ITS FIRST DAY
+
+Of 33 consignments the plant has assayed this month, it read LOWER on Cr2O3 on
+25 and higher on 8. Three quarters one way is not sampling noise; it is a
+calibration question for the two labs. Nobody could see that from a table of
+variances, which is the argument for the summary existing at all.
+
+---
+
 ## Deployed — 2026-09-26: capacity, and the mines stock entry screen
 
 Released commit `f7928b3` (branch `release-26-09-2026`) to mines.balasorealloys.in.
