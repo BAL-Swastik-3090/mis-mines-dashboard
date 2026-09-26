@@ -60,6 +60,57 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ---
 
+## Deployed — 2026-09-26: capacity, and the mines stock entry screen
+
+Released commit `f7928b3` (branch `release-26-09-2026`) to mines.balasorealloys.in.
+Backup: `~/mines_dashboard-backup-20260926-1030.tar.gz`.
+
+**What changed**
+
+- **Capacity**, a new screen between Equipment 360 and Manpower. It replaces
+  the planning office's productivity workbook — reproducing its arithmetic
+  exactly, row for row — and answers the question the workbook's own totals
+  hide: not "is there a tipper shortage" but "which faces are short and which
+  have trucks standing spare".
+- Eight of the plan's nine excavators are mapped to the register under
+  `asset_identity` system `BUSINESS_PLAN`. 370-5 is deliberately unmapped.
+- A face is now a real place, a named job and a known material, from the
+  location and material masters the gate and the weighbridge already use.
+- Every change to the plan is recorded with what it said before.
+- Swastik's mines stock entry screen, merged.
+
+**No database change on this box.** Migrations 065 and 066 are Postgres, and
+that Postgres is shared between dev and production, so they were already
+applied when the work was done. `mines_stock_entry` in balcorpdb was created by
+Swastik on 25-09 and already held 541 rows.
+
+**The deletion check caught one.** `frontend/src/contexts/usePrevDayEntry.ts`
+was replaced by `useEntryDialog.ts` in the merge, and the old file was still on
+the server. Removed before building, per the standing step.
+
+Verified inside the container rather than at the door — a 401 says an endpoint
+is wired and nothing about whether the model behind it still computes after a
+merge:
+
+```
+choices    27 places, 8 jobs, 16 materials
+plan       2026-09-25: 8 faces, effective 3935.04 Cum/day
+           2026-09-26: 0 faces  (no plan built for today yet — per-day by design)
+unmapped   ['370-5']  — suggested as EX-5, not taken
+stock      2026-09-25: 25 cells   2026-09-24: 25 cells
+```
+
+### THE STOCK TABLE HAS NO DDL IN THIS REPOSITORY
+
+`scripts/sql/` stops at `004_mines_prev_day_actual.sql`. `mines_stock_entry`
+exists in balcorpdb, is written to by `backend/app/routers/stock_entry.py`, and
+nothing in git describes it — so a fresh environment cannot be built from the
+repository. Ask for the `005_` file, or write it from the live schema. The same
+would have been true of `mines_prev_day_actual` if its file had not been
+committed with the branch.
+
+---
+
 ## Deployed — 2026-09-25 (third): off the rolls, said out loud
 
 Released commit `70052cd` (branch `release-25-09-2026`) to mines.balasorealloys.in.
