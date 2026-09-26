@@ -26,7 +26,8 @@
  */
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { GitCompareArrows, Search, Download, AlertTriangle, SlidersHorizontal } from "lucide-react";
+import { GitCompareArrows, Search, Download, AlertTriangle,
+         SlidersHorizontal, HelpCircle, X } from "lucide-react";
 import api from "@/lib/api";
 import { formatIndian } from "@/lib/utils";
 import { matchesSearch } from "@/lib/search";
@@ -160,6 +161,7 @@ export default function QualityE2ETable() {
   const [onlyOut, setOnlyOut] = useState(false);
   const [tol, setTol] = useState<Record<Param, number>>(DEFAULT_TOLERANCE);
   const [showTol, setShowTol] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
 
   const q = useQuery<Resp>({
     queryKey: ["quality-e2e", from, to],
@@ -225,6 +227,37 @@ export default function QualityE2ETable() {
 
   const t = q.data?.totals;
 
+  /**
+   * The reading of this period's own figures, not a paragraph about
+   * tolerances in general.
+   *
+   * Three things somebody needs and cannot get by looking: which consignment
+   * carries the most ore under dispute, how much contained chrome that is in
+   * tonnes, and whether the disagreements point one way or scatter. The first
+   * two size the problem; the third says whose problem it is — a consistent
+   * direction across many consignments is a calibration question for the labs,
+   * a scattered one is a sampling question for the stacks.
+   */
+  const reading = useMemo(() => {
+    if (!all.length) return null;
+    const top = worst[0];
+
+    // Contained Cr2O3 in dispute on the worst row: tonnes times the gap.
+    const gap = top ? top.variance.cr2o3 : null;
+    const contained = top && gap != null
+      ? Math.abs(gap) / 100 * top.mines.qty : null;
+
+    // Which way the plant reads on Cr2O3, across everything assayed — not
+    // only the flagged ones, because a drift shows in the ordinary rows too.
+    const withCr = all.filter((r) => r.variance.cr2o3 != null);
+    const lower = withCr.filter((r) => (r.variance.cr2o3 as number) < 0).length;
+    const higher = withCr.length - lower;
+    const leans = withCr.length >= 5
+      && Math.max(lower, higher) / withCr.length >= 0.75;
+
+    return { top, gap, contained, lower, higher, withCr: withCr.length, leans };
+  }, [all, worst]);
+
   const download = () => {
     const head = ["Date", "Stack", "Grade", "Trips", "Qty MT",
       ...PARAMS.map((pp) => `Mines ${HEADS[pp]}`),
@@ -271,8 +304,16 @@ export default function QualityE2ETable() {
             ? "border-rose-ring bg-rose-bg/40"
             : "border-emerald-ring bg-emerald-bg/40"}`}>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <AlertTriangle className={`w-4 h-4 ${
-              flagged.length ? "text-rose" : "text-emerald"}`} />
+            {/* The icon is the way in to the explanation, because it is the
+                thing somebody looks at when they do not understand the card. */}
+            <button type="button" onClick={() => setShowHelp((v) => !v)}
+              title="What is this card saying?"
+              className={`rounded-full p-0.5 transition-colors ${
+                flagged.length
+                  ? "text-rose hover:bg-rose/10"
+                  : "text-emerald hover:bg-emerald/10"}`}>
+              <AlertTriangle className="w-4 h-4" />
+            </button>
             <span className="text-[13px] font-bold text-navy">
               {flagged.length === 0
                 ? `All ${all.length} consignments agree within tolerance`
@@ -293,38 +334,151 @@ export default function QualityE2ETable() {
                 {onlyOut ? "show them all" : "show only those"}
               </button>
             )}
-            <button type="button" onClick={() => setShowTol((v) => !v)}
-              className="ml-auto inline-flex items-center gap-1 text-[11px]
-                         text-txt-muted hover:text-navy">
-              <SlidersHorizontal className="w-3.5 h-3.5" />
-              tolerance
-            </button>
+            <span className="ml-auto flex items-center gap-3">
+              <button type="button" onClick={() => setShowHelp((v) => !v)}
+                className="inline-flex items-center gap-1 text-[11px]
+                           text-txt-muted hover:text-navy">
+                <HelpCircle className="w-3.5 h-3.5" />
+                how to read this
+              </button>
+              <button type="button" onClick={() => setShowTol((v) => !v)}
+                className="inline-flex items-center gap-1 text-[11px]
+                           text-txt-muted hover:text-navy">
+                <SlidersHorizontal className="w-3.5 h-3.5" />
+                tolerance
+              </button>
+            </span>
           </div>
 
+          {showHelp && reading && (
+            <div className="mt-2 rounded-lg border border-border-light bg-white/70
+                            px-3 py-2.5 text-[11.5px] leading-relaxed space-y-2">
+              <div className="flex items-start gap-2">
+                <HelpCircle className="w-3.5 h-3.5 text-txt-light shrink-0 mt-0.5" />
+                <span className="font-bold text-navy">
+                  What this card is saying
+                </span>
+                <button type="button" onClick={() => setShowHelp(false)}
+                  className="ml-auto rounded p-0.5 text-txt-light hover:text-navy">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              <p className="text-txt-muted">
+                The mine&apos;s lab assays a stack before it leaves; Balasore&apos;s
+                assays the same material on arrival. Over{" "}
+                {from.split("-").reverse().join("-")} to{" "}
+                {to.split("-").reverse().join("-")}, <b className="text-navy">
+                {all.length} consignments</b> went out —{" "}
+                {formatIndian(totalQty, 2)} MT. On{" "}
+                <b className="text-navy">{flagged.length}</b> of them the two
+                labs differ by more than they usually do.
+              </p>
+
+              {reading.top && (
+                <p className="text-txt-muted">
+                  <b className="text-navy">The one that matters most</b> is{" "}
+                  <span className="font-mono font-semibold text-navy">
+                    {reading.top.batch}
+                  </span>{" "}
+                  on {reading.top.date.split("-").reverse().join("-")}:{" "}
+                  {formatIndian(reading.top.mines.qty, 2)} MT in{" "}
+                  {reading.top.mines.trips} trips.
+                  {reading.gap != null && (
+                    <>
+                      {" "}The plant assayed Cr<sub>2</sub>O<sub>3</sub> at{" "}
+                      <b className="text-navy">
+                        {formatIndian(reading.top.plant.cr2o3 as number, 2)}
+                      </b>{" "}against the mine&apos;s{" "}
+                      <b className="text-navy">
+                        {formatIndian(reading.top.mines.cr2o3 as number, 2)}
+                      </b>{" "}— {formatIndian(Math.abs(reading.gap), 2)}{" "}
+                      {reading.gap < 0 ? "lower" : "higher"}. On that tonnage
+                      it is about{" "}
+                      <b className="text-navy">
+                        {formatIndian(reading.contained as number, 1)} MT
+                      </b>{" "}of contained chrome in dispute.
+                    </>
+                  )}
+                  {" "}Ordered by tonnage, not by how far apart the labs are: a
+                  single truck out by 2% is two labs arguing about one truck.
+                </p>
+              )}
+
+              {/* The direction across everything assayed, not only the
+                  flagged rows — a drift shows in the ordinary ones too. */}
+              <p className="text-txt-muted">
+                <b className="text-navy">Which way it leans.</b> Of{" "}
+                {reading.withCr} consignments the plant has assayed, it read
+                LOWER on Cr<sub>2</sub>O<sub>3</sub> on{" "}
+                <b className="text-navy">{reading.lower}</b> and higher on{" "}
+                <b className="text-navy">{reading.higher}</b>.{" "}
+                {reading.leans
+                  ? "That is one-sided enough to be worth asking the labs about "
+                    + "calibration, rather than looking at individual stacks."
+                  : "That is scattered, so it reads as sampling rather than as "
+                    + "one lab drifting — how the stack was mixed and when the "
+                    + "sample was taken."}
+              </p>
+
+              <p className="text-txt-light">
+                Colour marks disagreement, not good or bad. Variance is Plant
+                minus Mines: on Cr<sub>2</sub>O<sub>3</sub> a positive is good
+                for the mine, on moisture a positive means weight was paid for
+                that was water. The sign says which way; the tolerance says
+                whether it is unusual.
+              </p>
+            </div>
+          )}
+
           {worst.length > 0 && (
-            <div className="mt-1.5 space-y-0.5">
-              {worst.map((r) => (
-                <div key={`${r.date}-${r.batch}`} className="text-[11.5px]">
-                  <span className="font-mono font-semibold text-navy">{r.batch}</span>
-                  <span className="text-txt-muted">
-                    {" "}on {r.date.split("-").reverse().join("-")}
-                    {r.grade ? ` (${r.grade})` : ""}
-                    {" · "}
-                    <span className="font-semibold text-navy">
-                      {formatIndian(r.mines.qty, 2)} MT
+            <div className="mt-2 space-y-0.5">
+              {worst.map((r) => {
+                const bad = outOn.get(`${r.date}-${r.batch}`) ?? [];
+                return (
+                  <div key={`${r.date}-${r.batch}`}
+                    className="grid grid-cols-[7.5rem_5.5rem_2.2rem_6rem_1fr]
+                               gap-x-2 items-baseline text-[11.5px] py-0.5
+                               border-t border-rose-ring/30 first:border-0">
+                    <span className="font-mono font-semibold text-navy truncate">
+                      {r.batch}
                     </span>
-                    {" in "}{r.mines.trips} trip{r.mines.trips === 1 ? "" : "s"} —{" "}
-                    {(outOn.get(`${r.date}-${r.batch}`) ?? []).map((pp) => {
-                      const v = r.variance[pp] as number;
-                      return `${HEADS[pp]} ${v > 0 ? "+" : ""}${formatIndian(v, DP[pp])}`;
-                    }).join(", ")}
-                  </span>
-                </div>
-              ))}
+                    <span className="text-txt-muted tabular-nums">
+                      {r.date.split("-").reverse().join("-")}
+                    </span>
+                    <span className="text-[10px] text-txt-light">{r.grade ?? "—"}</span>
+                    {/* Right-aligned so the tonnages line up on the decimal —
+                        this is the column the list is ordered by and the one
+                        somebody is comparing. */}
+                    <span className="text-right font-semibold text-navy tabular-nums">
+                      {formatIndian(r.mines.qty, 2)}
+                      <span className="text-[9.5px] font-normal text-txt-light"> MT</span>
+                    </span>
+                    <span className="flex flex-wrap gap-x-2 gap-y-0.5">
+                      {bad.map((pp) => {
+                        const v = r.variance[pp] as number;
+                        return (
+                          <span key={pp} className="whitespace-nowrap">
+                            <span className="text-txt-light">{HEADS[pp]}</span>{" "}
+                            <span className="font-mono font-bold text-rose">
+                              {v > 0 ? "+" : ""}{formatIndian(v, DP[pp])}
+                            </span>
+                          </span>
+                        );
+                      })}
+                      <span className="text-[10px] text-txt-light">
+                        · {r.mines.trips} trip{r.mines.trips === 1 ? "" : "s"}
+                      </span>
+                    </span>
+                  </div>
+                );
+              })}
               {flagged.length > worst.length && (
-                <div className="text-[11px] text-txt-light">
-                  and {flagged.length - worst.length} more
-                </div>
+                <button type="button" onClick={() => setOnlyOut(true)}
+                  className="text-[11px] text-gold-dark hover:underline
+                             underline-offset-2 pt-0.5">
+                  and {flagged.length - worst.length} more — show them
+                </button>
               )}
             </div>
           )}
