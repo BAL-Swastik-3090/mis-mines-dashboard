@@ -49,7 +49,7 @@
  */
 import { useCallback, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarCheck } from "lucide-react";
+import { CalendarCheck, Truck } from "lucide-react";
 import api from "@/lib/api";
 import { formatIndian } from "@/lib/utils";
 import PrevDayEntryModal, { type StoredValue } from "@/components/tables/PrevDayEntryModal";
@@ -71,6 +71,175 @@ function Num({ v, bold = false }: { v: number | null; bold?: boolean }) {
   );
 }
 
+/* ── what went out that day, stack by stack ─────────────────────────────── */
+
+interface Consign {
+  date: string; batch: string; grade: string | null;
+  mines: Record<string, number | null> & { trips: number; qty: number };
+  plant: Record<string, number | null> & { trips: number; qty: number };
+  variance: Record<string, number | null>;
+}
+
+/**
+ * The tolerances the end-to-end quality screen uses, so a stack flagged here
+ * is flagged there. Measured from 106 consignments, July to September 2026,
+ * at about the ninetieth percentile of the absolute variance.
+ *
+ * Duplicated rather than imported because that screen keeps them in state so
+ * they can be edited; the day card is a glance, not a place to tune them. If a
+ * third reader appears they should move to the backend and both read one row.
+ */
+const TOL: Record<string, number> = {
+  moisture: 0.60, cr2o3: 0.60, feo: 0.55, cr_fe: 0.05,
+};
+
+function DespatchQuality({ day, expected }: {
+  day: string;
+  /** What the plan-vs-actual table says went out, so the two can be tied. */
+  expected: number | null;
+}) {
+  const q = useQuery<{ rows: Consign[]; totals: Record<string, number | null> }>({
+    // Straight from the service the end-to-end quality screen uses, with one
+    // day on both ends. It is verified against the mine's own workbook, and a
+    // second path to the same figure is a second path to a different figure.
+    queryKey: ["prev-day", "despatch-quality", day],
+    queryFn: async () => (await api.get("/quality-e2e", {
+      params: { from_date: day, to_date: day },
+    })).data,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const rows = q.data?.rows ?? [];
+  const t = q.data?.totals;
+  const shipped = rows.reduce((n, r) => n + (r.mines.qty || 0), 0);
+
+  // The two tables should agree. Saying so is how a difference becomes
+  // visible instead of being two numbers on one screen nobody compared.
+  const ties = expected == null || rows.length === 0
+    || Math.abs(shipped - expected) < 1;
+
+  if (q.isLoading) {
+    return (
+      <div className="rounded-xl border border-border bg-white p-4 space-y-2">
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="h-5 bg-bg-section animate-pulse rounded" />
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-xl overflow-hidden border border-border shadow-md bg-white">
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 px-3 py-2
+                      border-b border-border-light bg-bg-soft">
+        <Truck className="w-3.5 h-3.5 text-gold self-center" />
+        <span className="text-[12px] font-bold text-navy">What went out</span>
+        <span className="text-[11px] text-txt-muted">
+          {rows.length === 0
+            ? "nothing despatched to Balasore"
+            : `${rows.length} stack${rows.length === 1 ? "" : "s"} · `
+              + `${t?.trips ?? 0} trips · ${formatIndian(shipped, 2)} MT`}
+        </span>
+        {!ties && (
+          // Not an error, a question. The despatch actual comes from the gate
+          // record and this from SAP's outbound, and the two disagreeing is
+          // worth somebody knowing about.
+          <span className="text-[10.5px] text-amber font-semibold">
+            · the table above says {formatIndian(expected ?? 0, 2)} MT
+          </span>
+        )}
+        <span className="ml-auto text-[10px] text-txt-light/70">
+          mine&apos;s assay · plant&apos;s underneath where it differs
+        </span>
+      </div>
+
+      {rows.length === 0 ? (
+        <p className="px-3 py-4 text-[12px] text-txt-light">
+          No consignment to Balasore on this day.
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse min-w-[640px]">
+            <thead>
+              <tr className="bg-navy text-white">
+                <th className="px-3 py-1.5 text-left font-condensed font-extrabold
+                               text-[11px] tracking-[.12em]">Stack</th>
+                <th className="px-2 py-1.5 text-left font-condensed font-extrabold
+                               text-[11px] tracking-[.12em]">Grade</th>
+                <th className="px-2 py-1.5 text-right font-condensed font-extrabold
+                               text-[11px] tracking-[.12em]">Trips</th>
+                <th className="px-2 py-1.5 text-right font-condensed font-extrabold
+                               text-[11px] tracking-[.12em] border-r border-white/20">
+                  MT
+                </th>
+                {QUALITY.map(([, label]) => (
+                  <th key={label}
+                    className="px-2 py-1.5 text-right font-condensed font-extrabold
+                               text-[11px] tracking-[.08em] w-[78px]">
+                    {label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.batch}
+                  className="border-b border-border-light last:border-0 hover:bg-bg-soft/60">
+                  <td className="px-3 py-2 text-[12px] font-mono font-semibold text-navy
+                                 whitespace-nowrap">{r.batch}</td>
+                  <td className="px-2 py-2">
+                    <span className="inline-block px-1.5 py-0.5 rounded bg-bg-section
+                                     text-[10px] font-bold text-txt-muted tracking-wide">
+                      {r.grade ?? "—"}
+                    </span>
+                  </td>
+                  <td className="px-2 py-2 text-right text-[12px] font-mono text-txt-muted">
+                    {r.mines.trips}
+                  </td>
+                  <td className="px-2 py-2 text-right text-[12px] font-mono font-bold
+                                 text-navy border-r border-border-light">
+                    {formatIndian(r.mines.qty, 2)}
+                  </td>
+                  {QUALITY.map(([key]) => (
+                    <td key={key} className="px-2 py-2 text-right text-[12px]">
+                      <Assay mine={r.mines[key] ?? null} plant={r.plant[key] ?? null}
+                        out={r.variance[key] != null
+                          && Math.abs(r.variance[key] as number) > TOL[key]} />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+            {rows.length > 1 && t && (
+              <tfoot>
+                <tr className="bg-bg-section border-t-2 border-navy/15">
+                  <td className="px-3 py-1.5 text-[10.5px] font-condensed font-extrabold
+                                 tracking-[.1em] text-navy" colSpan={2}>
+                    WTD AVG
+                  </td>
+                  <td className="px-2 py-1.5 text-right text-[12px] font-mono text-txt-muted">
+                    {t.trips}
+                  </td>
+                  <td className="px-2 py-1.5 text-right text-[12px] font-mono font-bold
+                                 text-navy border-r border-border-light">
+                    {formatIndian(shipped, 2)}
+                  </td>
+                  {QUALITY.map(([key]) => (
+                    <td key={key} className="px-2 py-1.5 text-right text-[12px]">
+                      <Assay mine={t[`mines_${key}`] ?? null}
+                             plant={t[`plant_${key}`] ?? null} />
+                    </td>
+                  ))}
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** The four the two labs report on, and what to head the column. */
 const QUALITY = [
   ["moisture", "Mois%"], ["cr2o3", "Cr2O3%"],
@@ -85,18 +254,39 @@ const QUALITY = [
  * nobody has assayed it yet — the plant posts its receipt one to three days
  * after the trucks leave — and a dash is not a zero.
  */
-function Assay({ mine, plant }: { mine: number | null; plant: number | null }) {
+function Assay({ mine, plant, out }: {
+  mine: number | null; plant: number | null;
+  /** The two labs disagree by more than they usually do. */
+  out?: boolean;
+}) {
   if (mine == null && plant == null) {
     return <span className="text-txt-light/40">—</span>;
   }
+  // Where only the plant has a figure, its number is the only one there is —
+  // LUMP is the case: SAP holds no FeO or Cr/Fe for it on the mine's side, but
+  // the plant assays it anyway. Showing a bare dash there hides a real
+  // measurement behind a claim that nobody measured it.
+  if (mine == null && plant != null) {
+    return (
+      <span className="inline-block leading-tight" title="Plant only — the mine did not assay this">
+        <span className="font-mono text-txt-muted">{formatIndian(plant, 2)}</span>
+        <span className="block text-[9px] text-txt-light">plant only</span>
+      </span>
+    );
+  }
   const differs = mine != null && plant != null && Math.abs(plant - mine) >= 0.05;
   return (
-    <span className="inline-block leading-tight">
-      <span className="font-mono text-navy">
+    <span className={`inline-block leading-tight ${
+      out ? "bg-rose-bg rounded px-1" : ""}`}
+      title={out && mine != null && plant != null
+        ? `The two labs are ${formatIndian(Math.abs(plant - mine), 2)} apart here`
+        : undefined}>
+      <span className={`font-mono ${out ? "font-bold text-rose" : "text-navy"}`}>
         {mine == null ? "—" : formatIndian(mine, 2)}
       </span>
       {differs && (
-        <span className="block text-[9.5px] font-mono text-txt-light"
+        <span className={`block text-[9.5px] font-mono ${
+          out ? "text-rose/80" : "text-txt-light"}`}
           title={`Plant ${formatIndian(plant, 2)} · ${plant > mine ? "+" : ""}`
                  + `${formatIndian(plant - mine, 2)} against the mine`}>
           {formatIndian(plant, 2)}
@@ -149,26 +339,6 @@ export default function PrevDayVarianceTable() {
     })).data,
     staleTime: 5 * 60 * 1000,
   });
-  /**
-   * The assay of what went out that day, weighted by quantity.
-   *
-   * Straight from /quality-e2e with one day on both ends, rather than a second
-   * query written here: that service is verified against the mine's own
-   * workbook, and a second path to the same figure is a second path to a
-   * different figure.
-   *
-   * Both halves come back blank for a despatch the labs have not finished
-   * with — the plant posts its receipt one to three days later — and blank is
-   * the honest answer, not zero.
-   */
-  const assay = useQuery<{ totals: Record<string, number | null> }>({
-    queryKey: ["prev-day", "assay", day],
-    queryFn: async () => (await api.get("/quality-e2e", {
-      params: { from_date: day, to_date: day },
-    })).data,
-    staleTime: 5 * 60 * 1000,
-  });
-
   const entries = useQuery<{ values: Record<string, StoredValue> }>({
     queryKey: ["prev-day", "entered", day],
     queryFn: async () => (await api.get("/prev-day-actual", {
@@ -223,7 +393,8 @@ export default function PrevDayVarianceTable() {
   );
 
   const stored = entries.data?.values;
-  const q = assay.data?.totals;
+  // What the first table says went out, for the second to be checked against.
+  const despatchActual = rows.find((r) => r.key === "despatch")?.actual ?? null;
   const olderStored = olderEntries.data?.values;
 
   // Invalidate the day that was actually saved — the dialog may have been on a
@@ -317,7 +488,7 @@ export default function PrevDayVarianceTable() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className={`w-full border-collapse ${view === "both" ? "min-w-[800px]" : "min-w-[760px]"}`}>
+            <table className={`w-full border-collapse ${view === "both" ? "min-w-[800px]" : "min-w-[560px]"}`}>
               <thead>
                 {/* In "Both Days" the columns belong to two different dates, so
                     the dates are a header row of their own. Five unlabelled
@@ -340,8 +511,7 @@ export default function PrevDayVarianceTable() {
                   </tr>
                 )}
                 <tr className="bg-navy text-white">
-                  <th className="px-3 py-2 text-left font-condensed font-extrabold
-                                 text-[12px] tracking-[.14em] w-[24%]">
+                  <th className="px-3 py-2 text-left font-condensed font-extrabold text-[12px] tracking-[.14em]">
                     KPI
                   </th>
                   <th className="px-3 py-2 text-right font-condensed font-extrabold text-[12px] tracking-[.14em]">Plan</th>
@@ -349,17 +519,6 @@ export default function PrevDayVarianceTable() {
                     {view === "both" ? "Est Actual" : valueLabel}
                   </th>
                   <th className="px-3 py-2 text-right font-condensed font-extrabold text-[12px] tracking-[.14em]">Variance</th>
-                  {/* The assay of the day's despatch. Not in Both Days: that
-                      view already carries two date groups, and four more
-                      columns would push the comparison off the screen. */}
-                  {view !== "both" && QUALITY.map(([, label]) => (
-                    <th key={label}
-                      className="px-2 py-2 text-right font-condensed font-extrabold
-                                 text-[11px] tracking-[.08em] w-[76px]
-                                 first:border-l first:border-white/20">
-                      {label}
-                    </th>
-                  ))}
                   {view === "both" && (
                     <>
                       <th className="px-3 py-2 text-right font-condensed font-extrabold text-[12px] tracking-[.14em] border-l border-l-white/30">
@@ -399,18 +558,6 @@ export default function PrevDayVarianceTable() {
                         <Variance plan={r.plan}
                           value={view === "both" ? (stored?.[r.key]?.value ?? null) : value} />
                       </td>
-                      {view !== "both" && QUALITY.map(([key, label], i) => (
-                        <td key={label}
-                          className={`px-2 py-2.5 text-right text-[12px] ${
-                            i === 0 ? "border-l border-border-light" : ""}`}>
-                          {r.key === "despatch" ? (
-                            <Assay mine={q?.[`mines_${key}`] ?? null}
-                                   plant={q?.[`plant_${key}`] ?? null} />
-                          ) : (
-                            <span className="text-txt-light/30">·</span>
-                          )}
-                        </td>
-                      ))}
                       {view === "both" && (
                         <>
                           <td className="px-3 py-2.5 text-right text-[13px]
@@ -447,16 +594,17 @@ export default function PrevDayVarianceTable() {
             )}
           </span>
           <span className="text-[9px] text-txt-light/50">
-            {/* Where the assay comes from, because a figure whose source is
-                not stated is a figure somebody will re-derive differently. */}
-            {view !== "both" && (
-              <>Assay is the mine's, weighted by quantity, of that day&apos;s
-                despatch; a second line is the plant&apos;s where it differs · </>
-            )}
             Total Excavation = OB + Ore ÷ {ORE_T_PER_M3} t/m³, on both sides
           </span>
         </div>
       </div>
+
+      {/* What actually went out, stack by stack.
+          The assay has a grain of its own — one row per consignment — and
+          forcing it into the table above meant four rows of dots to serve
+          one. Underneath, at its own grain, it is a table rather than an
+          apology for one. */}
+      {view !== "both" && <DespatchQuality day={day} expected={despatchActual} />}
 
       <PrevDayEntryModal
         open={dialog === "prev-day"}
