@@ -218,7 +218,7 @@ export default function QualityE2ETable() {
       return v == null ? 0 : Math.abs(v) / tol[pp];
     })) * (r.mines.qty || 0);
     return score(b) - score(a);
-  }).slice(0, 4), [flagged, tol]);
+  }), [flagged, tol]);
 
   /** How much ore is under a disagreement. The count of rows says nothing
    *  about scale: five consignments can be 40 MT or 4,000. */
@@ -432,7 +432,7 @@ export default function QualityE2ETable() {
           )}
 
           {worst.length > 0 && (
-            <div className="mt-2 space-y-0.5">
+            <div className="mt-2 space-y-0.5 max-h-[13rem] overflow-y-auto pr-1">
               {worst.map((r) => {
                 const bad = outOn.get(`${r.date}-${r.batch}`) ?? [];
                 return (
@@ -473,13 +473,7 @@ export default function QualityE2ETable() {
                   </div>
                 );
               })}
-              {flagged.length > worst.length && (
-                <button type="button" onClick={() => setOnlyOut(true)}
-                  className="text-[11px] text-gold-dark hover:underline
-                             underline-offset-2 pt-0.5">
-                  and {flagged.length - worst.length} more — show them
-                </button>
-              )}
+
             </div>
           )}
 
