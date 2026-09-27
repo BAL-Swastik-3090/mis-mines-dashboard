@@ -49,19 +49,37 @@ from typing import Any, Iterable
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
-# Balasore. Other destinations ship under the same batch numbers.
-CUSTOMER_BAL = "BAL"
+# THE TWO DESTINATIONS, AND WHY EACH IS A PAIR.
+#
+# A stack is split between both plants on the same day under one batch number,
+# and the two consignments genuinely assay differently — I260130047 on
+# 3 September is 48.85 Cr2O3 for the 25 trucks that went to Balasore and 46.55
+# for the 17 that went to Jabamoyee. So the gate record's customer and the
+# receiving plant code must move together; crossing them compares trucks sent
+# to one plant against ore assayed at the other.
+#
+# The pairing was not assumed. For every stack that shipped to both in the
+# twelve days to 26 September, the truck counts line up exactly: 92/92 and
+# 17/17 on I263004474, 68/68 and 20/20 on I263004524, and so on for seven
+# stacks with no rounding.
+DESTINATIONS: tuple[tuple[str, str, str], ...] = (
+    # key          customer      receiving plant
+    ("BAL",        "BAL",        "1100"),
+    ("JABAMOYEE",  "JABAMOYEE",  "1110"),
+)
+DEST_LABEL = {"BAL": "Balasore", "JABAMOYEE": "Jabamoyee"}
 
 # Mine-side inspection lots. 1200 is the mine, 1210 the COB plant; DY01 is the
 # despatch yard, which is what separates a despatch assay from any other.
+# There is no destination column here — the mine assays each consignment
+# separately, so the two are told apart by quantity.
 MINE_PLANTS = ("1200", "1210")
 MINE_STORAGE = "DY01"
 
-# Plant-side receipt at Balasore: goods receipt (101) against a stock-transfer
-# inspection (08). Type 02 also carries an assay for these batches, but it is
-# the MINE's figure copied across at issue — joining to it would compare the
-# mine against itself and report no variance at all.
-PLANT_CODE = "1100"
+# Plant-side receipt: goods receipt (101) against a stock-transfer inspection
+# (08). Type 02 also carries an assay for these batches, but it is the MINE's
+# figure copied across at issue — joining to it would compare the mine against
+# itself and report no variance at all.
 PLANT_INSPECTION = "08"
 PLANT_MOVEMENT = "101"
 
@@ -83,6 +101,19 @@ GRADES = {
     "CONCENTRATE WITH STD MOISTURE": "COB",
     "LUMP -100MM -40% CR2O3": "LUMP",
 }
+
+# WHAT A STACK NUMBER LOOKS LIKE: a month letter then the serial, e.g.
+# I263004474. Finished product moves under the same gate record with a
+# date-prefixed batch — 030626F712, 250926S101 — usually one or two trucks of
+# ferrochrome, briquettes or chips.
+#
+# The material would normally exclude those, and does, but only once one of
+# the labs has posted an assay to read a material from. Before that a non-ore
+# batch is indistinguishable from a stack despatched this morning, and would
+# sit on the screen as a blank row. The shape is the only thing available at
+# that moment, and it is safe: of every batch the mine's own lab assayed at
+# DY01 between January 2025 and September 2026, NOT ONE fails this pattern.
+STACK_SHAPE = "^[A-Za-z][0-9]{6,}$"
 
 # Quantities are compared with a tolerance rather than for equality. 50 kg is
 # far below one truck, so it cannot merge two consignments by accident.
@@ -116,7 +147,7 @@ def _char_cols(expr: str, alias: str = "") -> str:
     )
 
 
-def _despatches(db: Session, frm: date, to: date,
+def _despatches(db: Session, customer: str, frm: date, to: date,
                 batches: list[str] | None = None) -> list[dict]:
     """One row per stack per despatch day, from the gate record.
 
@@ -142,11 +173,12 @@ def _despatches(db: Session, frm: date, to: date,
           FROM zsd_outbound_despatch
          WHERE CUSTOMERNO = :cust
            AND BATCH IS NOT NULL AND BATCH <> ''
+           AND BATCH REGEXP '{STACK_SHAPE}'
            {clause}
          GROUP BY BATCH, GATEINDATE
          ORDER BY GATEINDATE, BATCH
     """)
-    params: dict[str, Any] = {"cust": CUSTOMER_BAL}
+    params: dict[str, Any] = {"cust": customer}
     if batches is not None:
         sql = sql.bindparams(bindparam("batches", expanding=True))
         params["batches"] = batches
@@ -189,7 +221,8 @@ def _mine_lots(db: Session, batches: list[str]) -> dict[str, list[dict]]:
     return out
 
 
-def _plant_lots(db: Session, batches: list[str]) -> dict[str, list[dict]]:
+def _plant_lots(db: Session, plant: str,
+                batches: list[str]) -> dict[str, list[dict]]:
     """Plant receipt assay, one entry per inspection lot — one truck."""
     if not batches:
         return {}
@@ -205,7 +238,7 @@ def _plant_lots(db: Session, batches: list[str]) -> dict[str, list[dict]]:
          GROUP BY h.BATCH, h.LOT_NUMBER
     """).bindparams(bindparam("batches", expanding=True))
     rows = db.execute(sql, {
-        "plant": PLANT_CODE, "insp": PLANT_INSPECTION,
+        "plant": plant, "insp": PLANT_INSPECTION,
         "mvt": PLANT_MOVEMENT, "batches": batches,
     }).fetchall()
     out: dict[str, list[dict]] = defaultdict(list)
@@ -281,14 +314,15 @@ def _summarise(lots: list[dict]) -> dict:
     }
 
 
-def get_quality_e2e(db: Session, frm: date, to: date) -> dict:
-    """Mine despatch against plant receipt, one row per stack per day."""
-    window = _despatches(db, frm, to)
+def _destination_rows(db: Session, key: str, customer: str, plant_code: str,
+                      frm: date, to: date) -> list[dict]:
+    """Every consignment sent to one plant, with both labs' assays."""
+    window = _despatches(db, customer, frm, to)
     batches = sorted({d["batch"] for d in window})
     # The whole despatch history of each stack, so plant lots line up.
-    every = _despatches(db, frm, to, batches=batches)
+    every = _despatches(db, customer, frm, to, batches=batches)
     mine = _mine_lots(db, batches)
-    plant = _plant_lots(db, batches)
+    plant = _plant_lots(db, plant_code, batches)
 
     in_window = {(d["batch"], d["date"]) for d in window}
     by_batch: dict[str, list[dict]] = defaultdict(list)
@@ -305,8 +339,14 @@ def get_quality_e2e(db: Session, frm: date, to: date) -> dict:
         for i, d in enumerate(days):
             if (batch, d["date"]) not in in_window:
                 continue
-            m = _match_by_qty(mine_groups, d["qty"]) or (
-                mine_groups[0] if len(mine_groups) == 1 else None)
+            # THE QUANTITY MUST AGREE. There used to be a fallback here: where
+            # a stack had exactly one assay group on file, it was used for
+            # every despatch day of that stack. It never once helped and it
+            # was wrong five times in 303 consignments — on 1 August
+            # G263004718 wore an assay recorded against 11.93 MT across a
+            # 68-truck, 802.62 MT despatch. A borrowed figure is worse than a
+            # blank, because a blank says so.
+            m = _match_by_qty(mine_groups, d["qty"])
             lots = plant_for.get(i)
             p = _summarise(lots) if lots else None
             material = (m or p or {}).get("material")
@@ -320,6 +360,7 @@ def get_quality_e2e(db: Session, frm: date, to: date) -> dict:
                 "date": d["date"].isoformat(),
                 "batch": batch,
                 "grade": grade,
+                "destination": key,
                 # Quantity and trips RECEIVED mirror the despatched figures
                 # until the plant's own gate record is wired in — see router.
                 "mines": {"trips": d["trips"], "qty": d["qty"],
@@ -327,6 +368,20 @@ def get_quality_e2e(db: Session, frm: date, to: date) -> dict:
                 "plant": {"trips": d["trips"], "qty": d["qty"],
                           **{k: (p or {}).get(k) for k in PARAMS}},
             })
+    return rows
+
+
+def get_quality_e2e(db: Session, frm: date, to: date) -> dict:
+    """Mine despatch against plant receipt, both destinations, one row each.
+
+    Every consignment is returned and tagged with where it went, rather than
+    the caller choosing a destination. The screen switches between them without
+    another round trip, and a total for one plant can never be built from the
+    other plant's rows.
+    """
+    rows: list[dict] = []
+    for key, customer, plant_code in DESTINATIONS:
+        rows += _destination_rows(db, key, customer, plant_code, frm, to)
 
     for r in rows:
         r["variance"] = {
@@ -339,9 +394,16 @@ def get_quality_e2e(db: Session, frm: date, to: date) -> dict:
             },
         }
 
-    rows.sort(key=lambda r: (r["date"], r["batch"]))
-    return {"from": frm.isoformat(), "to": to.isoformat(),
-            "rows": rows, "totals": _totals(rows)}
+    rows.sort(key=lambda r: (r["date"], r["batch"], r["destination"]))
+    totals = {k: _totals([r for r in rows if r["destination"] == k])
+              for k, _, _ in DESTINATIONS}
+    totals["ALL"] = _totals(rows)
+    return {
+        "from": frm.isoformat(), "to": to.isoformat(),
+        "destinations": [{"key": k, "label": DEST_LABEL[k], "plant": p}
+                         for k, _, p in DESTINATIONS],
+        "rows": rows, "totals": totals,
+    }
 
 
 def _totals(rows: list[dict]) -> dict:

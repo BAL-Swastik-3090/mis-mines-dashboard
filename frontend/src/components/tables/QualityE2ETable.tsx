@@ -45,16 +45,34 @@ interface Row {
   date: string;
   batch: string;
   grade: string | null;
+  /** Which plant it went to — "BAL" or "JABAMOYEE". */
+  destination: string;
   mines: Side;
   plant: Side;
   variance: Omit<Side, "trips"> & { trips: number };
 }
+interface Dest { key: string; label: string; plant: string }
 interface Totals {
   trips: number;
   mines_qty: number;
   [k: string]: number | null;
 }
-interface Resp { from: string; to: string; rows: Row[]; totals: Totals }
+interface Resp {
+  from: string; to: string;
+  destinations: Dest[];
+  rows: Row[];
+  /** Keyed by destination, plus "ALL". */
+  totals: Record<string, Totals>;
+}
+
+/** Both plants, plus everything. "ALL" is a view, not a destination. */
+const ALL_DEST = "ALL";
+
+/**
+ * A stack number repeats across destinations — the same batch ships to both
+ * plants on the same day — so date and batch alone do not identify a row.
+ */
+const rowKey = (r: Row) => `${r.date}|${r.batch}|${r.destination}`;
 
 const PARAMS = ["moisture", "cr2o3", "feo", "cr_fe"] as const;
 type Param = (typeof PARAMS)[number];
@@ -162,6 +180,7 @@ export default function QualityE2ETable() {
   const [tol, setTol] = useState<Record<Param, number>>(DEFAULT_TOLERANCE);
   const [showTol, setShowTol] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [dest, setDest] = useState<string>(ALL_DEST);
 
   const q = useQuery<Resp>({
     queryKey: ["quality-e2e", from, to],
@@ -172,20 +191,58 @@ export default function QualityE2ETable() {
     staleTime: 5 * 60 * 1000,
   });
 
+  const dests = q.data?.destinations ?? [];
+
   // Newest despatch first — the row people come to this table for is the last
   // one, not the first. The API stays chronological for anything else reading it.
-  const all = useMemo(
+  const everything = useMemo(
     () => [...(q.data?.rows ?? [])].sort(
-      (a, b) => b.date.localeCompare(a.date) || a.batch.localeCompare(b.batch)),
+      (a, b) => b.date.localeCompare(a.date)
+        || a.batch.localeCompare(b.batch)
+        || a.destination.localeCompare(b.destination)),
     [q.data],
   );
+
+  /**
+   * One plant at a time, or both.
+   *
+   * Everything below — the flagged count, the ordering, the lean, the footer
+   * — is computed from this and not from the whole response, because the two
+   * plants are separate questions. A weighted average across both would
+   * describe a shipment nobody made, and a lean pooled across both would hide
+   * one plant's calibration drift inside the other's volume: Balasore is 85%
+   * of the tonnage, so Jabamoyee could be badly out and never show.
+   */
+  const all = useMemo(
+    () => (dest === ALL_DEST
+      ? everything
+      : everything.filter((r) => r.destination === dest)),
+    [everything, dest],
+  );
+
+  /** Per-plant headline figures, so both are legible without switching. */
+  const byDest = useMemo(() => dests.map((d) => {
+    const rs = everything.filter((r) => r.destination === d.key);
+    const out = rs.filter((r) => PARAMS.some((pp) => {
+      const v = r.variance[pp];
+      return v != null && Math.abs(v) > tol[pp];
+    }));
+    return {
+      ...d,
+      rows: rs.length,
+      trips: rs.reduce((n, r) => n + r.mines.trips, 0),
+      qty: rs.reduce((n, r) => n + (r.mines.qty || 0), 0),
+      flagged: out.length,
+      unassayed: rs.filter((r) => r.mines.cr2o3 == null).length,
+    };
+  }), [everything, dests, tol]);
 
   /** Which parameters this consignment is out on. Empty means the two labs
    *  agree within tolerance on all four. */
   const outOn = useMemo(() => {
     const m = new Map<string, Param[]>();
     for (const r of all) {
-      m.set(`${r.date}-${r.batch}`, PARAMS.filter((pp) => {
+      m.set(rowKey(r), PARAMS.filter((pp) => {
         const v = r.variance[pp];
         return v != null && Math.abs(v) > tol[pp];
       }));
@@ -194,13 +251,13 @@ export default function QualityE2ETable() {
   }, [all, tol]);
 
   const rows = useMemo(() => all.filter((r) => {
-    const key = `${r.date}-${r.batch}`;
+    const key = rowKey(r);
     if (onlyOut && (outOn.get(key)?.length ?? 0) === 0) return false;
     return matchesSearch(q2, [r.batch, r.grade, r.date]);
   }), [all, q2, onlyOut, outOn]);
 
   const flagged = all.filter(
-    (r) => (outOn.get(`${r.date}-${r.batch}`)?.length ?? 0) > 0);
+    (r) => (outOn.get(rowKey(r))?.length ?? 0) > 0);
 
   /**
    * The ones worth ringing somebody about, worst first — and "worst" is how
@@ -225,7 +282,7 @@ export default function QualityE2ETable() {
   const flaggedQty = flagged.reduce((n, r) => n + (r.mines.qty || 0), 0);
   const totalQty = all.reduce((n, r) => n + (r.mines.qty || 0), 0);
 
-  const t = q.data?.totals;
+  const t = q.data?.totals?.[dest];
 
   /**
    * The reading of this period's own figures, not a paragraph about
@@ -259,16 +316,18 @@ export default function QualityE2ETable() {
   }, [all, worst]);
 
   const download = () => {
-    const head = ["Date", "Stack", "Grade", "Trips", "Qty MT",
+    const head = ["Date", "Stack", "Destination", "Grade", "Trips", "Qty MT",
       ...PARAMS.map((pp) => `Mines ${HEADS[pp]}`),
       ...PARAMS.map((pp) => `Plant ${HEADS[pp]}`),
       ...PARAMS.map((pp) => `Var ${HEADS[pp]}`), "Out of tolerance on"];
     const body = rows.map((r) => [
-      r.date, r.batch, r.grade ?? "", r.mines.trips, r.mines.qty,
+      r.date, r.batch,
+      dests.find((d) => d.key === r.destination)?.label ?? r.destination,
+      r.grade ?? "", r.mines.trips, r.mines.qty,
       ...PARAMS.map((pp) => r.mines[pp] ?? ""),
       ...PARAMS.map((pp) => r.plant[pp] ?? ""),
       ...PARAMS.map((pp) => r.variance[pp] ?? ""),
-      (outOn.get(`${r.date}-${r.batch}`) ?? []).map((pp) => HEADS[pp]).join(" "),
+      (outOn.get(rowKey(r)) ?? []).map((pp) => HEADS[pp]).join(" "),
     ]);
     // Quoted throughout: a stack number is safe but a grade or a future column
     // may not be, and a CSV that breaks on one comma breaks silently.
@@ -277,7 +336,7 @@ export default function QualityE2ETable() {
       .join("\r\n");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-    a.download = `end-to-end-quality-${from}-to-${to}.csv`;
+    a.download = `end-to-end-quality-${dest.toLowerCase()}-${from}-to-${to}.csv`;
     a.click();
     URL.revokeObjectURL(a.href);
   };
@@ -292,6 +351,65 @@ export default function QualityE2ETable() {
           {to.split("-").reverse().join("-")} · from the date at the top
         </span>
       </div>
+
+      {/* BOTH PLANTS AT ONCE, AND THE TABLE FOR ONE.
+          Ore leaves the same mine for two plants and they are separate
+          questions — Balasore is 85% of the tonnage, so anything wrong at
+          Jabamoyee would be invisible inside a pooled figure. Each tile
+          carries the three things that say whether a plant needs attention:
+          how much went, how many consignments are out of tolerance, and how
+          many the mine has not assayed. Reading them needs no click, and no
+          scrolling; selecting one narrows everything below. */}
+      {!q.isLoading && byDest.length > 1 && (
+        <div className="flex flex-wrap gap-2">
+          {[{ key: ALL_DEST, label: "Both plants", plant: "" }, ...byDest].map((d) => {
+            const s = byDest.find((x) => x.key === d.key);
+            const on = dest === d.key;
+            const rows_ = s ? s.rows : byDest.reduce((n, x) => n + x.rows, 0);
+            const trips = s ? s.trips : byDest.reduce((n, x) => n + x.trips, 0);
+            const qty = s ? s.qty : byDest.reduce((n, x) => n + x.qty, 0);
+            const flag = s ? s.flagged : byDest.reduce((n, x) => n + x.flagged, 0);
+            const blank = s ? s.unassayed : byDest.reduce((n, x) => n + x.unassayed, 0);
+            return (
+              <button key={d.key} type="button" onClick={() => setDest(d.key)}
+                aria-pressed={on}
+                className={`rounded-xl border px-3 py-2 text-left transition-colors
+                  ${on ? "border-navy bg-navy text-white shadow-md"
+                       : "border-border bg-white hover:border-navy/40"}`}>
+                <div className="flex items-baseline gap-2">
+                  <span className={`text-[12px] font-bold ${on ? "text-white" : "text-navy"}`}>
+                    {d.label}
+                  </span>
+                  {s && (
+                    <span className={`text-[9.5px] font-mono
+                      ${on ? "text-white/60" : "text-txt-light"}`}>
+                      plant {s.plant}
+                    </span>
+                  )}
+                </div>
+                <div className={`mt-0.5 flex items-baseline gap-2 text-[11px] tabular-nums
+                  ${on ? "text-white/85" : "text-txt-muted"}`}>
+                  <span className="font-semibold">{formatIndian(qty, 2)} MT</span>
+                  <span>{trips} trips</span>
+                  <span>{rows_} cons.</span>
+                </div>
+                <div className="mt-0.5 flex items-center gap-2 text-[10px]">
+                  <span className={flag
+                    ? (on ? "text-rose-200 font-semibold" : "text-rose font-semibold")
+                    : (on ? "text-emerald-200" : "text-emerald")}>
+                    {flag ? `${flag} out of tolerance` : "all within tolerance"}
+                  </span>
+                  {blank > 0 && (
+                    <span className={on ? "text-white/60" : "text-txt-light"}>
+                      · {blank} unassayed
+                    </span>
+                  )}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* The answer, before the working.
           Thirty rows of four variances each is a hundred and twenty numbers,
@@ -365,8 +483,8 @@ export default function QualityE2ETable() {
               </div>
 
               <p className="text-txt-muted">
-                The mine&apos;s lab assays a stack before it leaves; Balasore&apos;s
-                assays the same material on arrival. Over{" "}
+                The mine&apos;s lab assays a stack before it leaves; the receiving
+                plant assays the same material on arrival. Over{" "}
                 {from.split("-").reverse().join("-")} to{" "}
                 {to.split("-").reverse().join("-")}, <b className="text-navy">
                 {all.length} consignments</b> went out —{" "}
@@ -432,11 +550,14 @@ export default function QualityE2ETable() {
           )}
 
           {worst.length > 0 && (
-            <div className="mt-2 space-y-0.5 max-h-[13rem] overflow-y-auto pr-1">
+            // The tiles above now carry the headline for each plant, so this list is
+            // the detail rather than the summary. Shortened from 13rem to keep the
+            // whole section — tiles, card and ten table rows — inside one screen.
+            <div className="mt-2 space-y-0.5 max-h-[8.5rem] overflow-y-auto pr-1">
               {worst.map((r) => {
-                const bad = outOn.get(`${r.date}-${r.batch}`) ?? [];
+                const bad = outOn.get(rowKey(r)) ?? [];
                 return (
-                  <div key={`${r.date}-${r.batch}`}
+                  <div key={rowKey(r)}
                     className="grid grid-cols-[7.5rem_5.5rem_2.2rem_6rem_1fr]
                                gap-x-2 items-baseline text-[11.5px] py-0.5
                                border-t border-rose-ring/30 first:border-0">
@@ -550,18 +671,24 @@ export default function QualityE2ETable() {
           </div>
         ) : rows.length === 0 ? (
           <div className="p-6 text-center text-[12px] text-txt-light">
-            No despatches to Balasore in this period.
+            {dest === ALL_DEST
+              ? "No despatches in this period."
+              : `No despatches to ${dests.find((d) => d.key === dest)?.label ?? dest}`
+                + " in this period."}
           </div>
         ) : (
           <div
             className="overflow-auto"
             style={{ maxHeight: rows.length > VISIBLE_ROWS ? WINDOW_H : undefined }}
           >
-            <table className="w-full border-collapse min-w-[1080px]">
+            <table className={`w-full border-collapse ${dest === ALL_DEST ? "min-w-[1160px]" : "min-w-[1080px]"}`}>
               <thead>
                 <tr className="text-white" style={{ height: HEAD_H }}>
                   <th className={`${TH} ${STICKY_1} text-left`} rowSpan={2}>Date</th>
                   <th className={`${TH} ${STICKY_1} text-left`} rowSpan={2}>Stack No.</th>
+                  {dest === ALL_DEST && (
+                    <th className={`${TH} ${STICKY_1} text-left`} rowSpan={2}>To</th>
+                  )}
                   <th className={`${TH} ${STICKY_1} text-left`} rowSpan={2}>Grade</th>
                   <th className={`${TH} ${STICKY_1} text-right`} rowSpan={2}>Trips</th>
                   <th className={`${TH} ${STICKY_1} text-right border-r border-white/20`}
@@ -594,7 +721,7 @@ export default function QualityE2ETable() {
               <tbody>
                 {rows.map((r) => (
                   <tr
-                    key={`${r.date}-${r.batch}`}
+                    key={rowKey(r)}
                     style={{ height: ROW_H }}
                     className="border-b border-border-light last:border-0 hover:bg-bg-soft/60"
                   >
@@ -604,6 +731,16 @@ export default function QualityE2ETable() {
                     <td className="px-2 py-2 leading-4 text-[12px] font-mono text-txt-primary whitespace-nowrap">
                       {r.batch}
                     </td>
+                    {dest === ALL_DEST && (
+                      <td className="px-2 py-2 leading-4 text-[12px]">
+                        <span className={`inline-block px-1.5 py-0.5 rounded text-[10px]
+                          font-bold tracking-wide ${r.destination === "BAL"
+                            ? "bg-navy/10 text-navy" : "bg-gold/15 text-gold-dark"}`}>
+                          {dests.find((d) => d.key === r.destination)?.label
+                            ?? r.destination}
+                        </span>
+                      </td>
+                    )}
                     <td className="px-2 py-2 leading-4 text-[12px]">
                       <span className="inline-block px-1.5 py-0.5 rounded bg-bg-section
                                        text-[10px] font-bold text-txt-muted tracking-wide">
@@ -644,7 +781,7 @@ export default function QualityE2ETable() {
                   <tr style={{ height: ROW_H }}>
                     <td className={`px-2 py-2 leading-4 text-[11px] font-condensed font-extrabold
                                    tracking-[.1em] text-navy text-left ${STICKY_FOOT}`}
-                      colSpan={3}>
+                      colSpan={dest === ALL_DEST ? 4 : 3}>
                       WTD AVG
                     </td>
                     <td className={TF}>
