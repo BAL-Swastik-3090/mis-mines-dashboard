@@ -327,13 +327,26 @@ def usage(request: Request,
          GROUP BY 1
     """), p).all()}
 
-    by_day_sessions = {str(r[0]): {"sessions": int(r[1]), "people": int(r[2])}
-                       for r in db.execute(text("""
+    # Every day in the range, including the ones nobody signed in.
+    #
+    # Grouping only returns days that HAPPENED, so a chart drawn from it starts
+    # at the first day with a session and silently redraws its own x-axis: a
+    # range of 1-28 September opened at the 12th, and the three quiet days
+    # before it — which are the interesting ones on an adoption screen —
+    # simply were not there to see.
+    seen_days = {str(r[0]): {"sessions": _int(r[1]), "people": _int(r[2])}
+                 for r in db.execute(text("""
         SELECT DATE(login_at), COUNT(*), COUNT(DISTINCT emp_id)
           FROM digital_apps_user_sessions
          WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
          GROUP BY 1 ORDER BY 1
     """), p).all()}
+    by_day_sessions = {}
+    day = frm
+    while day <= to:
+        key = day.isoformat()
+        by_day_sessions[key] = seen_days.get(key, {"sessions": 0, "people": 0})
+        day += timedelta(days=1)
 
     by_day = [{"day": str(r[0]), "views": int(r[1]), "people": int(r[2])}
               for r in db.execute(text("""

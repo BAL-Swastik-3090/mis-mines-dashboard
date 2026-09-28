@@ -40,15 +40,15 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Activity, AlertTriangle, BarChart3, CalendarClock, Clock, Eye, Gauge,
   LayoutGrid, Loader2, LogOut, Monitor, MousePointerClick, Pencil, Trophy,
-  TrendingUp, UserCheck, Users, X,
+  TrendingUp, UserCheck, Users, X, ChevronRight,
 } from "lucide-react";
 import api from "@/lib/api";
 import { formatIndian } from "@/lib/utils";
 import { matchesSearch } from "@/lib/search";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import {
-  Avatar, Card, CardHeader, Chip, EmptyRow, StatBar, Td, Th, Tile, PageHeader,
-  inputClass, type Tone,
+  Avatar, Card, CardHeader, Chip, EmptyRow, SortTh, StatBar, Td, Th, Tile,
+  PageHeader, inputClass, sortRows, type SortWay, type Tone,
 } from "@/components/minehub/ui";
 import SearchSelect from "@/components/minehub/SearchSelect";
 
@@ -56,6 +56,7 @@ import SearchSelect from "@/components/minehub/SearchSelect";
 interface Person {
   emp_id: string; name: string | null; department: string | null;
   role: string | null; roles?: string | null; provisioned?: boolean;
+  designation?: string | null; active_days?: number; first_seen?: string | null;
   sessions: number; minutes: number; last_seen: string | null;
   browser: string | null; device: string | null; timed_out: number;
   views: number; changes: number;
@@ -108,6 +109,14 @@ interface PersonDetail {
   role: string | null; sessions: Sess[];
   screens: (Screen & { last_seen: string })[]; changes: Change[];
 }
+
+/** A person, plus the two figures the leaderboard works out for itself.
+ *
+ *  `rank` is by total time and does NOT move when the table is sorted by
+ *  something else — a number that changes meaning when you click a heading is
+ *  worse than no number. `avg` exists as a field rather than only in the cell
+ *  because a column that can be sorted needs a value to sort on. */
+type Leader = Person & { rank: number; avg: number };
 
 const WEEK = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -227,6 +236,20 @@ export default function UsageSection() {
   const [here, setHere] = useState<string>("adoption");
   const navLock = useRef(0);
 
+  /* One sort per table. Each is {key, dir}; dir null means the table keeps the
+     order the query gave it, which is itself meaningful — screens arrive most
+     visited first, people by time spent. */
+  const [sortPeople, setSortPeople] =
+    useState<{ key: keyof Person | null; dir: SortWay | null }>({ key: null, dir: null });
+  const [sortLead, setSortLead] =
+    useState<{ key: keyof Leader | null; dir: SortWay | null }>({ key: "minutes", dir: "desc" });
+  const [sortScreens, setSortScreens] =
+    useState<{ key: keyof Screen | null; dir: SortWay | null }>({ key: null, dir: null });
+  const [sortDept, setSortDept] =
+    useState<{ key: string | null; dir: SortWay | null }>({ key: null, dir: null });
+  const [sortSess, setSortSess] =
+    useState<{ key: keyof Sess | null; dir: SortWay | null }>({ key: null, dir: null });
+
   const load = useCallback(async () => {
     setLoading(true); setErr(null);
     const params = { day_from: apiFrom, day_to: apiTo, app_source: app };
@@ -294,9 +317,10 @@ export default function UsageSection() {
       const b = BANDS.find((x) => x.key === band);
       if (b) list = list.filter((p) => b.test(p.sessions));
     }
-    return list.filter((p) =>
+    const found = list.filter((p) =>
       matchesSearch(q, [p.emp_id, p.name, p.department, p.role, p.roles]));
-  }, [data, q, band]);
+    return sortRows(found, sortPeople.key, sortPeople.dir);
+  }, [data, q, band, sortPeople]);
 
   const bandCounts = useMemo(() => {
     const out: Record<string, number> = {};
@@ -313,12 +337,20 @@ export default function UsageSection() {
   /** The ten who spent the most time, with what they did while there. Ordered
    *  by a real quantity: hours are something a person can check and argue
    *  with, which a score is not. */
-  const leaders = useMemo(
-    () => [...(data?.people ?? [])]
-      .filter((p) => p.minutes > 0)
-      .sort((a, b) => b.minutes - a.minutes)
-      .slice(0, 10),
-    [data]);
+  const leaders = useMemo(() => {
+    const been = (data?.people ?? []).filter((p) => p.sessions > 0);
+    const ranked = [...been].sort((a, b) => b.minutes - a.minutes);
+    // Rank is by time and stays by time however the table is then sorted: a
+    // number that changes meaning when you click a column heading is worse
+    // than no number at all.
+    const withRank: Leader[] = ranked.map((p, i) => ({
+      ...p, rank: i + 1,
+      // Derived here rather than in the cell, because a column that can be
+      // sorted has to have a value to sort ON.
+      avg: p.sessions ? Math.round(p.minutes / p.sessions) : 0,
+    }));
+    return sortRows(withRank, sortLead.key, sortLead.dir);
+  }, [data, sortLead]);
   const maxLeader = Math.max(1, ...leaders.map((p) => p.minutes));
 
   const modules = useMemo(() => {
@@ -344,9 +376,11 @@ export default function UsageSection() {
       cur.sessions += p.sessions; cur.minutes += p.minutes;
       m.set(key, cur);
     }
-    return [...m.entries()].map(([name, v]) => ({ name, ...v }))
-      .sort((a, b) => b.sessions - a.sessions);
-  }, [data]);
+    const rows = [...m.entries()].map(([name, v]) => ({
+      ...v, name, share: v.total ? v.active / v.total : 0,
+    })).sort((a, b) => b.sessions - a.sessions);
+    return sortRows(rows, sortDept.key as keyof typeof rows[0], sortDept.dir);
+  }, [data, sortDept]);
 
   const daySeries = useMemo(
     () => Object.entries(data?.by_day_sessions ?? {})
@@ -621,47 +655,87 @@ export default function UsageSection() {
               <Card>
                 <CardHeader icon={Trophy} tone="amber" subtitleOnIcon
                   title="Who spends the most time here"
-                  subtitle="Ordered by hours, which anybody can check — not by a score. The two columns on the right are the point: screens opened is reading, changes is working, and a platform needs both."
-                  actions={<Chip tone="amber" dot={false}>top {leaders.length}</Chip>} />
-                <div className="px-4 py-3 space-y-1">
-                  {leaders.map((p, i) => (
-                    <button key={p.emp_id} type="button"
-                      onClick={() => void openPerson(p.emp_id)}
-                      className="w-full flex items-center gap-3 px-2 py-1.5 rounded-lg
-                                 hover:bg-bg-soft transition-colors text-left">
-                      <span className={`w-6 h-6 rounded-full text-[10.5px] font-bold
-                                        flex items-center justify-center shrink-0
-                                        ${i < 3 ? "bg-gold/15 text-gold-dark ring-1 ring-gold/25"
-                                                : "bg-bg-section text-txt-light"}`}>
-                        {i + 1}
-                      </span>
-                      <Avatar name={p.name ?? p.emp_id} size="sm" />
-                      <span className="min-w-0 w-[180px] shrink-0">
-                        <span className="block text-[12px] font-semibold text-navy truncate">
-                          {p.name ?? p.emp_id}</span>
-                        <span className="block text-[10px] text-txt-light truncate">
-                          {p.department ?? p.emp_id}</span>
-                      </span>
-                      <span className="flex-1 min-w-[50px]">
-                        <Bar value={p.minutes} max={maxLeader} tone="amber" />
-                      </span>
-                      <span className="w-16 text-right text-[12px] font-mono tabular-nums
-                                       text-navy shrink-0">{hours(p.minutes)}</span>
-                      <span className="w-14 text-right text-[11.5px] font-mono tabular-nums
-                                       text-txt-muted shrink-0" title="screens opened">
-                        {formatIndian(p.views)}</span>
-                      <span className="w-14 text-right text-[11.5px] font-mono tabular-nums
-                                       shrink-0" title="things changed">
-                        {p.changes
-                          ? <span className="text-violet font-bold">
-                              {formatIndian(p.changes)}</span>
-                          : <span className="text-txt-light">—</span>}</span>
-                    </button>
-                  ))}
-                </div>
-                <div className="border-t border-border-light px-6 py-1.5 text-[10.5px]
-                                text-txt-light flex justify-end gap-[26px]">
-                  <span>hours</span><span>screens</span><span>changes</span>
+                  subtitle="Rank is by hours — a quantity anybody can check, not a score. Every column sorts: 60 hours over 250 sessions is a quarter of an hour at a time, 60 over 12 is a working week, and only the columns beside the total tell them apart. Click a row for that person's record."
+                  actions={<Chip tone="amber" dot={false}>{leaders.length} have signed in</Chip>} />
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[900px]">
+                    <thead><tr>
+                      <Th className="w-8">#</Th>
+                      {([
+                        ["name", "Person", "left"], ["department", "Department", "left"],
+                        ["sessions", "Logins", "right"], ["minutes", "Total time", "right"],
+                        ["avg", "Avg", "right"], ["active_days", "Days", "right"],
+                        ["views", "Screens", "right"], ["changes", "Changes", "right"],
+                        ["last_seen", "Last seen", "left"],
+                      ] as const).map(([key, label, align]) => (
+                        <SortTh key={key} align={align}
+                          active={sortLead.key === key} dir={sortLead.dir ?? undefined}
+                          onSort={(d) => setSortLead({ key: d ? key : "minutes",
+                                                       dir: d ?? "desc" })}>
+                          {label}
+                        </SortTh>
+                      ))}
+                      <Th />
+                    </tr></thead>
+                    <tbody>
+                      {leaders.length === 0 && (
+                        <EmptyRow colSpan={11}>Nobody has signed in during this range.</EmptyRow>
+                      )}
+                      {leaders.map((p) => (
+                        <tr key={p.emp_id} onClick={() => void openPerson(p.emp_id)}
+                          className="border-t border-border-light hover:bg-bg-soft/60
+                                     cursor-pointer">
+                          <Td>
+                            <span className={`w-6 h-6 rounded-full text-[10.5px] font-bold
+                                              flex items-center justify-center
+                                              ${p.rank <= 3
+                                                ? "bg-gold/15 text-gold-dark ring-1 ring-gold/25"
+                                                : "bg-bg-section text-txt-light"}`}
+                              title="rank by total time, whatever this table is sorted by">
+                              {p.rank}
+                            </span>
+                          </Td>
+                          <Td>
+                            <span className="flex items-center gap-2.5">
+                              <Avatar name={p.name ?? p.emp_id} size="sm" />
+                              <span className="min-w-0">
+                                <span className="block text-[12px] font-semibold text-navy truncate">
+                                  {p.name ?? p.emp_id}</span>
+                                <span className="block text-[10px] text-txt-light">
+                                  {p.emp_id}{p.designation ? ` · ${p.designation}` : ""}</span>
+                              </span>
+                            </span>
+                          </Td>
+                          <Td className="text-[11px] text-txt-muted">{p.department ?? "—"}</Td>
+                          <Td className="text-right text-[12px] font-mono tabular-nums">
+                            {formatIndian(p.sessions)}</Td>
+                          <Td className="text-right">
+                            <span className="block text-[12px] font-mono tabular-nums text-navy">
+                              {hours(p.minutes)}</span>
+                            <span className="block mt-0.5">
+                              <Bar value={p.minutes} max={maxLeader} tone="amber" /></span>
+                          </Td>
+                          <Td className="text-right text-[11.5px] font-mono tabular-nums
+                                         text-txt-muted" title="average session">
+                            {p.sessions ? `${Math.round(p.minutes / p.sessions)}m` : "—"}</Td>
+                          <Td className="text-right text-[11.5px] font-mono tabular-nums
+                                         text-txt-muted" title="separate days they came">
+                            {p.active_days || "—"}</Td>
+                          <Td className="text-right text-[11.5px] font-mono tabular-nums
+                                         text-txt-muted">{formatIndian(p.views)}</Td>
+                          <Td className="text-right text-[11.5px] font-mono tabular-nums">
+                            {p.changes
+                              ? <span className="text-violet font-bold">
+                                  {formatIndian(p.changes)}</span>
+                              : <span className="text-txt-light">—</span>}</Td>
+                          <Td className="text-[11px] text-txt-muted whitespace-nowrap">
+                            {ago(p.last_seen)}</Td>
+                          <Td className="w-6 text-txt-light">
+                            <ChevronRight className="w-3.5 h-3.5" /></Td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </Card>
             </div>
@@ -779,9 +853,17 @@ export default function UsageSection() {
                   <div className="overflow-x-auto">
                     <table className="w-full">
                       <thead><tr>
-                        <Th>Department</Th><Th className="text-right">Using</Th>
-                        <Th>Share</Th><Th className="text-right">Sessions</Th>
-                        <Th className="text-right">Time</Th>
+                        {([
+                          ["name", "Department", "left"], ["active", "Using", "right"],
+                          ["share", "Share", "left"], ["sessions", "Sessions", "right"],
+                          ["minutes", "Time", "right"],
+                        ] as const).map(([key, label, align]) => (
+                          <SortTh key={key} align={align}
+                            active={sortDept.key === key} dir={sortDept.dir ?? undefined}
+                            onSort={(d) => setSortDept({ key: d ? key : null, dir: d })}>
+                            {label}
+                          </SortTh>
+                        ))}
                       </tr></thead>
                       <tbody>
                         {departments.map((d) => (
@@ -814,12 +896,29 @@ export default function UsageSection() {
                 <div className="overflow-x-auto">
                   <table className="w-full min-w-[760px]">
                     <thead><tr>
-                      <Th>Screen</Th><Th className="text-right">Views</Th><Th>Share</Th>
-                      <Th className="text-right">People</Th><Th className="text-right">Avg stay</Th>
-                      <Th className="text-right">Total</Th>
+                      <SortTh active={sortScreens.key === "screen"} dir={sortScreens.dir ?? undefined}
+                        onSort={(d) => setSortScreens({ key: d ? "screen" : null, dir: d })}>
+                        Screen</SortTh>
+                      <SortTh align="right" active={sortScreens.key === "views"}
+                        dir={sortScreens.dir ?? undefined}
+                        onSort={(d) => setSortScreens({ key: d ? "views" : null, dir: d })}>
+                        Views</SortTh>
+                      <Th>Share</Th>
+                      <SortTh align="right" active={sortScreens.key === "people"}
+                        dir={sortScreens.dir ?? undefined}
+                        onSort={(d) => setSortScreens({ key: d ? "people" : null, dir: d })}>
+                        People</SortTh>
+                      <SortTh align="right" active={sortScreens.key === "avg_seconds"}
+                        dir={sortScreens.dir ?? undefined}
+                        onSort={(d) => setSortScreens({ key: d ? "avg_seconds" : null, dir: d })}>
+                        Avg stay</SortTh>
+                      <SortTh align="right" active={sortScreens.key === "total_seconds"}
+                        dir={sortScreens.dir ?? undefined}
+                        onSort={(d) => setSortScreens({ key: d ? "total_seconds" : null, dir: d })}>
+                        Total</SortTh>
                     </tr></thead>
                     <tbody>
-                      {data.screens.map((s, i) => (
+                      {sortRows(data.screens, sortScreens.key, sortScreens.dir).map((s, i) => (
                         <tr key={s.page_path} className="border-t border-border-light
                                                          hover:bg-bg-soft/50">
                           <Td>
@@ -878,15 +977,23 @@ export default function UsageSection() {
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[920px]">
                   <thead><tr>
-                    <Th>Person</Th><Th>Role</Th>
-                    <Th className="text-right">Sessions</Th>
-                    <Th className="text-right">Time</Th>
-                    <Th className="text-right">Screens</Th>
-                    <Th className="text-right">Changes</Th>
-                    <Th>Last seen</Th>
+                    {([
+                      ["name", "Person", "left"], ["roles", "Role", "left"],
+                      ["sessions", "Sessions", "right"], ["minutes", "Time", "right"],
+                      ["active_days", "Days", "right"], ["views", "Screens", "right"],
+                      ["changes", "Changes", "right"], ["last_seen", "Last seen", "left"],
+                    ] as const).map(([key, label, align]) => (
+                      <SortTh key={key} align={align}
+                        active={sortPeople.key === key}
+                        dir={sortPeople.dir ?? undefined}
+                        onSort={(d) => setSortPeople({ key: d ? key : null, dir: d })}>
+                        {label}
+                      </SortTh>
+                    ))}
+                    <Th />
                   </tr></thead>
                   <tbody>
-                    {people.length === 0 && <EmptyRow colSpan={7}>Nobody matches.</EmptyRow>}
+                    {people.length === 0 && <EmptyRow colSpan={9}>Nobody matches.</EmptyRow>}
                     {people.map((p) => (
                       <tr key={p.emp_id} onClick={() => void openPerson(p.emp_id)}
                         className="border-t border-border-light hover:bg-bg-soft/60 cursor-pointer">
@@ -912,6 +1019,10 @@ export default function UsageSection() {
                         <Td className="text-right text-[12px] font-mono tabular-nums">
                           {hours(p.minutes)}
                         </Td>
+                        <Td className="text-right text-[12px] font-mono tabular-nums text-txt-muted"
+                          title="separate days they signed in">
+                          {p.active_days || "—"}
+                        </Td>
                         <Td className="text-right text-[12px] font-mono tabular-nums text-txt-muted">
                           {p.views || "—"}
                         </Td>
@@ -923,6 +1034,9 @@ export default function UsageSection() {
                         </Td>
                         <Td className="text-[11.5px] text-txt-muted whitespace-nowrap">
                           {ago(p.last_seen)}
+                        </Td>
+                        <Td className="w-6 text-txt-light">
+                          <ChevronRight className="w-3.5 h-3.5" />
                         </Td>
                       </tr>
                     ))}
@@ -1023,11 +1137,20 @@ export default function UsageSection() {
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[860px]">
                   <thead><tr>
-                    <Th>Person</Th><Th>Signed in</Th><Th className="text-right">For</Th>
-                    <Th>Ended</Th><Th>On</Th><Th>From</Th>
+                    {([
+                      ["emp_name", "Person", "left"], ["login_at", "Signed in", "left"],
+                      ["duration_minutes", "For", "right"], ["end_reason", "Ended", "left"],
+                      ["browser", "On", "left"], ["ip_address", "From", "left"],
+                    ] as const).map(([key, label, align]) => (
+                      <SortTh key={key} align={align}
+                        active={sortSess.key === key} dir={sortSess.dir ?? undefined}
+                        onSort={(d) => setSortSess({ key: d ? key : null, dir: d })}>
+                        {label}
+                      </SortTh>
+                    ))}
                   </tr></thead>
                   <tbody>
-                    {data.recent_sessions.map((s) => (
+                    {sortRows(data.recent_sessions, sortSess.key, sortSess.dir).map((s) => (
                       <tr key={s.session_id + s.login_at}
                         onClick={() => s.emp_id && void openPerson(s.emp_id)}
                         className="border-t border-border-light hover:bg-bg-soft/50 cursor-pointer">
