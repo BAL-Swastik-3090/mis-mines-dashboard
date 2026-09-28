@@ -23,14 +23,71 @@ connections daily, which is why database.py keeps the resting pool at two.
 from __future__ import annotations
 
 import hashlib
+import logging
 import secrets
 import time
 
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.orm import Session
 
 LOGIN_TBL = "intranet_user_login"
 EMP_TBL = "sap_employee_details"
+log = logging.getLogger(__name__)
+
+# MySQL says 1213 for a deadlock and 1205 for a lock-wait timeout. Both mean
+# "somebody else had it, try again" rather than "this statement is wrong".
+_RETRYABLE = (1213, 1205)
+
+
+def _mysql_errno(exc: BaseException) -> int | None:
+    """The engine's own error number, wherever SQLAlchemy has wrapped it."""
+    orig = getattr(exc, "orig", None)
+    for holder in (orig, exc):
+        n = getattr(holder, "errno", None)
+        if isinstance(n, int):
+            return n
+        args = getattr(holder, "args", None)
+        if args and isinstance(args[0], int):
+            return args[0]
+    return None
+
+
+def _best_effort(db: Session, what: str, run) -> bool:
+    """Do a housekeeping write, or do not, but never take the request with it.
+
+    THE CALLER IS SERVING A PAGE. These writes record that somebody is still
+    active and which page they looked at; none of them is the reason the
+    request was made, and a failure in one used to surface as "Internal server
+    error" on whatever screen happened to be loading.
+
+    Retried once. A deadlock is transient by definition — InnoDB picks a loser
+    and rolls it back precisely so the other can finish — so the second attempt
+    almost always succeeds. Anything still failing after that is logged and
+    dropped: last_active_at stays as it was, which is a minute stale at worst,
+    and the next request corrects it.
+    """
+    for attempt in (1, 2):
+        try:
+            run()
+            db.commit()
+            return True
+        except (OperationalError, DBAPIError) as exc:
+            db.rollback()
+            errno = _mysql_errno(exc)
+            if errno in _RETRYABLE and attempt == 1:
+                continue
+            log.warning("%s skipped (mysql errno %s): %s", what, errno,
+                        str(exc)[:160])
+            return False
+        except Exception as exc:                        # noqa: BLE001
+            # Housekeeping has no business raising anything at all here.
+            db.rollback()
+            log.warning("%s skipped: %s", what, str(exc)[:160])
+            return False
+    return False
+
+
 SESS_TBL = "digital_apps_user_sessions"
 VIEW_TBL = "digital_apps_page_views"
 ROLE_TBL = "mines_user_role"
@@ -353,8 +410,23 @@ def peek_session(sid: str | None) -> dict | None:
     return None
 
 
-def touch_due(sid: str, throttle_seconds: float = 30.0) -> bool:
-    """Whether the session's activity timestamp is worth another write."""
+def touch_due(sid: str, throttle_seconds: float = 120.0) -> bool:
+    """Whether the session's activity timestamp is worth another write.
+
+    Every thirty seconds, to protect a thirty-MINUTE idle timeout — sixty
+    times more often than the policy it exists for. Each of those writes
+    enters a race with ev_sync_digital_apps_crm, which runs every minute in
+    the shared database and takes the same two indexes of this table in the
+    opposite order, so the rate is not free: it is the rate at which we buy
+    lottery tickets for a deadlock.
+
+    Two minutes instead. The stored timestamp then lags real activity by at
+    most two minutes, so a session idles out somewhere between 28 and 30
+    minutes rather than at exactly 30 — which no policy written as "about half
+    an hour" can tell the difference between. Four times fewer writes, and
+    "who is online" reporting elsewhere in the shared table stays within two
+    minutes of the truth.
+    """
     last = _last_touch.get(sid)
     return last is None or (time.monotonic() - last) > throttle_seconds
 
@@ -400,12 +472,23 @@ def get_session(db: Session, sid: str | None) -> dict | None:
 
 
 def touch(db: Session, sid: str) -> None:
-    """Push the idle timeout out. Throttled by the caller — see main.py."""
+    """Push the idle timeout out. Throttled by the caller — see main.py.
+
+    Best-effort. This runs inside the auth middleware on every request, and it
+    deadlocks against ev_sync_digital_apps_crm — a MySQL event in the shared
+    balcorpdb that runs every minute and takes the same two indexes of this
+    table in the opposite order. InnoDB rolls one of the pair back, and when
+    that was us the user saw "Internal server error" on whatever page was
+    loading.
+
+    The timestamp is worth having and is not worth a failed page. Marked as
+    touched either way: retrying it on the very next request would only put
+    the same statement back into the same race.
+    """
     _last_touch[sid] = time.monotonic()
-    db.execute(text(
-        f"UPDATE {SESS_TBL} SET last_active_at = NOW() WHERE session_id = :sid AND is_active = 1"),
-        {"sid": sid})
-    db.commit()
+    _best_effort(db, "session touch", lambda: db.execute(text(
+        f"UPDATE {SESS_TBL} SET last_active_at = NOW() "
+        f"WHERE session_id = :sid AND is_active = 1"), {"sid": sid}))
 
 
 def end_session(db: Session, sid: str, reason: str = "LOGOUT") -> None:
@@ -432,28 +515,37 @@ def record_time_spent(db: Session, sid: str, path: str, seconds: int) -> None:
     if seconds is None or seconds < 0:
         return
     seconds = min(int(seconds), 86_400)     # a tab left open for days is not "time spent"
-    db.execute(text(
-        f"""UPDATE {VIEW_TBL}
-            SET time_spent_seconds = :ts
-            WHERE session_id = :sid AND page_path = :p AND app_source = :app
-              AND time_spent_seconds IS NULL
-            ORDER BY viewed_at DESC LIMIT 1"""),
-        {"ts": seconds, "sid": sid, "p": (path or "/")[:255], "app": APP_SOURCE})
-    db.execute(text(
-        f"UPDATE {SESS_TBL} SET last_active_at = NOW() WHERE session_id = :sid AND is_active = 1"),
-        {"sid": sid})
-    db.commit()
+
+    def go() -> None:
+        db.execute(text(
+            f"""UPDATE {VIEW_TBL}
+                SET time_spent_seconds = :ts
+                WHERE session_id = :sid AND page_path = :p AND app_source = :app
+                  AND time_spent_seconds IS NULL
+                ORDER BY viewed_at DESC LIMIT 1"""),
+            {"ts": seconds, "sid": sid, "p": (path or "/")[:255], "app": APP_SOURCE})
+        db.execute(text(
+            f"UPDATE {SESS_TBL} SET last_active_at = NOW() "
+            f"WHERE session_id = :sid AND is_active = 1"), {"sid": sid})
+
+    # Usage reporting. Losing a page's dwell time to a lock race costs a row in
+    # a report; failing the request costs the user their page.
+    _best_effort(db, "time spent", go)
 
 
 def record_page_view(db: Session, sid: str, emp_id: str, path: str,
                      time_spent: int | None = None, referrer: str | None = None) -> None:
-    db.execute(text(
-        f"""INSERT INTO {VIEW_TBL}
-              (session_id, emp_id, page_path, app_source, referrer_path, viewed_at, time_spent_seconds)
-            VALUES (:sid,:eid,:p,:app,:ref, NOW(), :ts)"""),
-        {"sid": sid, "eid": emp_id, "p": (path or "/")[:255], "app": APP_SOURCE,
-         "ref": (referrer or None), "ts": time_spent})
-    db.execute(text(
-        f"UPDATE {SESS_TBL} SET last_active_at = NOW() WHERE session_id = :sid AND is_active = 1"),
-        {"sid": sid})
-    db.commit()
+    def go() -> None:
+        db.execute(text(
+            f"""INSERT INTO {VIEW_TBL}
+                  (session_id, emp_id, page_path, app_source, referrer_path,
+                   viewed_at, time_spent_seconds)
+                VALUES (:sid,:eid,:p,:app,:ref, NOW(), :ts)"""),
+            {"sid": sid, "eid": emp_id, "p": (path or "/")[:255], "app": APP_SOURCE,
+             "ref": (referrer or None), "ts": time_spent})
+        db.execute(text(
+            f"UPDATE {SESS_TBL} SET last_active_at = NOW() "
+            f"WHERE session_id = :sid AND is_active = 1"), {"sid": sid})
+
+    # Same bargain as above: the page view is reporting, the page is the job.
+    _best_effort(db, "page view", go)
