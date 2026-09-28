@@ -3,7 +3,7 @@ import { useState } from "react";
 import {
   Package, Building2, BarChart3,
   Layers, FlaskConical, Wrench, Droplets,
-  Download, Check, GitCompareArrows,
+  Download, Check, GitCompareArrows, Factory,
 } from "lucide-react";
 import { useSectionObserver } from "@/hooks/useSectionObserver";
 import { useDateFilter }      from "@/contexts/useDateFilter";
@@ -12,6 +12,7 @@ import { downloadDashboard }  from "@/utils/downloadDashboard";
 
 const TABS = [
   { id: "quality-e2e",    label: "E2E Quality",     icon: GitCompareArrows },
+  { id: "plant-output",   label: "Plant Output",    icon: Factory      },
   { id: "stock",          label: "Stock",           icon: Package      },
   { id: "plant",          label: "Plant",           icon: Building2    },
   { id: "production",     label: "Production",      icon: BarChart3    },
