@@ -24,7 +24,13 @@ const PRPO_URL =
  *  screen with no section to render. */
 type NavItem =
   | { kind: "page"; id: AppPage;  label: string; icon: React.ElementType }
-  | { kind: "link"; href: string; label: string; icon: React.ElementType };
+  /** `need` is a permission code. A link is still access: the application it
+   *  opens has its own login, but putting the shortcut in front of somebody is
+   *  telling them the door is theirs. Without it the entry is open to anyone
+   *  signed in, which is right for something like a public notice and wrong
+   *  for procurement. */
+  | { kind: "link"; href: string; label: string; icon: React.ElementType;
+      need?: string };
 
 const NAV_ITEMS: NavItem[] = [
   { kind: "page", id: "mis",             label: "MIS Dashboard",              icon: LayoutDashboard },
@@ -34,7 +40,11 @@ const NAV_ITEMS: NavItem[] = [
   { kind: "page", id: "market",          label: "Market Watch",               icon: LineChart       },
   { kind: "page", id: "fuel-management", label: "Fuel Management",            icon: Gauge           },
   { kind: "page", id: "ev-tracking",     label: "Electric Vehicles Tracking", icon: Zap             },
-  { kind: "link", href: PRPO_URL,        label: "PR/PO Status",               icon: ClipboardList   },
+  // Procurement, built by another IT team. Every role that existed before this
+  // permission was added already holds it, so nobody lost a shortcut they were
+  // using; the roles that should not see it simply are not given it.
+  { kind: "link", href: PRPO_URL,        label: "PR/PO Status",               icon: ClipboardList,
+    need: "link.prpo.view" },
 ];
 
 /* Two administration entries, split by audience rather than merged for tidiness.
@@ -108,8 +118,12 @@ export default function AppSidebar() {
 
      canOpen draws the absent/empty distinction that this used to get wrong. */
   const items: NavItem[] = [
-    ...NAV_ITEMS.filter(
-      (i) => i.kind === "link" || canOpen(user, i.id as AppPage),
+    ...NAV_ITEMS.filter((i) =>
+      i.kind === "link"
+        // `i.kind === "link" ||` used to end the test here, which drew every
+        // external link for everybody regardless of what they held.
+        ? (!i.need || (user?.permissions ?? []).includes(i.need))
+        : canOpen(user, i.id as AppPage),
     ),
     // Permission, not role name — a role created in the UI reaches these entries
     // without any code change.
