@@ -20,12 +20,15 @@ export default function HomePage() {
         <PrevDayVarianceTable />
       </section>
 
-      <section id="quality-e2e" className={S}>
-        <QualityE2ETable />
-      </section>
-
+      {/* Stock before quality, matching the tab bar. The tabs scroll to these
+          sections, so an order here that disagreed with the bar would send
+          somebody to the wrong place. */}
       <section id="stock" className={S}>
         <StockSection />
+      </section>
+
+      <section id="quality-e2e" className={S}>
+        <QualityE2ETable />
       </section>
 
       <section id="plant" className={S}>

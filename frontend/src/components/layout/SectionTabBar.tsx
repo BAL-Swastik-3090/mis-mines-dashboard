@@ -11,8 +11,10 @@ import { useSidebar }         from "@/contexts/useSidebar";
 import { downloadDashboard }  from "@/utils/downloadDashboard";
 
 const TABS = [
-  { id: "quality-e2e",    label: "E2E Quality",     icon: GitCompareArrows },
+  // Stock first. It is what the morning meeting opens on, and quality is the
+  // question asked about what has already left.
   { id: "stock",          label: "Stock",           icon: Package      },
+  { id: "quality-e2e",    label: "E2E Quality",     icon: GitCompareArrows },
   { id: "plant",          label: "Plant",           icon: Building2    },
   { id: "production",     label: "Production",      icon: BarChart3    },
   { id: "ob",             label: "OB Excavation",   icon: Layers       },
