@@ -23,6 +23,8 @@ from typing import AsyncIterator
 
 import httpx
 from sqlalchemy.orm import Session
+
+from app.services import breakdown as bd
 from sqlalchemy import text
 
 # Production figures are net of SAP reversal documents — see sap_movement.
@@ -392,20 +394,24 @@ def _equipment_summary(db: Session, from_date: date, to_date: date) -> dict:
         period_hrs = days * 24.0
         total_excavators = 7
 
-        bd_row = db.execute(text("""
-            SELECT ROUND(SUM(BREAKDOWN_DURAION) / 3600.0, 1) AS total_bd_hrs,
-                   COUNT(*) AS bd_events
+        # Open notifications count from their start until now — the shared
+        # definition in services/breakdown.py. They used to be excluded, which
+        # left a machine still down out of the digest entirely.
+        bd_row = db.execute(text(f"""
+            SELECT ROUND(SUM({bd.DURATION_SECONDS}) / 3600.0, 1) AS total_bd_hrs,
+                   COUNT(*)                                      AS bd_events,
+                   COUNT(CASE WHEN {bd.IS_OPEN} THEN 1 END)      AS bd_open
             FROM zpm_iw29_notifications
             WHERE MAINTENANCE_PLANT = '1200'
               AND MAIN_WORK_CENTER  = 'MINEAUTO'
               AND NOTIFICATION_TYPE = 'M2'
+              AND MALFUNCTION_START IS NOT NULL
               AND MALFUNCTION_START BETWEEN :f AND :t
-              AND BREAKDOWN_DURAION IS NOT NULL
-              AND BREAKDOWN_DURAION > 0
-        """), {"f": from_date, "t": to_date}).fetchone()
+        """), {"f": from_date, "t": to_date, **bd.params(to_date)}).fetchone()
 
         total_bd_hrs = float(bd_row.total_bd_hrs or 0)
         bd_events    = int(bd_row.bd_events or 0)
+        bd_open      = int(bd_row.bd_open or 0)
         fleet_avail  = round(max(0.0, (1 - total_bd_hrs / (total_excavators * period_hrs)) * 100), 1)
 
         # Enhancement #4: cost context — BD hours → estimated lost ore MT

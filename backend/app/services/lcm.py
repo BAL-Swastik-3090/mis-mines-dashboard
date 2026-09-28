@@ -28,6 +28,8 @@ from datetime import date
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.services import breakdown as bd
+
 # Actuals are net of SAP reversal documents. Without this the ore deviation
 # was UNDERSTATED — Aug 2026 read 8,366 MT / Rs 13.75 Cr instead of
 # 11,806 MT / Rs 19.41 Cr, because reversals inflated the actual.
@@ -312,13 +314,14 @@ def _shift_hours(db: Session, machines: list[dict], fd: date, td: date,
 
 
 def _sap_breakdown(db: Session, machines: list[dict], fd: date, td: date) -> float:
-    """SAP M2 notification hours. BREAKDOWN_DURAION is stored in SECONDS."""
+    """SAP M2 notification hours, open events included — see services/breakdown.py."""
     ph = ", ".join(f":e{i}" for i in range(len(machines)))
-    params: dict = {"fd": fd, "td": td, "plant": PLANT, "wc": WORK_CENTRE}
+    params: dict = {"fd": fd, "td": td, "plant": PLANT, "wc": WORK_CENTRE,
+                    **bd.params(td)}
     for i, m in enumerate(machines):
         params[f"e{i}"] = m["sap_eq"]
     row = db.execute(text(f"""
-        SELECT COALESCE(SUM(BREAKDOWN_DURAION), 0) / 3600.0 AS hrs
+        SELECT COALESCE(SUM({bd.DURATION_SECONDS}), 0) / 3600.0 AS hrs
         FROM zpm_iw29_notifications
         WHERE MAINTENANCE_PLANT = :plant AND NOTIFICATION_TYPE = 'M2'
           AND MAIN_WORK_CENTER = :wc AND EQUIPMENT IN ({ph})

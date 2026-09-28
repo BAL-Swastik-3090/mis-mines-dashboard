@@ -94,8 +94,14 @@ export default function BreakdownModal({ machineName, sapName, onClose }: Props)
                       <td className={`px-4 py-2.5 font-mono text-[11px] ${ev.end ? "text-success" : "text-txt-muted italic"}`}>
                         {ev.end ? fmt(ev.end) : "Open / Not closed"}
                       </td>
+                      {/* An open notification is still counting, so the figure
+                          is "so far" rather than final — marked, not hidden. */}
                       <td className="px-4 py-2.5 text-right font-mono text-[12px] font-semibold text-gold">
                         {ev.bd_hrs != null ? ev.bd_hrs.toFixed(2) : "—"}
+                        {ev.is_open && (
+                          <span className="ml-1 text-[9px] font-sans font-normal
+                                           not-italic text-txt-muted">so far</span>
+                        )}
                       </td>
                       <td className="px-4 py-2.5 text-txt-secondary text-[11px]">
                         {ev.reason || <span className="text-txt-muted italic">Not specified</span>}
