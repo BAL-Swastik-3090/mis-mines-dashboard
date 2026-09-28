@@ -344,6 +344,16 @@ export default function QualityE2ETable() {
    * direction across many consignments is a calibration question for the labs,
    * a scattered one is a sampling question for the stacks.
    */
+  /** The "To" column is shown whenever the period has more than one
+   *  destination — not only when both are selected.
+   *
+   *  It used to disappear the moment a plant was chosen, which took the plant
+   *  filter with it, and a column that comes and goes as you filter makes the
+   *  table jump under the reader. Showing "Balasore" on every row of a
+   *  Balasore-only view is a little redundant; a column that vanishes is
+   *  worse. */
+  const showDest = dests.length > 1;
+
   const destLabel = dest === ALL_DEST
     ? "both plants"
     : (dests.find((d) => d.key === dest)?.label ?? dest);
@@ -737,12 +747,12 @@ export default function QualityE2ETable() {
             className="overflow-auto"
             style={{ maxHeight: rows.length > VISIBLE_ROWS ? WINDOW_H : undefined }}
           >
-            <table className={`w-full border-collapse ${dest === ALL_DEST ? "min-w-[1160px]" : "min-w-[1080px]"}`}>
+            <table className={`w-full border-collapse ${showDest ? "min-w-[1160px]" : "min-w-[1080px]"}`}>
               <thead>
                 <tr className="text-white" style={{ height: HEAD_H }}>
                   <th className={`${TH} ${STICKY_1} text-left`}>Date</th>
                   <th className={`${TH} ${STICKY_1} text-left`}>Stack No.</th>
-                  {dest === ALL_DEST && (
+                  {showDest && (
                     <th className={`${TH} ${STICKY_1} text-left`}>To</th>
                   )}
                   <th className={`${TH} ${STICKY_1} text-left`}>Grade</th>
@@ -788,7 +798,7 @@ export default function QualityE2ETable() {
                       the figures that say whether a plant needs looking at;
                       this is for somebody already in the table who does not
                       want to go back up to change it. */}
-                  {dests.length > 1 && (
+                  {showDest && (
                     <th style={{ top: HEAD_H }} className={`${STICKY_2} px-1.5 pb-1`}>
                       <SearchSelect narrow value={dest === ALL_DEST ? "" : dest}
                         allLabel="Both plants" allValue=""
@@ -837,7 +847,7 @@ export default function QualityE2ETable() {
                     <td className="px-2 py-2 leading-4 text-[12px] font-mono text-txt-primary whitespace-nowrap">
                       {r.batch}
                     </td>
-                    {dest === ALL_DEST && (
+                    {showDest && (
                       <td className="px-2 py-2 leading-4 text-[12px]">
                         <span className={`inline-block px-1.5 py-0.5 rounded text-[10px]
                           font-bold tracking-wide ${r.destination === "BAL"
@@ -887,7 +897,7 @@ export default function QualityE2ETable() {
                   <tr style={{ height: ROW_H }}>
                     <td className={`px-2 py-2 leading-4 text-[11px] font-condensed font-extrabold
                                    tracking-[.1em] text-navy text-left ${STICKY_FOOT}`}
-                      colSpan={dest === ALL_DEST ? 4 : 3}>
+                      colSpan={showDest ? 4 : 3}>
                       WTD AVG
                     </td>
                     <td className={TF}>
