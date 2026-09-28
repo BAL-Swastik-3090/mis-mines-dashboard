@@ -197,37 +197,44 @@ _AUTH_EXEMPT = ("/api/auth/", "/api/health", "/api/docs", "/api/redoc", "/api/op
 #
 # Page access is separate and data-driven: a page maps to a dashboard.* code,
 # resolved through PREFIX_PAGE in services/auth.py.
-_PERMISSION_RULES: tuple[tuple[str, str], ...] = (
-    ("/api/access",  "access.users.view"),   # finer checks are inside the router
-    # Who used what, and what they changed. Same audience as the access
-    # screen: seeing a colleague's activity is seeing a colleague's details.
-    ("/api/usage",   "access.users.view"),
-    ("/api/roles",   "access.users.manage"),
-    ("/api/minehub", "platform.registry.view"),
+# A rule may list more than one code, and any of them opens the path.
+#
+# Usage is why. It was gated on access.users.view, which is the Access Control
+# screen — so the only way to let a department head read the usage figures was
+# to hand them the user list and the role grid. It has its own permission now,
+# and the old one is still accepted so nobody who could read it this morning
+# finds it gone this afternoon.
+_PERMISSION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("/api/access",  ("access.users.view",)),  # finer checks are inside the router
+    # Who used what, and what they changed. Names individuals, so it is its own
+    # permission rather than a corner of somebody else's.
+    ("/api/usage",   ("usage.view", "access.users.view")),
+    ("/api/roles",   ("access.users.manage",)),
+    ("/api/minehub", ("platform.registry.view",)),
     # The competency dimensions and handover checks. Reading them is reading
     # the platform's vocabulary, which migration 038 established every register
     # needs — an operator registrar cannot assess anybody without it. Changing
     # them is gated per kind inside the router.
-    ("/api/checklists", "platform.registry.view"),
+    ("/api/checklists", ("platform.registry.view",)),
     # The attendance register reads the gate readers and joins them to the
     # manpower register, so it needs what the manpower register needs. Nothing
     # here writes anything.
     # Reading the attendance register needs what the manpower register needs.
     # Raising and approving corrections are checked per action inside the
     # router, because they are held by different people on purpose.
-    ("/api/attendance", "platform.operators.view"),
+    ("/api/attendance", ("platform.operators.view",)),
     # Operator profiles hold dates of birth, medical expiry and photographs, so
     # the view permission is deliberately not part of a dashboard role.
-    ("/api/operators", "platform.operators.view"),
+    ("/api/operators", ("platform.operators.view",)),
     # The shift board shows who is on which machine, so it sits behind its own
     # permission rather than inside a dashboard role.
-    ("/api/ops", "ops.shift.view"),
+    ("/api/ops", ("ops.shift.view",)),
     # The roster says where people will be on days they have not worked yet, so
     # it sits behind its own permission rather than the shift board's.
-    ("/api/workforce", "ops.roster.view"),
+    ("/api/workforce", ("ops.roster.view",)),
     # Capacity reads the roster's machines and faces, and says what the fleet
     # can move. Same audience as the roster, so the same permission.
-    ("/api/productivity", "ops.roster.view"),
+    ("/api/productivity", ("ops.roster.view",)),
     # Notes are readable by anybody who can open the platform at all — writing
     # is what carries a permission, checked inside the router.
 )
@@ -283,9 +290,12 @@ def _check_auth(sid: str | None, path: str) -> tuple[dict | None, str | None, se
     if not perms:
         return s, "revoked", perms
 
-    need = next((c for pre, c in _PERMISSION_RULES if path.startswith(pre)), None)
-    if need and need not in perms:
-        return s, need, perms
+    need = next((codes for pre, codes in _PERMISSION_RULES
+                 if path.startswith(pre)), None)
+    # Any one of them is enough. A path that can be reached two legitimate ways
+    # should not need the person to hold both.
+    if need and not (set(need) & perms):
+        return s, need[0], perms
 
     # Page access, enforced on the API prefix behind each page — hiding the
     # sidebar entry alone would leave the data reachable to anyone who knows

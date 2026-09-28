@@ -65,11 +65,12 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   // Capacity reads the same machines and faces the roster does, and is read
   // by the same people planning the day.
   "capacity": ["ops.roster.view"],
-  // The same permission as Access Control, and deliberately the same one:
-  // seeing which colleague opened what, and for how long, is seeing a
-  // colleague's details. Whoever is trusted with the user list is trusted
-  // with this; nobody else needs a second permission invented for it.
-  "usage": ["access.users.view"],
+  // Its own permission, because the first version of this was wrong. Gating
+  // Usage on access.users.view meant the only way to let a department head
+  // read the figures was to hand them the user list and the role grid — a
+  // "Usage Viewer" would have been an Access Manager under another name.
+  // access.users.view still opens it, so no administrator lost a screen.
+  "usage": ["usage.view", "access.users.view"],
 };
 
 /**

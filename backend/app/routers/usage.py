@@ -41,7 +41,13 @@ from app.minehub_db import get_minehub_db
 router = APIRouter(prefix="/api/usage", tags=["Usage"])
 
 APP = "MINES"
-VIEW = "access.users.view"
+
+# Either opens this screen. `usage.view` is the real one — it exists so that
+# reading who used the platform does not require the ability to change who may.
+# `access.users.view` is kept because every administrator held it before that
+# permission existed, and a security tidy-up that quietly removes somebody's
+# screen is a security tidy-up that gets reverted.
+VIEW = ("usage.view", "access.users.view")
 
 # The applications this screen may report on.
 #
@@ -96,8 +102,8 @@ def _numbers(row: dict, *keys: str) -> dict:
 
 
 def _require(request: Request) -> None:
-    perms = getattr(request.state, "permissions", None) or set()
-    if VIEW not in perms:
+    perms = set(getattr(request.state, "permissions", None) or set())
+    if not (set(VIEW) & perms):
         raise HTTPException(403, "You do not have permission to see usage. "
                                  "An Access Manager can add it to your role.")
 
