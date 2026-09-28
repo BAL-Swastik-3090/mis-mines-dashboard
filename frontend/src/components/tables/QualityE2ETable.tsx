@@ -780,8 +780,27 @@ export default function QualityE2ETable() {
                       className="w-full bg-white/10 border-white/25 text-white
                                  font-normal hover:border-white/50" />
                   </th>
+                  {/* The same selection the tiles above make, in the column
+                      it belongs to.
+                      
+                      Not a second piece of state: it reads and writes `dest`,
+                      so the tile and this can never disagree. The tiles carry
+                      the figures that say whether a plant needs looking at;
+                      this is for somebody already in the table who does not
+                      want to go back up to change it. */}
                   {dests.length > 1 && (
-                    <th style={{ top: HEAD_H }} className={`${STICKY_2} px-2`} />
+                    <th style={{ top: HEAD_H }} className={`${STICKY_2} px-1.5 pb-1`}>
+                      <SearchSelect narrow value={dest === ALL_DEST ? "" : dest}
+                        allLabel="Both plants" allValue=""
+                        onChange={(v) => setDest(v || ALL_DEST)}
+                        searchPlaceholder="Type a plant…"
+                        options={dests.map((d) => ({
+                          value: d.key, label: d.label,
+                          hint: d.plant ? `plant ${d.plant}` : undefined,
+                        }))}
+                        className="w-full bg-white/10 border-white/25 text-white
+                                   font-normal hover:border-white/50" />
+                    </th>
                   )}
                   <th style={{ top: HEAD_H }} className={`${STICKY_2} px-1.5 pb-1`}>
                     <SearchSelect narrow value={byGrade} onChange={setByGrade}
