@@ -31,7 +31,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -41,6 +41,15 @@ router = APIRouter(prefix="/api/usage", tags=["Usage"])
 
 APP = "MINES"
 VIEW = "access.users.view"
+
+# The applications this screen may report on.
+#
+# Twenty-five write to the shared session table. This page belongs to the mine,
+# and the mine has no business seeing who reads the Leave Management
+# Application: that is somebody else's staff, on somebody else's screen. Two —
+# the systems this site actually runs — and anything else is refused rather
+# than quietly answered.
+ALLOWED_APPS = ("MINES", "IMOS")
 
 # Where a page path maps to a name somebody would recognise. The paths are
 # what the browser reported; these are what the sidebar calls them.
@@ -64,9 +73,25 @@ def _require(request: Request) -> None:
                                  "An Access Manager can add it to your role.")
 
 
-def _window(days: int) -> tuple[date, date]:
+def _window(days: int, day_from: date | None = None,
+            day_to: date | None = None) -> tuple[date, date]:
+    """The range to report on: the header's, or a rolling window if none.
+
+    Every other screen takes its dates from the header picker. A page with a
+    second date control has two answers to "what am I looking at", and the one
+    the user did not touch is the one they believe.
+    """
+    if day_from and day_to:
+        return (day_from, day_to) if day_from <= day_to else (day_to, day_from)
     to = date.today()
     return to - timedelta(days=days - 1), to
+
+
+def _app(app_source: str) -> str:
+    """The application asked for, if this screen is allowed to answer for it."""
+    if app_source not in ALLOWED_APPS:
+        raise HTTPException(404, f"No usage is reported for {app_source!r}.")
+    return app_source
 
 
 def _emp_of(recorded_by: str | None) -> str | None:
@@ -91,6 +116,8 @@ def _emp_of(recorded_by: str | None) -> str | None:
 @router.get("")
 def usage(request: Request,
           days: int = Query(30, ge=1, le=365),
+          day_from: date | None = Query(None),
+          day_to: date | None = Query(None),
           app_source: str = Query(APP),
           db: Session = Depends(get_db),
           pg: Session = Depends(get_minehub_db)) -> dict:
@@ -101,7 +128,8 @@ def usage(request: Request,
     fortnight from the one above it.
     """
     _require(request)
-    frm, to = _window(days)
+    app_source = _app(app_source)
+    frm, to = _window(days, day_from, day_to)
     p = {"app": app_source, "frm": frm, "to": to}
 
     # ── who signed in ────────────────────────────────────────────────────
@@ -110,7 +138,8 @@ def usage(request: Request,
                COUNT(DISTINCT emp_id)                      AS people,
                COALESCE(SUM(duration_minutes), 0)          AS minutes,
                COALESCE(ROUND(AVG(duration_minutes), 1), 0) AS avg_minutes,
-               SUM(is_active = 1)                          AS live
+               COUNT(DISTINCT CASE WHEN is_active = 1
+                                   THEN emp_id END)        AS live
           FROM digital_apps_user_sessions
          WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
     """), p).mappings().first()
@@ -181,11 +210,26 @@ def usage(request: Request,
          WHERE app_source = :app AND DATE(viewed_at) BETWEEN :frm AND :to
     """), p).scalar() or 0)
 
-    # Who is in there right now, by name.
+    # Who is in there right now — one row per PERSON, not per session.
+    #
+    # A session is a browser tab, and somebody with the dashboard open on their
+    # desk and again on the wall display is one colleague, not two. Listing the
+    # sessions made "3 signed in now" out of two people, which is the kind of
+    # number that gets repeated in a meeting.
+    #
+    # The session count is kept, because two tabs is worth seeing once you know
+    # it is one person.
     online = [dict(r) for r in db.execute(text("""
-        SELECT emp_id, emp_name, department, role, last_active_at, login_at
+        SELECT emp_id,
+               MAX(emp_name)       AS emp_name,
+               MAX(department)     AS department,
+               MAX(role)           AS role,
+               MAX(last_active_at) AS last_active_at,
+               MIN(login_at)       AS login_at,
+               COUNT(*)            AS sessions
           FROM digital_apps_user_sessions
          WHERE app_source = :app AND is_active = 1
+         GROUP BY emp_id
          ORDER BY last_active_at DESC
     """), p).mappings().all()]
 
@@ -353,7 +397,7 @@ def usage(request: Request,
 
     return {
         "app_source": app_source, "from": frm.isoformat(), "to": to.isoformat(),
-        "days": days,
+        "days": (to - frm).days + 1,
         "headline": {
             **{k: (int(v) if v is not None else 0) for k, v in dict(head or {}).items()
                if k != "avg_minutes"},
@@ -388,16 +432,17 @@ def usage(request: Request,
 
 @router.get("/apps")
 def apps(request: Request, days: int = Query(30, ge=1, le=365),
+         day_from: date | None = Query(None),
+         day_to: date | None = Query(None),
          db: Session = Depends(get_db)) -> list[dict]:
-    """Every application sharing the session table, for scope and for scale.
+    """The applications this screen may report on — MINES and IMOS.
 
-    Twenty-two of them write here. Seeing this dashboard's numbers beside the
-    others is the difference between "494 sessions" and "494 sessions, which
-    is sixth of twenty-two".
+    Not all twenty-five that share the table. The others belong to other
+    departments and their staff are not this page's business.
     """
     _require(request)
-    frm, to = _window(days)
-    return [dict(r) for r in db.execute(text("""
+    frm, to = _window(days, day_from, day_to)
+    rows = {r["app_source"]: dict(r) for r in db.execute(text("""
         SELECT app_source,
                COUNT(*) AS sessions,
                COUNT(DISTINCT emp_id) AS people,
@@ -405,13 +450,24 @@ def apps(request: Request, days: int = Query(30, ge=1, le=365),
                MAX(last_active_at) AS last_seen
           FROM digital_apps_user_sessions
          WHERE DATE(login_at) BETWEEN :frm AND :to
-         GROUP BY app_source ORDER BY sessions DESC
-    """), {"frm": frm, "to": to}).mappings().all()]
+           AND app_source IN :apps
+         GROUP BY app_source
+    """).bindparams(bindparam("apps", expanding=True)),
+        {"frm": frm, "to": to, "apps": list(ALLOWED_APPS)}).mappings().all()}
+
+    # Listed in the order they are declared, and present even with no sessions
+    # in the range — an application with nothing this fortnight is an answer,
+    # and dropping the row makes the picker change shape as the dates move.
+    return [rows.get(a, {"app_source": a, "sessions": 0, "people": 0,
+                         "minutes": 0, "last_seen": None})
+            for a in ALLOWED_APPS]
 
 
 @router.get("/person/{emp_id}")
 def person(emp_id: str, request: Request,
            days: int = Query(30, ge=1, le=365),
+           day_from: date | None = Query(None),
+           day_to: date | None = Query(None),
            app_source: str = Query(APP),
            db: Session = Depends(get_db),
            pg: Session = Depends(get_minehub_db)) -> dict:
@@ -425,7 +481,8 @@ def person(emp_id: str, request: Request,
     it is the same three logs, filtered to one person.
     """
     _require(request)
-    frm, to = _window(days)
+    app_source = _app(app_source)
+    frm, to = _window(days, day_from, day_to)
     p = {"app": app_source, "frm": frm, "to": to, "e": emp_id}
 
     sessions = [dict(r) for r in db.execute(text("""
