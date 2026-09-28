@@ -9,10 +9,14 @@ import { persist } from "zustand/middleware";
 // workforce register are different people doing different work, and a section
 // somebody has to enter through somebody else's screen is a section they stop
 // visiting.
+// "usage" is its own screen and not a tab inside Access Control: the two
+// answer different questions. Access Control is "who may do what", changed
+// about twice a month; Usage is "who actually did", read by whoever is asking
+// whether the platform earns its keep.
 // "weather" is its own screen rather than a strip on the MIS dashboard: it is
 // consulted before a shift is planned, by people who are not otherwise reading
 // production figures, and a full-height map cannot share a page with anything.
-export type AppPage = "mis" | "weather" | "fuel-management" | "ev-tracking" | "oee" | "intelligence" | "access-control" | "minehub" | "manpower" | "operations" | "workforce" | "market" | "organisation" | "weighbridge" | "gate" | "capacity";
+export type AppPage = "mis" | "weather" | "fuel-management" | "ev-tracking" | "oee" | "intelligence" | "access-control" | "minehub" | "manpower" | "operations" | "workforce" | "market" | "organisation" | "weighbridge" | "gate" | "capacity" | "usage";
 
 interface AppPageStore {
   page: AppPage;

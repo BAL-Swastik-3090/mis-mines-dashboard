@@ -81,6 +81,35 @@ async def _market_collector():
         await asyncio.sleep(3600)
 
 
+async def _flush_activity():
+    """Push the activity noted by requests into the session table.
+
+    Runs for the life of the process. Every pass is wrapped, because a
+    background task that dies takes the idle timeout with it: sessions would
+    stop being marked active and everybody would be signed out on the hour.
+
+    The write itself runs in a worker thread — it is a blocking database call
+    and may sit on a lock for a few seconds, which on the event loop would
+    block every request in this process for exactly as long.
+    """
+    from app.database import SessionLocal
+    from app.services import auth as auth_svc
+
+    while True:
+        await asyncio.sleep(auth_svc.FLUSH_SECONDS)
+        try:
+            def go() -> int:
+                with SessionLocal() as db:
+                    return auth_svc.flush_touches(db)
+            n = await run_in_threadpool(go)
+            if n:
+                logger.debug("activity flushed for %d sessions", n)
+        except asyncio.CancelledError:
+            raise
+        except Exception:                               # noqa: BLE001
+            logger.warning("activity flush pass failed", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ── Startup — retry up to 5 times for transient errors (e.g. too many connections) ──
@@ -96,6 +125,16 @@ async def lifespan(app: FastAPI):
         logger.critical(f"❌ Database connection failed after 5 attempts — aborting startup")
         sys.exit(1)
 
+    # Write down who has been active, once a minute, from one place.
+    #
+    # It used to happen inline on every request and almost never landed: the
+    # UPDATE raced ev_sync_digital_apps_crm — every minute, in the shared
+    # balcorpdb, same two indexes, opposite order — and lost. A user clicking
+    # through five screens over half an hour kept a last_active_at from the
+    # minute they signed in, and was turned out at exactly thirty minutes for
+    # being idle.
+    activity_task = asyncio.create_task(_flush_activity())
+
     # Start 7AM digest scheduler as a background task
     digest_task = asyncio.create_task(_daily_insights_digest())
     market_task = asyncio.create_task(_market_collector())
@@ -107,6 +146,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # ── Shutdown ─────────────────────────────────────────────
+    activity_task.cancel()
     digest_task.cancel()
     market_task.cancel()
     reaper_task.cancel()
@@ -157,34 +197,44 @@ _AUTH_EXEMPT = ("/api/auth/", "/api/health", "/api/docs", "/api/redoc", "/api/op
 #
 # Page access is separate and data-driven: a page maps to a dashboard.* code,
 # resolved through PREFIX_PAGE in services/auth.py.
-_PERMISSION_RULES: tuple[tuple[str, str], ...] = (
-    ("/api/access",  "access.users.view"),   # finer checks are inside the router
-    ("/api/roles",   "access.users.manage"),
-    ("/api/minehub", "platform.registry.view"),
+# A rule may list more than one code, and any of them opens the path.
+#
+# Usage is why. It was gated on access.users.view, which is the Access Control
+# screen — so the only way to let a department head read the usage figures was
+# to hand them the user list and the role grid. It has its own permission now,
+# and the old one is still accepted so nobody who could read it this morning
+# finds it gone this afternoon.
+_PERMISSION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("/api/access",  ("access.users.view",)),  # finer checks are inside the router
+    # Who used what, and what they changed. Names individuals, so it is its own
+    # permission rather than a corner of somebody else's.
+    ("/api/usage",   ("usage.view", "access.users.view")),
+    ("/api/roles",   ("access.users.manage",)),
+    ("/api/minehub", ("platform.registry.view",)),
     # The competency dimensions and handover checks. Reading them is reading
     # the platform's vocabulary, which migration 038 established every register
     # needs — an operator registrar cannot assess anybody without it. Changing
     # them is gated per kind inside the router.
-    ("/api/checklists", "platform.registry.view"),
+    ("/api/checklists", ("platform.registry.view",)),
     # The attendance register reads the gate readers and joins them to the
     # manpower register, so it needs what the manpower register needs. Nothing
     # here writes anything.
     # Reading the attendance register needs what the manpower register needs.
     # Raising and approving corrections are checked per action inside the
     # router, because they are held by different people on purpose.
-    ("/api/attendance", "platform.operators.view"),
+    ("/api/attendance", ("platform.operators.view",)),
     # Operator profiles hold dates of birth, medical expiry and photographs, so
     # the view permission is deliberately not part of a dashboard role.
-    ("/api/operators", "platform.operators.view"),
+    ("/api/operators", ("platform.operators.view",)),
     # The shift board shows who is on which machine, so it sits behind its own
     # permission rather than inside a dashboard role.
-    ("/api/ops", "ops.shift.view"),
+    ("/api/ops", ("ops.shift.view",)),
     # The roster says where people will be on days they have not worked yet, so
     # it sits behind its own permission rather than the shift board's.
-    ("/api/workforce", "ops.roster.view"),
+    ("/api/workforce", ("ops.roster.view",)),
     # Capacity reads the roster's machines and faces, and says what the fleet
     # can move. Same audience as the roster, so the same permission.
-    ("/api/productivity", "ops.roster.view"),
+    ("/api/productivity", ("ops.roster.view",)),
     # Notes are readable by anybody who can open the platform at all — writing
     # is what carries a permission, checked inside the router.
 )
@@ -240,9 +290,12 @@ def _check_auth(sid: str | None, path: str) -> tuple[dict | None, str | None, se
     if not perms:
         return s, "revoked", perms
 
-    need = next((c for pre, c in _PERMISSION_RULES if path.startswith(pre)), None)
-    if need and need not in perms:
-        return s, need, perms
+    need = next((codes for pre, codes in _PERMISSION_RULES
+                 if path.startswith(pre)), None)
+    # Any one of them is enough. A path that can be reached two legitimate ways
+    # should not need the person to hold both.
+    if need and not (set(need) & perms):
+        return s, need[0], perms
 
     # Page access, enforced on the API prefix behind each page — hiding the
     # sidebar entry alone would leave the data reachable to anyone who knows
@@ -323,6 +376,8 @@ from app.routers import prev_day_actual
 from app.routers import stock_entry
 from app.routers import quality_e2e
 from app.routers import plant_output
+from app.routers import alerts as live_alerts
+from app.routers import usage
 from app.routers import production, stock, cob, plant, ob, despatch, equipment, dewatering, insights, live_tracking, fuel_management, ev_tracking, auth, oee, roles, minehub, access, operators, operations, workforce, productivity, comments
 app.include_router(production.router,      prefix="/api/production",    tags=["Production"])
 app.include_router(stock.router,           prefix="/api/stock",         tags=["Stock"])
@@ -361,4 +416,6 @@ app.include_router(prev_day_actual.router)
 app.include_router(stock_entry.router)
 app.include_router(quality_e2e.router)
 app.include_router(plant_output.router)
+app.include_router(usage.router)
+app.include_router(live_alerts.router)
 app.include_router(access.router)

@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useState } from "react";
 import LoginScreen from "./LoginScreen";
 import Header from "./Header";
 import MainLayout from "./MainLayout";
+import SessionExpiryDialog from "./SessionExpiryDialog";
 import { useAppPage } from "@/contexts/useAppPage";
 import { useAuth } from "@/contexts/useAuth";
 import { canOpen, landingPage } from "@/contexts/pageAccess";
@@ -186,6 +187,10 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
     <>
       <Header />
       <MainLayout>{children}</MainLayout>
+      {/* Two minutes and a button before the session closes. Being signed out
+          mid-sentence costs somebody the roster they were halfway through; a
+          timeout is still right, a timeout with no warning is not. */}
+      <SessionExpiryDialog />
     </>
   );
 }

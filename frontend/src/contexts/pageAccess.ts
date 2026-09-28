@@ -65,6 +65,12 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   // Capacity reads the same machines and faces the roster does, and is read
   // by the same people planning the day.
   "capacity": ["ops.roster.view"],
+  // Its own permission, because the first version of this was wrong. Gating
+  // Usage on access.users.view meant the only way to let a department head
+  // read the figures was to hand them the user list and the role grid — a
+  // "Usage Viewer" would have been an Access Manager under another name.
+  // access.users.view still opens it, so no administrator lost a screen.
+  "usage": ["usage.view", "access.users.view"],
 };
 
 /**
@@ -112,6 +118,9 @@ const LANDING_RANK: Record<AppPage, number> = {
   // first would land every user on the weather map instead of their own work.
   "weather": 85,
   "access-control": 90,
+  // Last, beside the screen it shares a permission with. Nobody should ever
+  // land here: it reports on work rather than being any.
+  "usage": 92,
 };
 
 const LANDING_ORDER = (Object.keys(LANDING_RANK) as AppPage[])

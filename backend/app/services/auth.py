@@ -23,14 +23,125 @@ connections daily, which is why database.py keeps the resting pool at two.
 from __future__ import annotations
 
 import hashlib
+import logging
+import threading
 import secrets
 import time
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
+from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.orm import Session
 
 LOGIN_TBL = "intranet_user_login"
 EMP_TBL = "sap_employee_details"
+log = logging.getLogger(__name__)
+
+# MySQL says 1213 for a deadlock and 1205 for a lock-wait timeout. Both mean
+# "somebody else had it, try again" rather than "this statement is wrong".
+_RETRYABLE = (1213, 1205)
+
+# How long one of these writes may wait on a row lock before giving up.
+#
+# The server's own setting is 50 seconds, which is a sensible default for a
+# statement somebody is waiting on the result of. Nobody waits on the result of
+# these. What they cost while they wait is a connection out of the 8 this
+# process is allowed, and eight of them blocked together is every connection
+# gone — which is how a stalled timestamp update turned into "Could not read
+# the attendance readers" on a screen that reads a different database entirely.
+_LOCK_WAIT_SECONDS = 2
+
+
+def _mysql_errno(exc: BaseException) -> int | None:
+    """The engine's own error number, wherever SQLAlchemy has wrapped it."""
+    orig = getattr(exc, "orig", None)
+    for holder in (orig, exc):
+        n = getattr(holder, "errno", None)
+        if isinstance(n, int):
+            return n
+        args = getattr(holder, "args", None)
+        if args and isinstance(args[0], int):
+            return args[0]
+    return None
+
+
+def _best_effort(db: Session, what: str, run) -> bool:
+    """Do a housekeeping write, or do not, but never take the request with it.
+
+    THE CALLER IS SERVING A PAGE. These writes record that somebody is still
+    active and which page they looked at; none of them is the reason the
+    request was made, and a failure in one used to surface as "Internal server
+    error" on whatever screen happened to be loading.
+
+    Retried once. A deadlock is transient by definition — InnoDB picks a loser
+    and rolls it back precisely so the other can finish — so the second attempt
+    almost always succeeds. Anything still failing after that is logged and
+    dropped: last_active_at stays as it was, which is a minute stale at worst,
+    and the next request corrects it.
+
+    AND IT GIVES UP QUICKLY. Not failing the request was only half the problem:
+    the statement still waited out the server's 50-second lock timeout while
+    holding one of the 8 MySQL connections this process may have. Eight at once
+    is all of them, and every other request in the application then failed at
+    pool checkout — including ones that never touch MySQL for their own data.
+    Two seconds here, restored afterwards so the next caller on this pooled
+    connection inherits the server's own setting rather than ours.
+    """
+    restore = False
+    try:
+        db.execute(text("SET SESSION innodb_lock_wait_timeout = :s"),
+                   {"s": _LOCK_WAIT_SECONDS})
+        restore = True
+    except Exception as exc:                            # noqa: BLE001
+        # Not fatal, and not worth failing over: without it the write simply
+        # has the server's patience instead of ours.
+        db.rollback()
+        log.warning("could not shorten the lock wait: %s", str(exc)[:120])
+
+    try:
+        return _attempt(db, what, run)
+    finally:
+        if restore:
+            try:
+                db.execute(text(
+                    "SET SESSION innodb_lock_wait_timeout = "
+                    "@@GLOBAL.innodb_lock_wait_timeout"))
+                db.commit()
+            except Exception:                           # noqa: BLE001
+                # The connection is in an unknown state, so do not hand it back
+                # carrying our setting. Closing it costs one reconnect; leaving
+                # a 2-second lock timeout on a pooled connection costs a
+                # mysterious failure in an unrelated write later.
+                try:
+                    db.rollback()
+                    db.get_bind().dispose()
+                except Exception:                       # noqa: BLE001
+                    pass
+
+
+def _attempt(db: Session, what: str, run) -> bool:
+    """The write itself, with the one retry. Split out so the lock-timeout
+    handling above reads as the setup it is."""
+    for attempt in (1, 2):
+        try:
+            run()
+            db.commit()
+            return True
+        except (OperationalError, DBAPIError) as exc:
+            db.rollback()
+            errno = _mysql_errno(exc)
+            if errno in _RETRYABLE and attempt == 1:
+                continue
+            log.warning("%s skipped (mysql errno %s): %s", what, errno,
+                        str(exc)[:160])
+            return False
+        except Exception as exc:                        # noqa: BLE001
+            # Housekeeping has no business raising anything at all here.
+            db.rollback()
+            log.warning("%s skipped: %s", what, str(exc)[:160])
+            return False
+    return False
+
+
 SESS_TBL = "digital_apps_user_sessions"
 VIEW_TBL = "digital_apps_page_views"
 ROLE_TBL = "mines_user_role"
@@ -338,7 +449,36 @@ _session_cache: dict[str, tuple[dict, float]] = {}
 # When each session was last written to the database. Tracked here rather than
 # read off the cached row, whose last_active_at is frozen at the moment it was
 # cached and would otherwise make the throttle fire on every request.
-_last_touch: dict[str, float] = {}
+# Sessions seen since the last flush. A request adds to this and returns; the
+# flusher below turns the whole set into one UPDATE.
+#
+# A plain dict guarded by a lock rather than a queue: the same session appearing
+# forty times in a minute should cost one entry and one write, not forty.
+_seen: dict[str, float] = {}
+_seen_lock = threading.Lock()
+
+# How often the flusher runs, and how long it may wait for the lock while it
+# does. It can be patient because no request is waiting on it — the opposite of
+# the inline write, which had a user watching.
+FLUSH_SECONDS = 45.0
+FLUSH_LOCK_WAIT = 15
+FLUSH_ATTEMPTS = 4
+
+
+# session id -> the monotonic time its next activity write is due.
+#
+# "When is the next one due" rather than "when did we last try", because those
+# are the same number only when the write succeeded. A touch that lost its race
+# used to book the next two minutes off anyway, which is how an active user's
+# timestamp went stale enough to idle them out while they were still clicking.
+_touch_next: dict[str, float] = {}
+
+# How long to wait before trying again, after a write that worked and after one
+# that did not. The retry gap is short because the cost of being wrong is
+# somebody being logged out mid-sentence, and cheap because the write itself
+# gives up after two seconds.
+_TOUCH_AFTER_OK = 120.0
+_TOUCH_AFTER_FAIL = 20.0
 
 
 def peek_session(sid: str | None) -> dict | None:
@@ -355,16 +495,43 @@ def peek_session(sid: str | None) -> dict | None:
     return None
 
 
-def touch_due(sid: str, throttle_seconds: float = 30.0) -> bool:
-    """Whether the session's activity timestamp is worth another write."""
-    last = _last_touch.get(sid)
-    return last is None or (time.monotonic() - last) > throttle_seconds
+def touch_due(sid: str, throttle_seconds: float = _TOUCH_AFTER_OK) -> bool:
+    """Whether the session's activity timestamp is worth another write.
+
+    Every thirty seconds, to protect a thirty-MINUTE idle timeout — sixty
+    times more often than the policy it exists for. Each of those writes
+    enters a race with ev_sync_digital_apps_crm, which runs every minute in
+    the shared database and takes the same two indexes of this table in the
+    opposite order, so the rate is not free: it is the rate at which we buy
+    lottery tickets for a deadlock.
+
+    Two minutes instead. The stored timestamp then lags real activity by at
+    most two minutes, so a session idles out somewhere between 28 and 30
+    minutes rather than at exactly 30 — which no policy written as "about half
+    an hour" can tell the difference between. Four times fewer writes, and
+    "who is online" reporting elsewhere in the shared table stays within two
+    minutes of the truth.
+
+    Two minutes only when the last write SUCCEEDED. When it did not, the next
+    one is due in twenty seconds: the throttle exists to avoid pointless
+    writes, and a write that never landed was not pointless. Booking the full
+    two minutes after a failure is what let an active session go stale enough
+    to be logged out.
+
+    `throttle_seconds` is no longer read — the interval is decided by touch()
+    when it learns whether the write landed — and is kept so callers passing it
+    still work.
+    """
+    due = _touch_next.get(sid)
+    return due is None or time.monotonic() >= due
 
 
 def forget_session(sid: str) -> None:
     """Drop a cached session — called on logout so signing out is immediate."""
     _session_cache.pop(sid, None)
-    _last_touch.pop(sid, None)
+    _touch_next.pop(sid, None)
+    with _seen_lock:
+        _seen.pop(sid, None)
 
 
 def get_session(db: Session, sid: str | None) -> dict | None:
@@ -402,16 +569,131 @@ def get_session(db: Session, sid: str | None) -> dict | None:
 
 
 def touch(db: Session, sid: str) -> None:
-    """Push the idle timeout out. Throttled by the caller — see main.py."""
-    _last_touch[sid] = time.monotonic()
-    db.execute(text(
-        f"UPDATE {SESS_TBL} SET last_active_at = NOW() WHERE session_id = :sid AND is_active = 1"),
-        {"sid": sid})
-    db.commit()
+    """Push the idle timeout out. Throttled by the caller — see main.py.
+
+    Best-effort. This runs inside the auth middleware on every request, and it
+    deadlocks against ev_sync_digital_apps_crm — a MySQL event in the shared
+    balcorpdb that runs every minute and takes the same two indexes of this
+    table in the opposite order. InnoDB rolls one of the pair back, and when
+    that was us the user saw "Internal server error" on whatever page was
+    loading.
+
+    The timestamp is worth having and is not worth a failed page. But it is
+    also what the idle timeout reads, so a write that did not land has to be
+    retried rather than forgotten: this used to mark the session touched before
+    attempting, and a run of lost races aged `last_active_at` past the
+    thirty-minute limit while somebody was actively using the screen. They were
+    returned to the login page for being idle while they were working.
+
+    IT NO LONGER WRITES. It notes the session id, and `flush_touches` below
+    turns every session noted since the last run into a single UPDATE, once
+    every 45 seconds, from one background task.
+
+    Because the inline write did not land. It raced ev_sync_digital_apps_crm —
+    which runs every minute in the shared balcorpdb and takes the same two
+    indexes of this table in the opposite order — and with the short lock
+    timeout it needed in order not to drain the connection pool, it lost almost
+    every time. A user clicking through five screens over half an hour had a
+    last_active_at still showing the minute they signed in, and was turned out
+    at exactly thirty minutes for being idle.
+
+    Noting it in memory cannot fail, costs nothing, and gives the write to
+    somebody who can afford to wait for the lock.
+
+    `db` is kept in the signature: every caller has one, and the day this needs
+    a database again is not the day to go and find them all.
+    """
+    with _seen_lock:
+        _seen[sid] = time.time()
+
+
+def flush_touches(db: Session) -> int:
+    """Write the activity noted since the last flush. One statement, patiently.
+
+    Returns how many sessions were written, for the log.
+
+    The patience is the point. This is the same UPDATE that used to run inline
+    with two seconds to get its lock, against a job that holds the table for
+    longer than that every minute. Here nobody is waiting on it, so it may take
+    fifteen seconds and try four times — which is what it takes to land between
+    the bursts.
+
+    On failure the ids go back, so the next flush covers this one's sessions
+    too. Activity is never dropped because a write was unlucky; that is the
+    whole bug this exists to fix.
+    """
+    with _seen_lock:
+        if not _seen:
+            return 0
+        sids = list(_seen)
+        _seen.clear()
+
+    restore = False
+    try:
+        db.execute(text("SET SESSION innodb_lock_wait_timeout = :s"),
+                   {"s": FLUSH_LOCK_WAIT})
+        restore = True
+    except Exception as exc:                            # noqa: BLE001
+        db.rollback()
+        log.warning("could not set the flush lock wait: %s", str(exc)[:120])
+
+    try:
+        for attempt in range(1, FLUSH_ATTEMPTS + 1):
+            try:
+                res = db.execute(text(
+                    f"UPDATE {SESS_TBL} SET last_active_at = NOW() "
+                    f"WHERE is_active = 1 AND session_id IN :sids"
+                ).bindparams(bindparam("sids", expanding=True)), {"sids": sids})
+                db.commit()
+                # Rows actually written, not sessions attempted. The bug this
+                # whole mechanism exists to fix was a write that reported
+                # success and changed nothing, so this must not be the count of
+                # what we hoped for. Fewer than asked is normal and correct:
+                # sessions closed since they were noted match nothing, and they
+                # should not be resurrected.
+                return int(res.rowcount or 0)
+            except (OperationalError, DBAPIError) as exc:
+                db.rollback()
+                errno = _mysql_errno(exc)
+                if errno in _RETRYABLE and attempt < FLUSH_ATTEMPTS:
+                    time.sleep(0.5 * attempt)
+                    continue
+                log.warning("activity flush failed for %d sessions "
+                            "(mysql errno %s) — will retry next pass",
+                            len(sids), errno)
+                break
+            except Exception as exc:                    # noqa: BLE001
+                db.rollback()
+                log.warning("activity flush failed: %s", str(exc)[:160])
+                break
+    finally:
+        if restore:
+            try:
+                db.execute(text("SET SESSION innodb_lock_wait_timeout = "
+                                "@@GLOBAL.innodb_lock_wait_timeout"))
+                db.commit()
+            except Exception:                           # noqa: BLE001
+                try:
+                    db.rollback()
+                except Exception:                       # noqa: BLE001
+                    pass
+
+    # Put them back rather than losing the activity they represent.
+    with _seen_lock:
+        for sid in sids:
+            _seen.setdefault(sid, time.time())
+    return 0
 
 
 def end_session(db: Session, sid: str, reason: str = "LOGOUT") -> None:
     forget_session(sid)     # otherwise the cookie keeps working until the TTL
+    # And drop any pending activity for it, so a flush a few seconds from now
+    # does not write last_active_at onto a session somebody has just left. The
+    # UPDATE is guarded by is_active = 1 as well, so this is belt and braces —
+    # but a logout that can be partially undone by a timer is not worth the
+    # cleverness of leaving it to one guard.
+    with _seen_lock:
+        _seen.pop(sid, None)
     # duration_minutes is a generated column — the DB derives it from login/logout.
     db.execute(text(
         f"""UPDATE {SESS_TBL}
@@ -434,28 +716,37 @@ def record_time_spent(db: Session, sid: str, path: str, seconds: int) -> None:
     if seconds is None or seconds < 0:
         return
     seconds = min(int(seconds), 86_400)     # a tab left open for days is not "time spent"
-    db.execute(text(
-        f"""UPDATE {VIEW_TBL}
-            SET time_spent_seconds = :ts
-            WHERE session_id = :sid AND page_path = :p AND app_source = :app
-              AND time_spent_seconds IS NULL
-            ORDER BY viewed_at DESC LIMIT 1"""),
-        {"ts": seconds, "sid": sid, "p": (path or "/")[:255], "app": APP_SOURCE})
-    db.execute(text(
-        f"UPDATE {SESS_TBL} SET last_active_at = NOW() WHERE session_id = :sid AND is_active = 1"),
-        {"sid": sid})
-    db.commit()
+
+    def go() -> None:
+        db.execute(text(
+            f"""UPDATE {VIEW_TBL}
+                SET time_spent_seconds = :ts
+                WHERE session_id = :sid AND page_path = :p AND app_source = :app
+                  AND time_spent_seconds IS NULL
+                ORDER BY viewed_at DESC LIMIT 1"""),
+            {"ts": seconds, "sid": sid, "p": (path or "/")[:255], "app": APP_SOURCE})
+        db.execute(text(
+            f"UPDATE {SESS_TBL} SET last_active_at = NOW() "
+            f"WHERE session_id = :sid AND is_active = 1"), {"sid": sid})
+
+    # Usage reporting. Losing a page's dwell time to a lock race costs a row in
+    # a report; failing the request costs the user their page.
+    _best_effort(db, "time spent", go)
 
 
 def record_page_view(db: Session, sid: str, emp_id: str, path: str,
                      time_spent: int | None = None, referrer: str | None = None) -> None:
-    db.execute(text(
-        f"""INSERT INTO {VIEW_TBL}
-              (session_id, emp_id, page_path, app_source, referrer_path, viewed_at, time_spent_seconds)
-            VALUES (:sid,:eid,:p,:app,:ref, NOW(), :ts)"""),
-        {"sid": sid, "eid": emp_id, "p": (path or "/")[:255], "app": APP_SOURCE,
-         "ref": (referrer or None), "ts": time_spent})
-    db.execute(text(
-        f"UPDATE {SESS_TBL} SET last_active_at = NOW() WHERE session_id = :sid AND is_active = 1"),
-        {"sid": sid})
-    db.commit()
+    def go() -> None:
+        db.execute(text(
+            f"""INSERT INTO {VIEW_TBL}
+                  (session_id, emp_id, page_path, app_source, referrer_path,
+                   viewed_at, time_spent_seconds)
+                VALUES (:sid,:eid,:p,:app,:ref, NOW(), :ts)"""),
+            {"sid": sid, "eid": emp_id, "p": (path or "/")[:255], "app": APP_SOURCE,
+             "ref": (referrer or None), "ts": time_spent})
+        db.execute(text(
+            f"UPDATE {SESS_TBL} SET last_active_at = NOW() "
+            f"WHERE session_id = :sid AND is_active = 1"), {"sid": sid})
+
+    # Same bargain as above: the page view is reporting, the page is the job.
+    _best_effort(db, "page view", go)

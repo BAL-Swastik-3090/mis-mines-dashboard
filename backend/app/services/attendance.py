@@ -26,7 +26,8 @@ silence is an operator who cannot be deployed for a reason nobody can see.
 from __future__ import annotations
 
 import logging
-from datetime import date
+from collections import OrderedDict
+from datetime import date, timedelta
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -187,6 +188,52 @@ def _employee_ids(cur) -> dict[str, int]:
     return _EMP_IDS
 
 
+# A month of punches, held briefly.
+#
+# The query is twenty-one seconds for a month. A month from last week cannot
+# change; today's can, so three minutes — long enough that moving around the
+# screen is free, short enough that a punch taken at the gate appears while the
+# man is still walking to his machine.
+#
+# Bounded at eight, because a cache with no limit is a leak with good manners.
+_DAYS_CACHE: "OrderedDict[tuple, tuple[float, dict]]" = OrderedDict()
+_DAYS_TTL = 180.0
+_DAYS_MAX = 8
+
+
+def _days_key(frm: str, to: str, emp_nos: list[str]) -> tuple:
+    """What the answer depends on: the range, and exactly who was asked about.
+
+    The employee set is part of the key, not decoration — a register narrowed
+    to one contractor asks about fewer people and must not be handed the answer
+    for everybody.
+    """
+    return (frm, to, hash(tuple(sorted(emp_nos))))
+
+
+# How far a punch can sit from the day it is counted against.
+#
+# A night shift that starts on the 14th is punched out at 00:40 on the 15th,
+# and SmartFace attributes it to the 14th — which is right, and is why the
+# register must keep filtering on AttendanceDate. Measured across August and
+# September for the mine's 204 people, PunchTime is either on the attendance
+# date or exactly one day after it, never before.
+#
+# One day either side of that, because the cost is a few thousand extra rows
+# scanned inside an index and the cost of being wrong is a missing shift.
+_PUNCH_WINDOW_DAYS = 2
+
+
+def _punch_from(d: date) -> str:
+    """The earliest punch that could belong to day `d`."""
+    return (d - timedelta(days=1)).isoformat()
+
+
+def _punch_to(d: date) -> str:
+    """One past the latest punch that could belong to day `d`."""
+    return (d + timedelta(days=_PUNCH_WINDOW_DAYS)).isoformat()
+
+
 def punch_days(day_from: date | str, day_to: date | str,
                emp_nos: list[str]) -> dict[tuple[str, str], dict]:
     """Every punch day in a range, keyed by (employee number, date).
@@ -203,11 +250,19 @@ def punch_days(day_from: date | str, day_to: date | str,
     if not configured() or not emp_nos:
         return {}
 
-    frm = day_from.isoformat() if isinstance(day_from, date) else str(day_from)[:10]
-    to = day_to.isoformat() if isinstance(day_to, date) else str(day_to)[:10]
+    frm_d = day_from if isinstance(day_from, date) else date.fromisoformat(str(day_from)[:10])
+    to_d = day_to if isinstance(day_to, date) else date.fromisoformat(str(day_to)[:10])
+    frm, to = frm_d.isoformat(), to_d.isoformat()
     wanted = sorted({e.strip() for e in emp_nos if e and e.strip()})
     if not wanted:
         return {}
+
+    import time as _time
+    key = _days_key(frm, to, wanted)
+    hit = _DAYS_CACHE.get(key)
+    if hit and _time.monotonic() - hit[0] < _DAYS_TTL:
+        _DAYS_CACHE.move_to_end(key)
+        return hit[1]
 
     try:
         with _connect() as conn:
@@ -217,6 +272,10 @@ def punch_days(day_from: date | str, day_to: date | str,
                 if not mine:
                     return {}
                 placeholders = ", ".join(["%d"] * len(mine))
+                # PunchTime is in the index; AttendanceDate is not, and is the
+                # only thing the old query filtered on — which is why a month
+                # never finished. PunchTime narrows the search, AttendanceDate
+                # still decides the day. See the note on _PUNCH_WINDOW_DAYS.
                 cur.execute(f"""
                     SELECT a.EmployeeID                                     AS emp_id,
                            a.AttendanceDate                                 AS on_date,
@@ -233,17 +292,18 @@ def punch_days(day_from: date | str, day_to: date | str,
                            MIN(CASE WHEN a.InOutMode = 1 THEN a.DeviceID END) AS in_device,
                            MIN(CASE WHEN a.InOutMode = 2 THEN a.DeviceID END) AS out_device
                       FROM Attendance.tblTAttendanceData a
-                     WHERE a.AttendanceDate BETWEEN %s AND %s
-                       AND a.EmployeeID IN ({placeholders})
+                     WHERE a.EmployeeID IN ({placeholders})
+                       AND a.PunchTime >= %s AND a.PunchTime < %s
+                       AND a.AttendanceDate BETWEEN %s AND %s
                      GROUP BY a.EmployeeID, a.AttendanceDate
-                """, tuple([frm, to] + list(mine)))
+                """, tuple(list(mine) + [_punch_from(frm_d), _punch_to(to_d), frm, to]))
                 rows = cur.fetchall()
                 devices = _device_names(cur)
     except Exception:                  # noqa: BLE001 — the register still works
         logger.warning("Attendance readers unreachable for %s..%s", frm, to, exc_info=True)
         raise
 
-    return {
+    answer = {
         (mine[r["emp_id"]], r["on_date"].isoformat()): {
             "first_in": r["first_in"],
             "last_out": r["last_out"],
@@ -254,6 +314,11 @@ def punch_days(day_from: date | str, day_to: date | str,
         }
         for r in rows if r["emp_id"] in mine
     }
+    _DAYS_CACHE[key] = (_time.monotonic(), answer)
+    _DAYS_CACHE.move_to_end(key)
+    while len(_DAYS_CACHE) > _DAYS_MAX:
+        _DAYS_CACHE.popitem(last=False)
+    return answer
 
 
 def punches_on(day: date | str, emp_no: str) -> list[dict]:
@@ -262,18 +327,27 @@ def punches_on(day: date | str, emp_no: str) -> list[dict]:
     if not configured() or not emp_no:
         return []
     on = day.isoformat() if isinstance(day, date) else str(day)[:10]
+    # Resolved to the reader's own integer id first, and bounded on PunchTime,
+    # for the same reason as punch_days: LTRIM(RTRIM(EmpNo)) on a joined column
+    # cannot use the index, and AttendanceDate is not in one at all. One row
+    # expanded is not a month, but it is one query per click.
     sql = """
         SELECT a.PunchTime, a.InOutMode, a.DeviceID,
                d.Name AS device_name
         FROM Attendance.tblTAttendanceData a
-        JOIN dbo.tblMEmployee e ON e.ID = a.EmployeeID
         LEFT JOIN dbo.tblMDevice d ON d.ID = a.DeviceID
-        WHERE a.AttendanceDate = %s AND LTRIM(RTRIM(e.EmpNo)) = %s
+        WHERE a.EmployeeID = %d
+          AND a.PunchTime >= %s AND a.PunchTime < %s
+          AND a.AttendanceDate = %s
         ORDER BY a.PunchTime
     """
+    on_d = day if isinstance(day, date) else date.fromisoformat(on)
     with _connect() as conn:
         with conn.cursor(as_dict=True) as cur:
-            cur.execute(sql, (on, emp_no.strip()))
+            emp_id = _employee_ids(cur).get(emp_no.strip())
+            if emp_id is None:
+                return []
+            cur.execute(sql, (emp_id, _punch_from(on_d), _punch_to(on_d), on))
             return [{
                 "at": r["PunchTime"],
                 "direction": "IN" if r["InOutMode"] == 1 else "OUT",

@@ -60,6 +60,114 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ---
 
+## Deployed — 2026-09-28 10:43: the pool stops draining
+
+Released commit `cf04417` to mines.balasorealloys.in. Backup:
+`~/mines_dashboard-backup-20260928-1045.tar.gz`. No files were deleted between
+`4bc1d7d` and this, so the `git archive` extract needed no manual removals.
+
+**The outage this ended**
+
+Manpower said "Could not read the attendance readers". The readers were fine —
+attendance reads MSSQL and died anyway, because the auth middleware needs a
+MySQL connection before any handler runs, and there were none left.
+
+    1205 (HY000): Lock wait timeout exceeded
+    QueuePool limit of size 2 overflow 6 reached, connection timed out
+
+One failure in two parts. `ev_sync_digital_apps_crm` in the shared balcorpdb
+takes the same two indexes of `digital_apps_user_sessions` in the opposite
+order from our `last_active_at` update, every 60 seconds. Ours loses, and
+`innodb_lock_wait_timeout` there is 50 seconds — so the update sat on one of
+this process's 8 MySQL connections for 50 seconds, retried, and sat for 50
+more. Eight of those is the whole allowance, and every other screen then failed
+at pool checkout whatever database it actually reads. Organisation, Fuel
+Management and Manpower were all this, wearing different error messages.
+
+**What shipped**
+
+- `838fbdb` — the three housekeeping writes (session touch, page view, time
+  spent) no longer fail the request they ride on.
+- `cf04417` — and no longer hold a connection for 50 seconds to do it:
+  `innodb_lock_wait_timeout` is 2 for those writes, restored afterwards so a
+  pooled connection does not hand our setting to a real write later. Tested
+  against a real row lock: ~100s before, 7.4s after.
+- `dc8df75` — a Usage screen, behind `access.users.view`. Additive; due to be
+  redesigned.
+
+**Deliberately not changed:** the connection pool. balcorpdb was at 368 of its
+500 connections with a peak of 466, shared by 22 applications. Widening our
+allowance to survive a self-inflicted stall would spend someone else's headroom
+on our bug.
+
+**Still owed to the platform owner:** `ev_sync_digital_apps_crm` should take
+those rows in primary-key order. Until it does, every one of the 22 apps
+writing to that table is exposed to the same race; we have only stopped paying
+for it.
+
+**Verified after restart:** site 200, `/api/auth/me` 401 in 0.30s, zero
+`Lock wait timeout` and zero `QueuePool limit` in the log.
+
+---
+
+## Deployed — 2026-09-28: both plants, and filters in the header
+
+Released commit `4bc1d7d` (branch `release-28-09-2026`) to
+mines.balasorealloys.in. Backup: `~/mines_dashboard-backup-20260928-1200.tar.gz`.
+
+**What changed**
+
+- Swastik's enhancement: the quality screen covers both destinations, not only
+  Balasore. Jabamoyee — 19 consignments and 2,641 MT in September — was not on
+  the screen at all before.
+- The mines assay is no longer borrowed. Where a stack had one assay group on
+  file it was used for every despatch day of that stack; it never helped and
+  was wrong five times in 303 consignments. Six rows now show a blank instead.
+- Finished product is excluded. The date-prefixed batches are ferrochrome, not
+  ore. Balasore for 1-26 September moves from 37 consignments and 15,384.64 MT
+  to 36 and 15,334.63 — exactly `250926S101`, 50.01 MT with no grade and no
+  assay.
+- Filters in the second header row for stack, plant and grade, in the space
+  five columns were using to hold one word each.
+- The count says stacks as well as consignments: 36 consignments at Balasore
+  are 29 stacks, because seven shipped over more than one day.
+- Stock now sits before E2E Quality in the tab bar and in the page.
+
+**No database change.** The quality screen is read-only against SAP tables in
+balcorpdb.
+
+Verified inside the container:
+
+```
+BAL          36 consignments   29 stacks   1303 trips   15,334.63 MT
+JABAMOYEE    19 consignments   17 stacks    225 trips    2,641.65 MT
+6 rows blank rather than borrowing an assay
+0 date-prefixed batches
+18 stack-days shipped to both plants, each a distinct row
+```
+
+The deletion check ran and came back empty.
+
+### ONE COLUMN, THREE CONDITIONS
+
+Worth recording because the symptom looked like two unrelated bugs. The "To"
+column was decided in three places by two different tests — the header and
+body asked whether both plants were selected, the filter row asked whether the
+period had two destinations — so choosing a plant dropped the column from two
+of the three and left the filter row one cell wider. Every filter then sat
+under the wrong heading.
+
+The table's own `min-width` was a fourth opinion, 1080 against 1160, and a
+table declared narrower than the columns it draws is the white space that
+appeared at the right-hand end.
+
+One `showDest`, read by the header cell, the filter cell, the body cell, the
+footer colSpan and the width. When a structural choice is made in more than
+one place, the bug is not that one of them is wrong — it is that there is more
+than one of them.
+
+---
+
 ## Deployed — 2026-09-26 (second): end-to-end quality
 
 Released commit `5550990` (branch `release-26-09-2026-b`) to

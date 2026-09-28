@@ -405,10 +405,13 @@ export const Th = ({ children, className = "", colSpan }: {
   </th>
 );
 
-export const Td = ({ children, className = "", colSpan }: {
+export const Td = ({ children, className = "", colSpan, title }: {
   children?: React.ReactNode; className?: string; colSpan?: number;
+  /** A tooltip. How a one-word heading says what it actually counts without
+   *  spending a whole line of the table explaining itself. */
+  title?: string;
 }) => (
-  <td colSpan={colSpan}
+  <td colSpan={colSpan} title={title}
       className={`px-3 py-2 border-b border-border-light text-[12.5px]
                   text-txt-secondary align-middle ${className}`}>
     {children}
@@ -442,4 +445,79 @@ export function Avatar({ name, size = "md" }: { name: string; size?: "sm" | "md"
       {initials}
     </span>
   );
+}
+
+/* ── Sortable column heading ─────────────────────────────────────────────── */
+/**
+ * A table heading you can sort by.
+ *
+ * `ColumnFilter` next door already does this, and does it better, for a column
+ * whose values are worth FILTERING by — a trade, a contractor, a plant. It
+ * needs a list of the values present, which is the whole point of it.
+ *
+ * A count has no such list. Nobody filters a table to "the rows where sessions
+ * is 248"; they sort by it. So this is the other half: the heading is a button,
+ * clicking cycles descending → ascending → off, and the arrow says which way it
+ * is going. Descending first, because the question behind sorting a count is
+ * almost always "who is at the top".
+ *
+ * Off is a real third state rather than a toggle between two. A table sorted by
+ * something is a table whose natural order — usually the one the query chose,
+ * which is itself meaningful — has been thrown away, and there should be a way
+ * back to it that is not reloading the page.
+ */
+export type SortWay = "asc" | "desc";
+
+export function SortTh({ children, active, dir, onSort, className = "", align = "left" }: {
+  children: React.ReactNode;
+  /** Whether THIS column is the one the table is sorted by. */
+  active?: boolean;
+  dir?: SortWay;
+  onSort: (next: SortWay | null) => void;
+  className?: string;
+  align?: "left" | "right";
+}) {
+  const next: SortWay | null =
+    !active ? "desc" : dir === "desc" ? "asc" : null;
+  return (
+    <th className={`text-[11.5px] font-semibold text-txt-secondary px-3 py-2.5
+                    bg-bg-light border-b border-border whitespace-nowrap
+                    ${align === "right" ? "text-right" : "text-left"} ${className}`}>
+      <button type="button" onClick={() => onSort(next)}
+        title={next ? `Sort ${next === "desc" ? "high to low" : "low to high"}`
+                    : "Back to the original order"}
+        className={`inline-flex items-center gap-1 hover:text-navy transition-colors
+                    ${align === "right" ? "flex-row-reverse" : ""}
+                    ${active ? "text-navy font-bold" : ""}`}>
+        {children}
+        <span className={`text-[9px] leading-none ${active ? "text-gold" : "text-txt-light/50"}`}>
+          {active ? (dir === "desc" ? "▼" : "▲") : "⇅"}
+        </span>
+      </button>
+    </th>
+  );
+}
+
+/**
+ * Sort a list by a column, keeping the unsorted order available.
+ *
+ * Nulls go last in both directions. A person who has never signed in has no
+ * "last seen", and sorting oldest-first should not put them above somebody who
+ * came yesterday: absence of a value is not the smallest value, and treating it
+ * as one is how "who has been away longest" ends up naming people who were
+ * never here.
+ */
+export function sortRows<T>(rows: T[], key: keyof T | null, dir: SortWay | null): T[] {
+  if (!key || !dir) return rows;
+  const sign = dir === "asc" ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const x = a[key] as unknown, y = b[key] as unknown;
+    const xEmpty = x === null || x === undefined || x === "";
+    const yEmpty = y === null || y === undefined || y === "";
+    if (xEmpty && yEmpty) return 0;
+    if (xEmpty) return 1;          // always last, whichever way we are going
+    if (yEmpty) return -1;
+    if (typeof x === "number" && typeof y === "number") return (x - y) * sign;
+    return String(x).localeCompare(String(y), undefined, { numeric: true }) * sign;
+  });
 }

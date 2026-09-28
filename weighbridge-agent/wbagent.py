@@ -305,6 +305,10 @@ class Sender(threading.Thread):
         self.online = False
         self.sent = 0
         self.spooled = 0
+        # Readings thrown away because their spooled line could not be parsed.
+        # Surfaced rather than silent: a number that creeps up means the spool
+        # is being corrupted, which is worth knowing before it matters.
+        self.dropped = 0
         self.last_error: str | None = None
         self._stop = threading.Event()
 
@@ -333,8 +337,24 @@ class Sender(threading.Thread):
             return
         kept: list[str] = []
         for i in range(0, len(lines), 200):
-            chunk = [json.loads(l) for l in lines[i:i + 200] if l.strip()]
-            if not chunk or not self._post(session, chunk):
+            chunk = []
+            for line in lines[i:i + 200]:
+                if not line.strip():
+                    continue
+                try:
+                    chunk.append(json.loads(line))
+                except ValueError:
+                    # A line that will never parse. Dropped, not kept: keeping
+                    # it means retrying it forever and blocking every reading
+                    # behind it, which is how two bad records out of fourteen
+                    # thousand took WB3 off the air for two days.
+                    #
+                    # The spool is appended without fsync, so a power cut can
+                    # leave half a line. One lost reading is the right price.
+                    self.dropped += 1
+            if not chunk:
+                continue          # nothing readable in this chunk; move on
+            if not self._post(session, chunk):
                 kept.extend(lines[i:])
                 break
         try:
@@ -364,31 +384,51 @@ class Sender(threading.Thread):
             return False
 
     def run(self) -> None:
+        """Send what the reader hands over, and never stop for good.
+
+        THIS THREAD IS THE ONLY THING THAT TALKS TO THE SERVER. When it died —
+        on a JSONDecodeError from one malformed spool line — the agent went on
+        looking perfectly healthy: the process was up, the port was open, the
+        weight was on the operator's screen, and nothing had arrived at the
+        server for two days. Nobody noticed, because every visible sign was
+        normal.
+
+        So nothing escapes. A batch can fail, a spool line can be nonsense, the
+        server can return something unexpected; the loop reports it and comes
+        round again. The worst case is a lost batch and a message, not silence
+        that looks like health.
+        """
         session = requests.Session()
         while not self._stop.is_set():
-            batch: list[dict] = []
             try:
-                batch.append(self.q.get(timeout=1.0))
-            except queue.Empty:
-                pass
-            while len(batch) < 100:
-                try:
-                    batch.append(self.q.get_nowait())
-                except queue.Empty:
-                    break
-
-            if batch:
-                if not self._post(session, batch):
-                    self._spool(batch)
-            elif self.online or self.last_error is None:
-                self._drain_spool(session)
-            else:
-                # Offline and idle: try the spool occasionally rather than
-                # hammering a server that is not there.
-                time.sleep(2)
-                self._drain_spool(session)
-
+                self._once(session)
+            except Exception as exc:                    # noqa: BLE001
+                self.last_error = f"sender recovered from: {type(exc).__name__}: {exc}"[:140]
+                time.sleep(1.0)
             self.on_status()
+
+    def _once(self, session: requests.Session) -> None:
+        batch: list[dict] = []
+        try:
+            batch.append(self.q.get(timeout=1.0))
+        except queue.Empty:
+            pass
+        while len(batch) < 100:
+            try:
+                batch.append(self.q.get_nowait())
+            except queue.Empty:
+                break
+
+        if batch:
+            if not self._post(session, batch):
+                self._spool(batch)
+        elif self.online or self.last_error is None:
+            self._drain_spool(session)
+        else:
+            # Offline and idle: try the spool occasionally rather than
+            # hammering a server that is not there.
+            time.sleep(2)
+            self._drain_spool(session)
 
     def stop(self) -> None:
         self._stop.set()

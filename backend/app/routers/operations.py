@@ -1148,7 +1148,14 @@ def reconcile(day: str | None = Query(None), plant_id: int | None = Query(None),
     for row in db.execute(text("""
         SELECT d.asset_id, d.deployment_ref, d.status, d.started_at, d.ended_at,
                d.start_reading, d.end_reading, d.override_reason, d.activity,
-               sc.code AS shift_code, p.display_name AS operator_name
+               sc.code AS shift_code, p.display_name AS operator_name,
+               -- How long it has run, measured where the timestamps live.
+               -- Computing it in Python against datetime.now() added this
+               -- server's lead over the database — currently 411 seconds — to
+               -- every deployment still open, and deployed hours are the
+               -- numerator of utilisation.
+               EXTRACT(EPOCH FROM (COALESCE(d.ended_at, now()) - d.started_at))
+                   AS ran_seconds
         FROM deployment d
         JOIN shift_instance si ON si.shift_instance_id = d.shift_instance_id
         JOIN shift_calendar sc ON sc.shift_id = si.shift_id
@@ -1184,9 +1191,8 @@ def reconcile(day: str | None = Query(None), plant_id: int | None = Query(None),
         for d in deployments:
             if d["start_reading"] is not None and d["end_reading"] is not None:
                 deployed_hours += float(d["end_reading"]) - float(d["start_reading"])
-            elif d["started_at"]:
-                end = d["ended_at"] or datetime.now(d["started_at"].tzinfo)
-                deployed_hours += (end - d["started_at"]).total_seconds() / 3600.0
+            elif d["started_at"] and d.get("ran_seconds") is not None:
+                deployed_hours += float(d["ran_seconds"]) / 3600.0
 
         findings: list[dict] = []
         if reading and reading["engine_hours"] > 0.25 and not deployments:

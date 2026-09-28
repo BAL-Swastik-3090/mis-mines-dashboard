@@ -32,6 +32,7 @@ import api from "@/lib/api";
 import { formatIndian } from "@/lib/utils";
 import { matchesSearch } from "@/lib/search";
 import { useDateFilter } from "@/contexts/useDateFilter";
+import SearchSelect from "@/components/minehub/SearchSelect";
 
 interface Side {
   trips: number;
@@ -156,10 +157,15 @@ const TD = "px-2 py-2 leading-4 text-right text-[12px] whitespace-nowrap";
  * Sticky is applied to the cells, never to <thead>/<tr>: with
  * border-collapse a sticky row is ignored in Chrome, while sticky cells work.
  */
-const HEAD_H = 28;   // px, per header row — matches `h-7`
+const HEAD_H = 28;   // px, the FIRST header row — matches `h-7`
+// The second row is taller, because it now holds the stack and grade filters
+// rather than only a label. Its own height does not affect where it sticks —
+// that offset is the first row's height — but the scroll window is measured
+// from both, so it is stated rather than assumed to match.
+const HEAD2_H = 36;
 const ROW_H = 33;    // px, one body row at py-2 plus its border
 const VISIBLE_ROWS = 10;
-const WINDOW_H = HEAD_H * 2 + ROW_H * (VISIBLE_ROWS + 1); // + the WTD AVG row
+const WINDOW_H = HEAD_H + HEAD2_H + ROW_H * (VISIBLE_ROWS + 1); // + the WTD AVG row
 
 // The background lives on the cell, not the row: a transparent sticky cell
 // lets the body scroll through it.
@@ -180,6 +186,8 @@ export default function QualityE2ETable() {
   const [tol, setTol] = useState<Record<Param, number>>(DEFAULT_TOLERANCE);
   const [showTol, setShowTol] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [byStack, setByStack] = useState("");
+  const [byGrade, setByGrade] = useState("");
   const [dest, setDest] = useState<string>(ALL_DEST);
 
   const q = useQuery<Resp>({
@@ -253,8 +261,49 @@ export default function QualityE2ETable() {
   const rows = useMemo(() => all.filter((r) => {
     const key = rowKey(r);
     if (onlyOut && (outOn.get(key)?.length ?? 0) === 0) return false;
+    if (byStack && r.batch !== byStack) return false;
+    if (byGrade && (r.grade ?? "") !== byGrade) return false;
     return matchesSearch(q2, [r.batch, r.grade, r.date]);
-  }), [all, q2, onlyOut, outOn]);
+  }), [all, q2, onlyOut, outOn, byStack, byGrade]);
+
+  /** The stacks and grades on offer, from what the selected plant actually
+   *  shipped — not from every value the master holds, which would offer a
+   *  grade that empties the table. */
+  const stackOptions = useMemo(() => {
+    const m = new Map<string, { trips: number; qty: number; days: number }>();
+    for (const r of all) {
+      const e = m.get(r.batch) ?? { trips: 0, qty: 0, days: 0 };
+      e.trips += r.mines.trips;
+      e.qty += r.mines.qty || 0;
+      e.days += 1;
+      m.set(r.batch, e);
+    }
+    return [...m.entries()]
+      .sort((a, b) => b[1].qty - a[1].qty)
+      .map(([batch, e]) => ({
+        value: batch, label: batch,
+        // A stack is one row per despatch day per plant, so the count of
+        // rows behind a stack is worth saying: picking it shows all of them.
+        hint: e.days > 1 ? `${e.days} consignments` : undefined,
+        meta: <span className="text-txt-light">{formatIndian(e.qty, 2)} MT</span>,
+      }));
+  }, [all]);
+
+  const gradeOptions = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of all) m.set(r.grade ?? "—", (m.get(r.grade ?? "—") ?? 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1])
+      .map(([g, n]) => ({
+        value: g === "—" ? "" : g, label: g,
+        meta: <span className="text-txt-light">{n}</span>,
+      }));
+  }, [all]);
+
+  /** How many distinct stacks are behind the rows. One stack ships over
+   *  several days and to both plants, so the count of consignments is not the
+   *  count of stacks and saying only the first invites the wrong one. */
+  const uniqueStacks = useMemo(
+    () => new Set(rows.map((r) => r.batch)).size, [rows]);
 
   const flagged = all.filter(
     (r) => (outOn.get(rowKey(r))?.length ?? 0) > 0);
@@ -295,6 +344,20 @@ export default function QualityE2ETable() {
    * direction across many consignments is a calibration question for the labs,
    * a scattered one is a sampling question for the stacks.
    */
+  /** The "To" column is shown whenever the period has more than one
+   *  destination — not only when both are selected.
+   *
+   *  It used to disappear the moment a plant was chosen, which took the plant
+   *  filter with it, and a column that comes and goes as you filter makes the
+   *  table jump under the reader. Showing "Balasore" on every row of a
+   *  Balasore-only view is a little redundant; a column that vanishes is
+   *  worse. */
+  const showDest = dests.length > 1;
+
+  const destLabel = dest === ALL_DEST
+    ? "both plants"
+    : (dests.find((d) => d.key === dest)?.label ?? dest);
+
   const reading = useMemo(() => {
     if (!all.length) return null;
     const top = worst[0];
@@ -487,7 +550,8 @@ export default function QualityE2ETable() {
                 plant assays the same material on arrival. Over{" "}
                 {from.split("-").reverse().join("-")} to{" "}
                 {to.split("-").reverse().join("-")}, <b className="text-navy">
-                {all.length} consignments</b> went out —{" "}
+                {all.length} consignments</b> went to{" "}
+                <b className="text-navy">{destLabel}</b> —{" "}
                 {formatIndian(totalQty, 2)} MT. On{" "}
                 <b className="text-navy">{flagged.length}</b> of them the two
                 labs differ by more than they usually do.
@@ -638,9 +702,10 @@ export default function QualityE2ETable() {
                          pl-7 pr-2 py-1 text-navy placeholder:text-txt-light
                          focus:outline-none focus:border-gold" />
           </span>
-          {(q2 || onlyOut) && (
+          {(q2 || onlyOut || byStack || byGrade) && (
             <button type="button"
-              onClick={() => { setQ2(""); setOnlyOut(false); }}
+              onClick={() => { setQ2(""); setOnlyOut(false);
+                               setByStack(""); setByGrade(""); }}
               className="text-[11.5px] font-semibold text-gold-dark hover:underline">
               Clear
             </button>
@@ -654,7 +719,8 @@ export default function QualityE2ETable() {
           <span className="text-[10px] text-txt-light/70 ml-auto">
             {q.isLoading ? "Loading…"
               : `${rows.length}${rows.length !== all.length ? ` of ${all.length}` : ""}`
-                + ` consignment${rows.length === 1 ? "" : "s"}`}
+                + ` consignment${rows.length === 1 ? "" : "s"}`
+                + ` · ${uniqueStacks} stack${uniqueStacks === 1 ? "" : "s"}`}
             {" · matched on batch number"}
           </span>
         </div>
@@ -681,18 +747,18 @@ export default function QualityE2ETable() {
             className="overflow-auto"
             style={{ maxHeight: rows.length > VISIBLE_ROWS ? WINDOW_H : undefined }}
           >
-            <table className={`w-full border-collapse ${dest === ALL_DEST ? "min-w-[1160px]" : "min-w-[1080px]"}`}>
+            <table className={`w-full border-collapse ${showDest ? "min-w-[1160px]" : "min-w-[1080px]"}`}>
               <thead>
                 <tr className="text-white" style={{ height: HEAD_H }}>
-                  <th className={`${TH} ${STICKY_1} text-left`} rowSpan={2}>Date</th>
-                  <th className={`${TH} ${STICKY_1} text-left`} rowSpan={2}>Stack No.</th>
-                  {dest === ALL_DEST && (
-                    <th className={`${TH} ${STICKY_1} text-left`} rowSpan={2}>To</th>
+                  <th className={`${TH} ${STICKY_1} text-left`}>Date</th>
+                  <th className={`${TH} ${STICKY_1} text-left`}>Stack No.</th>
+                  {showDest && (
+                    <th className={`${TH} ${STICKY_1} text-left`}>To</th>
                   )}
-                  <th className={`${TH} ${STICKY_1} text-left`} rowSpan={2}>Grade</th>
-                  <th className={`${TH} ${STICKY_1} text-right`} rowSpan={2}>Trips</th>
+                  <th className={`${TH} ${STICKY_1} text-left`}>Grade</th>
+                  <th className={`${TH} ${STICKY_1} text-right`}>Trips</th>
                   <th className={`${TH} ${STICKY_1} text-right border-r border-white/20`}
-                    rowSpan={2}>
+                    >
                     Qty&nbsp;(MT)
                   </th>
                   <th className={`${TH} ${STICKY_1} text-center border-r border-white/20`}
@@ -705,7 +771,57 @@ export default function QualityE2ETable() {
                   </th>
                   <th className={`${TH} ${STICKY_1} text-center`} colSpan={4}>Variation</th>
                 </tr>
-                <tr className="text-white/90" style={{ height: HEAD_H }}>
+                <tr className="text-white/90" style={{ height: HEAD2_H }}>
+                  {/* The five left columns held one word each across two
+                      header rows, so this row under them was empty navy. The
+                      assay columns need the second row; these did not, and
+                      the space was there either way.
+
+                      Stack and grade only: those are the two with a small set
+                      of values somebody picks from. The date is already
+                      bounded by the header's range, and a dropdown of every
+                      distinct tonnage is a list of every row — which is the
+                      table you are already looking at. */}
+                  <th style={{ top: HEAD_H }} className={`${STICKY_2} px-2`} />
+                  <th style={{ top: HEAD_H }} className={`${STICKY_2} px-1.5 pb-1`}>
+                    <SearchSelect narrow value={byStack} onChange={setByStack}
+                      allLabel="All stacks" options={stackOptions}
+                      searchPlaceholder="Type a stack number…"
+                      className="w-full bg-white/10 border-white/25 text-white
+                                 font-normal hover:border-white/50" />
+                  </th>
+                  {/* The same selection the tiles above make, in the column
+                      it belongs to.
+                      
+                      Not a second piece of state: it reads and writes `dest`,
+                      so the tile and this can never disagree. The tiles carry
+                      the figures that say whether a plant needs looking at;
+                      this is for somebody already in the table who does not
+                      want to go back up to change it. */}
+                  {showDest && (
+                    <th style={{ top: HEAD_H }} className={`${STICKY_2} px-1.5 pb-1`}>
+                      <SearchSelect narrow value={dest === ALL_DEST ? "" : dest}
+                        allLabel="Both plants" allValue=""
+                        onChange={(v) => setDest(v || ALL_DEST)}
+                        searchPlaceholder="Type a plant…"
+                        options={dests.map((d) => ({
+                          value: d.key, label: d.label,
+                          hint: d.plant ? `plant ${d.plant}` : undefined,
+                        }))}
+                        className="w-full bg-white/10 border-white/25 text-white
+                                   font-normal hover:border-white/50" />
+                    </th>
+                  )}
+                  <th style={{ top: HEAD_H }} className={`${STICKY_2} px-1.5 pb-1`}>
+                    <SearchSelect narrow value={byGrade} onChange={setByGrade}
+                      allLabel="All grades" options={gradeOptions}
+                      searchPlaceholder="Type a grade…"
+                      className="w-full bg-white/10 border-white/25 text-white
+                                 font-normal hover:border-white/50" />
+                  </th>
+                  <th style={{ top: HEAD_H }} className={`${STICKY_2} px-2`} />
+                  <th style={{ top: HEAD_H }}
+                    className={`${STICKY_2} px-2 border-r border-white/20`} />
                   {SUB_HEADS.map(({ key, label, edge }) => (
                     <th
                       key={key}
@@ -731,7 +847,7 @@ export default function QualityE2ETable() {
                     <td className="px-2 py-2 leading-4 text-[12px] font-mono text-txt-primary whitespace-nowrap">
                       {r.batch}
                     </td>
-                    {dest === ALL_DEST && (
+                    {showDest && (
                       <td className="px-2 py-2 leading-4 text-[12px]">
                         <span className={`inline-block px-1.5 py-0.5 rounded text-[10px]
                           font-bold tracking-wide ${r.destination === "BAL"
@@ -781,7 +897,7 @@ export default function QualityE2ETable() {
                   <tr style={{ height: ROW_H }}>
                     <td className={`px-2 py-2 leading-4 text-[11px] font-condensed font-extrabold
                                    tracking-[.1em] text-navy text-left ${STICKY_FOOT}`}
-                      colSpan={dest === ALL_DEST ? 4 : 3}>
+                      colSpan={showDest ? 4 : 3}>
                       WTD AVG
                     </td>
                     <td className={TF}>
