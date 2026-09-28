@@ -446,7 +446,20 @@ _session_cache: dict[str, tuple[dict, float]] = {}
 # When each session was last written to the database. Tracked here rather than
 # read off the cached row, whose last_active_at is frozen at the moment it was
 # cached and would otherwise make the throttle fire on every request.
-_last_touch: dict[str, float] = {}
+# session id -> the monotonic time its next activity write is due.
+#
+# "When is the next one due" rather than "when did we last try", because those
+# are the same number only when the write succeeded. A touch that lost its race
+# used to book the next two minutes off anyway, which is how an active user's
+# timestamp went stale enough to idle them out while they were still clicking.
+_touch_next: dict[str, float] = {}
+
+# How long to wait before trying again, after a write that worked and after one
+# that did not. The retry gap is short because the cost of being wrong is
+# somebody being logged out mid-sentence, and cheap because the write itself
+# gives up after two seconds.
+_TOUCH_AFTER_OK = 120.0
+_TOUCH_AFTER_FAIL = 20.0
 
 
 def peek_session(sid: str | None) -> dict | None:
@@ -463,7 +476,7 @@ def peek_session(sid: str | None) -> dict | None:
     return None
 
 
-def touch_due(sid: str, throttle_seconds: float = 120.0) -> bool:
+def touch_due(sid: str, throttle_seconds: float = _TOUCH_AFTER_OK) -> bool:
     """Whether the session's activity timestamp is worth another write.
 
     Every thirty seconds, to protect a thirty-MINUTE idle timeout — sixty
@@ -479,15 +492,25 @@ def touch_due(sid: str, throttle_seconds: float = 120.0) -> bool:
     an hour" can tell the difference between. Four times fewer writes, and
     "who is online" reporting elsewhere in the shared table stays within two
     minutes of the truth.
+
+    Two minutes only when the last write SUCCEEDED. When it did not, the next
+    one is due in twenty seconds: the throttle exists to avoid pointless
+    writes, and a write that never landed was not pointless. Booking the full
+    two minutes after a failure is what let an active session go stale enough
+    to be logged out.
+
+    `throttle_seconds` is no longer read — the interval is decided by touch()
+    when it learns whether the write landed — and is kept so callers passing it
+    still work.
     """
-    last = _last_touch.get(sid)
-    return last is None or (time.monotonic() - last) > throttle_seconds
+    due = _touch_next.get(sid)
+    return due is None or time.monotonic() >= due
 
 
 def forget_session(sid: str) -> None:
     """Drop a cached session — called on logout so signing out is immediate."""
     _session_cache.pop(sid, None)
-    _last_touch.pop(sid, None)
+    _touch_next.pop(sid, None)
 
 
 def get_session(db: Session, sid: str | None) -> dict | None:
@@ -534,14 +557,25 @@ def touch(db: Session, sid: str) -> None:
     that was us the user saw "Internal server error" on whatever page was
     loading.
 
-    The timestamp is worth having and is not worth a failed page. Marked as
-    touched either way: retrying it on the very next request would only put
-    the same statement back into the same race.
+    The timestamp is worth having and is not worth a failed page. But it is
+    also what the idle timeout reads, so a write that did not land has to be
+    retried rather than forgotten: this used to mark the session touched before
+    attempting, and a run of lost races aged `last_active_at` past the
+    thirty-minute limit while somebody was actively using the screen. They were
+    returned to the login page for being idle while they were working.
+
+    So the next attempt is scheduled by the outcome — twenty seconds after a
+    failure, two minutes after a success — and scheduled BEFORE the write, so
+    an exception escaping anything below cannot leave the session with no entry
+    at all and a write on every single request.
     """
-    _last_touch[sid] = time.monotonic()
-    _best_effort(db, "session touch", lambda: db.execute(text(
+    now = time.monotonic()
+    _touch_next[sid] = now + _TOUCH_AFTER_FAIL
+    ok = _best_effort(db, "session touch", lambda: db.execute(text(
         f"UPDATE {SESS_TBL} SET last_active_at = NOW() "
         f"WHERE session_id = :sid AND is_active = 1"), {"sid": sid}))
+    if ok:
+        _touch_next[sid] = time.monotonic() + _TOUCH_AFTER_OK
 
 
 def end_session(db: Session, sid: str, reason: str = "LOGOUT") -> None:

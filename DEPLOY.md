@@ -60,6 +60,56 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ---
 
+## Deployed — 2026-09-28 10:43: the pool stops draining
+
+Released commit `cf04417` to mines.balasorealloys.in. Backup:
+`~/mines_dashboard-backup-20260928-1045.tar.gz`. No files were deleted between
+`4bc1d7d` and this, so the `git archive` extract needed no manual removals.
+
+**The outage this ended**
+
+Manpower said "Could not read the attendance readers". The readers were fine —
+attendance reads MSSQL and died anyway, because the auth middleware needs a
+MySQL connection before any handler runs, and there were none left.
+
+    1205 (HY000): Lock wait timeout exceeded
+    QueuePool limit of size 2 overflow 6 reached, connection timed out
+
+One failure in two parts. `ev_sync_digital_apps_crm` in the shared balcorpdb
+takes the same two indexes of `digital_apps_user_sessions` in the opposite
+order from our `last_active_at` update, every 60 seconds. Ours loses, and
+`innodb_lock_wait_timeout` there is 50 seconds — so the update sat on one of
+this process's 8 MySQL connections for 50 seconds, retried, and sat for 50
+more. Eight of those is the whole allowance, and every other screen then failed
+at pool checkout whatever database it actually reads. Organisation, Fuel
+Management and Manpower were all this, wearing different error messages.
+
+**What shipped**
+
+- `838fbdb` — the three housekeeping writes (session touch, page view, time
+  spent) no longer fail the request they ride on.
+- `cf04417` — and no longer hold a connection for 50 seconds to do it:
+  `innodb_lock_wait_timeout` is 2 for those writes, restored afterwards so a
+  pooled connection does not hand our setting to a real write later. Tested
+  against a real row lock: ~100s before, 7.4s after.
+- `dc8df75` — a Usage screen, behind `access.users.view`. Additive; due to be
+  redesigned.
+
+**Deliberately not changed:** the connection pool. balcorpdb was at 368 of its
+500 connections with a peak of 466, shared by 22 applications. Widening our
+allowance to survive a self-inflicted stall would spend someone else's headroom
+on our bug.
+
+**Still owed to the platform owner:** `ev_sync_digital_apps_crm` should take
+those rows in primary-key order. Until it does, every one of the 22 apps
+writing to that table is exposed to the same race; we have only stopped paying
+for it.
+
+**Verified after restart:** site 200, `/api/auth/me` 401 in 0.30s, zero
+`Lock wait timeout` and zero `QueuePool limit` in the log.
+
+---
+
 ## Deployed — 2026-09-28: both plants, and filters in the header
 
 Released commit `4bc1d7d` (branch `release-28-09-2026`) to

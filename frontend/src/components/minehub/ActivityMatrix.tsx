@@ -8,10 +8,15 @@
  * fault becomes a deduction from somebody's wages.
  *
  * So the cells say what was seen — in and out, one punch only, nothing — and
- * the totals count punch days rather than working days. Where a pattern looks
- * like a person it is shown against the person; where it looks like a machine
- * it is shown against the day, because a column of single punches is a reader
- * that stopped, not forty people who forgot.
+ * the totals count punch days rather than working days.
+ *
+ * IT DESCRIBES, IT DOES NOT EXPLAIN. A day with many single punches is shown
+ * as a day that stands out, and nothing more. The screen has no way to know
+ * whether that was a gatepass, a shift that ran long, a gate with no reader, an
+ * arrangement made, or equipment — and every wrong guess costs somebody: blame
+ * the men and an ordinary day becomes a question about their conduct; blame the
+ * reader and a real one is sent for repair. Neither is this screen's to make.
+ * It names the day. Whoever knows the day says why.
  *
  * REST DAYS ARE DERIVED, NOT ASSUMED. Sunday is quiet at Kaliapani — 99 and 59
  * clocked on the two Sundays in this month against about 162 on a weekday —
@@ -223,10 +228,19 @@ export default function ActivityMatrix({ rows, days, narrowed: narrowedAbove }: 
     return new Set(done.filter((_, i) => median > 0 && active[i] < median * 0.55));
   }, [rows, days]);
 
-  // A day where single punches spiked is a reader that stopped, not a hundred
-  // people who forgot. Flagged against the day so nobody goes looking for a
-  // hundred explanations.
-  const readerTrouble = useMemo(() => {
+  // Days where unmatched punches — an in with no out, or an out with no in —
+  // are far above this range's own median.
+  //
+  // FLAGGED, NOT EXPLAINED. A single punch has many ordinary causes: a
+  // gatepass, a shift that ran past midnight, a man who left by a gate with no
+  // reader, an arrangement made with the union. It can also be a reader. This
+  // screen cannot tell which, and it has no business guessing: naming a cause
+  // it cannot see would either send somebody to check a gate that was working
+  // or put the record in doubt for a man who did nothing unusual.
+  //
+  // So it says which days stand out and stops there. What happened on them is
+  // for whoever knows the day, not for a median.
+  const unmatchedDays = useMemo(() => {
     const done = settled(days);
     const single = done.map((d) =>
       rows.filter((r) => r.on_date === d
@@ -299,25 +313,29 @@ export default function ActivityMatrix({ rows, days, narrowed: narrowedAbove }: 
           icon: AlertTriangle, hint: "in without out, or out without in" },
         { label: "No punch", value: totals("NOT_CLOCKED"), tone: "slate",
           icon: X, hint: "rest days included — not absence" },
-        { label: "Reader trouble", value: readerTrouble.size,
-          tone: readerTrouble.size ? "rose" : "emerald", icon: TrendingDown,
-          hint: readerTrouble.size ? "days when single punches spiked" : "no bad days" },
+        { label: "Unmatched days", value: unmatchedDays.size,
+          tone: unmatchedDays.size ? "amber" : "emerald", icon: TrendingDown,
+          hint: unmatchedDays.size
+            ? "days with unusually many single punches"
+            : "none stand out in this range" },
         { label: "Quiet days", value: quiet.size, tone: "violet", icon: CalendarDays,
           hint: "the whole site, not individuals" },
       ]} />
 
-      {readerTrouble.size > 0 && (
-        <Card tone="rose">
+      {unmatchedDays.size > 0 && (
+        <Card tone="amber">
           <div className="px-4 py-3 flex items-start gap-2.5">
-            <AlertTriangle className="w-4 h-4 text-rose shrink-0 mt-0.5" />
+            <AlertTriangle className="w-4 h-4 text-amber shrink-0 mt-0.5" />
             <p className="text-[12.5px] text-txt-secondary">
-              Single punches spiked on{" "}
-              <strong className="text-rose">
-                {[...readerTrouble].map(toDisplay).join(", ")}
-              </strong>. When dozens of people have an in without an out on the
-              same day, that is a reader that stopped rather than dozens of
-              people who forgot — worth checking the gate before anybody is
-              asked to explain themselves.
+              More single punches than usual on{" "}
+              <strong className="text-navy">
+                {[...unmatchedDays].map(toDisplay).join(", ")}
+              </strong>{" "}
+              — an in with no out, or an out with no in. A day is listed
+              because it stands out from the rest of this range, which is all
+              this can tell you. The reason belongs to the day: a gatepass, a
+              shift that ran long, a gate without a reader, an arrangement
+              made. Worth asking about; not worth assuming.
             </p>
           </div>
         </Card>
@@ -409,7 +427,7 @@ export default function ActivityMatrix({ rows, days, narrowed: narrowedAbove }: 
                       className={`px-0 py-1.5 border-b border-border text-center w-[30px]
                                   ${d === TODAY ? "bg-gold/10"
                                     : quiet.has(d) ? "bg-slate-100" : "bg-bg-light"}
-                                  ${readerTrouble.has(d) ? "border-b-2 border-b-rose" : ""}`}>
+                                  ${unmatchedDays.has(d) ? "border-b-2 border-b-amber" : ""}`}>
                       <span className="block text-[11px] font-bold text-navy tabular-nums">
                         {d.slice(8, 10)}
                       </span>
