@@ -77,6 +77,8 @@ class BreakdownEvent(BaseModel):
     start:   Optional[str]   = None
     end:     Optional[str]   = None
     bd_hrs:  Optional[float] = None
+    #: True while the notification is open — bd_hrs is counted up to now.
+    is_open: bool            = False
     reason:  Optional[str]   = None
 
 

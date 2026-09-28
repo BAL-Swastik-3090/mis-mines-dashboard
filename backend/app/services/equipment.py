@@ -39,6 +39,8 @@ MTTR / MTBF  (both date-filter dependent)
 """
 from datetime import date, timedelta
 from sqlalchemy.orm import Session
+
+from app.services import breakdown as bd
 from sqlalchemy import text
 
 
@@ -154,11 +156,11 @@ def _get_bd_hours(
     ph = ", ".join(f":n{i}" for i in range(len(sap_names)))
     sql = text(f"""
         SELECT DESC_TECH_OBJECT,
-               ROUND(SUM(CASE WHEN BREAKDOWN_DURAION IS NOT NULL
-                              THEN BREAKDOWN_DURAION ELSE 0 END) / 3600.0, 2) AS bd_hours,
-               COUNT(CASE WHEN BREAKDOWN_DURAION IS NOT NULL THEN 1 END)       AS bd_count,
+               ROUND(SUM({bd.DURATION_SECONDS}) / 3600.0, 2)                    AS bd_hours,
+               COUNT(*)                                                         AS bd_count,
                COUNT(*)                                                         AS bd_count_start,
-               COUNT(CASE WHEN BREAKDOWN_DURAION > 0 THEN 1 END)               AS bd_count_closed
+               COUNT(CASE WHEN MALFUNCTION_END IS NOT NULL THEN 1 END)          AS bd_count_closed,
+               COUNT(CASE WHEN {bd.IS_OPEN} THEN 1 END)                         AS bd_count_open
         FROM   zpm_iw29_notifications
         WHERE  MAINTENANCE_PLANT = :plant
           AND  MAIN_WORK_CENTER  = :wc
@@ -170,7 +172,7 @@ def _get_bd_hours(
     """)
     params: dict = {
         "plant": "1200", "wc": "MINEAUTO", "ntype": "M2",
-        "f": from_date, "t": to_date,
+        "f": from_date, "t": to_date, **bd.params(to_date),
     }
     for i, name in enumerate(sap_names):
         params[f"n{i}"] = name
@@ -180,6 +182,7 @@ def _get_bd_hours(
             "count":        int(r.bd_count        or 0),
             "count_start":  int(r.bd_count_start  or 0),
             "count_closed": int(r.bd_count_closed or 0),
+            "count_open":   int(r.bd_count_open   or 0),
         }
         for r in db.execute(sql, params).fetchall()
     }
@@ -191,13 +194,13 @@ def _get_tipper_bd_hours(
     """SAP breakdown hours + counts for ALL MAN tippers.
     Returns {machine_name: {"hours": float, "count": int, "count_start": int}}
     """
-    sql = text("""
+    sql = text(f"""
         SELECT DESC_TECH_OBJECT,
-               ROUND(SUM(CASE WHEN BREAKDOWN_DURAION IS NOT NULL AND BREAKDOWN_DURAION > 0
-                              THEN BREAKDOWN_DURAION ELSE 0 END) / 3600.0, 2) AS bd_hours,
-               COUNT(CASE WHEN BREAKDOWN_DURAION IS NOT NULL THEN 1 END)       AS bd_count,
+               ROUND(SUM({bd.DURATION_SECONDS}) / 3600.0, 2)                    AS bd_hours,
+               COUNT(*)                                                         AS bd_count,
                COUNT(*)                                                         AS bd_count_start,
-               COUNT(CASE WHEN BREAKDOWN_DURAION > 0 THEN 1 END)               AS bd_count_closed
+               COUNT(CASE WHEN MALFUNCTION_END IS NOT NULL THEN 1 END)          AS bd_count_closed,
+               COUNT(CASE WHEN {bd.IS_OPEN} THEN 1 END)                         AS bd_count_open
         FROM   zpm_iw29_notifications
         WHERE  MAINTENANCE_PLANT = :plant
           AND  MAIN_WORK_CENTER  = :wc
@@ -213,10 +216,11 @@ def _get_tipper_bd_hours(
             "count":        int(r.bd_count        or 0),
             "count_start":  int(r.bd_count_start  or 0),
             "count_closed": int(r.bd_count_closed or 0),
+            "count_open":   int(r.bd_count_open   or 0),
         }
         for r in db.execute(sql, {
             "plant": "1200", "wc": "MINEAUTO", "ntype": "M2",
-            "f": from_date, "t": to_date,
+            "f": from_date, "t": to_date, **bd.params(to_date),
         }).fetchall()
     }
 
@@ -235,7 +239,7 @@ def get_breakdown_details(
     error rather than quietly degrade into blank notification numbers and
     'Not specified' reasons.
     """
-    sql = text("""
+    sql = text(f"""
         SELECT
             NOTIFICATION AS notification_no,
 
@@ -250,8 +254,9 @@ def get_breakdown_details(
                  ELSE MALFUNCTION_END
             END AS end_at,
 
-            ROUND(BREAKDOWN_DURAION / 3600.0, 2) AS bd_hrs,
-            DESCRIPTION                          AS reason
+            ROUND(({bd.DURATION_SECONDS}) / 3600.0, 2) AS bd_hrs,
+            {bd.IS_OPEN}                              AS is_open,
+            DESCRIPTION                               AS reason
         FROM   zpm_iw29_notifications
         WHERE  MAINTENANCE_PLANT = '1200'
           AND  MAIN_WORK_CENTER  = 'MINEAUTO'
@@ -262,7 +267,8 @@ def get_breakdown_details(
         ORDER BY MALFUNCTION_START DESC, MALFUNCTION_START_TIME DESC
     """)
     rows = db.execute(
-        sql, {"machine": machine_sap_name, "f": from_date, "t": to_date}
+        sql, {"machine": machine_sap_name, "f": from_date, "t": to_date,
+              **bd.params(to_date)}
     ).fetchall()
 
     def _iso(v):
@@ -277,6 +283,9 @@ def get_breakdown_details(
             "start":  _iso(r.start_at),
             "end":    _iso(r.end_at),
             "bd_hrs": float(r.bd_hrs) if r.bd_hrs is not None else None,
+            # Still running: the hours above are counted to now and will be
+            # larger next time this is opened.
+            "is_open": bool(r.is_open),
             "reason": (str(r.reason or "").strip() or None),
         }
         for r in rows

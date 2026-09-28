@@ -32,6 +32,8 @@ from datetime import date
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.services import breakdown as bd
+
 PLANT           = "1200"
 WORK_CENTRE     = "MINEAUTO"
 BD_NOTIF_TYPE   = "M2"
@@ -83,11 +85,12 @@ _SHIFT_SQL = text("""
       AND (FIND_IN_SET(:code, equipment_name) > 0 OR equipment_name = :name)
 """)
 
-# BREAKDOWN_DURAION is in SECONDS despite BREAKDOWN_DURTN_UNIT = 'H' on every
-# row (note the typo in the column name — it is spelled that way in SAP's export).
-# Open notifications carry no duration, so they contribute 0.
-_BD_SQL = text("""
-    SELECT COALESCE(SUM(BREAKDOWN_DURAION), 0) / 3600.0 AS bd_hours
+# An open notification carries no duration in SAP, so it used to contribute 0 —
+# a machine down since the 3rd and still down on the 28th counted as nothing.
+# services/breakdown.py is the single definition; it counts an open event from
+# its start to now, and needs a :bd_upto parameter.
+_BD_SQL = text(f"""
+    SELECT COALESCE(SUM({bd.DURATION_SECONDS}), 0) / 3600.0 AS bd_hours
     FROM zpm_iw29_notifications
     WHERE MAINTENANCE_PLANT = :plant
       AND NOTIFICATION_TYPE = :ntype
@@ -124,6 +127,7 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
         bd_row = db.execute(_BD_SQL, {
             "plant": PLANT, "ntype": BD_NOTIF_TYPE, "wc": WORK_CENTRE,
             "eq": ex["sap_eq"], "fd": from_date, "td": to_date,
+            **bd.params(to_date),
         }).fetchone()
 
         pm_row = db.execute(_PM_SQL, {

@@ -322,6 +322,8 @@ export interface BreakdownEvent {
   start:   string | null;
   end:     string | null;
   bd_hrs:  number | null;
+  /** Still open — bd_hrs is counted to now and keeps growing. */
+  is_open?: boolean;
   reason:  string | null;
 }
 
