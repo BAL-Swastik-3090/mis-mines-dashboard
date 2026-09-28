@@ -39,6 +39,16 @@ log = logging.getLogger(__name__)
 # "somebody else had it, try again" rather than "this statement is wrong".
 _RETRYABLE = (1213, 1205)
 
+# How long one of these writes may wait on a row lock before giving up.
+#
+# The server's own setting is 50 seconds, which is a sensible default for a
+# statement somebody is waiting on the result of. Nobody waits on the result of
+# these. What they cost while they wait is a connection out of the 8 this
+# process is allowed, and eight of them blocked together is every connection
+# gone — which is how a stalled timestamp update turned into "Could not read
+# the attendance readers" on a screen that reads a different database entirely.
+_LOCK_WAIT_SECONDS = 2
+
 
 def _mysql_errno(exc: BaseException) -> int | None:
     """The engine's own error number, wherever SQLAlchemy has wrapped it."""
@@ -66,7 +76,50 @@ def _best_effort(db: Session, what: str, run) -> bool:
     almost always succeeds. Anything still failing after that is logged and
     dropped: last_active_at stays as it was, which is a minute stale at worst,
     and the next request corrects it.
+
+    AND IT GIVES UP QUICKLY. Not failing the request was only half the problem:
+    the statement still waited out the server's 50-second lock timeout while
+    holding one of the 8 MySQL connections this process may have. Eight at once
+    is all of them, and every other request in the application then failed at
+    pool checkout — including ones that never touch MySQL for their own data.
+    Two seconds here, restored afterwards so the next caller on this pooled
+    connection inherits the server's own setting rather than ours.
     """
+    restore = False
+    try:
+        db.execute(text("SET SESSION innodb_lock_wait_timeout = :s"),
+                   {"s": _LOCK_WAIT_SECONDS})
+        restore = True
+    except Exception as exc:                            # noqa: BLE001
+        # Not fatal, and not worth failing over: without it the write simply
+        # has the server's patience instead of ours.
+        db.rollback()
+        log.warning("could not shorten the lock wait: %s", str(exc)[:120])
+
+    try:
+        return _attempt(db, what, run)
+    finally:
+        if restore:
+            try:
+                db.execute(text(
+                    "SET SESSION innodb_lock_wait_timeout = "
+                    "@@GLOBAL.innodb_lock_wait_timeout"))
+                db.commit()
+            except Exception:                           # noqa: BLE001
+                # The connection is in an unknown state, so do not hand it back
+                # carrying our setting. Closing it costs one reconnect; leaving
+                # a 2-second lock timeout on a pooled connection costs a
+                # mysterious failure in an unrelated write later.
+                try:
+                    db.rollback()
+                    db.get_bind().dispose()
+                except Exception:                       # noqa: BLE001
+                    pass
+
+
+def _attempt(db: Session, what: str, run) -> bool:
+    """The write itself, with the one retry. Split out so the lock-timeout
+    handling above reads as the setup it is."""
     for attempt in (1, 2):
         try:
             run()
