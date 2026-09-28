@@ -1,5 +1,5 @@
 "use client";
-import { Activity, Boxes, CalendarRange, ChevronLeft, ChevronRight, ClipboardList, CloudSun, DoorOpen, ExternalLink, Gauge, LayoutDashboard, LineChart, Network, Radar, Scale, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
+import { Activity, BarChart3, Boxes, CalendarRange, ChevronLeft, ChevronRight, ClipboardList, CloudSun, DoorOpen, ExternalLink, Gauge, LayoutDashboard, LineChart, Network, Radar, Scale, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { canOpen } from "@/contexts/pageAccess";
 import { useSidebar }               from "@/contexts/useSidebar";
@@ -48,6 +48,11 @@ const ACCESS_ITEM: NavItem =
    against a department: a machine, a person, and soon a crate of bearings. A
    register whose owning department has no head is a register nobody answers
    for, and this is the screen that says so. */
+/* Usage sits below Access Control and shares its permission. Access Control
+   says who may do what; Usage says who did. */
+const USAGE_ITEM: NavItem =
+  { kind: "page", id: "usage", label: "Usage", icon: BarChart3 };
+
 const ORG_ITEM: NavItem =
   { kind: "page", id: "organisation", label: "Organisation", icon: Network };
 
@@ -124,6 +129,7 @@ export default function AppSidebar() {
     ...(canOpen(user, "operations") ? [OPERATIONS_ITEM] : []),
     ...(canOpen(user, "workforce") ? [WORKFORCE_ITEM] : []),
     ...(canOpen(user, "access-control") ? [ACCESS_ITEM] : []),
+    ...(canOpen(user, "usage") ? [USAGE_ITEM] : []),
   ];
 
   return (

@@ -65,6 +65,11 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   // Capacity reads the same machines and faces the roster does, and is read
   // by the same people planning the day.
   "capacity": ["ops.roster.view"],
+  // The same permission as Access Control, and deliberately the same one:
+  // seeing which colleague opened what, and for how long, is seeing a
+  // colleague's details. Whoever is trusted with the user list is trusted
+  // with this; nobody else needs a second permission invented for it.
+  "usage": ["access.users.view"],
 };
 
 /**
@@ -112,6 +117,9 @@ const LANDING_RANK: Record<AppPage, number> = {
   // first would land every user on the weather map instead of their own work.
   "weather": 85,
   "access-control": 90,
+  // Last, beside the screen it shares a permission with. Nobody should ever
+  // land here: it reports on work rather than being any.
+  "usage": 92,
 };
 
 const LANDING_ORDER = (Object.keys(LANDING_RANK) as AppPage[])
