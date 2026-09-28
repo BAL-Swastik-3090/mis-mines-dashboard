@@ -101,6 +101,23 @@ def _numbers(row: dict, *keys: str) -> dict:
     return row
 
 
+def _superadmins(pg: Session) -> list[str]:
+    """Everyone holding a role that grants everything.
+
+    From the role, not a list of names: `grants_everything` is what makes
+    somebody a superadmin, and hardcoding today's two would be wrong the first
+    time anybody is promoted or steps down.
+    """
+    return [r[0] for r in pg.execute(text("""
+        SELECT DISTINCT ua.emp_id
+          FROM user_access ua
+          JOIN role r ON r.role_id = ua.role_id
+         WHERE ua.valid_to IS NULL
+           AND r.status = 'ACTIVE'
+           AND r.grants_everything
+    """)).all()]
+
+
 def _require(request: Request) -> None:
     perms = set(getattr(request.state, "permissions", None) or set())
     if not (set(VIEW) & perms):
@@ -154,6 +171,7 @@ def usage(request: Request,
           day_from: date | None = Query(None),
           day_to: date | None = Query(None),
           app_source: str = Query(APP),
+          include_admins: bool = Query(False),
           db: Session = Depends(get_db),
           pg: Session = Depends(get_minehub_db)) -> dict:
     """Everything the page draws, in one request.
@@ -165,7 +183,13 @@ def usage(request: Request,
     _require(request)
     app_source = _app(app_source)
     frm, to = _window(days, day_from, day_to)
-    p = {"app": app_source, "frm": frm, "to": to}
+
+    # Superadmins are excluded by default — see _superadmins. A comma-joined
+    # string rather than an expanding IN: the exclusion reaches a dozen queries
+    # across two tables, and one plain parameter threads through all of them.
+    # Empty excludes nobody, so "include them" needs no second code path.
+    skipped = [] if include_admins else _superadmins(pg)
+    p = {"app": app_source, "frm": frm, "to": to, "skip": ",".join(skipped)}
 
     # ── who signed in ────────────────────────────────────────────────────
     head = db.execute(text("""
@@ -177,6 +201,7 @@ def usage(request: Request,
                                    THEN emp_id END)        AS live
           FROM digital_apps_user_sessions
          WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
+           AND NOT FIND_IN_SET(emp_id, :skip)
     """), p).mappings().first()
 
     people = [dict(r) for r in db.execute(text("""
@@ -197,6 +222,7 @@ def usage(request: Request,
                    AND DATE(v.viewed_at) BETWEEN :frm AND :to) AS views
           FROM digital_apps_user_sessions s
          WHERE s.app_source = :app AND DATE(s.login_at) BETWEEN :frm AND :to
+           AND NOT FIND_IN_SET(s.emp_id, :skip)
          GROUP BY s.emp_id ORDER BY minutes DESC
     """), p).mappings().all()]
     for r in people:
@@ -217,8 +243,9 @@ def usage(request: Request,
           FROM user_access ua
           JOIN role r ON r.role_id = ua.role_id AND r.status = 'ACTIVE'
          WHERE ua.valid_to IS NULL
+           AND (:keep OR NOT r.grants_everything)
          GROUP BY ua.emp_id
-    """)).mappings().all()]
+    """), {"keep": bool(include_admins)}).mappings().all()]
 
     # The same people over three windows. One number cannot separate a tool
     # somebody opens every morning from one they opened once this month.
@@ -231,6 +258,7 @@ def usage(request: Request,
                SUM(DATE(login_at) = CURDATE())                       AS sessions_today
           FROM digital_apps_user_sessions
          WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
+           AND NOT FIND_IN_SET(emp_id, :skip)
     """), p).mappings().first()
 
     # Every finished session's length, for a median. A mean is moved by one
@@ -240,6 +268,7 @@ def usage(request: Request,
         int(r[0]) for r in db.execute(text("""
             SELECT duration_minutes FROM digital_apps_user_sessions
              WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
+           AND NOT FIND_IN_SET(emp_id, :skip)
                AND duration_minutes IS NOT NULL
         """), p).all() if r[0] is not None)
     median_minutes = (durations[len(durations) // 2] if durations else 0)
@@ -250,6 +279,7 @@ def usage(request: Request,
     engaged = int(db.execute(text("""
         SELECT COUNT(DISTINCT session_id) FROM digital_apps_page_views
          WHERE app_source = :app AND DATE(viewed_at) BETWEEN :frm AND :to
+           AND NOT FIND_IN_SET(emp_id, :skip)
     """), p).scalar() or 0)
 
     # Who is in there right now — one row per PERSON, not per session.
@@ -271,6 +301,7 @@ def usage(request: Request,
                COUNT(*)            AS sessions
           FROM digital_apps_user_sessions
          WHERE app_source = :app AND is_active = 1
+           AND NOT FIND_IN_SET(emp_id, :skip)
          GROUP BY emp_id
          ORDER BY last_active_at DESC
     """), p).mappings().all()]
@@ -288,6 +319,7 @@ def usage(request: Request,
                SUM(time_spent_seconds IS NULL) AS no_dwell
           FROM digital_apps_page_views
          WHERE app_source = :app AND DATE(viewed_at) BETWEEN :frm AND :to
+           AND NOT FIND_IN_SET(emp_id, :skip)
          GROUP BY page_path ORDER BY views DESC
     """), p).mappings().all():
         o = _numbers(dict(r), "views", "people", "avg_seconds",
@@ -299,6 +331,7 @@ def usage(request: Request,
     by_hour = {int(r[0]): int(r[1]) for r in db.execute(text("""
         SELECT HOUR(viewed_at), COUNT(*) FROM digital_apps_page_views
          WHERE app_source = :app AND DATE(viewed_at) BETWEEN :frm AND :to
+           AND NOT FIND_IN_SET(emp_id, :skip)
          GROUP BY 1
     """), p).all()}
     # Monday is 2 in MySQL's DAYOFWEEK; shifted so 0 is Monday, which is how
@@ -307,6 +340,7 @@ def usage(request: Request,
         SELECT (DAYOFWEEK(viewed_at) + 5) % 7, COUNT(*)
           FROM digital_apps_page_views
          WHERE app_source = :app AND DATE(viewed_at) BETWEEN :frm AND :to
+           AND NOT FIND_IN_SET(emp_id, :skip)
          GROUP BY 1
     """), p).all()}
     # Weekday against hour, as a grid. "Busy on Thursday" and "busy at 3pm"
@@ -321,6 +355,7 @@ def usage(request: Request,
                COUNT(*) AS n
           FROM digital_apps_user_sessions
          WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
+           AND NOT FIND_IN_SET(emp_id, :skip)
          GROUP BY 1, 2
     """), p).all():
         heatmap[int(r[0])][int(r[1])] = int(r[2])
@@ -330,6 +365,7 @@ def usage(request: Request,
         SELECT (DAYOFWEEK(login_at) + 5) % 7, COUNT(*), COUNT(DISTINCT emp_id)
           FROM digital_apps_user_sessions
          WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
+           AND NOT FIND_IN_SET(emp_id, :skip)
          GROUP BY 1
     """), p).all()}
 
@@ -345,6 +381,7 @@ def usage(request: Request,
         SELECT DATE(login_at), COUNT(*), COUNT(DISTINCT emp_id)
           FROM digital_apps_user_sessions
          WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
+           AND NOT FIND_IN_SET(emp_id, :skip)
          GROUP BY 1 ORDER BY 1
     """), p).all()}
     by_day_sessions = {}
@@ -359,6 +396,7 @@ def usage(request: Request,
         SELECT DATE(viewed_at), COUNT(*), COUNT(DISTINCT emp_id)
           FROM digital_apps_page_views
          WHERE app_source = :app AND DATE(viewed_at) BETWEEN :frm AND :to
+           AND NOT FIND_IN_SET(emp_id, :skip)
          GROUP BY 1 ORDER BY 1
     """), p).all()]
 
@@ -367,12 +405,14 @@ def usage(request: Request,
         SELECT COALESCE(end_reason, 'still open'), COUNT(*)
           FROM digital_apps_user_sessions
          WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
+           AND NOT FIND_IN_SET(emp_id, :skip)
          GROUP BY 1
     """), p).all()}
     browsers = {str(r[0] or "unknown"): int(r[1]) for r in db.execute(text("""
         SELECT COALESCE(browser, 'unknown'), COUNT(*)
           FROM digital_apps_user_sessions
          WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
+           AND NOT FIND_IN_SET(emp_id, :skip)
          GROUP BY 1 ORDER BY 2 DESC
     """), p).all()}
 
@@ -382,6 +422,7 @@ def usage(request: Request,
                device_type, ip_address
           FROM digital_apps_user_sessions
          WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
+           AND NOT FIND_IN_SET(emp_id, :skip)
          ORDER BY login_at DESC LIMIT 60
     """), p).mappings().all()]
     for r in recent:
@@ -406,6 +447,13 @@ def usage(request: Request,
         k["count"] += 1
         k["last"] = k["last"] or e["occurred_at"]
         emp = _emp_of(e["recorded_by"])
+        if emp and emp in skipped:
+            # Their changes come out too, or "633 changes" stays mostly the
+            # test writes of the person reading the screen.
+            k["count"] -= 1
+            if k["count"] == 0:
+                kinds.pop(e["event_type"], None)
+            continue
         if emp:
             k["people"].add(emp)
             by_actor[emp] = by_actor.get(emp, 0) + 1
@@ -483,11 +531,12 @@ def usage(request: Request,
                            "browser": None, "device": None, "timed_out": 0,
                            "views": 0, "changes": 0})
 
+    shown = [e for e in raw if _emp_of(e["recorded_by"]) not in skipped]
     latest = [{
         "occurred_at": e["occurred_at"], "event_type": e["event_type"],
         "by": e["recorded_by"], "emp_id": _emp_of(e["recorded_by"]),
         "payload": e["payload"],
-    } for e in raw[:80]]
+    } for e in shown[:80]]
 
     return {
         "app_source": app_source, "from": frm.isoformat(), "to": to.isoformat(),
@@ -497,7 +546,7 @@ def usage(request: Request,
                if k != "avg_minutes"},
             "avg_minutes": float(head["avg_minutes"]) if head else 0.0,
             "views": sum(s["views"] for s in screens),
-            "changes": len(raw),
+            "changes": len(shown),
             "screens": len(screens),
             "provisioned": len(provisioned),
             "dau": int(reach["dau"] or 0) if reach else 0,
@@ -507,6 +556,7 @@ def usage(request: Request,
             "median_minutes": median_minutes,
             "engaged_sessions": engaged,
         },
+        "excluded": skipped,
         "online": online,
         "heatmap": heatmap,
         "by_weekday_sessions": by_weekday_sessions,

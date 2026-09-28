@@ -40,7 +40,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Activity, AlertTriangle, BarChart3, CalendarClock, Clock, Eye, Gauge,
   LayoutGrid, Loader2, LogOut, Monitor, MousePointerClick, Pencil, Trophy,
-  TrendingUp, UserCheck, Users, X, ChevronRight,
+  TrendingUp, UserCheck, Users, X, ChevronRight, ShieldCheck,
 } from "lucide-react";
 import api from "@/lib/api";
 import { formatIndian } from "@/lib/utils";
@@ -94,6 +94,8 @@ interface Usage {
   by_day_sessions: Record<string, { sessions: number; people: number }>;
   by_hour: Record<string, number>;
   by_day: { day: string; views: number; people: number }[];
+  /** Employee numbers left out of every figure above. */
+  excluded?: string[];
   endings: Record<string, number>; browsers: Record<string, number>;
   recent_sessions: Sess[];
   changes_by_kind: { event_type: string; count: number; people: number }[];
@@ -225,6 +227,10 @@ export default function UsageSection() {
   const rangeLabel = useDateFilter((s) => s.label);
 
   const [app, setApp] = useState("MINES");
+  /* Administrators are out by default. The people who built the platform are
+     not the people who use it, and counting them makes adoption look like
+     something it is not. */
+  const [withAdmins, setWithAdmins] = useState(false);
   const [data, setData] = useState<Usage | null>(null);
   const [apps, setApps] = useState<App[]>([]);
   const [loading, setLoading] = useState(true);
@@ -252,7 +258,10 @@ export default function UsageSection() {
 
   const load = useCallback(async () => {
     setLoading(true); setErr(null);
-    const params = { day_from: apiFrom, day_to: apiTo, app_source: app };
+    const params = {
+      day_from: apiFrom, day_to: apiTo, app_source: app,
+      include_admins: withAdmins,
+    };
     try {
       const [u, a] = await Promise.all([
         api.get("/usage", { params }),
@@ -265,7 +274,7 @@ export default function UsageSection() {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setErr(d ?? "Could not read the usage logs.");
     } finally { setLoading(false); }
-  }, [apiFrom, apiTo, app]);
+  }, [apiFrom, apiTo, app, withAdmins]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -430,6 +439,18 @@ export default function UsageSection() {
                 hint: `${a.people} people`,
                 meta: <span className="text-txt-light">{a.sessions}</span>,
               }))} />
+            <button type="button" onClick={() => setWithAdmins((v) => !v)}
+              title={withAdmins
+                ? "Counting superadmins. They built and test the platform, so they flatter every figure."
+                : "Superadmins are left out of every figure. Click to count them."}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11.5px]
+                          font-semibold ring-1 transition-colors
+                          ${withAdmins
+                            ? "bg-amber-bg text-amber ring-amber-ring"
+                            : "bg-bg-section text-txt-muted ring-border-light hover:text-navy"}`}>
+              <ShieldCheck className="w-3.5 h-3.5" />
+              {withAdmins ? "Counting admins" : "Admins excluded"}
+            </button>
           </span>
         } />
 
@@ -492,6 +513,21 @@ export default function UsageSection() {
             ))}
           </div>
         </Card>
+      )}
+
+      {data && (data.excluded?.length ?? 0) > 0 && (
+        <p className="text-[11.5px] text-txt-muted flex items-start gap-1.5">
+          <ShieldCheck className="w-3.5 h-3.5 text-txt-light shrink-0 mt-0.5" />
+          <span>
+            Every figure on this page leaves out{" "}
+            <strong className="text-navy">{data.excluded!.length} superadmin
+            {data.excluded!.length === 1 ? "" : "s"}</strong>
+            {" "}({data.excluded!.join(", ")}) — the people who build and test the
+            platform rather than use it. Counting them roughly triples the
+            sessions and the hours, which measures the work of making this thing
+            rather than anybody adopting it.
+          </span>
+        </p>
       )}
 
       {h && (
