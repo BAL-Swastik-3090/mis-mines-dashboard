@@ -48,6 +48,8 @@ from datetime import date
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.services import ibm_rates
+
 # Net of SAP reversal documents — see sap_movement.
 from app.services.sap_movement import PRODUCTION_QTY, CONSUMPTION_QTY
 
@@ -65,15 +67,17 @@ MAT_CONCENTRATE = "000000000030000001"  # CONCENTRATE WITH STD MOISTURE -> outpu
 # that line — the fines bands are not applicable to a beneficiated product and
 # are not consulted here.
 #
-#   IBM June 2026        Rs/MT
-#   CONCENTRATES         24,560
-#
 # One rate, one product: no weighting is required. That is the whole reason the
 # COB costing is simpler than the mines costing, which has to plan-weight across
-# HG/MG/LG. Kept as a module constant for the same reason IBM_RATES is — when
-# the rate table moves into the database, this is the single place to change.
-IBM_RATE_CONCENTRATE = 24560.0
-IBM_RATE_SOURCE      = "IBM average sale price, June 2026 - concentrates"
+# HG/MG/LG.
+#
+# The figure is read from minehub.mineral_price — services/ibm_rates.py — and no
+# longer typed here. It was 24,560, June 2026's; July's 24,964 had been
+# published and collected while the screen still quoted June.
+#
+# A missing rate reports no Loss Amount rather than a zero, the same rule the
+# mines LCM follows: an invented rupee figure on a costing screen is worse than
+# a blank one.
 
 
 def _f(v) -> float:
@@ -209,6 +213,10 @@ def _actual_grades(db: Session, fd: date, td: date) -> dict:
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 def get_cob_lcm(db: Session, from_date: date, to_date: date) -> dict:
+    # The CONCENTRATES line current for the month the report ends in.
+    quoted = ibm_rates.concentrate_for(to_date)
+    rate   = quoted["rate"]
+
     plan = _plan(db, from_date, to_date)
     aq   = _actual_qty(db, from_date, to_date)
     ag   = _actual_grades(db, from_date, to_date)
@@ -270,7 +278,8 @@ def get_cob_lcm(db: Session, from_date: date, to_date: date) -> dict:
             "level":            level,
             "parent":           parent,
             "loss_mt":          mt_r,
-            "loss_amount":      round(mt_r * IBM_RATE_CONCENTRATE, 2) if mt_r is not None else None,
+            "loss_amount":      (round(mt_r * rate, 2)
+                                 if mt_r is not None and rate is not None else None),
             "loss_share_pct":   None,   # filled below, once the total is known
         }
 
@@ -383,8 +392,11 @@ def get_cob_lcm(db: Session, from_date: date, to_date: date) -> dict:
         },
 
         "costing": {
-            "rate":   IBM_RATE_CONCENTRATE,
-            "source": IBM_RATE_SOURCE,
-            "basis":  "CONCENTRATES",
+            "rate":         rate,
+            "source":       quoted["source"],
+            "basis":        "CONCENTRATES",
+            "rate_period":  quoted["period"],
+            "rate_is_stale": quoted["stale"],
+            "rate_flagged": quoted["flagged"],
         },
     }

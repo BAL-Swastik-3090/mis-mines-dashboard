@@ -210,7 +210,23 @@ export default function LCMSection() {
                 Costing Basis — IBM Rate
               </span>
             </div>
-            <span className="text-[10px] font-mono text-txt-light">{cost.source}</span>
+            {/* The issue is read from minehub and changes on its own when IBM
+                publishes, so the line has to say which one is being quoted —
+                and say when it is a cached copy rather than a live read. */}
+            <span className="text-[10px] font-mono text-txt-light">
+              {cost.source}
+              {cost.rate_is_stale && (
+                <span className="ml-1.5 text-[#c8960c]" title="MineHub could not be reached; this is the last issue read">
+                  · cached
+                </span>
+              )}
+              {!!cost.rate_flagged?.length && (
+                <span className="ml-1.5 text-danger"
+                  title={`Flagged as an implausible parse: ${cost.rate_flagged.join(", ")}`}>
+                  · check {cost.rate_flagged.join("/")}
+                </span>
+              )}
+            </span>
           </div>
 
           {cost.status !== "ok" && (

@@ -819,6 +819,12 @@ export interface LCMCosting {
   missing_grades: string[];
   total_plan_qty: number;
   source:         string;
+  /** The bulletin issue in use, YYYY-MM-01. Null when none could be read. */
+  rate_period?:   string | null;
+  /** True when minehub could not be reached and the last known issue is shown. */
+  rate_is_stale?: boolean;
+  /** Grades whose price the collector flagged as an implausible parse. */
+  rate_flagged?:  string[];
   breakdown:      LCMGradeRate[];
   ore_plan:       number;
   grade_plan_total: number;
