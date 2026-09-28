@@ -28,7 +28,8 @@ screen.
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import bindparam, text
@@ -64,6 +65,34 @@ SCREEN_NAMES = {
     "/access-control": "Access Control", "/weather": "Weather Forecast",
     "/usage": "Usage",
 }
+
+
+def _int(v) -> int:
+    """A count, as a number.
+
+    MySQL's SUM() and COUNT() come back as Decimal, and Pydantic v2 writes
+    Decimal to JSON as a string to protect a precision that a count does not
+    have. The browser then adds "5908" to "34" and gets "590834".
+
+    Done here rather than in the page, because the page is not the only reader
+    and the next chart would have to remember.
+    """
+    if v is None:
+        return 0
+    if isinstance(v, (int, Decimal, float)):
+        return int(v)
+    try:
+        return int(str(v).strip() or 0)
+    except ValueError:
+        return 0
+
+
+def _numbers(row: dict, *keys: str) -> dict:
+    """The same, for the counts in a row that came from the database."""
+    for k in keys:
+        if k in row:
+            row[k] = _int(row[k])
+    return row
 
 
 def _require(request: Request) -> None:
@@ -149,6 +178,11 @@ def usage(request: Request,
                MAX(s.role) AS role,
                COUNT(*) AS sessions,
                COALESCE(SUM(s.duration_minutes), 0) AS minutes,
+               -- On how many separate days, which says something sessions
+               -- cannot: 40 sessions on 3 days is a week of work, 40 across
+               -- 20 days is a habit.
+               COUNT(DISTINCT DATE(s.login_at)) AS active_days,
+               MIN(s.login_at) AS first_seen,
                MAX(s.last_active_at) AS last_seen,
                MAX(s.browser) AS browser, MAX(s.device_type) AS device,
                SUM(s.end_reason = 'TIMEOUT') AS timed_out,
@@ -159,6 +193,8 @@ def usage(request: Request,
          WHERE s.app_source = :app AND DATE(s.login_at) BETWEEN :frm AND :to
          GROUP BY s.emp_id ORDER BY minutes DESC
     """), p).mappings().all()]
+    for r in people:
+        _numbers(r, "sessions", "minutes", "views", "timed_out", "active_days")
 
     # ── everyone who was GIVEN it, used or not ───────────────────────────
     #
@@ -232,6 +268,8 @@ def usage(request: Request,
          GROUP BY emp_id
          ORDER BY last_active_at DESC
     """), p).mappings().all()]
+    for r in online:
+        _numbers(r, "sessions")
 
     # ── what they opened ─────────────────────────────────────────────────
     screens = []
@@ -246,7 +284,8 @@ def usage(request: Request,
          WHERE app_source = :app AND DATE(viewed_at) BETWEEN :frm AND :to
          GROUP BY page_path ORDER BY views DESC
     """), p).mappings().all():
-        o = dict(r)
+        o = _numbers(dict(r), "views", "people", "avg_seconds",
+                     "total_seconds", "no_dwell")
         o["screen"] = SCREEN_NAMES.get(o["page_path"], o["page_path"])
         screens.append(o)
 
@@ -328,6 +367,7 @@ def usage(request: Request,
     """), p).mappings().all()]
     for r in recent:
         r["session_id"] = (r["session_id"] or "")[:8]   # enough to tell apart
+        _numbers(r, "duration_minutes", "is_active")
 
     # ── what they changed, from the other database ───────────────────────
     raw = pg.execute(text("""
@@ -372,6 +412,31 @@ def usage(request: Request,
                            "last_seen": None, "browser": None, "device": None,
                            "timed_out": 0, "views": 0, "changes": n})
 
+    # Name, department and designation for everybody, from the SAP master.
+    #
+    # The session log carries these, but only for somebody who has signed in —
+    # so the people the adoption section is ABOUT were the people it could say
+    # least about, and twenty of them sat under "Not recorded".
+    #
+    # EMPID there is zero-padded to eight digits, so the join is on the number:
+    # '00003101' and '3101' are the same man and a string comparison says they
+    # are not. Cheap enough to read whole (1,259 rows) and matched in Python,
+    # which keeps the padding rule in one place instead of in every query.
+    master: dict[str, dict] = {}
+    try:
+        for r in db.execute(text("""
+            SELECT EMPID, EMPNAME, EMPDEPT, EMPDESG FROM sap_employee_details_new
+        """)).mappings().all():
+            key = str(r["EMPID"] or "").strip().lstrip("0")
+            if key:
+                master[key] = {"name": (r["EMPNAME"] or "").strip() or None,
+                               "department": (r["EMPDEPT"] or "").strip() or None,
+                               "designation": (r["EMPDESG"] or "").strip() or None}
+    except Exception:                                   # noqa: BLE001
+        # A master that cannot be read costs names on a few rows; it must not
+        # cost the page.
+        master = {}
+
     # Somebody provisioned who never arrived belongs on the list of people,
     # with zeroes. They are the entire point of having a denominator: a name
     # that shows up here is a licence nobody is using, or a colleague who was
@@ -381,11 +446,21 @@ def usage(request: Request,
     for r in people:
         r["roles"] = roles_of.get(r["emp_id"])
         r["provisioned"] = r["emp_id"] in roles_of
+        m = master.get(str(r["emp_id"]).lstrip("0"), {})
+        # The session log wins where it has something — it is what this person
+        # was called when they actually signed in — and the master fills gaps.
+        r["name"] = r.get("name") or m.get("name")
+        r["department"] = r.get("department") or m.get("department")
+        r["designation"] = m.get("designation")
     for r in provisioned:
         if r["emp_id"] not in seen:
-            people.append({"emp_id": r["emp_id"], "name": None, "department": None,
+            m = master.get(str(r["emp_id"]).lstrip("0"), {})
+            people.append({"emp_id": r["emp_id"], "name": m.get("name"),
+                           "department": m.get("department"),
+                           "designation": m.get("designation"),
                            "role": None, "roles": r["roles"], "provisioned": True,
-                           "sessions": 0, "minutes": 0, "last_seen": None,
+                           "sessions": 0, "minutes": 0, "active_days": 0,
+                           "first_seen": None, "last_seen": None,
                            "browser": None, "device": None, "timed_out": 0,
                            "views": 0, "changes": 0})
 
@@ -399,7 +474,7 @@ def usage(request: Request,
         "app_source": app_source, "from": frm.isoformat(), "to": to.isoformat(),
         "days": (to - frm).days + 1,
         "headline": {
-            **{k: (int(v) if v is not None else 0) for k, v in dict(head or {}).items()
+            **{k: _int(v) for k, v in dict(head or {}).items()
                if k != "avg_minutes"},
             "avg_minutes": float(head["avg_minutes"]) if head else 0.0,
             "views": sum(s["views"] for s in screens),
@@ -442,7 +517,8 @@ def apps(request: Request, days: int = Query(30, ge=1, le=365),
     """
     _require(request)
     frm, to = _window(days, day_from, day_to)
-    rows = {r["app_source"]: dict(r) for r in db.execute(text("""
+    rows = {r["app_source"]: _numbers(dict(r), "sessions", "people", "minutes")
+            for r in db.execute(text("""
         SELECT app_source,
                COUNT(*) AS sessions,
                COUNT(DISTINCT emp_id) AS people,
@@ -495,6 +571,7 @@ def person(emp_id: str, request: Request,
     """), p).mappings().all()]
     for r in sessions:
         r["session_id"] = (r["session_id"] or "")[:8]
+        _numbers(r, "duration_minutes", "is_active")
 
     screens = []
     for r in db.execute(text("""
@@ -507,9 +584,20 @@ def person(emp_id: str, request: Request,
            AND DATE(viewed_at) BETWEEN :frm AND :to
          GROUP BY page_path ORDER BY views DESC
     """), p).mappings().all():
-        o = dict(r)
+        o = _numbers(dict(r), "views", "avg_seconds", "total_seconds")
         o["screen"] = SCREEN_NAMES.get(o["page_path"], o["page_path"])
         screens.append(o)
+
+    # One row per day they were here, so the drill-down can show the shape of
+    # somebody's month rather than only its total.
+    by_day = [{"day": str(r[0]), "sessions": _int(r[1]), "minutes": _int(r[2])}
+              for r in db.execute(text("""
+        SELECT DATE(login_at), COUNT(*), COALESCE(SUM(duration_minutes), 0)
+          FROM digital_apps_user_sessions
+         WHERE app_source = :app AND emp_id = :e
+           AND DATE(login_at) BETWEEN :frm AND :to
+         GROUP BY 1 ORDER BY 1
+    """), p).all()]
 
     who = db.execute(text("""
         SELECT emp_name, department, role FROM digital_apps_user_sessions
@@ -531,10 +619,17 @@ def person(emp_id: str, request: Request,
     """), {"frm": frm, "to": to}).mappings().all()
         if _emp_of(e["recorded_by"]) == emp_id][:200]
 
+    m = db.execute(text("""
+        SELECT EMPNAME, EMPDEPT, EMPDESG FROM sap_employee_details_new
+         WHERE CAST(EMPID AS UNSIGNED) = :n
+    """), {"n": _int(emp_id)}).mappings().first() if emp_id.isdigit() else None
+
     return {
         "emp_id": emp_id,
-        "name": (who or {}).get("emp_name"),
-        "department": (who or {}).get("department"),
+        "name": (who or {}).get("emp_name") or (m or {}).get("EMPNAME"),
+        "department": (who or {}).get("department") or (m or {}).get("EMPDEPT"),
         "role": (who or {}).get("role"),
+        "designation": (m or {}).get("EMPDESG"),
         "sessions": sessions, "screens": screens, "changes": changes,
+        "by_day": by_day,
     }

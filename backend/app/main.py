@@ -81,6 +81,35 @@ async def _market_collector():
         await asyncio.sleep(3600)
 
 
+async def _flush_activity():
+    """Push the activity noted by requests into the session table.
+
+    Runs for the life of the process. Every pass is wrapped, because a
+    background task that dies takes the idle timeout with it: sessions would
+    stop being marked active and everybody would be signed out on the hour.
+
+    The write itself runs in a worker thread — it is a blocking database call
+    and may sit on a lock for a few seconds, which on the event loop would
+    block every request in this process for exactly as long.
+    """
+    from app.database import SessionLocal
+    from app.services import auth as auth_svc
+
+    while True:
+        await asyncio.sleep(auth_svc.FLUSH_SECONDS)
+        try:
+            def go() -> int:
+                with SessionLocal() as db:
+                    return auth_svc.flush_touches(db)
+            n = await run_in_threadpool(go)
+            if n:
+                logger.debug("activity flushed for %d sessions", n)
+        except asyncio.CancelledError:
+            raise
+        except Exception:                               # noqa: BLE001
+            logger.warning("activity flush pass failed", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ── Startup — retry up to 5 times for transient errors (e.g. too many connections) ──
@@ -96,6 +125,16 @@ async def lifespan(app: FastAPI):
         logger.critical(f"❌ Database connection failed after 5 attempts — aborting startup")
         sys.exit(1)
 
+    # Write down who has been active, once a minute, from one place.
+    #
+    # It used to happen inline on every request and almost never landed: the
+    # UPDATE raced ev_sync_digital_apps_crm — every minute, in the shared
+    # balcorpdb, same two indexes, opposite order — and lost. A user clicking
+    # through five screens over half an hour kept a last_active_at from the
+    # minute they signed in, and was turned out at exactly thirty minutes for
+    # being idle.
+    activity_task = asyncio.create_task(_flush_activity())
+
     # Start 7AM digest scheduler as a background task
     digest_task = asyncio.create_task(_daily_insights_digest())
     market_task = asyncio.create_task(_market_collector())
@@ -107,6 +146,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # ── Shutdown ─────────────────────────────────────────────
+    activity_task.cancel()
     digest_task.cancel()
     market_task.cancel()
     reaper_task.cancel()
