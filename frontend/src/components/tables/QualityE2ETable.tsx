@@ -295,6 +295,10 @@ export default function QualityE2ETable() {
    * direction across many consignments is a calibration question for the labs,
    * a scattered one is a sampling question for the stacks.
    */
+  const destLabel = dest === ALL_DEST
+    ? "both plants"
+    : (dests.find((d) => d.key === dest)?.label ?? dest);
+
   const reading = useMemo(() => {
     if (!all.length) return null;
     const top = worst[0];
@@ -487,7 +491,8 @@ export default function QualityE2ETable() {
                 plant assays the same material on arrival. Over{" "}
                 {from.split("-").reverse().join("-")} to{" "}
                 {to.split("-").reverse().join("-")}, <b className="text-navy">
-                {all.length} consignments</b> went out —{" "}
+                {all.length} consignments</b> went to{" "}
+                <b className="text-navy">{destLabel}</b> —{" "}
                 {formatIndian(totalQty, 2)} MT. On{" "}
                 <b className="text-navy">{flagged.length}</b> of them the two
                 labs differ by more than they usually do.
