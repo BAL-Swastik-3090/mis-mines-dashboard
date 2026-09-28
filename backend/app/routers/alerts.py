@@ -97,10 +97,11 @@ def _ago(seconds: float | None) -> tuple[float, str]:
     return (mins, f"{d} day{'s' if d != 1 else ''} ago")
 
 
-def _lasted(a: datetime | None, b: datetime | None) -> str | None:
-    if not a or not b:
+def _span(seconds: float | None) -> str | None:
+    """How long something ran, from seconds the database measured."""
+    if seconds is None:
         return None
-    mins = (b - a).total_seconds() / 60
+    mins = float(seconds) / 60
     if mins < 60:
         return f"{int(mins)} minutes"
     if mins < 60 * 24:
@@ -224,7 +225,9 @@ def live(request: Request, pg: Session = Depends(get_minehub_db)) -> dict:
         SELECT alert_id, alert_key, kind, title, detail, severity,
                opened_at, since_at, resolved_at,
                EXTRACT(EPOCH FROM (now() - COALESCE(since_at, opened_at)))
-                   AS running_seconds
+                   AS running_seconds,
+               EXTRACT(EPOCH FROM (COALESCE(resolved_at, now())
+                                   - COALESCE(since_at, opened_at))) AS ran_seconds
           FROM platform_alert
          WHERE (resolved_at IS NULL OR resolved_at > now() - :window)
            AND alert_key LIKE 'wb-agent-%'
@@ -250,7 +253,7 @@ def live(request: Request, pg: Session = Depends(get_minehub_db)) -> dict:
                       if resolved else r["title"]),
             "detail": (
                 f"Back at {r['resolved_at']:%d %b %H:%M}. It was out for "
-                f"{_lasted(r['since_at'] or r['opened_at'], r['resolved_at'])}."
+                f"{_span(r['ran_seconds'])}."
                 if resolved else r["detail"]),
             "since": (r["since_at"] or r["opened_at"]).isoformat(),
             "minutes": None if mins == float("inf") else round(mins),
@@ -310,7 +313,12 @@ def history(request: Request,
     out = []
     for r in pg.execute(text("""
         SELECT alert_id, alert_key, kind, title, severity,
-               opened_at, since_at, resolved_at, last_seen_at
+               opened_at, since_at, resolved_at, last_seen_at,
+               -- Measured by the clock that wrote both ends of it. Doing this
+               -- in Python against datetime.now() added the app server's
+               -- 411-second lead over this database to every open episode.
+               EXTRACT(EPOCH FROM (COALESCE(resolved_at, now())
+                                   - COALESCE(since_at, opened_at))) AS lasted_seconds
           FROM platform_alert
          WHERE opened_at > now() - make_interval(days => :d)
          ORDER BY opened_at DESC LIMIT 200
@@ -319,7 +327,7 @@ def history(request: Request,
         out.append({
             **dict(r),
             "began": began.isoformat() if began else None,
-            "lasted": _lasted(began, r["resolved_at"] or datetime.now(timezone.utc)),
+            "lasted": _span(r["lasted_seconds"]),
             "ongoing": r["resolved_at"] is None,
         })
     return out
