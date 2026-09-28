@@ -70,14 +70,22 @@ def _me(request: Request) -> str:
     return str(getattr(request.state, "emp_id", "") or "")
 
 
-def _ago(then: datetime | None) -> tuple[float, str]:
-    """Minutes since, and how a person would say it."""
-    if then is None:
+def _ago(seconds: float | None) -> tuple[float, str]:
+    """Minutes since, and how a person would say it.
+
+    TAKES SECONDS, MEASURED BY THE DATABASE — not a timestamp to subtract from
+    this server's clock. Those are two different clocks and on this site they
+    are nearly seven minutes apart, which made every age here seven minutes too
+    old: an agent that had just reported was "late", and the one-hour threshold
+    fired after fifty-three minutes.
+
+    The weighbridge router already carried a comment warning about exactly
+    this. Subtracting two readings of the same clock is right whichever of them
+    is wrong.
+    """
+    if seconds is None:
         return (float("inf"), "never")
-    now = datetime.now(timezone.utc)
-    if then.tzinfo is None:
-        then = then.replace(tzinfo=timezone.utc)
-    mins = (now - then).total_seconds() / 60
+    mins = float(seconds) / 60
     if mins < 1:
         return (mins, "just now")
     if mins < 60:
@@ -112,13 +120,15 @@ def _current(pg: Session, held: set[str]) -> list[dict]:
     # (access.users.view — can reach the machine). Nobody else can do either.
     if held & {"wb.view", "access.users.view"}:
         for r in pg.execute(text("""
-            SELECT w.code, w.name, a.machine_name, a.last_seen_at, a.last_error
+            SELECT w.code, w.name, a.machine_name, a.last_seen_at, a.last_error,
+                   -- Measured here, by the clock that wrote the timestamp.
+                   EXTRACT(EPOCH FROM (now() - a.last_seen_at)) AS quiet_seconds
               FROM weighbridge_agent a
               JOIN weighbridge w ON w.weighbridge_id = a.weighbridge_id
              WHERE a.status = 'ACTIVE'
              ORDER BY a.last_seen_at NULLS FIRST
         """)).mappings().all():
-            mins, said = _ago(r["last_seen_at"])
+            mins, said = _ago(r["quiet_seconds"])
             if mins <= AGENT_QUIET_WARN.total_seconds() / 60:
                 continue
             down = mins > AGENT_QUIET_DOWN.total_seconds() / 60
@@ -212,7 +222,9 @@ def live(request: Request, pg: Session = Depends(get_minehub_db)) -> dict:
 
     rows = pg.execute(text("""
         SELECT alert_id, alert_key, kind, title, detail, severity,
-               opened_at, since_at, resolved_at
+               opened_at, since_at, resolved_at,
+               EXTRACT(EPOCH FROM (now() - COALESCE(since_at, opened_at)))
+                   AS running_seconds
           FROM platform_alert
          WHERE (resolved_at IS NULL OR resolved_at > now() - :window)
            AND alert_key LIKE 'wb-agent-%'
@@ -228,7 +240,7 @@ def live(request: Request, pg: Session = Depends(get_minehub_db)) -> dict:
         if seen_at and SEVERITY_RANK.get(r["severity"], 0) <= SEVERITY_RANK.get(seen_at, 0):
             continue
         resolved = r["resolved_at"] is not None
-        mins, said = _ago(r["since_at"] or r["opened_at"])
+        mins, said = _ago(r["running_seconds"])
         out.append({
             "id": r["alert_id"],
             "key": r["alert_key"],
