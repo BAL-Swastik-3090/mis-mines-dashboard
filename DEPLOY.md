@@ -60,6 +60,64 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ---
 
+## Deployed — 2026-09-28: both plants, and filters in the header
+
+Released commit `4bc1d7d` (branch `release-28-09-2026`) to
+mines.balasorealloys.in. Backup: `~/mines_dashboard-backup-20260928-1200.tar.gz`.
+
+**What changed**
+
+- Swastik's enhancement: the quality screen covers both destinations, not only
+  Balasore. Jabamoyee — 19 consignments and 2,641 MT in September — was not on
+  the screen at all before.
+- The mines assay is no longer borrowed. Where a stack had one assay group on
+  file it was used for every despatch day of that stack; it never helped and
+  was wrong five times in 303 consignments. Six rows now show a blank instead.
+- Finished product is excluded. The date-prefixed batches are ferrochrome, not
+  ore. Balasore for 1-26 September moves from 37 consignments and 15,384.64 MT
+  to 36 and 15,334.63 — exactly `250926S101`, 50.01 MT with no grade and no
+  assay.
+- Filters in the second header row for stack, plant and grade, in the space
+  five columns were using to hold one word each.
+- The count says stacks as well as consignments: 36 consignments at Balasore
+  are 29 stacks, because seven shipped over more than one day.
+- Stock now sits before E2E Quality in the tab bar and in the page.
+
+**No database change.** The quality screen is read-only against SAP tables in
+balcorpdb.
+
+Verified inside the container:
+
+```
+BAL          36 consignments   29 stacks   1303 trips   15,334.63 MT
+JABAMOYEE    19 consignments   17 stacks    225 trips    2,641.65 MT
+6 rows blank rather than borrowing an assay
+0 date-prefixed batches
+18 stack-days shipped to both plants, each a distinct row
+```
+
+The deletion check ran and came back empty.
+
+### ONE COLUMN, THREE CONDITIONS
+
+Worth recording because the symptom looked like two unrelated bugs. The "To"
+column was decided in three places by two different tests — the header and
+body asked whether both plants were selected, the filter row asked whether the
+period had two destinations — so choosing a plant dropped the column from two
+of the three and left the filter row one cell wider. Every filter then sat
+under the wrong heading.
+
+The table's own `min-width` was a fourth opinion, 1080 against 1160, and a
+table declared narrower than the columns it draws is the white space that
+appeared at the right-hand end.
+
+One `showDest`, read by the header cell, the filter cell, the body cell, the
+footer colSpan and the width. When a structural choice is made in more than
+one place, the bug is not that one of them is wrong — it is that there is more
+than one of them.
+
+---
+
 ## Deployed — 2026-09-26 (second): end-to-end quality
 
 Released commit `5550990` (branch `release-26-09-2026-b`) to
