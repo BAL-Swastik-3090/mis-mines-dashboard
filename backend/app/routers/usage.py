@@ -556,7 +556,12 @@ def usage(request: Request,
             "median_minutes": median_minutes,
             "engaged_sessions": engaged,
         },
-        "excluded": skipped,
+        # Named rather than numbered: an employee number is not more discreet
+        # than a name, only harder to read. What is deliberately NOT sent is
+        # the reason they hold the access — see the note on _superadmins.
+        "excluded": [{"emp_id": e,
+                      "name": (master.get(e.lstrip("0"), {}) or {}).get("name") or e}
+                     for e in skipped],
         "online": online,
         "heatmap": heatmap,
         "by_weekday_sessions": by_weekday_sessions,
