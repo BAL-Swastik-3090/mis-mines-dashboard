@@ -365,6 +365,7 @@ from app.routers import checklists, operators_analytics
 from app.routers import prev_day_actual
 from app.routers import stock_entry
 from app.routers import quality_e2e
+from app.routers import alerts as live_alerts
 from app.routers import usage
 from app.routers import production, stock, cob, plant, ob, despatch, equipment, dewatering, insights, live_tracking, fuel_management, ev_tracking, auth, oee, roles, minehub, access, operators, operations, workforce, productivity, comments
 app.include_router(production.router,      prefix="/api/production",    tags=["Production"])
@@ -404,4 +405,5 @@ app.include_router(prev_day_actual.router)
 app.include_router(stock_entry.router)
 app.include_router(quality_e2e.router)
 app.include_router(usage.router)
+app.include_router(live_alerts.router)
 app.include_router(access.router)

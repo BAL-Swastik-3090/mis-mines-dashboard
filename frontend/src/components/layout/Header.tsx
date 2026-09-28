@@ -1,6 +1,7 @@
 "use client";
 import { format } from "date-fns";
-import { RefreshCw, Bell, MoreVertical, PencilLine, Boxes } from "lucide-react";
+import { RefreshCw, MoreVertical, PencilLine, Boxes } from "lucide-react";
+import AlertsBell from "./AlertsBell";
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import DateFilter from "./DateFilter";
@@ -122,16 +123,13 @@ export default function Header() {
             />
           </button>
 
-          {/* Alerts */}
-          <button
-            title="Alerts"
-            className="p-2 rounded border border-white/15 text-white/60 hover:text-white hover:border-white/30 transition-colors relative"
-          >
-            <Bell size={15} />
-            <span className="absolute -top-1 -right-1 w-4 h-4 bg-danger rounded-full text-[9px] text-white flex items-center justify-center font-bold">
-              3
-            </span>
-          </button>
+          {/* Alerts.
+              This was a picture of a bell with a 3 painted on it, and it sat
+              here through the whole of the WB3 outage saying 3 — while the one
+              thing worth knowing, that the weighbridge had stopped sending
+              readings on Saturday morning, was not among them. A badge that is
+              always 3 teaches people the bell means nothing. */}
+          <AlertsBell />
 
           {/* Data-entry actions. Separate from the profile menu, which is about
               who you are rather than what you can record. */}
