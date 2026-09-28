@@ -131,6 +131,64 @@ def usage(request: Request,
          GROUP BY s.emp_id ORDER BY minutes DESC
     """), p).mappings().all()]
 
+    # ── everyone who was GIVEN it, used or not ───────────────────────────
+    #
+    # The number that makes every other number mean something. A live role is
+    # the definition of provisioned: `valid_to IS NULL` is how access.py
+    # decides somebody currently holds a role, and disagreeing with it here
+    # would put two different answers to "who has access" on two screens.
+    # Postgres, not MySQL: roles and grants live in minehub beside the rest of
+    # the platform's own tables, while the session log is in the shared
+    # balcorpdb. Two databases in one answer, which is the whole shape of this
+    # screen.
+    provisioned = [dict(r) for r in pg.execute(text("""
+        SELECT ua.emp_id, STRING_AGG(DISTINCT r.name, ', ' ORDER BY r.name) AS roles
+          FROM user_access ua
+          JOIN role r ON r.role_id = ua.role_id AND r.status = 'ACTIVE'
+         WHERE ua.valid_to IS NULL
+         GROUP BY ua.emp_id
+    """)).mappings().all()]
+
+    # The same people over three windows. One number cannot separate a tool
+    # somebody opens every morning from one they opened once this month.
+    reach = db.execute(text("""
+        SELECT COUNT(DISTINCT CASE WHEN DATE(login_at) = CURDATE()
+                                   THEN emp_id END)                  AS dau,
+               COUNT(DISTINCT CASE WHEN login_at >= NOW() - INTERVAL 7 DAY
+                                   THEN emp_id END)                  AS wau,
+               COUNT(DISTINCT emp_id)                                AS mau,
+               SUM(DATE(login_at) = CURDATE())                       AS sessions_today
+          FROM digital_apps_user_sessions
+         WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
+    """), p).mappings().first()
+
+    # Every finished session's length, for a median. A mean is moved by one
+    # person who left a tab open over lunch; a median is not, and the two
+    # printed together say whether that happened.
+    durations = sorted(
+        int(r[0]) for r in db.execute(text("""
+            SELECT duration_minutes FROM digital_apps_user_sessions
+             WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
+               AND duration_minutes IS NOT NULL
+        """), p).all() if r[0] is not None)
+    median_minutes = (durations[len(durations) // 2] if durations else 0)
+
+    # Sessions that reached at least one screen. A sign-in that arrived
+    # nowhere is not use, and dividing page views by ALL sessions quietly
+    # counts it as though it were.
+    engaged = int(db.execute(text("""
+        SELECT COUNT(DISTINCT session_id) FROM digital_apps_page_views
+         WHERE app_source = :app AND DATE(viewed_at) BETWEEN :frm AND :to
+    """), p).scalar() or 0)
+
+    # Who is in there right now, by name.
+    online = [dict(r) for r in db.execute(text("""
+        SELECT emp_id, emp_name, department, role, last_active_at, login_at
+          FROM digital_apps_user_sessions
+         WHERE app_source = :app AND is_active = 1
+         ORDER BY last_active_at DESC
+    """), p).mappings().all()]
+
     # ── what they opened ─────────────────────────────────────────────────
     screens = []
     for r in db.execute(text("""
@@ -162,6 +220,38 @@ def usage(request: Request,
          WHERE app_source = :app AND DATE(viewed_at) BETWEEN :frm AND :to
          GROUP BY 1
     """), p).all()}
+    # Weekday against hour, as a grid. "Busy on Thursday" and "busy at 3pm"
+    # are two totals that cannot tell you about Thursday at 3pm, which is the
+    # question somebody scheduling a shift handover is actually asking.
+    #
+    # Sessions rather than page views: this is about when people come to the
+    # dashboard, not how much they clicked once they were in.
+    heatmap = [[0] * 24 for _ in range(7)]
+    for r in db.execute(text("""
+        SELECT (DAYOFWEEK(login_at) + 5) % 7 AS wd, HOUR(login_at) AS hr,
+               COUNT(*) AS n
+          FROM digital_apps_user_sessions
+         WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
+         GROUP BY 1, 2
+    """), p).all():
+        heatmap[int(r[0])][int(r[1])] = int(r[2])
+
+    by_weekday_sessions = {int(r[0]): {"sessions": int(r[1]), "people": int(r[2])}
+                           for r in db.execute(text("""
+        SELECT (DAYOFWEEK(login_at) + 5) % 7, COUNT(*), COUNT(DISTINCT emp_id)
+          FROM digital_apps_user_sessions
+         WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
+         GROUP BY 1
+    """), p).all()}
+
+    by_day_sessions = {str(r[0]): {"sessions": int(r[1]), "people": int(r[2])}
+                       for r in db.execute(text("""
+        SELECT DATE(login_at), COUNT(*), COUNT(DISTINCT emp_id)
+          FROM digital_apps_user_sessions
+         WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
+         GROUP BY 1 ORDER BY 1
+    """), p).all()}
+
     by_day = [{"day": str(r[0]), "views": int(r[1]), "people": int(r[2])}
               for r in db.execute(text("""
         SELECT DATE(viewed_at), COUNT(*), COUNT(DISTINCT emp_id)
@@ -238,6 +328,23 @@ def usage(request: Request,
                            "last_seen": None, "browser": None, "device": None,
                            "timed_out": 0, "views": 0, "changes": n})
 
+    # Somebody provisioned who never arrived belongs on the list of people,
+    # with zeroes. They are the entire point of having a denominator: a name
+    # that shows up here is a licence nobody is using, or a colleague who was
+    # never shown how.
+    seen = {r["emp_id"] for r in people}
+    roles_of = {r["emp_id"]: r["roles"] for r in provisioned}
+    for r in people:
+        r["roles"] = roles_of.get(r["emp_id"])
+        r["provisioned"] = r["emp_id"] in roles_of
+    for r in provisioned:
+        if r["emp_id"] not in seen:
+            people.append({"emp_id": r["emp_id"], "name": None, "department": None,
+                           "role": None, "roles": r["roles"], "provisioned": True,
+                           "sessions": 0, "minutes": 0, "last_seen": None,
+                           "browser": None, "device": None, "timed_out": 0,
+                           "views": 0, "changes": 0})
+
     latest = [{
         "occurred_at": e["occurred_at"], "event_type": e["event_type"],
         "by": e["recorded_by"], "emp_id": _emp_of(e["recorded_by"]),
@@ -254,7 +361,18 @@ def usage(request: Request,
             "views": sum(s["views"] for s in screens),
             "changes": len(raw),
             "screens": len(screens),
+            "provisioned": len(provisioned),
+            "dau": int(reach["dau"] or 0) if reach else 0,
+            "wau": int(reach["wau"] or 0) if reach else 0,
+            "mau": int(reach["mau"] or 0) if reach else 0,
+            "sessions_today": int(reach["sessions_today"] or 0) if reach else 0,
+            "median_minutes": median_minutes,
+            "engaged_sessions": engaged,
         },
+        "online": online,
+        "heatmap": heatmap,
+        "by_weekday_sessions": by_weekday_sessions,
+        "by_day_sessions": by_day_sessions,
         "people": people,
         "screens": screens,
         "by_hour": by_hour, "by_weekday": by_weekday, "by_day": by_day,
@@ -289,3 +407,77 @@ def apps(request: Request, days: int = Query(30, ge=1, le=365),
          WHERE DATE(login_at) BETWEEN :frm AND :to
          GROUP BY app_source ORDER BY sessions DESC
     """), {"frm": frm, "to": to}).mappings().all()]
+
+
+@router.get("/person/{emp_id}")
+def person(emp_id: str, request: Request,
+           days: int = Query(30, ge=1, le=365),
+           app_source: str = Query(APP),
+           db: Session = Depends(get_db),
+           pg: Session = Depends(get_minehub_db)) -> dict:
+    """One person: every session, every screen, everything they changed.
+
+    The first thing anybody asks of an aggregate is which of these rows is me,
+    and the second is what the person at the top of it was actually doing. A
+    leaderboard that cannot be opened is a ranking nobody can check.
+
+    Same permission as the page it opens from. Nothing new is exposed here —
+    it is the same three logs, filtered to one person.
+    """
+    _require(request)
+    frm, to = _window(days)
+    p = {"app": app_source, "frm": frm, "to": to, "e": emp_id}
+
+    sessions = [dict(r) for r in db.execute(text("""
+        SELECT session_id, login_at, logout_at, duration_minutes, end_reason,
+               is_active, browser, os, device_type, ip_address
+          FROM digital_apps_user_sessions
+         WHERE app_source = :app AND emp_id = :e
+           AND DATE(login_at) BETWEEN :frm AND :to
+         ORDER BY login_at DESC LIMIT 100
+    """), p).mappings().all()]
+    for r in sessions:
+        r["session_id"] = (r["session_id"] or "")[:8]
+
+    screens = []
+    for r in db.execute(text("""
+        SELECT page_path, COUNT(*) AS views,
+               COALESCE(ROUND(AVG(time_spent_seconds)), 0) AS avg_seconds,
+               COALESCE(SUM(time_spent_seconds), 0) AS total_seconds,
+               MAX(viewed_at) AS last_seen
+          FROM digital_apps_page_views
+         WHERE app_source = :app AND emp_id = :e
+           AND DATE(viewed_at) BETWEEN :frm AND :to
+         GROUP BY page_path ORDER BY views DESC
+    """), p).mappings().all():
+        o = dict(r)
+        o["screen"] = SCREEN_NAMES.get(o["page_path"], o["page_path"])
+        screens.append(o)
+
+    who = db.execute(text("""
+        SELECT emp_name, department, role FROM digital_apps_user_sessions
+         WHERE app_source = :app AND emp_id = :e
+         ORDER BY login_at DESC LIMIT 1
+    """), p).mappings().first()
+
+    # The event log records who by a string, not an id — see _emp_of. Filtering
+    # in SQL would mean LIKE on a dirty column; the range is already small
+    # enough to read and match in Python, and it uses the same rule the rest of
+    # the page uses rather than a second one that could disagree.
+    changes = [{
+        "occurred_at": e["occurred_at"], "event_type": e["event_type"],
+        "by": e["recorded_by"], "payload": e["payload"],
+    } for e in pg.execute(text("""
+        SELECT event_type, recorded_by, occurred_at, payload FROM event
+         WHERE occurred_at >= :frm AND occurred_at < (CAST(:to AS date) + 1)
+         ORDER BY occurred_at DESC
+    """), {"frm": frm, "to": to}).mappings().all()
+        if _emp_of(e["recorded_by"]) == emp_id][:200]
+
+    return {
+        "emp_id": emp_id,
+        "name": (who or {}).get("emp_name"),
+        "department": (who or {}).get("department"),
+        "role": (who or {}).get("role"),
+        "sessions": sessions, "screens": screens, "changes": changes,
+    }
