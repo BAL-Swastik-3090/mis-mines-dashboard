@@ -94,8 +94,12 @@ interface Usage {
   by_day_sessions: Record<string, { sessions: number; people: number }>;
   by_hour: Record<string, number>;
   by_day: { day: string; views: number; people: number }[];
-  /** The people left out of every figure above. */
-  excluded?: { emp_id: string; name: string }[];
+  /** How many people are left out of every figure above. A count and no
+   *  more: the reader needs to know the numbers exclude somebody, or they
+   *  cannot reconcile them against the session log. They do not need to know
+   *  who, and saying who published the platform's administrators to everybody
+   *  holding usage.view. */
+  excluded_count?: number;
   endings: Record<string, number>; browsers: Record<string, number>;
   recent_sessions: Sess[];
   changes_by_kind: { event_type: string; count: number; people: number }[];
@@ -517,17 +521,18 @@ export default function UsageSection() {
         </Card>
       )}
 
-      {data && (data.excluded?.length ?? 0) > 0 && (
+      {data && (data.excluded_count ?? 0) > 0 && (
         <p className="text-[11.5px] text-txt-muted flex items-start gap-1.5">
           <Wrench className="w-3.5 h-3.5 text-txt-light shrink-0 mt-0.5" />
           <span>
-            These figures leave out the{" "}
-            <strong className="text-navy">{data.excluded!.length} people who
-            build and test this platform</strong>
-            {" "}({data.excluded!.map((e) => e.name).join(", ")}) — their time
-            here is the work of making it, not of using it. Counting them
-            roughly triples the sessions and the hours and tells you nothing
-            about whether the mine has taken it up.
+            These figures leave out{" "}
+            <strong className="text-navy">
+              {data.excluded_count} {data.excluded_count === 1 ? "person" : "people"}
+              {" "}who build and test this platform
+            </strong>
+            {" "}— their time here is the work of making it, not of using it.
+            Counting them roughly triples the sessions and the hours and tells
+            you nothing about whether the mine has taken it up.
           </span>
         </p>
       )}

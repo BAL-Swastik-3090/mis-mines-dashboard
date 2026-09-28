@@ -556,12 +556,14 @@ def usage(request: Request,
             "median_minutes": median_minutes,
             "engaged_sessions": engaged,
         },
-        # Named rather than numbered: an employee number is not more discreet
-        # than a name, only harder to read. What is deliberately NOT sent is
-        # the reason they hold the access — see the note on _superadmins.
-        "excluded": [{"emp_id": e,
-                      "name": (master.get(e.lstrip("0"), {}) or {}).get("name") or e}
-                     for e in skipped],
+        # A COUNT, and nothing else.
+        #
+        # This was a list of employee numbers, then a list of names, and both
+        # were more than the page needs. The reader has to know the figures
+        # exclude somebody, or they cannot reconcile them against the session
+        # log. They do not have to know who, and sending it published the
+        # platform's administrators to everybody holding usage.view.
+        "excluded_count": len(skipped),
         "online": online,
         "heatmap": heatmap,
         "by_weekday_sessions": by_weekday_sessions,
