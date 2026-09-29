@@ -277,8 +277,21 @@ export default function UsageSection() {
       setData(u.data ?? null);
       setApps(a.data ?? []);
     } catch (e) {
-      const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setErr(d ?? "Could not read the usage logs.");
+      /* A request the BROWSER abandoned is not a failure of ours.
+       *
+       * Switching tab or changing the date mid-flight aborts it, nginx logs a
+       * 499, and this used to paint "Could not read the usage logs" over a
+       * screen that was working perfectly — which is what happened at 13:38
+       * today and sent the investigation to the wrong place. Silent, and the
+       * next load fills it in. */
+      const err = e as { code?: string; message?: string;
+                         response?: { data?: { detail?: string } } };
+      const aborted = err?.code === "ERR_CANCELED"
+        || err?.code === "ECONNABORTED"
+        || /abort|cancel/i.test(err?.message ?? "");
+      if (!aborted) {
+        setErr(err?.response?.data?.detail ?? "Could not read the usage logs.");
+      }
     } finally { setLoading(false); }
   }, [apiFrom, apiTo, app, withBuilders]);
 

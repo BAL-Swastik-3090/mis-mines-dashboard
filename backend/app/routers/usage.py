@@ -28,6 +28,7 @@ screen.
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
@@ -99,6 +100,20 @@ def _numbers(row: dict, *keys: str) -> dict:
         if k in row:
             row[k] = _int(row[k])
     return row
+
+
+# The assembled answer, held briefly.
+#
+# The endpoint is fourteen quick queries rather than one slow one, and nearly
+# all of the three seconds is round trips to a MySQL server on another host.
+# That is long enough that somebody switching tabs aborts it — which is exactly
+# what happened at 13:38 today, and the screen reported it as a failure of
+# ours.
+#
+# A past range cannot change and today's changes slowly.
+_ANSWER: "OrderedDict[tuple, tuple[float, dict]]" = OrderedDict()
+_ANSWER_TTL = 60.0
+_ANSWER_MAX = 12
 
 
 def _superadmins(pg: Session) -> list[str]:
@@ -183,6 +198,16 @@ def usage(request: Request,
     _require(request)
     app_source = _app(app_source)
     frm, to = _window(days, day_from, day_to)
+
+    # The same answer was assembled a moment ago for somebody else, or for
+    # this reader before they changed tab. Fourteen round trips to another host
+    # is long enough to be abandoned mid-flight.
+    import time as _time
+    key = (app_source, frm, to, bool(include_admins))
+    hit = _ANSWER.get(key)
+    if hit and _time.monotonic() - hit[0] < _ANSWER_TTL:
+        _ANSWER.move_to_end(key)
+        return hit[1]
 
     # Superadmins are excluded by default — see _superadmins. A comma-joined
     # string rather than an expanding IN: the exclusion reaches a dozen queries
@@ -538,7 +563,7 @@ def usage(request: Request,
         "payload": e["payload"],
     } for e in shown[:80]]
 
-    return {
+    answer = {
         "app_source": app_source, "from": frm.isoformat(), "to": to.isoformat(),
         "days": (to - frm).days + 1,
         "headline": {
@@ -579,6 +604,11 @@ def usage(request: Request,
                          for k, v in sorted(unattributed.items(),
                                             key=lambda x: -x[1])],
     }
+    _ANSWER[key] = (_time.monotonic(), answer)
+    _ANSWER.move_to_end(key)
+    while len(_ANSWER) > _ANSWER_MAX:
+        _ANSWER.popitem(last=False)
+    return answer
 
 
 @router.get("/apps")
