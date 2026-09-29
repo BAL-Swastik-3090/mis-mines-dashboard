@@ -607,6 +607,26 @@ def touch(db: Session, sid: str) -> None:
         _seen[sid] = time.time()
 
 
+def touch_now(db: Session, sid: str) -> bool:
+    """Write this session's activity immediately, and say whether it landed.
+
+    For the heartbeat, which is the only thing keeping a session alive while
+    somebody reads one screen. touch() notes the session for the flusher, which
+    is right for the per-request path — a write on every call is what drained
+    the pool — and wrong here: the heartbeat fires once every two minutes and is
+    the whole reason an idle-but-watching user stays signed in.
+
+    Once per user per two minutes is a fraction of the load that caused the
+    original trouble, and it keeps the short lock timeout and the retry, so it
+    can neither hold a pooled connection nor fail the request it rides on.
+    """
+    with _seen_lock:
+        _seen.pop(sid, None)        # written here; the flusher need not repeat it
+    return _best_effort(db, "heartbeat", lambda: db.execute(text(
+        f"UPDATE {SESS_TBL} SET last_active_at = NOW() "
+        f"WHERE session_id = :sid AND is_active = 1"), {"sid": sid}))
+
+
 def flush_touches(db: Session) -> int:
     """Write the activity noted since the last flush. One statement, patiently.
 
