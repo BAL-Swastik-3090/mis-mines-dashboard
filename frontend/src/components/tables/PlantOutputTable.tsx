@@ -26,6 +26,8 @@ import { Factory } from "lucide-react";
 import api from "@/lib/api";
 import { formatIndian } from "@/lib/utils";
 import { useDateFilter } from "@/contexts/useDateFilter";
+import SearchSelect from "@/components/minehub/SearchSelect";
+import ChainScorecard from "@/components/tables/ChainScorecard";
 
 const PARAMS = ["cr", "si", "c", "p", "s"] as const;
 type Param = (typeof PARAMS)[number];
@@ -70,11 +72,19 @@ const HEADS: Record<Param, string> = {
  * readable without losing the column names. Heights are fixed because the
  * sticky header's offset has to be an exact pixel count. */
 const HEAD_H = 28;
+// The second header row is taller because it holds a control rather than a
+// word. Its height does not decide where it sticks — that is the first row's
+// height — but the scroll window is measured from both, so it is stated.
+const HEAD2_H = 36;
 const ROW_H = 33;
 const VISIBLE_ROWS = 10;
-const WINDOW_H = HEAD_H + ROW_H * (VISIBLE_ROWS + 1);
+const WINDOW_H = HEAD_H + HEAD2_H + ROW_H * (VISIBLE_ROWS + 1);
 
+// The background belongs on the cell, never the row: with border-collapse a
+// sticky row is ignored in Chrome, and a transparent sticky cell lets the body
+// scroll through it.
 const STICKY_HEAD = "sticky top-0 z-20 bg-navy";
+const STICKY_2 = "sticky z-20 bg-navy";
 const STICKY_FOOT = "sticky bottom-0 z-10 bg-bg-section border-t-2 border-navy/20";
 const TH = "px-2 font-condensed font-extrabold text-[11px] tracking-[.1em]";
 const TD = "px-2 py-2 leading-4 text-right text-[12px] whitespace-nowrap";
@@ -90,6 +100,7 @@ export default function PlantOutputTable() {
   const from = useDateFilter((x) => x.apiFrom);
   const to = useDateFilter((x) => x.apiTo);
   const [plant, setPlant] = useState<string>(ALL_PLANTS);
+  const [furnace, setFurnace] = useState<string>("");
 
   const q = useQuery<Resp>({
     queryKey: ["plant-output", from, to],
@@ -111,12 +122,47 @@ export default function PlantOutputTable() {
     [q.data],
   );
 
-  const rows = useMemo(
+  const byPlant = useMemo(
     () => (plant === ALL_PLANTS
       ? everything
       : everything.filter((r) => r.plant === plant)),
     [everything, plant],
   );
+
+  // The furnaces actually present in what the plant filter has left, so the
+  // list never offers one that would empty the table.
+  const furnaces = useMemo(
+    () => [...new Set(byPlant.map((r) => r.furnace))].sort(),
+    [byPlant],
+  );
+
+  /* A furnace chosen under one plant may not exist under the next — F5 does
+     not run at Jabamoyee. Derived rather than corrected with setState during
+     render: an unavailable choice simply stops filtering, and the select falls
+     back to "All furnaces" on its own. */
+  const activeFurnace = furnaces.includes(furnace) ? furnace : "";
+
+  const rows = useMemo(
+    () => (activeFurnace
+      ? byPlant.filter((r) => r.furnace === activeFurnace)
+      : byPlant),
+    [byPlant, activeFurnace],
+  );
+
+  /* Which background band each date falls in.
+   *
+   * Alternating per DATE rather than per row: a production day is five rows on
+   * Balasore and one on Jabamoyee, and a plain zebra stripe would cut straight
+   * through the grouping the reader is trying to see. Built from the rows on
+   * screen, so filtering to one furnace still bands by day. */
+  const band = useMemo(() => {
+    const m = new Map<string, number>();
+    let i = 0;
+    for (const r of rows) {
+      if (!m.has(r.date)) m.set(r.date, i++ % 2);
+    }
+    return m;
+  }, [rows]);
 
   const t = q.data?.totals?.[plant];
 
@@ -130,40 +176,13 @@ export default function PlantOutputTable() {
         </span>
       </div>
 
-      {/* Both smelters at once. Balasore runs five furnaces and Jabamoyee one,
-          so a pooled figure would be almost entirely Balasore's. */}
-      {!q.isLoading && plants.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {[{ key: ALL_PLANTS, label: "Both plants" }, ...plants].map((p) => {
-            const tt = q.data?.totals?.[p.key];
-            const on = plant === p.key;
-            return (
-              <button key={p.key} type="button" onClick={() => setPlant(p.key)}
-                aria-pressed={on}
-                className={`rounded-xl border px-3 py-2 text-left transition-colors
-                  ${on ? "border-navy bg-navy text-white shadow-md"
-                       : "border-border bg-white hover:border-navy/40"}`}>
-                <div className={`text-[12px] font-bold ${on ? "text-white" : "text-navy"}`}>
-                  {p.label}
-                </div>
-                <div className={`mt-0.5 flex items-baseline gap-2 text-[11px] tabular-nums
-                  ${on ? "text-white/85" : "text-txt-muted"}`}>
-                  <span className="font-semibold">
-                    {formatIndian(tt?.yield_t ?? 0, 2)} t
-                  </span>
-                  <span>{tt?.taps ?? 0} taps</span>
-                </div>
-                <div className={`mt-0.5 text-[10px]
-                  ${on ? "text-white/70" : "text-txt-light"}`}>
-                  {tt?.cr != null
-                    ? `Cr ${formatIndian(tt.cr, 2)}%`
-                    : "no composite analysis"}
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      )}
+      {/* What the page is opened for, before the detail that supports it.
+          The tiles that stood here carried a tonnage, a tap count and one
+          percentage — all of it repeated by the table below, and two of the
+          three a total of the rows already in view. Choosing a plant, which is
+          what they were really for, is now a control in the column it
+          filters. */}
+      <ChainScorecard />
 
       <div className="rounded-xl overflow-hidden border border-border shadow-md bg-white">
         {q.isLoading ? (
@@ -183,43 +202,98 @@ export default function PlantOutputTable() {
         ) : (
           <div className="overflow-auto"
             style={{ maxHeight: rows.length > VISIBLE_ROWS ? WINDOW_H : undefined }}>
-            <table className={`w-full border-collapse
-              ${plant === ALL_PLANTS ? "min-w-[820px]" : "min-w-[720px]"}`}>
+            <table className="w-full border-collapse min-w-[860px]">
               <thead>
+                {/* Banded like the consignment table above: what ran, then what
+                    came out of it. The analysis columns are one group and are
+                    named once, rather than five headings with nothing saying
+                    they belong together. */}
                 <tr className="text-white" style={{ height: HEAD_H }}>
-                  <th className={`${TH} ${STICKY_HEAD} text-left`}>Date</th>
-                  {plant === ALL_PLANTS && (
-                    <th className={`${TH} ${STICKY_HEAD} text-left`}>Plant</th>
-                  )}
+                  <th className={`${TH} ${STICKY_HEAD} text-left`} rowSpan={2}>Date</th>
+                  <th className={`${TH} ${STICKY_HEAD} text-left`}>Plant</th>
                   <th className={`${TH} ${STICKY_HEAD} text-left`}>Furnace</th>
-                  <th className={`${TH} ${STICKY_HEAD} text-right`}>Yield&nbsp;(t)</th>
-                  <th className={`${TH} ${STICKY_HEAD} text-right border-r border-white/20`}>
+                  <th className={`${TH} ${STICKY_HEAD} text-center border-r border-white/20`}
+                    colSpan={2}>
+                    Produced
+                  </th>
+                  <th className={`${TH} ${STICKY_HEAD} text-center`}
+                    colSpan={PARAMS.length}>
+                    Composite Analysis
+                  </th>
+                </tr>
+                <tr className="text-white/90" style={{ height: HEAD2_H }}>
+                  {/* The same choice the tiles above make, in the column it
+                      belongs to. It reads and writes the same `plant`, so the
+                      tiles and this can never disagree — it is for somebody
+                      already down in the table who does not want to scroll
+                      back up to change it. */}
+                  <th style={{ top: HEAD_H }}
+                    className={`${STICKY_2} px-1.5 pb-1 text-left`}>
+                    {/* Sized to the longest plant name, not to the column. A
+                        select stretched edge to edge is a control shouting over
+                        the data underneath it. */}
+                    <SearchSelect narrow value={plant === ALL_PLANTS ? "" : plant}
+                      onChange={(v) => setPlant(v || ALL_PLANTS)}
+                      allLabel="Both plants"
+                      options={plants.map((pl) => ({
+                        value: pl.key, label: pl.label,
+                      }))}
+                      className="w-[118px] bg-white/10 border-white/25 text-white
+                                 font-normal hover:border-white/50" />
+                  </th>
+                  <th style={{ top: HEAD_H }}
+                    className={`${STICKY_2} px-1.5 pb-1 text-left`}>
+                    <SearchSelect narrow value={activeFurnace} onChange={setFurnace}
+                      allLabel="All furnaces"
+                      options={furnaces.map((f) => ({ value: f, label: f }))}
+                      className="w-[104px] bg-white/10 border-white/25 text-white
+                                 font-normal hover:border-white/50" />
+                  </th>
+                  <th style={{ top: HEAD_H }}
+                    className={`${TH} ${STICKY_2} text-right align-bottom pb-2`}>
+                    Yield&nbsp;(t)
+                  </th>
+                  <th style={{ top: HEAD_H }}
+                    className={`${TH} ${STICKY_2} text-right align-bottom pb-2
+                                border-r border-white/20`}>
                     Taps
                   </th>
-                  {PARAMS.map((p) => (
-                    <th key={p} className={`${TH} ${STICKY_HEAD} text-right`}>
-                      {HEADS[p]}
+                  {PARAMS.map((pp) => (
+                    <th key={pp} style={{ top: HEAD_H }}
+                      className={`${TH} ${STICKY_2} text-right align-bottom pb-2`}>
+                      {HEADS[pp]}
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
+                {rows.map((r) => {
+                  /* Two very pale tints so the figures stay the loudest thing
+                     on the row; Jabamoyee warm, everything else neutral. */
+                  const alt = band.get(r.date) === 1;
+                  const jab = r.plant !== "1100";
+                  const bg = jab
+                    ? (alt ? "bg-gold/10" : "bg-gold/5")
+                    : (alt ? "bg-sky/5" : "bg-transparent");
+                  return (
                   <tr key={`${r.date}|${r.plant}|${r.furnace}`}
                     style={{ height: ROW_H }}
-                    className="border-b border-border-light last:border-0 hover:bg-bg-soft/60">
+                    className={`${bg} border-b border-border-light last:border-0
+                                hover:bg-bg-soft/70 transition-colors`}>
                     <td className="px-2 py-2 leading-4 text-[12px] whitespace-nowrap text-txt-primary">
                       {r.date.slice(8, 10)}.{r.date.slice(5, 7)}.{r.date.slice(2, 4)}
                     </td>
-                    {plant === ALL_PLANTS && (
-                      <td className="px-2 py-2 leading-4 text-[12px]">
-                        <span className={`inline-block px-1.5 py-0.5 rounded text-[10px]
-                          font-bold tracking-wide ${r.plant === "1100"
-                            ? "bg-navy/10 text-navy" : "bg-gold/15 text-gold-dark"}`}>
-                          {r.plant_label}
-                        </span>
-                      </td>
-                    )}
+                    {/* Shown whether or not a plant is selected. A column that
+                        vanishes takes the table's shape with it: everything
+                        shifts left, and a screen printed with one plant chosen
+                        no longer says which. */}
+                    <td className="px-2 py-2 leading-4 text-[12px]">
+                      <span className={`inline-block px-1.5 py-0.5 rounded text-[10px]
+                        font-bold tracking-wide ${r.plant === "1100"
+                          ? "bg-navy/10 text-navy" : "bg-gold/15 text-gold-dark"}`}>
+                        {r.plant_label}
+                      </span>
+                    </td>
                     <td className="px-2 py-2 leading-4 text-[12px] font-mono text-txt-primary">
                       {r.furnace}
                     </td>
@@ -237,14 +311,15 @@ export default function PlantOutputTable() {
                       </td>
                     ))}
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
               {t && (
                 <tfoot>
                   <tr style={{ height: ROW_H }}>
                     <td className={`px-2 py-2 leading-4 text-[11px] font-condensed
                       font-extrabold tracking-[.1em] text-navy text-left ${STICKY_FOOT}`}
-                      colSpan={plant === ALL_PLANTS ? 3 : 2}>
+                      colSpan={3}>
                       WTD AVG
                     </td>
                     <td className={TF}>
