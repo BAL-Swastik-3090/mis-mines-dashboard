@@ -6,16 +6,19 @@
  * three-dot menu in the header; this section only displays. The modal is
  * mounted here because this is the section its figures belong to.
  *
- * Mine stock all comes from Section B — the four clearance status rows. The page
- * shows that one quantity three ways, and all three tie back to it:
+ * TWO TABLES, SIDE BY SIDE, in the layout the mine already reads:
  *
- *   Total Stock       — the whole Section B block
- *   Grade-wise        — the same block read down its HG/MG/LG/COB columns
- *   Clearance Status  — the same block read across its status rows
+ *   Mines Clearance Status          status down, grade across
+ *   Location wise & Grade wise      grade down, location across
  *
- * So Grade-wise and Clearance Status each sum to Total Stock. Only the plant
- * figures in All Locations come from Section C (BAL_QTY / SUK_QTY), and Mines
- * there is Total Stock again rather than a separate number.
+ * They are one grade x bucket grid read along two axes, which is why they are
+ * shown together and why they cannot disagree — the clearance table's Total
+ * Stock column and the location table's Mines column are the same sum. This
+ * replaced three separate blocks (grade bars, location tiles, clearance tiles)
+ * that made three answers out of one.
+ *
+ * Both tables come from the API already shaped, totals included, so no figure
+ * on screen is arithmetic done twice.
  */
 import { useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -38,12 +41,11 @@ function Shimmer({ w = "w-20", h = "h-5" }: { w?: string; h?: string }) {
   return <div className={`${h} ${w} bg-white/20 animate-pulse rounded`} />;
 }
 
-const GRADE_COLOR: Record<string, string> = {
-  HG:  "bg-gold",
-  MG:  "bg-accent",
-  LG:  "bg-[#e65100]",
-  COB: "bg-[#00838f]",
-};
+// Cell styles shared by the two tables, so they line up when read side by side.
+const TH = "px-2 py-1.5 font-condensed font-extrabold text-[10px] tracking-[.1em]";
+const TD = "px-2 py-1.5 text-right text-[11px] font-mono tabular-nums " +
+           "whitespace-nowrap text-txt-primary";
+
 
 export default function StockSection() {
   const { data, isLoading, isError, error } = useStockPosition();
@@ -82,14 +84,10 @@ export default function StockSection() {
     );
   }
 
-  const loc      = data?.locations;
-  const grades   = data?.grades   ?? [];
   const statuses = data?.statuses ?? [];
   const permission = statuses.find((s) => s.label === "Permission in Hand")?.qty ?? null;
-  const awaiting   = statuses.filter((s) => s.label !== "Permission in Hand");
-  // Bars are scaled to the largest grade present, not to the total, so a small
-  // grade beside a dominant one is still visible.
-  const gradeMax = Math.max(...grades.map((g) => g.mines), 1);
+  const clearance    = data?.clearance;
+  const locationGrid = data?.location_grid;
 
   return (
     <div className="bg-white border border-border rounded-lg shadow-sm overflow-hidden">
@@ -159,78 +157,100 @@ export default function StockSection() {
             ))}
           </div>
 
-          {/* Grade-wise mine stock — all four grades always listed */}
-          <div className="px-4 pb-4">
-            <div className="text-[10px] font-bold tracking-widest uppercase font-condensed text-txt-secondary mb-2">
-              Grade-wise Stock (Mines)
-            </div>
-            <div className="space-y-1.5">
-              {(isLoading ? [] : grades).map((g) => (
-                /* Grid rather than fixed widths: the label column can shrink and
-                   truncate, the bar takes the slack, and the figure sizes to its
-                   own content so it is never clipped. The bar is dropped below
-                   sm — on a phone the number matters and 40px of bar does not. */
-                <div key={g.grade_key}
-                     className="grid grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(90px,0.9fr)_minmax(0,1fr)_auto] items-center gap-x-2 sm:gap-x-3">
-                  <span className="flex items-center gap-1.5 min-w-0">
-                    <span className={`w-2 h-2 rounded-full shrink-0 ${GRADE_COLOR[g.grade_key] ?? "bg-accent"}`} />
-                    <span className="text-[11px] text-txt-muted font-medium truncate">{g.grade_label}</span>
-                  </span>
-                  <div className="hidden sm:block h-[14px] bg-bg-section rounded overflow-hidden">
-                    <div className={`h-full rounded ${GRADE_COLOR[g.grade_key] ?? "bg-accent"}`}
-                         style={{ width: `${(g.mines / gradeMax) * 100}%` }} />
-                  </div>
-                  <span className="text-right font-mono text-[11px] font-semibold text-navy tabular-nums whitespace-nowrap">
-                    {mt(g.mines)}<span className="text-[9px] text-txt-light ml-0.5">MT</span>
-                  </span>
-                </div>
-              ))}
-              {isLoading && [0,1,2,3].map((i) => <div key={i} className="h-[14px] bg-bg-section animate-pulse rounded" />)}
-            </div>
-          </div>
+          {/* THE MINE'S OWN TWO TABLES, SIDE BY SIDE.
+              Replaces the grade bars, the location tiles and the clearance
+              tiles — the same figures, in the layout the mine already reads
+              them in. Side by side because they are one grid read along two
+              axes: clearance status down and grade across, then grade down and
+              location across. Reading them apart is what made three blocks out
+              of one answer.
 
-          {/* All locations — Total is the sum of the four tiles beside it */}
-          <div className="px-4 pb-4 border-t border-border-light pt-3">
-            <div className="text-[10px] font-bold tracking-widest uppercase font-condensed text-txt-secondary mb-2">
-              All Locations — Total Stock
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-              {[
-                { label: "Mines",      value: loc?.mines },
-                { label: "BAL Plant",  value: loc?.bal_plant },
-                { label: "Sukinda Plant", value: loc?.suk_plant },
-                { label: "LG for COB", value: loc?.lg_for_cob },
-                { label: "Total",      value: loc?.total, strong: true },
-              ].map((t) => (
-                <div key={t.label}
-                     className={`rounded-lg border p-2.5 text-center ${t.strong ? "border-[#1565c0] bg-[#f5f9ff]" : "border-border bg-white"}`}>
-                  <div className="text-[9px] font-bold tracking-widest uppercase font-condensed text-txt-secondary">
-                    {t.label}
-                  </div>
-                  <div className={`font-condensed font-extrabold text-[15px] sm:text-[16px] xl:text-[17px] leading-none mt-1 break-words ${t.strong ? "text-[#1565c0]" : "text-navy"}`}>
-                    {isLoading ? "—" : mt(t.value)}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+              They stack on a narrow screen. Each scrolls sideways on its own
+              rather than the page doing it, so a header stays with its column. */}
+          <div className="px-4 pb-4 grid grid-cols-1 xl:grid-cols-2 gap-4">
 
-          {/* Clearance status — the remaining Section B rows */}
-          <div className="px-4 pb-4 border-t border-border-light pt-3">
-            <div className="text-[10px] font-bold tracking-widest uppercase font-condensed text-txt-secondary mb-2">
-              Clearance Status
+            {/* ── Mines clearance status ─────────────────────────────── */}
+            <div>
+              <div className="text-[10px] font-bold tracking-widest uppercase
+                              font-condensed text-txt-secondary mb-2">
+                Mines Clearance Status
+              </div>
+              <div className="overflow-x-auto rounded-lg border border-border">
+                <table className="w-full border-collapse min-w-[360px]">
+                  <thead>
+                    <tr className="bg-navy text-white">
+                      <th className={`${TH} text-left`}>Status</th>
+                      <th className={`${TH} text-center`}>UoM</th>
+                      <th className={`${TH} text-right`}>Total</th>
+                      {(clearance?.grades ?? []).map((g) => (
+                        <th key={g.key} className={`${TH} text-right`}>{g.label}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(isLoading ? [] : clearance?.rows ?? []).map((r) => (
+                      <tr key={r.key}
+                          className={`border-b border-border-light last:border-0
+                            ${r.is_total ? "bg-bg-section font-semibold" : "hover:bg-bg-soft/60"}`}>
+                        <td className={`${TD} text-left ${r.is_total ? "text-navy font-bold" : "text-txt-primary"}`}>
+                          {r.label}
+                        </td>
+                        <td className={`${TD} text-center text-txt-light`}>{r.uom}</td>
+                        <td className={`${TD} font-bold text-navy`}>{mt(r.total)}</td>
+                        {(clearance?.grades ?? []).map((g) => (
+                          <td key={g.key} className={TD}>{mt(r.by_grade[g.key])}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {isLoading && <div className="p-3 space-y-1.5">
+                  {[0,1,2,3,4].map((i) => (
+                    <div key={i} className="h-4 bg-bg-section animate-pulse rounded" />))}
+                </div>}
+              </div>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              {(isLoading ? [] : awaiting).map((s) => (
-                <div key={s.label} className="rounded-lg border border-border bg-white p-2.5">
-                  <div className="text-[9px] font-bold tracking-widest uppercase font-condensed text-txt-secondary">
-                    {s.label}
-                  </div>
-                  <div className="font-condensed font-extrabold text-[17px] leading-none text-navy mt-1">
-                    {mt(s.qty)}<span className="text-[10px] font-mono font-normal text-txt-muted ml-1">MT</span>
-                  </div>
-                </div>
-              ))}
+
+            {/* ── Location wise & grade wise stock ───────────────────── */}
+            <div>
+              <div className="text-[10px] font-bold tracking-widest uppercase
+                              font-condensed text-txt-secondary mb-2">
+                Location wise &amp; Grade wise Stock
+              </div>
+              <div className="overflow-x-auto rounded-lg border border-border">
+                <table className="w-full border-collapse min-w-[420px]">
+                  <thead>
+                    <tr className="bg-navy text-white">
+                      <th className={`${TH} text-left`}>Grade</th>
+                      <th className={`${TH} text-center`}>UoM</th>
+                      {(locationGrid?.columns ?? []).map((c) => (
+                        <th key={c.key} className={`${TH} text-right`}>{c.label}</th>
+                      ))}
+                      <th className={`${TH} text-right`}>Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(isLoading ? [] : locationGrid?.rows ?? []).map((r) => (
+                      <tr key={r.key}
+                          className={`border-b border-border-light last:border-0
+                            ${r.is_total ? "bg-bg-section font-semibold" : "hover:bg-bg-soft/60"}`}>
+                        <td className={`${TD} text-left ${r.is_total ? "text-navy font-bold" : "text-txt-primary"}`}>
+                          {r.label}
+                        </td>
+                        <td className={`${TD} text-center text-txt-light`}>{r.uom}</td>
+                        {(locationGrid?.columns ?? []).map((c) => (
+                          <td key={c.key} className={TD}>{mt(r.cells[c.key])}</td>
+                        ))}
+                        <td className={`${TD} font-bold text-navy`}>{mt(r.total)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {isLoading && <div className="p-3 space-y-1.5">
+                  {[0,1,2,3,4].map((i) => (
+                    <div key={i} className="h-4 bg-bg-section animate-pulse rounded" />))}
+                </div>}
+              </div>
             </div>
           </div>
         </>
