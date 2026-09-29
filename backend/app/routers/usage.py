@@ -203,10 +203,15 @@ def usage(request: Request,
     # this reader before they changed tab. Fourteen round trips to another host
     # is long enough to be abandoned mid-flight.
     import time as _time
-    key = (app_source, frm, to, bool(include_admins))
-    hit = _ANSWER.get(key)
+    # `cache_key`, not `key`: this function reuses `key` twice further down —
+    # for the day loop and for the employee master — and the cache is written
+    # at the very end, by which time a plain `key` holds the last employee
+    # number read. Every answer was filed under '17331' and none was ever found
+    # again.
+    cache_key = (app_source, frm, to, bool(include_admins))
+    hit = _ANSWER.get(cache_key)
     if hit and _time.monotonic() - hit[0] < _ANSWER_TTL:
-        _ANSWER.move_to_end(key)
+        _ANSWER.move_to_end(cache_key)
         return hit[1]
 
     # Superadmins are excluded by default — see _superadmins. A comma-joined
@@ -604,8 +609,8 @@ def usage(request: Request,
                          for k, v in sorted(unattributed.items(),
                                             key=lambda x: -x[1])],
     }
-    _ANSWER[key] = (_time.monotonic(), answer)
-    _ANSWER.move_to_end(key)
+    _ANSWER[cache_key] = (_time.monotonic(), answer)
+    _ANSWER.move_to_end(cache_key)
     while len(_ANSWER) > _ANSWER_MAX:
         _ANSWER.popitem(last=False)
     return answer
