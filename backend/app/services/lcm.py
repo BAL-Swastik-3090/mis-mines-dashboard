@@ -29,6 +29,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.services import breakdown as bd
+from app.services import ibm_rates
 
 # Actuals are net of SAP reversal documents. Without this the ore deviation
 # was UNDERSTATED — Aug 2026 read 8,366 MT / Rs 13.75 Cr instead of
@@ -66,32 +67,28 @@ WORK_CENTRE   = "MINEAUTO"
 # mix the plan intended. Being a ratio, the weighting is scale-invariant: it does
 # not matter whether HG+MG+LG equals ORE_QTY exactly, only their proportions.
 #
-# Rates are supplied by the mine today and are to be scraped from the IBM site
-# later, behind a user confirmation step — hence the explicit `source` field, so
-# the page can always state where the number in use came from.
-IBM_RATE_SOURCE = "IBM average sale price, June 2026 — chrome ore fines"
-
+# Rates come from minehub.mineral_price, which the market collector fills from
+# the IBM monthly bulletin — see services/ibm_rates.py. They used to be three
+# constants copied in by hand, and by the time anyone looked they were a month
+# behind the published issue. The `source` field still travels with every
+# response so the page can always state which issue it is quoting.
+#
 # IBM's published bands map one-to-one onto the HG/MG/LG buckets the mine plans
 # in, so no band has to be chosen as representative:
 #
-#   IBM band                       Rs/MT     Bucket
-#   52% and above Cr2O3, Fines     28,436    HG   (+52% CHROME ORE)
-#   40% to below 52% Cr2O3, Fines  23,551    MG   (40-52% CHROME ORE)
-#   Below 40% Cr2O3, Fines         11,294    LG   (-40% Cr2O3)
+#   IBM band                       Bucket
+#   52% and above Cr2O3, Fines     HG   (+52% CHROME ORE)
+#   40% to below 52% Cr2O3, Fines  MG   (40-52% CHROME ORE)
+#   Below 40% Cr2O3, Fines         LG   (-40% Cr2O3)
 #
 # These are FINES prices. The plan carries only the HG/MG/LG columns and does
 # not split lump from fines, so every planned tonne is valued as fines. If the
 # mine later plans lump separately it needs its own rate — lump prices differ.
 #
-# ₹ per MT. None = not yet determined. While ANY grade carrying plan quantity
-# has no rate, the whole Loss Amount column reports null rather than a number:
-# dropping the unpriced grade would silently understate every row, which is
-# worse than showing nothing.
-IBM_RATES: dict[str, float | None] = {
-    "HG": 28436.0,   # +52% CHROME ORE            -> 52% and above, Fines
-    "MG": 23551.0,   # 40-52% CHROME ORE          -> 40% to below 52%, Fines
-    "LG": 11294.0,   # LOW GRADE ORE (-40% Cr2O3) -> Below 40%, Fines
-}
+# While ANY grade carrying plan quantity has no rate, the whole Loss Amount
+# column reports null rather than a number: dropping the unpriced grade would
+# silently understate every row, which is worse than showing nothing. That path
+# now also covers minehub being unreachable with nothing cached.
 
 # OB carries no rupee value. It is waste rock moved to expose ore, not a saleable
 # product, so there is no IBM rate for it — the OB loss stays a volume in CuM.
@@ -406,21 +403,23 @@ def _grade_plan(db: Session, fd: date, td: date) -> dict[str, float]:
     return {"HG": _n(r.hg), "MG": _n(r.mg), "LG": _n(r.lg)}
 
 
-def _weighted_rate(grade_qty: dict[str, float]) -> dict:
+def _weighted_rate(grade_qty: dict[str, float], quoted: dict) -> dict:
     """Plan-weighted average IBM rate across the grades.
 
-    Returns the rate plus the full per-grade working, so the page can show how
-    the number was arrived at instead of asking anyone to trust a bare figure.
+    `quoted` is one issue of the bulletin, from services/ibm_rates.py. Returns
+    the rate plus the full per-grade working, so the page can show how the
+    number was arrived at instead of asking anyone to trust a bare figure.
     """
+    quoted_rates = quoted["rates"]
     total_qty = sum(grade_qty.values())
-    missing   = [g for g, q in grade_qty.items() if q > 0 and IBM_RATES.get(g) is None]
+    missing   = [g for g, q in grade_qty.items() if q > 0 and quoted_rates.get(g) is None]
 
     breakdown = [{
         "grade":  g,
         "qty":    round(grade_qty.get(g, 0.0), 3),
-        "rate":   IBM_RATES.get(g),
+        "rate":   quoted_rates.get(g),
         "share":  round(grade_qty.get(g, 0.0) / total_qty * 100, 2) if total_qty > 0 else 0.0,
-        "value":  round(grade_qty.get(g, 0.0) * IBM_RATES[g], 2) if IBM_RATES.get(g) is not None else None,
+        "value":  round(grade_qty.get(g, 0.0) * quoted_rates[g], 2) if quoted_rates.get(g) is not None else None,
     } for g in ("HG", "MG", "LG")]
 
     if total_qty <= 0:
@@ -432,7 +431,7 @@ def _weighted_rate(grade_qty: dict[str, float]) -> dict:
         # zero qty is skipped outright rather than multiplied by its rate — it
         # adds nothing to either side of the ratio, and skipping it means an
         # unpriced-but-unplanned grade cannot break the calculation.
-        rate = sum(q * IBM_RATES[g] for g, q in grade_qty.items() if q > 0) / total_qty
+        rate = sum(q * quoted_rates[g] for g, q in grade_qty.items() if q > 0) / total_qty
         status = "ok"
 
     return {
@@ -440,7 +439,10 @@ def _weighted_rate(grade_qty: dict[str, float]) -> dict:
         "status":          status,
         "missing_grades":  missing,
         "total_plan_qty":  round(total_qty, 3),
-        "source":          IBM_RATE_SOURCE,
+        "source":          quoted["source"],
+        "rate_period":     quoted["period"],
+        "rate_is_stale":   quoted["stale"],
+        "rate_flagged":    quoted["flagged"],
         "breakdown":       breakdown,
     }
 
@@ -709,7 +711,8 @@ def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
     ob_factor  = (ob_dev  / tot_ob_hrs)  if tot_ob_hrs  > 0 else 0.0
 
     grade_qty = _grade_plan(db, from_date, to_date)
-    costing   = _weighted_rate(grade_qty)
+    # The issue current for the month the report ends in — read, not typed.
+    costing   = _weighted_rate(grade_qty, ibm_rates.rates_for(to_date))
     rate      = costing["weighted_rate"]
 
     def amount(ore_loss_mt: float) -> float | None:
