@@ -86,6 +86,7 @@ export default function StockSection() {
 
   const statuses = data?.statuses ?? [];
   const permission = statuses.find((s) => s.label === "Permission in Hand")?.qty ?? null;
+  const proposed     = data?.proposed_despatch;
   const clearance    = data?.clearance;
   const locationGrid = data?.location_grid;
 
@@ -132,13 +133,25 @@ export default function StockSection() {
       {(isLoading || data?.has_data) && (
         <>
           {/* Headline KPIs */}
-          <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {[
               { label: "Total Stock",        value: data?.total_stock,
                 sub: "mine stock · all grades, all clearance statuses",
                 accent: "#1565c0", strong: true },
               { label: "Permission in Hand", value: permission,
                 sub: "cleared · ready to lift", accent: "#2e7d32" },
+              // Entered on the stock form against this same date, so it is the
+              // proposal made while looking at the position beside it. The
+              // sub-line carries the split, because the total alone does not
+              // say which plant it is going to.
+              { label: "Proposed Today's Despatch",
+                value: proposed?.has_data ? proposed.total : null,
+                sub: proposed?.has_data
+                  ? Object.entries(proposed.by_destination)
+                      .map(([k, v]) => `${proposed.labels[k] ?? k} ${mt(v)}`)
+                      .join(" · ")
+                  : "not entered for this day",
+                accent: "#ad1457" },
             ].map((k) => (
               <div key={k.label}
                    className={`rounded-lg border p-3 ${k.strong ? "border-[#1565c0] bg-[#f5f9ff]" : "border-border bg-white"}`}>

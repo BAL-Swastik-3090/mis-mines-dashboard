@@ -89,6 +89,14 @@ export interface StockLocationRow {
   is_total: boolean;
 }
 
+/** The day's proposed despatch, split by plant. total = SKD + BLS. */
+export interface ProposedDespatch {
+  total:          number;
+  by_destination: Record<string, number>;
+  labels:         Record<string, string>;
+  has_data:       boolean;
+}
+
 export interface StockPositionResponse {
   snapshot_date:  string | null;
   requested_date: string | null;
@@ -104,6 +112,7 @@ export interface StockPositionResponse {
                    rows: StockClearanceRow[] };
   location_grid: { columns: { key: string; label: string }[];
                    rows: StockLocationRow[] };
+  proposed_despatch: ProposedDespatch;
 }
 
 // ── Production API Responses ─────────────────────────────────
