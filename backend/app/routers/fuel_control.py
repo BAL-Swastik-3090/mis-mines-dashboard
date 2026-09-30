@@ -699,3 +699,414 @@ def explain(exception_id: int, request: Request, body: dict = Body(...),
         raise HTTPException(404, "No such exception.")
     pg.commit()
     return {"ok": True}
+
+
+# ──────────────────────────────────────────────────────────────────────────
+#  The chain: a litre from the tanker to a cubic metre of rock
+# ──────────────────────────────────────────────────────────────────────────
+@router.get("/chain")
+def chain(request: Request,
+          day_from: date | None = Query(None),
+          day_to: date | None = Query(None),
+          pg: Session = Depends(get_minehub_db),
+          db: Session = Depends(get_db)) -> dict:
+    """Where the diesel went, and what it moved.
+
+        delivered -> held in tanks -> moved to bowsers -> issued to machines
+                                                             |
+                                                       cubic metres moved
+                                                             |
+                                                  litres/Cum and cost/Cum vs plan
+
+    WHY THE DECOMPOSITION MATTERS MORE THAN THE RATIO. The audit's August
+    observation reads 5.49 litres/Cum against a plan of 2.60 and calls it
+    111 per cent worse. Both halves of that fraction moved:
+
+        diesel spend   68.98 lakh against 185.94 lakh   =  37 per cent of plan
+        excavation      8,949 Cum  against 67,735 Cum   =  13 per cent of plan
+
+    Fuel came in far UNDER plan. Output came in further under. The ratio rose
+    because the denominator collapsed, not because machines drank more — and a
+    screen that shows only 5.49 against 2.60 sends somebody to audit the
+    excavators when the question is why the rock did not move.
+
+    So this returns both sides as a share of plan and lets the reader see which
+    one moved. It does not compute a verdict.
+    """
+    _require(request, VIEW, "see fuel management")
+    frm, to = _window(day_from, day_to)
+    p = {"frm": frm, "to": to}
+
+    # ── the fuel side, from our own records ──────────────────────────────
+    flow = pg.execute(text("""
+        SELECT
+          (SELECT COALESCE(SUM(litres), 0) FROM fuel_receipt
+            WHERE on_date BETWEEN :frm AND :to)            AS received,
+          (SELECT COALESCE(SUM(litres), 0) FROM fuel_transfer
+            WHERE on_date BETWEEN :frm AND :to)            AS transferred,
+          (SELECT COALESCE(SUM(litres), 0) FROM fuel_issue
+            WHERE on_date BETWEEN :frm AND :to)            AS issued,
+          (SELECT COUNT(*) FROM fuel_issue
+            WHERE on_date BETWEEN :frm AND :to)            AS issue_count
+    """), p).mappings().first()
+
+    # Issued, split by what received it. A generator running the dewatering
+    # pumps burns diesel that moves no rock at all, and charging it against
+    # cubic metres is one of the ways a ratio misleads.
+    by_kind = {r["kind"]: {"litres": _f(r["litres"]), "consumers": r["n"]}
+               for r in pg.execute(text("""
+        SELECT c.kind, SUM(i.litres) AS litres, COUNT(DISTINCT c.consumer_id) AS n
+          FROM fuel_issue i JOIN fuel_consumer c ON c.consumer_id = i.consumer_id
+         WHERE i.on_date BETWEEN :frm AND :to
+         GROUP BY c.kind
+    """), p).mappings()}
+
+    top = [{"code": r["code"], "label": r["label"], "type": r["asset_type"],
+            "litres": _f(r["litres"]), "issues": r["n"]}
+           for r in pg.execute(text("""
+        SELECT c.code, c.label, t.name AS asset_type,
+               SUM(i.litres) AS litres, COUNT(*) AS n
+          FROM fuel_issue i
+          JOIN fuel_consumer c ON c.consumer_id = i.consumer_id
+          LEFT JOIN asset a ON a.asset_id = c.asset_id
+          LEFT JOIN asset_type t ON t.asset_type_id = a.asset_type_id
+         WHERE i.on_date BETWEEN :frm AND :to
+         GROUP BY c.code, c.label, t.name
+         ORDER BY SUM(i.litres) DESC LIMIT 15
+    """), p).mappings()]
+
+    # The rate we actually paid, from receipts. Null rather than a guess: a
+    # cost per Cum built on an assumed price is a number nobody can defend.
+    rate = pg.execute(text("""
+        SELECT CASE WHEN SUM(litres) > 0
+                    THEN SUM(litres * COALESCE(rate_per_l, 0)) / SUM(litres) END
+          FROM fuel_receipt
+         WHERE on_date BETWEEN :frm AND :to AND rate_per_l IS NOT NULL
+    """), p).scalar()
+
+    # ── what was moved, from the excavation log ──────────────────────────
+    #
+    # Variant 1 is ore, 3 overburden, 4 silt, and the Units column says
+    # whether a row is tonnes or cubic metres. Ore in tonnes is converted at
+    # the same factor the capacity model uses, not a number typed in here.
+    t_per_cum = pg.execute(text("""
+        SELECT ore_t_per_cum FROM productivity_assumption
+         WHERE effective_to IS NULL ORDER BY effective_from DESC LIMIT 1
+    """)).scalar()
+    t_per_cum = float(t_per_cum) if t_per_cum else 3.0
+
+    exc = {"silt_cum": 0.0, "ob_cum": 0.0, "ore_cum": 0.0, "ore_mt": 0.0}
+    exc_ok, exc_problem = True, None
+    try:
+        for r in db.execute(text("""
+            SELECT Variant AS v, Units AS u,
+                   SUM(CAST(Qty AS DECIMAL(15,3))) AS q
+              FROM mines_day_wise_excavation
+             WHERE Prod_date BETWEEN :frm AND :to
+             GROUP BY Variant, Units
+        """), p).mappings():
+            q = _f(r["q"])
+            unit = (r["u"] or "").strip().upper()
+            v = str(r["v"] or "").strip()
+            if v == "4":
+                exc["silt_cum"] += q / t_per_cum if unit == "MT" else q
+            elif v == "3":
+                exc["ob_cum"] += q / t_per_cum if unit == "MT" else q
+            elif v == "1":
+                if unit == "MT":
+                    exc["ore_mt"] += q
+                    exc["ore_cum"] += q / t_per_cum
+                else:
+                    exc["ore_cum"] += q
+    except Exception as exc_err:                        # noqa: BLE001
+        exc_ok = False
+        exc_problem = f"the excavation log could not be read ({type(exc_err).__name__})"
+    total_cum = round(exc["silt_cum"] + exc["ob_cum"] + exc["ore_cum"], 2)
+
+    # ── the plan for the months this range covers ───────────────────────
+    plan = pg.execute(text("""
+        SELECT SUM(COALESCE(planned_silt_cum,0) + COALESCE(planned_ob_cum,0)
+                   + COALESCE(planned_ore_cum,0))            AS cum,
+               SUM(COALESCE(planned_total_cost,0))           AS cost,
+               AVG(planned_l_per_cum)                        AS l_per_cum,
+               AVG(planned_rate_per_l)                       AS rate,
+               COUNT(*)                                      AS months
+          FROM fuel_plan
+         WHERE plan_month BETWEEN DATE_TRUNC('month', CAST(:frm AS date))
+                              AND DATE_TRUNC('month', CAST(:to AS date))
+    """), p).mappings().first()
+
+    issued = _f(flow["issued"])
+    has_plan = bool(plan and plan["months"])
+    planned_cum = _f(plan["cum"]) if has_plan else None
+    planned_lpc = _f(plan["l_per_cum"]) if has_plan else None
+    planned_rate = _f(plan["rate"]) if has_plan else None
+    planned_cost = _f(plan["cost"]) if has_plan else None
+    planned_litres = (round(planned_cost / planned_rate, 0)
+                      if planned_cost and planned_rate else None)
+
+    actual_lpc = round(issued / total_cum, 3) if issued and total_cum else None
+    actual_cost = round(issued * float(rate), 2) if issued and rate else None
+    actual_cpc = (round(actual_cost / total_cum, 2)
+                  if actual_cost and total_cum else None)
+
+    def share(actual, planned):
+        """Actual as a share of plan.
+
+        The two shares side by side ARE the decomposition: whichever fell
+        further is the one that moved the ratio.
+        """
+        if actual is None or not planned:
+            return None
+        return round(100.0 * actual / planned, 1)
+
+    return {
+        "from": frm.isoformat(), "to": to.isoformat(),
+        "flow": {
+            "received_l": _f(flow["received"]),
+            "transferred_l": _f(flow["transferred"]),
+            "issued_l": issued,
+            "issue_count": flow["issue_count"],
+            "by_consumer_kind": by_kind,
+            "top_consumers": top,
+            "rate_per_l": _f(rate) or None,
+        },
+        "excavation": {
+            **{k: round(v, 2) for k, v in exc.items()},
+            "total_cum": total_cum,
+            "ore_t_per_cum": t_per_cum,
+            "ok": exc_ok, "problem": exc_problem,
+        },
+        "plan": None if not has_plan else {
+            "months": plan["months"], "cum": planned_cum,
+            "l_per_cum": planned_lpc, "rate_per_l": planned_rate,
+            "total_cost": planned_cost, "litres": planned_litres,
+            "cost_per_cum": (round(planned_cost / planned_cum, 2)
+                             if planned_cost and planned_cum else None),
+        },
+        "actual": {
+            "litres": issued or None, "cost": actual_cost,
+            "l_per_cum": actual_lpc, "cost_per_cum": actual_cpc,
+        },
+        # Both sides of the fraction, as a share of plan. No verdict.
+        "variance": {
+            "litres_pct_of_plan": share(issued or None, planned_litres),
+            "cum_pct_of_plan": share(total_cum or None, planned_cum),
+            "l_per_cum_pct_of_plan": share(actual_lpc, planned_lpc),
+            "rate_pct_of_plan": share(_f(rate) or None, planned_rate),
+        },
+        # What is missing, said plainly rather than shown as a zero.
+        "gaps": [g for g in [
+            "nothing has been issued through the portal for this range yet, "
+            "so the fuel side of every ratio is empty. It fills in as the "
+            "fuel point books issues — this is a live record, not a monthly "
+            "return" if not issued else None,
+            "no delivery rate has been recorded, so cost per cubic metre "
+            "cannot be worked out" if issued and not rate else None,
+            "no business plan is on file for this range, so there is nothing "
+            "to compare against" if not has_plan else None,
+            exc_problem,
+        ] if g],
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────
+#  Capture. The portal is the record, not a monthly return.
+# ──────────────────────────────────────────────────────────────────────────
+@router.post("/consumer-meter")
+def consumer_meter(request: Request, body: dict = Body(...),
+                   pg: Session = Depends(get_minehub_db)) -> dict:
+    """The hour meter or odometer on a machine, captured where it is read.
+
+    This is the number that turns litres into litres-per-hour, and the reason
+    the old logbooks could not produce it: the reading lived on a different
+    sheet from the fuel, and the sheet subtracted a blank cell when a shift
+    ended without a closing figure — 120 rows across 86 of 98 sheets carried a
+    negative working-hours figure and the error compounded down the month.
+
+    Here both readings are stored and the difference is derived, so a missing
+    closing reading leaves a gap rather than a negative number that looks like
+    data. And as with the pump, a reading that goes backwards is recorded and
+    flagged, never refused: a meter does get replaced, and an operator who is
+    told their reading is invalid stops typing readings.
+    """
+    _require(request, RECORD, "record machine readings")
+    cid, on = body.get("consumer_id"), body.get("on_date")
+    if not cid or not on:
+        raise HTTPException(422, "A machine and a date are needed.")
+
+    c = pg.execute(text(
+        "SELECT code, meter_kind FROM fuel_consumer WHERE consumer_id = :c"),
+        {"c": cid}).mappings().first()
+    if not c:
+        raise HTTPException(404, "That machine is not on the list.")
+    kind = body.get("meter_kind") or c["meter_kind"]
+    if kind == "NONE":
+        raise HTTPException(
+            422, f"{c['code']} has no hour meter or odometer recorded against "
+                 f"it. Set what it is measured in first — otherwise its hours "
+                 f"and its kilometres end up in one column.")
+
+    opening, closing = body.get("opening_reading"), body.get("closing_reading")
+    if opening is None and closing is None:
+        raise HTTPException(422, "At least one reading is needed.")
+
+    reasons = []
+    if opening is not None and closing is not None and float(closing) < float(opening):
+        reasons.append("the closing reading is below the opening")
+    # The last reading we hold for this machine, so a jump is visible at entry
+    # rather than in a report a fortnight later.
+    prev = pg.execute(text("""
+        SELECT closing_reading FROM consumer_meter_reading
+         WHERE consumer_id = :c AND meter_kind = :k
+           AND closing_reading IS NOT NULL AND on_date < CAST(:on AS date)
+         ORDER BY on_date DESC, shift DESC LIMIT 1
+    """), {"c": cid, "k": kind, "on": on}).scalar()
+    if prev is not None and opening is not None and float(opening) < float(prev):
+        reasons.append(f"the opening reading is below the last one recorded ({prev})")
+
+    row = pg.execute(text("""
+        INSERT INTO consumer_meter_reading (
+            consumer_id, on_date, shift, meter_kind, opening_reading,
+            closing_reading, idle_hours, breakdown_hours, is_suspect,
+            suspect_reason, source, entered_by, note)
+        VALUES (:c, :on, :shift, :k, :op, :cl, :idle, :bd, :sus, :reason,
+                :src, :by, :note)
+        ON CONFLICT (consumer_id, on_date, shift) DO UPDATE SET
+            meter_kind = EXCLUDED.meter_kind,
+            opening_reading = COALESCE(EXCLUDED.opening_reading,
+                                       consumer_meter_reading.opening_reading),
+            closing_reading = COALESCE(EXCLUDED.closing_reading,
+                                       consumer_meter_reading.closing_reading),
+            idle_hours = COALESCE(EXCLUDED.idle_hours,
+                                  consumer_meter_reading.idle_hours),
+            breakdown_hours = COALESCE(EXCLUDED.breakdown_hours,
+                                       consumer_meter_reading.breakdown_hours),
+            is_suspect = EXCLUDED.is_suspect,
+            suspect_reason = EXCLUDED.suspect_reason,
+            entered_by = EXCLUDED.entered_by,
+            note = COALESCE(EXCLUDED.note, consumer_meter_reading.note)
+        RETURNING consumer_meter_id
+    """), {"c": cid, "on": on, "shift": body.get("shift") or "GEN", "k": kind,
+           "op": opening, "cl": closing, "idle": body.get("idle_hours"),
+           "bd": body.get("breakdown_hours"),
+           "sus": bool(reasons), "reason": "; ".join(reasons) or None,
+           "src": body.get("source") or "MANUAL", "by": _who(request),
+           "note": body.get("note")}).mappings().first()
+    pg.commit()
+    worked = (round(float(closing) - float(opening), 2)
+              if opening is not None and closing is not None
+              and float(closing) >= float(opening) else None)
+    return {"ok": True, "consumer_meter_id": row["consumer_meter_id"],
+            "flagged": bool(reasons),
+            "worked": worked,
+            "unit": "hours" if kind == "HMR" else "km",
+            "message": ("Recorded, and flagged for review: " + "; ".join(reasons))
+                       if reasons else "Recorded."}
+
+
+@router.get("/daybook")
+def daybook(request: Request,
+            on: date | None = Query(None),
+            pg: Session = Depends(get_minehub_db)) -> dict:
+    """Everything the portal captured on one day, as it was captured.
+
+    The shift in-charge's view. Not a report assembled at month end from a
+    workbook somebody filled in from memory — a running record of what was
+    handed out, to what, by whom, and what the meters read.
+    """
+    _require(request, VIEW, "see fuel management")
+    day = on or date.today()
+
+    issues = [{
+        "issue_id": r["issue_id"], "shift": r["shift"],
+        "point": r["point"], "consumer": r["consumer"], "code": r["code"],
+        "litres": _f(r["litres"]), "meter_reading": _f(r["meter_reading"]) or None,
+        "meter_kind": r["meter_kind"], "capture_mode": r["capture_mode"],
+        "source": r["source"], "issued_by": r["issued_by"],
+        "received_by": r["received_by"], "entered_by": r["entered_by"],
+        "at": r["created_at"],
+    } for r in pg.execute(text("""
+        SELECT i.issue_id, i.shift, i.litres, i.meter_reading, i.meter_kind,
+               i.capture_mode, i.source, i.issued_by, i.received_by,
+               i.entered_by, i.created_at,
+               p.label AS point, c.label AS consumer, c.code
+          FROM fuel_issue i
+          JOIN fuel_issuing_point p ON p.issuing_point_id = i.issuing_point_id
+          JOIN fuel_consumer c ON c.consumer_id = i.consumer_id
+         WHERE i.on_date = :d
+         ORDER BY i.created_at DESC
+    """), {"d": day}).mappings()]
+
+    readings = [{
+        "point": r["point"], "shift": r["shift"],
+        "opening": _f(r["opening_reading"]) or None,
+        "closing": _f(r["closing_reading"]) or None,
+        "dispensed": (_f(r["closing_reading"]) - _f(r["opening_reading"]))
+                     if r["opening_reading"] is not None
+                     and r["closing_reading"] is not None else None,
+        "flagged": r["is_suspect"], "reason": r["suspect_reason"],
+        "by": r["entered_by"], "paper_ref": r["paper_ref"],
+    } for r in pg.execute(text("""
+        SELECT m.shift, m.opening_reading, m.closing_reading, m.is_suspect,
+               m.suspect_reason, m.entered_by, m.paper_ref, p.label AS point
+          FROM fuel_meter_reading m
+          JOIN fuel_issuing_point p ON p.issuing_point_id = m.issuing_point_id
+         WHERE m.on_date = :d ORDER BY p.code, m.shift
+    """), {"d": day}).mappings()]
+
+    meters = [{
+        "code": r["code"], "consumer": r["label"], "shift": r["shift"],
+        "meter_kind": r["meter_kind"],
+        "opening": _f(r["opening_reading"]) or None,
+        "closing": _f(r["closing_reading"]) or None,
+        "worked": (round(_f(r["closing_reading"]) - _f(r["opening_reading"]), 2)
+                   if r["opening_reading"] is not None
+                   and r["closing_reading"] is not None
+                   and _f(r["closing_reading"]) >= _f(r["opening_reading"])
+                   else None),
+        "flagged": r["is_suspect"], "reason": r["suspect_reason"],
+    } for r in pg.execute(text("""
+        SELECT c.code, c.label, m.shift, m.meter_kind, m.opening_reading,
+               m.closing_reading, m.is_suspect, m.suspect_reason
+          FROM consumer_meter_reading m
+          JOIN fuel_consumer c ON c.consumer_id = m.consumer_id
+         WHERE m.on_date = :d ORDER BY c.code, m.shift
+    """), {"d": day}).mappings()]
+
+    # What a machine burnt per hour, from what the portal captured today and
+    # nowhere else. Only where BOTH the fuel and the hours were captured —
+    # anything else is a division with a hole in it.
+    rates = [{
+        "code": r["code"], "consumer": r["label"], "litres": _f(r["litres"]),
+        "worked": _f(r["worked"]), "meter_kind": r["meter_kind"],
+        "per_unit": round(_f(r["litres"]) / _f(r["worked"]), 2)
+                    if _f(r["worked"]) else None,
+    } for r in pg.execute(text("""
+        SELECT c.code, c.label, m.meter_kind,
+               SUM(i.litres) AS litres,
+               MAX(m.closing_reading) - MIN(m.opening_reading) AS worked
+          FROM fuel_issue i
+          JOIN fuel_consumer c ON c.consumer_id = i.consumer_id
+          JOIN consumer_meter_reading m ON m.consumer_id = c.consumer_id
+                                       AND m.on_date = i.on_date
+         WHERE i.on_date = :d
+           AND m.opening_reading IS NOT NULL AND m.closing_reading IS NOT NULL
+           AND NOT m.is_suspect
+         GROUP BY c.code, c.label, m.meter_kind
+         HAVING MAX(m.closing_reading) > MIN(m.opening_reading)
+         ORDER BY SUM(i.litres) DESC
+    """), {"d": day}).mappings()]
+
+    return {
+        "on": day.isoformat(),
+        "issues": issues, "meter_readings": readings, "machine_meters": meters,
+        "rates": rates,
+        "totals": {
+            "litres": round(sum(i["litres"] for i in issues), 2),
+            "issues": len(issues),
+            "machines": len({i["code"] for i in issues}),
+            "flagged": sum(1 for r in readings if r["flagged"])
+                       + sum(1 for m in meters if m["flagged"]),
+        },
+    }

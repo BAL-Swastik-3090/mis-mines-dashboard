@@ -25,6 +25,8 @@ import { useDateFilter } from "@/contexts/useDateFilter";
 import { Card, CardHeader, Th, Td, EmptyRow, Chip, Button, Field,
          inputClass, Alert, SortTh, sortRows } from "@/components/minehub/ui";
 import type { SortWay } from "@/components/minehub/ui";
+import { IssuePanel, MachineMeterPanel, DayBookPanel,
+         ChainPanel } from "./FuelCapture";
 
 /* ── what the endpoints return ───────────────────────────────────────── */
 interface Point {
@@ -120,7 +122,22 @@ export default function FuelControlSection() {
       {err && <Alert tone="error">{err}</Alert>}
       {note && <Alert tone="info">{note}</Alert>}
 
-      {/* ── 1. the four issuing points, and whether they reconcile ───── */}
+      {/* ── 1. capture. The portal is the record, so this comes first. ── */}
+      {masters?.can_record && (
+        <>
+          <IssuePanel points={masters.points} consumers={masters.consumers}
+            busy={busy} write={write} />
+          <MachineMeterPanel consumers={masters.consumers} busy={busy} write={write} />
+        </>
+      )}
+
+      {/* ── 2. what it captured today ─────────────────────────────────── */}
+      <DayBookPanel />
+
+      {/* ── 3. a litre, and the rock it moved ─────────────────────────── */}
+      <ChainPanel apiFrom={apiFrom} apiTo={apiTo} />
+
+      {/* ── 4. the four issuing points, and whether they reconcile ───── */}
       <Card>
         <CardHeader icon={Gauge} tone="gold" subtitleOnIcon
           title="Issued against the pump"
@@ -209,10 +226,10 @@ export default function FuelControlSection() {
         </div>
       </Card>
 
-      {/* ── 2. record a reading ───────────────────────────────────────── */}
+      {/* ── 5. the pump reading that the reconciliation above rests on ── */}
       {masters?.can_record && <RecordPanel masters={masters} busy={busy} write={write} />}
 
-      {/* ── 3. what this screen cannot see ───────────────────────────── */}
+      {/* ── 6. what this screen cannot see ───────────────────────────── */}
       <Card>
         <CardHeader icon={WifiOff} tone="slate" subtitleOnIcon
           title="What is not covered"
@@ -251,7 +268,7 @@ export default function FuelControlSection() {
         )}
       </Card>
 
-      {/* ── 4. the masters, because none of this is constant ──────────── */}
+      {/* ── 7. the masters, because none of this is constant ──────────── */}
       <Card>
         <CardHeader icon={Settings2} tone="violet" subtitleOnIcon
           title="Machines, meters and names"
