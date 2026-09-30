@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useFuelManagement } from "@/hooks/useFuelManagement";
 import FuelSummarySection from "@/components/sections/FuelSummarySection";
+import FuelControlSection from "./FuelControlSection";
 import VehicleDrawer from "@/components/fuel/VehicleDrawer";
 import { equipPhoto } from "@/lib/equip-photo";
 import type { FuelVehicle, FuelOverviewResponse } from "@/types";
@@ -509,11 +510,14 @@ function VehicleRow({ v, onSelect }: { v: FuelVehicle; onSelect: (v: FuelVehicle
 }
 
 // ── Main component ─────────────────────────────────────────────
-type FuelTab = "live" | "summary";
+type FuelTab = "live" | "summary" | "control";
 
 const TABS: { id: FuelTab; label: string }[] = [
   { id: "live",    label: "Live Overview" },
   { id: "summary", label: "Fuel Summary"  },
+  /* The sensors say what a machine burnt. The register says what was handed
+   * out. Neither is the other, and until this tab nothing compared them. */
+  { id: "control", label: "Fuel Control"  },
 ];
 
 export default function FuelManagementSection() {
@@ -600,7 +604,7 @@ export default function FuelManagementSection() {
             </button>
           );
         })}
-        {tab === "summary" && (
+        {(tab === "summary" || tab === "control") && (
           <span className="ml-auto self-center text-[10px] text-txt-light font-mono pr-2 hidden sm:inline">
             Uses the date filter in the header
           </span>
@@ -609,6 +613,9 @@ export default function FuelManagementSection() {
 
       {/* ── FUEL SUMMARY tab ──────────────────────────────── */}
       {tab === "summary" && <FuelSummarySection />}
+
+      {/* ── FUEL CONTROL tab ──────────────────────────────── */}
+      {tab === "control" && <FuelControlSection />}
 
       {/* ── Loading / Error ───────────────────────────────── */}
       {tab === "live" && loading && (
