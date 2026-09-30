@@ -69,6 +69,26 @@ export interface StockLocations {
   total:      number;
 }
 
+/** One row of the Mines Clearance Status table: a status, read across grades. */
+export interface StockClearanceRow {
+  key:      string;
+  label:    string;
+  uom:      string;
+  by_grade: Record<string, number>;
+  total:    number;
+  is_total: boolean;
+}
+
+/** One row of the Location wise & Grade wise table: a grade, read across locations. */
+export interface StockLocationRow {
+  key:      string;
+  label:    string;
+  uom:      string;
+  cells:    Record<string, number>;
+  total:    number;
+  is_total: boolean;
+}
+
 export interface StockPositionResponse {
   snapshot_date:  string | null;
   requested_date: string | null;
@@ -79,6 +99,11 @@ export interface StockPositionResponse {
   grades:    StockGradeRow[];
   statuses:  StockStatusRow[];
   locations: StockLocations;
+  /** The two tables shown side by side — one grid read along two axes. */
+  clearance:     { grades: { key: string; label: string }[];
+                   rows: StockClearanceRow[] };
+  location_grid: { columns: { key: string; label: string }[];
+                   rows: StockLocationRow[] };
 }
 
 // ── Production API Responses ─────────────────────────────────

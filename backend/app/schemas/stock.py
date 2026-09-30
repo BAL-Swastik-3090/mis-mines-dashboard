@@ -24,6 +24,42 @@ class StockLocations(BaseModel):
     total:      float = 0.0     # mines + bal + suk + lg_for_cob
 
 
+class ColumnHead(BaseModel):
+    """A column of one of the two tables: its key and what it is called."""
+    key:   str
+    label: str
+
+
+class StockClearanceRow(BaseModel):
+    """Mines Clearance Status: one status, read across the grades."""
+    label:    str
+    key:      str
+    uom:      str = "MT"
+    by_grade: dict[str, float] = {}
+    total:    float = 0.0
+    is_total: bool = False      # the Total Stock row, summed from the others
+
+
+class StockLocationRow(BaseModel):
+    """Location wise & Grade wise: one grade, read across the locations."""
+    label:    str
+    key:      str
+    uom:      str = "MT"
+    cells:    dict[str, float] = {}
+    total:    float = 0.0
+    is_total: bool = False      # the foot row
+
+
+class StockClearanceTable(BaseModel):
+    grades: list[ColumnHead] = []
+    rows:   list[StockClearanceRow] = []
+
+
+class StockLocationTable(BaseModel):
+    columns: list[ColumnHead] = []
+    rows:    list[StockLocationRow] = []
+
+
 class StockPosition(BaseModel):
     # Entry is not daily, so the snapshot shown may predate the requested date.
     snapshot_date:  Optional[date] = None
@@ -39,3 +75,10 @@ class StockPosition(BaseModel):
     grades:    list[StockGradeRow]  = []
     statuses:  list[StockStatusRow] = []
     locations: StockLocations       = StockLocations()
+
+    # The two tables shown side by side — one grade x bucket grid read along
+    # two axes. They MUST be declared here: this model is the response_model,
+    # so anything it does not name is dropped from the response and the page
+    # renders headers with nothing under them.
+    clearance:     StockClearanceTable = StockClearanceTable()
+    location_grid: StockLocationTable  = StockLocationTable()
