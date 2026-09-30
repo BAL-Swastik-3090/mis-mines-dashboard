@@ -68,6 +68,9 @@ interface Trip {
   tare_source: string | null; tare_age_days: number | null;
   tare_is_stale: boolean; has_manual: boolean; overload_kg: number | null;
   created_by: string | null; gross_at: string | null;
+  /** The empty weight was taken after the load was tipped — the normal order
+   *  for a loaded truck, and it makes the net firmer rather than weaker. */
+  tare_after_gross?: boolean;
 }
 interface Mat {
   material_id: number; code: string; name: string; material_class: string;
@@ -437,7 +440,10 @@ export default function WeighbridgeSection() {
         </div>
       ) : tab === "trips" ? (
         <TripTable trips={trips} summary={summary}
-                   sources={sources} categories={categories} />
+                   sources={sources} categories={categories}
+                   bridges={bridges} mayTare={mayTare}
+                   onChanged={(m) => { setNotice(m); void refresh(); }}
+                   onError={setError} />
       ) : tab === "tares" ? (
         <TareRegister onError={setError} />
       ) : tab === "customise" ? (
@@ -1200,9 +1206,12 @@ function TareDialog({ vehicle, bridges, onClose, onDone, onError }: {
  * worth pulling out on their own, because "show me every load that was typed
  * in by hand" is the question an auditor opens with.
  */
-function TripTable({ trips, summary, sources, categories }: {
+function TripTable({ trips, summary, sources, categories, bridges, mayTare,
+                    onChanged, onError }: {
   trips: Trip[]; summary: Record<string, number>;
   sources: MoveGroup[]; categories: Category[];
+  bridges: Bridge[]; mayTare: boolean;
+  onChanged: (m: string) => void; onError: (m: string) => void;
 }) {
   const [q, setQ] = useState("");
   const [day, setDay] = useState("");
@@ -1229,6 +1238,8 @@ function TripTable({ trips, summary, sources, categories }: {
   const net = rows.reduce((a, t) => a + (t.net_kg ?? 0), 0) / 1000;
   const filtered = rows.length !== trips.length;
   const clear = () => { setQ(""); setDay(""); setShift(""); setSource(""); setMaterial(""); setFlag(""); };
+
+  const [pinning, setPinning] = useState<Trip | null>(null);
 
   // Every place a load can come from, flattened out of the source groups.
   const sourcePlaces = useMemo(
@@ -1334,11 +1345,11 @@ function TripTable({ trips, summary, sources, categories }: {
             <Th>Trip</Th><Th>Vehicle</Th><Th>Driver</Th><Th>Material</Th>
             <Th>From → to</Th>
             <Th className="text-right">Gross</Th><Th className="text-right">Tare</Th>
-            <Th className="text-right">Net</Th><Th>Flags</Th>
+            <Th className="text-right">Net</Th><Th>Flags</Th><Th />
           </tr></thead>
           <tbody>
             {rows.length === 0 && (
-              <EmptyRow colSpan={9}>
+              <EmptyRow colSpan={10}>
                 {trips.length === 0 ? "No trips recorded yet." : "Nothing matches those filters."}
               </EmptyRow>
             )}
@@ -1382,14 +1393,205 @@ function TripTable({ trips, summary, sources, categories }: {
                     {t.tare_is_stale && <Chip tone="amber" dot={false}>tare {t.tare_age_days}d</Chip>}
                     {t.overload_kg ? <Chip tone="rose" dot={false}>over</Chip> : null}
                     {t.status === "CANCELLED" && <Chip tone="slate">cancelled</Chip>}
+                    {t.tare_after_gross && (
+                      <Chip tone="emerald" dot={false}
+                        title="The empty weight was taken after the load was tipped — the normal order, and it makes this net firmer than one resting on a standing figure.">
+                        weighed empty after
+                      </Chip>
+                    )}
                   </div>
+                </Td>
+                {/* Only where it would change something: the net is resting on
+                    the vehicle's standing figure, so it moves every time that
+                    figure is taken again. Pinning the empty weight that was
+                    actually taken for this load stops it floating. */}
+                <Td className="text-right">
+                  {mayTare && t.tare_source !== "WEIGHED"
+                   && t.gross_kg != null && t.status !== "CANCELLED" && (
+                    <Button size="sm" onClick={() => setPinning(t)}
+                      title="Give this trip the empty weight taken for it">
+                      <Scale className="w-3.5 h-3.5" /> Apply tare
+                    </Button>
+                  )}
                 </Td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      {pinning && (
+        <ApplyTareDialog
+          trip={pinning} bridges={bridges}
+          onClose={() => setPinning(null)}
+          onDone={(m) => { setPinning(null); onChanged(m); }}
+          onError={onError}
+        />
+      )}
     </Card>
+  );
+}
+
+/* ── Giving a trip the empty weight that was taken for it ────────────────
+ *
+ * THE ORDER A LOADED TRUCK ARRIVES IN. It weighs gross, tips, and only then
+ * goes over the bridge empty. Until that empty weight is pinned to the trip,
+ * the net is computed from the vehicle's STANDING tare — which means it
+ * silently changes the next time that figure is taken, because net is worked
+ * out on read rather than stored.
+ */
+function ApplyTareDialog({ trip, bridges, onClose, onDone, onError }: {
+  trip: Trip;
+  bridges: Bridge[];
+  onClose: () => void;
+  onDone: (m: string) => void;
+  onError: (m: string) => void;
+}) {
+  const [source, setSource] = useState<"BRIDGE" | "MANUAL" | "REGISTER">("BRIDGE");
+  const [bridgeId, setBridgeId] = useState<number | "">(bridges[0]?.weighbridge_id ?? "");
+  const [weight, setWeight] = useState("");
+  const [reason, setReason] = useState("");
+  const [readingId, setReadingId] = useState<number | "">("");
+  const [history, setHistory] = useState<{ tare_reading_id: number;
+    weight_kg: number; taken_at: string; capture_mode: string }[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!trip.asset_id) return;
+    void api.get("/weighbridge/tare-register",
+      { params: { asset_id: trip.asset_id, days: 730 } })
+      .then((r) => setHistory((r.data as { readings: typeof history }).readings ?? []))
+      .catch(() => { /* the register is a convenience here, not the point */ });
+  }, [trip.asset_id]);
+
+  const gross = trip.gross_kg ?? 0;
+  const chosen = source === "MANUAL" ? Number(weight || 0)
+    : source === "REGISTER"
+      ? (history.find((h) => h.tare_reading_id === readingId)?.weight_kg ?? 0)
+      : 0;
+  const tooHeavy = chosen > 0 && gross > 0 && chosen >= gross;
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post(`/weighbridge/trips/${trip.trip_id}/tare`, {
+        source, weighbridge_id: bridgeId || null,
+        weight_kg: source === "MANUAL" ? Number(weight) : null,
+        tare_reading_id: source === "REGISTER" ? readingId : null,
+        manual_reason: reason || null,
+      });
+      const d = r.data as { net_kg: number | null; tare_kg: number | null };
+      onDone(`${trip.trip_no}: tare ${d.tare_kg?.toLocaleString("en-IN")} kg, `
+             + `net ${d.net_kg?.toLocaleString("en-IN")} kg.`);
+    } catch (e) { onError(errorOf(e, "Could not apply the tare.")); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Dialog open tone="info" title={`Apply a tare — ${trip.trip_no}`}
+            confirmLabel="Apply this tare" onCancel={onClose}
+            onConfirm={() => void save()}
+            busy={busy || tooHeavy
+                  || (source === "MANUAL" && (!weight || !reason))
+                  || (source === "REGISTER" && !readingId)}>
+      <div className="space-y-3.5">
+        <p className="text-[12px] text-txt-light">
+          This trip&apos;s net is resting on{" "}
+          <strong className="text-txt-primary">
+            {trip.vehicle ? `${trip.fleet_code || trip.vehicle}'s` : "the vehicle's"}
+          </strong>{" "}
+          standing empty weight, so it moves every time that figure is taken
+          again. Pinning the weight actually taken for this load stops it
+          floating.
+        </p>
+
+        <div className="grid grid-cols-3 gap-2 text-center">
+          {([["Gross", trip.gross_kg], ["Tare now", trip.tare_kg],
+             ["Net now", trip.net_kg]] as [string, number | null][]).map(([k, v]) => (
+            <div key={k} className="rounded-lg bg-bg-soft px-2 py-1.5">
+              <div className="text-[10px] uppercase tracking-wide text-txt-light">{k}</div>
+              <div className="font-mono text-[14px] font-bold text-navy">
+                {v == null ? "—" : v.toLocaleString("en-IN")}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex flex-wrap gap-1.5">
+          {([["BRIDGE", "Weigh it now"], ["REGISTER", "From its tare register"],
+             ["MANUAL", "Type the weight"]] as [typeof source, string][])
+            .map(([id, label]) => (
+            <button key={id} type="button" onClick={() => setSource(id)}
+              className={`px-3 py-1.5 rounded-lg text-[12px] font-semibold border
+                          transition-colors ${source === id
+                  ? "bg-navy text-white border-navy"
+                  : "border-border text-txt-muted hover:border-slate-300"}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {source === "BRIDGE" && (
+          <>
+            <Field label="Which bridge">
+              <select value={bridgeId} className={inputClass}
+                onChange={(e) => setBridgeId(e.target.value ? Number(e.target.value) : "")}>
+                {bridges.map((b) => (
+                  <option key={b.weighbridge_id} value={b.weighbridge_id}>
+                    {b.name ?? b.code}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Alert tone="info">
+              Drive the empty vehicle onto the deck and let it settle. The
+              weight is taken from the bridge when you confirm, and becomes this
+              vehicle&apos;s standing tare as well.
+            </Alert>
+          </>
+        )}
+
+        {source === "REGISTER" && (
+          <Field label="Which reading"
+            hint="an empty weight already recorded for this vehicle">
+            <select value={readingId} className={inputClass}
+              onChange={(e) => setReadingId(e.target.value ? Number(e.target.value) : "")}>
+              <option value="">Choose…</option>
+              {history.map((h) => (
+                <option key={h.tare_reading_id} value={h.tare_reading_id}>
+                  {h.weight_kg.toLocaleString("en-IN")} kg ·{" "}
+                  {new Date(h.taken_at).toLocaleDateString("en-IN")} ·{" "}
+                  {h.capture_mode.toLowerCase()}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
+
+        {source === "MANUAL" && (
+          <>
+            <Field label="Empty weight, kg" required>
+              <input type="number" value={weight} className={inputClass}
+                onChange={(e) => setWeight(e.target.value)} />
+            </Field>
+            <Field label="Why it is being typed" required
+              hint="a weight nobody watched settle has to be explainable later">
+              <input value={reason} className={inputClass}
+                placeholder="e.g. the bridge was down"
+                onChange={(e) => setReason(e.target.value)} />
+            </Field>
+          </>
+        )}
+
+        {tooHeavy && (
+          <Alert tone="warning">
+            {chosen.toLocaleString("en-IN")} kg is not less than the gross of{" "}
+            {gross.toLocaleString("en-IN")} kg, which would make the load weigh
+            nothing or less.
+          </Alert>
+        )}
+      </div>
+    </Dialog>
   );
 }
 

@@ -365,6 +365,7 @@ def employee(db: Session, empid: str) -> dict:
         return {"emp_id": empid, "name": empid, "designation": None, "department": None,
                 "email": None, "title": None, "location": None, "plant": None,
                 "roles": access_svc.roles_for(db, empid), "permissions": perms,
+                "access_source": access_svc.access_source(),
                 "allowed_pages": [pg for pg, code in (
                     ("mis", "dashboard.mis"), ("oee", "dashboard.oee"),
                     ("intelligence", "dashboard.intelligence"),
@@ -387,6 +388,10 @@ def employee(db: Session, empid: str) -> dict:
         # rather than a role name to reason about.
         "roles": _roles,
         "permissions": _perms,
+        # Where those two came from. "legacy" means the access database was
+        # unreachable and this is the old, smaller fallback set -- which looks
+        # identical to the real thing unless something says so.
+        "access_source": access_svc.access_source(),
         # The pages this user may open, so the sidebar shows only those. The
         # same rule is enforced on the API, so this is convenience, not security.
         "allowed_pages": [pg for pg, code in (

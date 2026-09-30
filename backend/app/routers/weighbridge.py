@@ -272,7 +272,10 @@ def trips(request: Request,
                src.name AS source, dst.name AS destination,
                w.code AS bridge,
                tw.gross_kg, tw.tare_kg, tw.net_kg, tw.tare_source,
-               tw.tare_age_days, tw.has_manual, tw.gross_at
+               tw.tare_age_days, tw.has_manual, tw.gross_at,
+               -- The empty weight was taken after the load was tipped, which
+               -- is the order a loaded truck actually arrives in.
+               tw.tare_after_gross
           FROM trip t
           JOIN gate_pass g        ON g.gate_pass_id = t.gate_pass_id
           LEFT JOIN asset a       ON a.asset_id = t.asset_id

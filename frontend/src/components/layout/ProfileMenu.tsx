@@ -158,6 +158,16 @@ export default function ProfileMenu() {
             <p className="text-[10.5px] text-txt-light mt-1.5">
               {user.permissions?.length ?? 0} permissions in total.
             </p>
+            {/* A fallback set looks exactly like the real one. If the access
+                database could not be reached, the roles above are the old
+                smaller list and nobody should read them as a decision. */}
+            {user.access_source === "legacy" && (
+              <p className="text-[10.5px] text-amber-dark mt-1.5 leading-snug">
+                The access database could not be reached, so this is a reduced
+                standby list — not what you actually hold. Screens may be
+                missing until the connection is back.
+              </p>
+            )}
           </div>
 
           <button
