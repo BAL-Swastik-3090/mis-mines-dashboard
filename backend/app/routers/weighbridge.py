@@ -1443,22 +1443,53 @@ def set_tare(asset_id: int, request: Request, body: dict = Body(...),
     if not bridge_id:
         raise HTTPException(400, "Which bridge?")
 
-    reading = pg.execute(text("""
-        SELECT reading_id, weight_kg FROM weighbridge_reading
-         WHERE weighbridge_id = :b AND is_stable
-           AND received_at > now() - interval '30 seconds'
-         ORDER BY read_at DESC LIMIT 1
-    """), {"b": bridge_id}).mappings().first()
-    if not reading:
-        raise HTTPException(409,
-            "The bridge is not showing a settled weight. Drive the empty vehicle "
-            "onto the deck and let it steady.")
-
-    weight = float(reading["weight_kg"])
     prev = pg.execute(text("""SELECT standing_tare_kg, tare_taken_at FROM asset
                                WHERE asset_id = :a"""), {"a": asset_id}).mappings().first()
     if prev is None:
         raise HTTPException(404, "No such vehicle on the register.")
+
+    # A typed weight, when the bridge is down. The gross weighing has always
+    # allowed this; the tare could not, which meant a bridge outage stopped
+    # tares being taken at all and every net that week fell back to a figure
+    # that was already stale.
+    typed = body.get("weight_kg")
+    reason = (body.get("manual_reason") or "").strip()
+    if typed is not None:
+        if not reason:
+            raise HTTPException(
+                400, "A typed tare needs a reason beside it. A weight nobody "
+                     "watched settle has to be explainable later, and \"the "
+                     "bridge was down\" is a perfectly good reason.")
+        weight = float(typed)
+        if not (0 < weight < 200000):
+            raise HTTPException(400, "That is not a believable empty weight.")
+        reading_id, mode = None, "MANUAL"
+    else:
+        reading = pg.execute(text("""
+            SELECT reading_id, weight_kg FROM weighbridge_reading
+             WHERE weighbridge_id = :b AND is_stable
+               AND received_at > now() - interval '30 seconds'
+             ORDER BY read_at DESC LIMIT 1
+        """), {"b": bridge_id}).mappings().first()
+        if not reading:
+            raise HTTPException(409,
+                "The bridge is not showing a settled weight. Drive the empty "
+                "vehicle onto the deck and let it steady, or type the weight "
+                "with a reason if the bridge is down.")
+        weight = float(reading["weight_kg"])
+        reading_id, mode = reading["reading_id"], "BRIDGE"
+
+    # The series first, then the standing figure. asset.standing_tare_kg is
+    # what every net is computed from; this table is where it came from and
+    # what it used to be.
+    pg.execute(text("""
+        INSERT INTO vehicle_tare_reading (asset_id, weight_kg, taken_by,
+                                          weighbridge_id, reading_id,
+                                          capture_mode, manual_reason, note)
+        VALUES (:a, :w, :by, :b, :r, :mode, :reason, :note)
+    """), {"a": asset_id, "w": weight, "by": _actor(request), "b": bridge_id,
+           "r": reading_id, "mode": mode, "reason": reason or None,
+           "note": body.get("note")})
 
     pg.execute(text("""
         UPDATE asset SET standing_tare_kg = :w, tare_taken_at = now(), tare_taken_by = :by
@@ -1469,7 +1500,195 @@ def set_tare(asset_id: int, request: Request, body: dict = Body(...),
     before = _f(prev["standing_tare_kg"])
     return {"standing_tare_kg": weight, "previous_kg": before,
             "change_kg": round(weight - before, 2) if before is not None else None,
-            "previous_taken_at": prev["tare_taken_at"]}
+            "previous_taken_at": prev["tare_taken_at"],
+            "capture_mode": mode}
+
+
+@router.get("/tare-register")
+def tare_register(request: Request,
+                  asset_id: int | None = Query(None),
+                  days: int = Query(365, ge=1, le=3650),
+                  db: Session = Depends(get_db),
+                  pg: Session = Depends(get_minehub_db)) -> dict:
+    """Every empty weight ever taken, as a series per vehicle.
+
+    ONE NUMBER CANNOT SHOW A DRIFT. A tare moves for honest reasons -- a body
+    repair, a spare wheel, mud packed into the chassis after a wet week -- and
+    a tipper that has gained 400 kg across three months has something in it.
+    Nobody sees that from a single overwritten figure, which is what this
+    replaces.
+    """
+    _require(db, request, VIEW)
+
+    rows = [dict(r) for r in pg.execute(text("""
+        SELECT h.*, a.payload_capacity_kg
+          FROM vehicle_tare_history h
+          LEFT JOIN asset a ON a.asset_id = h.asset_id
+         WHERE h.taken_at > now() - make_interval(days => :d)
+           -- Cast, because Postgres cannot infer the type of a bare
+           -- NULL parameter and refuses the whole statement.
+           AND (CAST(:aid AS bigint) IS NULL
+                OR h.asset_id = CAST(:aid AS bigint))
+         ORDER BY h.fleet_code, h.taken_at DESC
+    """), {"d": days, "aid": asset_id}).mappings()]
+    for r in rows:
+        for k in ("weight_kg", "previous_kg", "change_kg", "payload_capacity_kg"):
+            r[k] = _f(r.get(k))
+        # Worth a second look rather than a verdict. A tare that moves by more
+        # than about a tonne between readings is usually a real change to the
+        # vehicle, and occasionally a weighing nobody checked.
+        r["is_big_change"] = (r["change_kg"] is not None
+                              and abs(r["change_kg"]) >= 1000)
+
+    # One line per vehicle: where it stands now and how far it has moved.
+    per_vehicle: dict = {}
+    for r in rows:
+        key = r["fleet_code"] or r["registration_no"] or "—"
+        v = per_vehicle.setdefault(key, {
+            "fleet_code": r["fleet_code"], "registration_no": r["registration_no"],
+            "nickname": r["nickname"], "asset_id": r["asset_id"],
+            "readings": 0, "current_kg": None, "current_taken_at": None,
+            "first_kg": None, "lowest_kg": None, "highest_kg": None,
+            "payload_capacity_kg": r["payload_capacity_kg"],
+        })
+        v["readings"] += 1
+        if r["is_current"]:
+            v["current_kg"] = r["weight_kg"]
+            v["current_taken_at"] = r["taken_at"]
+        w = r["weight_kg"]
+        v["first_kg"] = w        # rows come newest first, so this ends oldest
+        v["lowest_kg"] = w if v["lowest_kg"] is None else min(v["lowest_kg"], w)
+        v["highest_kg"] = w if v["highest_kg"] is None else max(v["highest_kg"], w)
+    for v in per_vehicle.values():
+        v["drift_kg"] = (round(v["current_kg"] - v["first_kg"], 2)
+                         if v["current_kg"] is not None
+                         and v["first_kg"] is not None else None)
+        v["spread_kg"] = (round(v["highest_kg"] - v["lowest_kg"], 2)
+                          if v["highest_kg"] is not None else None)
+
+    return {"readings": rows,
+            "vehicles": sorted(per_vehicle.values(),
+                               key=lambda x: str(x["fleet_code"] or "")),
+            "stale_after_days": TARE_STALE_DAYS}
+
+
+@router.post("/trips/{trip_id}/tare")
+def pin_tare_to_trip(trip_id: int, request: Request, body: dict = Body(...),
+                     db: Session = Depends(get_db),
+                     pg: Session = Depends(get_minehub_db)) -> dict:
+    """Attach an empty weight to the trip it was taken for.
+
+    THE ORDER A LOADED TRUCK ACTUALLY ARRIVES IN. It weighs gross, tips, and
+    only then goes over the bridge empty. Until now that empty weight became
+    the vehicle's standing tare and the trip's net was computed from it by
+    luck -- the view falls back to the standing figure. The moment another
+    tare was taken, that trip's net silently changed, because net is computed
+    on read.
+
+    Pinning it makes the trip's net stop floating. The figure can come from
+    the bridge now, from a tare already in the register, or be typed with a
+    reason when the bridge is down.
+    """
+    _require(db, request, TARE)
+
+    trip = pg.execute(text("""
+        SELECT t.trip_id, t.asset_id, t.weighbridge_id, tw.gross_kg, tw.gross_at,
+               tw.tare_kg, tw.tare_source
+          FROM trip t LEFT JOIN trip_weights tw ON tw.trip_id = t.trip_id
+         WHERE t.trip_id = :t
+    """), {"t": trip_id}).mappings().first()
+    if not trip:
+        raise HTTPException(404, "No such trip.")
+    if trip["gross_kg"] is None:
+        raise HTTPException(
+            409, "That trip has no gross weight yet. A tare on its own gives "
+                 "nothing to subtract it from.")
+    if trip["tare_source"] == "WEIGHED":
+        raise HTTPException(
+            409, "That trip already has its own tare weighing. Re-weighing "
+                 "replaces it through the weighing screen, which keeps the "
+                 "correction in the revision history.")
+
+    bridge_id = body.get("weighbridge_id") or trip["weighbridge_id"]
+    source = (body.get("source") or "BRIDGE").upper()
+    reason = (body.get("manual_reason") or "").strip()
+
+    if source == "REGISTER":
+        # A tare already in the series, chosen deliberately.
+        rid = body.get("tare_reading_id")
+        if not rid:
+            raise HTTPException(400, "Which tare reading?")
+        r = pg.execute(text("""
+            SELECT weight_kg, taken_at FROM vehicle_tare_reading
+             WHERE tare_reading_id = :r AND asset_id = :a
+        """), {"r": rid, "a": trip["asset_id"]}).mappings().first()
+        if not r:
+            raise HTTPException(
+                404, "That tare is not on this vehicle's register. A tare "
+                     "belonging to another vehicle is not a tare for this trip.")
+        weight, mode, reading_id = float(r["weight_kg"]), "MANUAL", None
+        reason = reason or (f"Taken from this vehicle's tare register, "
+                            f"weighed {r['taken_at']:%d-%m-%Y %H:%M}.")
+    elif source == "MANUAL":
+        if body.get("weight_kg") is None:
+            raise HTTPException(400, "A weight is needed.")
+        if not reason:
+            raise HTTPException(400, "A typed tare needs a reason beside it.")
+        weight, mode, reading_id = float(body["weight_kg"]), "MANUAL", None
+    else:
+        reading = pg.execute(text("""
+            SELECT reading_id, weight_kg FROM weighbridge_reading
+             WHERE weighbridge_id = :b AND is_stable
+               AND received_at > now() - interval '30 seconds'
+             ORDER BY read_at DESC LIMIT 1
+        """), {"b": bridge_id}).mappings().first()
+        if not reading:
+            raise HTTPException(409,
+                "The bridge is not showing a settled weight. Drive the empty "
+                "vehicle onto the deck and let it steady.")
+        weight, mode = float(reading["weight_kg"]), "BRIDGE"
+        reading_id = reading["reading_id"]
+
+    if weight >= float(trip["gross_kg"]):
+        raise HTTPException(
+            422, f"An empty weight of {weight:,.0f} kg is not less than the "
+                 f"gross of {float(trip['gross_kg']):,.0f} kg, which would "
+                 f"make the load weigh nothing or less.")
+
+    pg.execute(text("""
+        INSERT INTO weighment (trip_id, weighbridge_id, kind, weight_kg,
+                               capture_mode, reading_id, manual_reason,
+                               weighed_at, weighed_by, remarks)
+        VALUES (:t, :b, 'TARE', :w, :mode, :r, :reason, now(), :by, :note)
+    """), {"t": trip_id, "b": bridge_id, "w": weight, "mode": mode,
+           "r": reading_id, "reason": reason or None, "by": _actor(request),
+           "note": body.get("note")})
+
+    # A tare weighed at the bridge is also this vehicle's newest empty weight.
+    # Not when it was chosen from the register — that figure is already there.
+    if mode == "BRIDGE" and trip["asset_id"]:
+        pg.execute(text("""
+            INSERT INTO vehicle_tare_reading (asset_id, weight_kg, taken_by,
+                                              weighbridge_id, reading_id,
+                                              capture_mode, note)
+            VALUES (:a, :w, :by, :b, :r, 'BRIDGE',
+                    'Weighed empty after the load was tipped, on trip ' || :t)
+        """), {"a": trip["asset_id"], "w": weight, "by": _actor(request),
+               "b": bridge_id, "r": reading_id, "t": str(trip_id)})
+        pg.execute(text("""
+            UPDATE asset SET standing_tare_kg = :w, tare_taken_at = now(),
+                             tare_taken_by = :by
+             WHERE asset_id = :a
+        """), {"a": trip["asset_id"], "w": weight, "by": _actor(request)})
+
+    pg.commit()
+    after = pg.execute(text(
+        "SELECT gross_kg, tare_kg, net_kg, tare_source, tare_after_gross "
+        "FROM trip_weights WHERE trip_id = :t"), {"t": trip_id}).mappings().first()
+    return {"ok": True, "weight_kg": weight, "capture_mode": mode,
+            "gross_kg": _f(after["gross_kg"]), "tare_kg": _f(after["tare_kg"]),
+            "net_kg": _f(after["net_kg"]), "tare_source": after["tare_source"],
+            "tare_after_gross": after["tare_after_gross"]}
 
 
 # ═══════════════════════════════════════════════════════════════════════════

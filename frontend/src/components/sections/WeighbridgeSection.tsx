@@ -33,9 +33,10 @@ import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
 import {
   Alert, Button, Card, CardHeader, Chip, EmptyRow, Field, PageHeader,
-  StatBar, Tabs, Td, Th, inputClass, type Tone,
+  StatBar, Tabs, Td, Th, inputClass, filterSelectClass, type Tone,
 } from "@/components/minehub/ui";
 import Dialog from "@/components/minehub/Dialog";
+import TareRegister from "./TareRegister";
 
 /* ── Shapes ──────────────────────────────────────────────────────────────── */
 interface Bridge {
@@ -201,9 +202,29 @@ const ago = (s: number | null) =>
   s === null ? "never" : s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)} min ago`
     : `${Math.round(s / 3600)} h ago`;
 
-type Tab = "weigh" | "trips" | "bridges" | "customise";
+type Tab = "weigh" | "trips" | "tares" | "bridges" | "customise";
 
 /* ════════════════════════════════════════════════════════════════════════ */
+/* What the mine calls this vehicle, then its plate.
+ *
+ * Nobody at the bridge says "OD-04-B-8776". They say MAN-19, and the plate is
+ * how they confirm it is the right MAN-19. Putting the fleet code first means
+ * the operator reads the name he already has in his head and checks the
+ * number underneath, rather than decoding a registration to work out which
+ * truck is on the deck.
+ *
+ * Falls back to whichever exists: a visiting truck has a plate and no fleet
+ * code, and showing "— (OD 12 AB 3456)" would be worse than showing the plate.
+ */
+function vehicleName(v: { fleet_code?: string | null;
+                          vehicle?: string | null } | null | undefined): string {
+  if (!v) return "—";
+  const code = (v.fleet_code ?? "").trim();
+  const reg = (v.vehicle ?? "").trim();
+  if (code && reg && code !== reg) return `${code} (${reg})`;
+  return code || reg || "—";
+}
+
 export default function WeighbridgeSection() {
   const can = useAuth((s) => s.can);
   const mayWeigh = can("wb.weigh");
@@ -373,6 +394,7 @@ export default function WeighbridgeSection() {
         tabs={[
           { id: "weigh", label: "Weigh a load", icon: Gauge, tone: "gold" },
           { id: "trips", label: "Trips", icon: ArrowRight, tone: "indigo" },
+          { id: "tares", label: "Tare register", icon: Scale, tone: "gold" },
           { id: "bridges", label: "Bridges & agents", icon: Radio, tone: "slate" },
           { id: "customise", label: "Customise lists", icon: SlidersHorizontal, tone: "violet" },
         ]}
@@ -416,6 +438,8 @@ export default function WeighbridgeSection() {
       ) : tab === "trips" ? (
         <TripTable trips={trips} summary={summary}
                    sources={sources} categories={categories} />
+      ) : tab === "tares" ? (
+        <TareRegister onError={setError} />
       ) : tab === "customise" ? (
         <Customise mayEdit={mayMasters}
                    onChanged={(m) => { setNotice(m); void refresh(); }} onError={setError} />
@@ -715,7 +739,7 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
   return (
     <Dialog
       open tone={manual ? "warning" : "info"} width={960} bare
-      title={`Weigh a load — ${vehicle.vehicle}`}
+      title={`Weigh a load — ${vehicleName(vehicle)}`}
       confirmLabel={manual ? "Record typed weight" : "Capture and record trip"}
       onCancel={onClose} onConfirm={() => void save()} busy={blocked}
     >
@@ -796,10 +820,11 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
               </span>
               <div className="min-w-0">
                 <p className="text-[13.5px] font-semibold text-txt-primary leading-tight">
-                  {vehicle.vehicle}
+                  {vehicle.fleet_code || vehicle.vehicle}
                 </p>
                 <p className="text-[11px] text-txt-light mt-0.5">
-                  {[vehicle.fleet_code, vehicle.vehicle_type].filter(Boolean).join(" · ") || "—"}
+                  {[vehicle.fleet_code ? vehicle.vehicle : null, vehicle.vehicle_type]
+                    .filter(Boolean).join(" · ") || "—"}
                 </p>
               </div>
             </div>
@@ -1090,7 +1115,7 @@ function TareDialog({ vehicle, bridges, onClose, onDone, onError }: {
   };
 
   return (
-    <Dialog open tone="warning" title={`Standing tare — ${vehicle.vehicle}`}
+    <Dialog open tone="warning" title={`Standing tare — ${vehicleName(vehicle)}`}
             confirmLabel="Take this as the tare" onCancel={onClose}
             onConfirm={() => void save()} busy={busy || !ready}>
       <div className="space-y-3.5">
@@ -1216,49 +1241,91 @@ function TripTable({ trips, summary, sources, categories }: {
   return (
     <Card>
       <CardHeader
-        title="Trips" tone="indigo" icon={ArrowRight}
-        subtitle={`${rows.length}${filtered ? ` of ${trips.length}` : ""} trips · `
-                  + `${net.toFixed(1)} t net`
-                  + (summary.stale_tare ? ` · ${summary.stale_tare} on a stale tare` : "")}
-        actions={filtered
-          ? <Button size="sm" onClick={clear}><X className="w-3.5 h-3.5" /> Clear filters</Button>
-          : undefined}
+        title="Trips" tone="indigo" icon={ArrowRight} subtitleOnIcon
+        subtitle="Every load weighed over the bridge, and where its tare came from."
+        actions={
+          /* The figures belong up here beside the title, where the eye
+             already is, rather than in a sentence underneath the filters. */
+          <span className="flex flex-wrap items-center gap-1.5">
+            <span className="px-2.5 py-1 rounded-lg bg-bg-soft">
+              <span className="font-mono text-[13px] font-bold text-navy">
+                {rows.length}
+              </span>
+              <span className="text-[10.5px] text-txt-muted ml-1">
+                {filtered ? `of ${trips.length} trips` : "trips"}
+              </span>
+            </span>
+            <span className="px-2.5 py-1 rounded-lg bg-bg-soft">
+              <span className="font-mono text-[13px] font-bold text-navy">
+                {net.toFixed(1)}
+              </span>
+              <span className="text-[10.5px] text-txt-muted ml-1">t net</span>
+            </span>
+            {summary.stale_tare > 0 && (
+              <Chip tone="amber"
+                title="Their nets rest on an empty weight that has not been taken recently.">
+                {summary.stale_tare} on a stale tare
+              </Chip>
+            )}
+            {filtered && (
+              <Button size="sm" onClick={clear}>
+                <X className="w-3.5 h-3.5" /> Clear
+              </Button>
+            )}
+          </span>
+        }
       />
 
-      <div className="px-4 py-3 border-b border-border-light flex flex-wrap gap-2">
+      <div className="px-4 py-2.5 border-b border-border-light
+                      flex flex-wrap items-center gap-2">
+        {/* The search first: it is what people reach for, and the one control
+            that earns the room to grow. */}
+        <div className="relative flex-1 min-w-[190px] max-w-[320px]">
+          <Search className="w-3.5 h-3.5 text-txt-light absolute left-2.5
+                             top-1/2 -translate-y-1/2" />
+          <input value={q} onChange={(e) => setQ(e.target.value)}
+                 placeholder="Trip, vehicle, driver"
+                 className={`${inputClass} pl-8 py-1.5 text-[12px] ${
+                   q ? "border-gold" : ""}`} />
+        </div>
+
         <input type="date" value={day} onChange={(e) => setDay(e.target.value)}
-               className={`${inputClass} w-[150px]`} />
+               title="One production day"
+               className={`rounded-lg border bg-bg-base px-2.5 py-1.5 text-[12px]
+                           text-txt-primary transition-colors focus:outline-none
+                           focus:border-gold focus:ring-2 focus:ring-gold/15 ${
+                 day ? "border-gold font-semibold" : "border-border text-txt-muted"}`} />
+
         <select value={shift} onChange={(e) => setShift(e.target.value)}
-                className={`${inputClass} w-[120px]`}>
+                title="Shift" className={filterSelectClass(!!shift)}>
           <option value="">Every shift</option>
           <option value="A">Shift A</option><option value="B">Shift B</option>
           <option value="C">Shift C</option>
         </select>
+
         <SearchSelect value={source} onChange={setSource} allLabel="Every source"
-          className="w-[180px] px-3 py-2 text-[13px]"
+          className={`${filterSelectClass(!!source)} w-[170px]`}
           searchPlaceholder="Type a pit or a stack…"
           options={sourcePlaces.map((l) => ({
             value: l.name, label: l.name, hint: l.group,
           }))} />
+
         <SearchSelect value={material} onChange={setMaterial} allLabel="Every material"
-          className="w-[190px] px-3 py-2 text-[13px]"
+          className={`${filterSelectClass(!!material)} w-[180px]`}
           searchPlaceholder="Type a material…"
           options={materialNames.map((n) => ({
             value: n.split(" · ")[1], label: n,
           }))} />
+
         <select value={flag} onChange={(e) => setFlag(e.target.value)}
-                className={`${inputClass} w-[210px]`}>
+                title="Only trips worth a second look"
+                className={filterSelectClass(!!flag)}>
           <option value="">Everything</option>
           <option value="MANUAL">Typed by hand only</option>
           <option value="STALE">On a stale tare only</option>
           <option value="STANDING">On a standing tare only</option>
           <option value="OVER">Over capacity only</option>
         </select>
-        <div className="relative flex-1 min-w-[200px]">
-          <Search className="w-3.5 h-3.5 text-txt-light absolute left-3 top-1/2 -translate-y-1/2" />
-          <input value={q} onChange={(e) => setQ(e.target.value)}
-                 placeholder="Trip, vehicle, driver" className={`${inputClass} pl-8`} />
-        </div>
       </div>
 
       <div className="overflow-x-auto">
@@ -1284,8 +1351,12 @@ function TripTable({ trips, summary, sources, categories }: {
                   </span>
                 </Td>
                 <Td>
-                  <span className="text-txt-primary">{t.vehicle ?? "—"}</span>
-                  {t.fleet_code && <span className="block text-[11px] text-txt-light">{t.fleet_code}</span>}
+                  <span className="font-semibold text-txt-primary">
+                    {t.fleet_code || t.vehicle || "—"}
+                  </span>
+                  {t.fleet_code && t.vehicle && (
+                    <span className="block text-[11px] text-txt-light">{t.vehicle}</span>
+                  )}
                 </Td>
                 <Td>
                   {t.driver ?? "—"}
