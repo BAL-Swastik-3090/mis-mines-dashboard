@@ -100,6 +100,10 @@ interface Usage {
    *  who, and saying who published the platform's administrators to everybody
    *  holding usage.view. */
   excluded_count?: number;
+  /** How current the copy these figures come from is — see usage_sync.py.
+   *  This screen reads our own mirror of the sign-in log, not the shared
+   *  table it is written to, so it is by design a little behind. */
+  mirror?: { ready: boolean; seconds_old: number | null; error: string | null };
   endings: Record<string, number>; browsers: Record<string, number>;
   recent_sessions: Sess[];
   changes_by_kind: { event_type: string; count: number; people: number }[];
@@ -532,6 +536,24 @@ export default function UsageSection() {
             ))}
           </div>
         </Card>
+      )}
+
+      {/* A screen quietly showing last week is worse than a slow one.
+          Silent while the copy is current; says so plainly when it is not. */}
+      {data?.mirror && (!data.mirror.ready || data.mirror.error
+        || (data.mirror.seconds_old ?? 0) > 600) && (
+        <p className="text-[11.5px] text-amber flex items-start gap-1.5">
+          <Wrench className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <span>
+            {!data.mirror.ready
+              ? "These figures are still being copied across — they will fill in within a minute."
+              : data.mirror.seconds_old == null
+                ? "The age of these figures could not be established."
+                : `These figures were last refreshed ${
+                    Math.round(data.mirror.seconds_old / 60)} minutes ago.`}
+            {data.mirror.error && ` The last refresh failed: ${data.mirror.error}`}
+          </span>
+        </p>
       )}
 
       {data && (data.excluded_count ?? 0) > 0 && (

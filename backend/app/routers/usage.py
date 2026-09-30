@@ -2,6 +2,13 @@
 
 TWO LOGS, AND NEITHER IS THE WHOLE STORY.
 
+  usage_session, usage_page_view   our own mirror in minehub of two tables
+  in the shared balcorpdb, kept current by services/usage_sync.py. The source
+  has no index led by app_source, so reading it meant scanning every other
+  application's rows; the mirror is indexed on (app_source, date) and the
+  screen never touches a shared server. The source of record is still
+  balcorpdb -- see the sync.
+
   digital_apps_user_sessions   MySQL, shared by 22 applications. Who signed
   digital_apps_page_views      in, from what browser, for how long, and which
                                screens they opened.
@@ -38,6 +45,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.minehub_db import get_minehub_db
+from app.services import usage_sync
 
 router = APIRouter(prefix="/api/usage", tags=["Usage"])
 
@@ -187,8 +195,12 @@ def usage(request: Request,
           day_to: date | None = Query(None),
           app_source: str = Query(APP),
           include_admins: bool = Query(False),
-          db: Session = Depends(get_db),
-          pg: Session = Depends(get_minehub_db)) -> dict:
+          pg: Session = Depends(get_minehub_db),
+          # Still MySQL, and rightly: this is the SAP employee master, not the
+          # usage log. It is the one thing on this screen the mirror does not
+          # hold, because it is not ours to mirror and it is read by name, not
+          # scanned by range.
+          db: Session = Depends(get_db)) -> dict:
     """Everything the page draws, in one request.
 
     One call rather than six. The page is read top to bottom in a meeting and
@@ -214,12 +226,12 @@ def usage(request: Request,
         _ANSWER.move_to_end(cache_key)
         return hit[1]
 
-    # Superadmins are excluded by default — see _superadmins. A comma-joined
-    # string rather than an expanding IN: the exclusion reaches a dozen queries
-    # across two tables, and one plain parameter threads through all of them.
+    # Superadmins are excluded by default — see _superadmins. A real array
+    # now that this reads Postgres: `= ANY(:skip)` takes the list directly,
+    # where MySQL had no arrays and needed it comma-joined into a string.
     # Empty excludes nobody, so "include them" needs no second code path.
     skipped = [] if include_admins else _superadmins(pg)
-    p = {"app": app_source, "frm": frm, "to": to, "skip": ",".join(skipped)}
+    p = {"app": app_source, "frm": frm, "to": to, "skip": list(skipped)}
 
     # ── the month, fetched whole, twice ──────────────────────────────────
     #
@@ -232,20 +244,20 @@ def usage(request: Request,
     # and grouped here. The worst offender was the people list, whose page-view
     # count was a correlated subquery -- one full scan of the page-view table
     # per person on the list.
-    ses = db.execute(text("""
+    ses = pg.execute(text("""
         SELECT session_id, emp_id, emp_name, department, role,
                login_at, logout_at, last_active_at, duration_minutes,
                end_reason, browser, os, device_type, ip_address, is_active
-          FROM digital_apps_user_sessions
-         WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
-           AND NOT FIND_IN_SET(emp_id, :skip)
+          FROM usage_session
+         WHERE app_source = :app AND login_at::date BETWEEN :frm AND :to
+           AND NOT (emp_id = ANY(:skip))
     """), p).mappings().all()
 
-    views_rows = db.execute(text("""
+    views_rows = pg.execute(text("""
         SELECT emp_id, session_id, page_path, viewed_at, time_spent_seconds
-          FROM digital_apps_page_views
-         WHERE app_source = :app AND DATE(viewed_at) BETWEEN :frm AND :to
-           AND NOT FIND_IN_SET(emp_id, :skip)
+          FROM usage_page_view
+         WHERE app_source = :app AND viewed_at::date BETWEEN :frm AND :to
+           AND NOT (emp_id = ANY(:skip))
     """), p).mappings().all()
 
     def _n(v) -> int:
@@ -366,7 +378,7 @@ def usage(request: Request,
     # Still its own query: this one is not bounded by the range at all -- it
     # asks who is signed in NOW, which is a different question from what the
     # rest of the screen reports on.
-    online = [dict(r) for r in db.execute(text("""
+    online = [dict(r) for r in pg.execute(text("""
         SELECT emp_id,
                MAX(emp_name)       AS emp_name,
                MAX(department)     AS department,
@@ -374,9 +386,9 @@ def usage(request: Request,
                MAX(last_active_at) AS last_active_at,
                MIN(login_at)       AS login_at,
                COUNT(*)            AS sessions
-          FROM digital_apps_user_sessions
-         WHERE app_source = :app AND is_active = 1
-           AND NOT FIND_IN_SET(emp_id, :skip)
+          FROM usage_session
+         WHERE app_source = :app AND is_active
+           AND NOT (emp_id = ANY(:skip))
          GROUP BY emp_id
          ORDER BY last_active_at DESC
     """), p).mappings().all()]
@@ -605,6 +617,9 @@ def usage(request: Request,
 
     answer = {
         "app_source": app_source, "from": frm.isoformat(), "to": to.isoformat(),
+        # This screen reads a mirror, so it is by design a little behind. A
+        # figure whose age cannot be established is a figure nobody can defend.
+        "mirror": usage_sync.freshness(pg),
         "days": (to - frm).days + 1,
         "headline": {
             **{k: _int(v) for k, v in dict(head or {}).items()
@@ -655,7 +670,7 @@ def usage(request: Request,
 def apps(request: Request, days: int = Query(30, ge=1, le=365),
          day_from: date | None = Query(None),
          day_to: date | None = Query(None),
-         db: Session = Depends(get_db)) -> list[dict]:
+         pg: Session = Depends(get_minehub_db)) -> list[dict]:
     """The applications this screen may report on — MINES and IMOS.
 
     Not all twenty-five that share the table. The others belong to other
@@ -664,14 +679,14 @@ def apps(request: Request, days: int = Query(30, ge=1, le=365),
     _require(request)
     frm, to = _window(days, day_from, day_to)
     rows = {r["app_source"]: _numbers(dict(r), "sessions", "people", "minutes")
-            for r in db.execute(text("""
+            for r in pg.execute(text("""
         SELECT app_source,
                COUNT(*) AS sessions,
                COUNT(DISTINCT emp_id) AS people,
                COALESCE(SUM(duration_minutes), 0) AS minutes,
                MAX(last_active_at) AS last_seen
-          FROM digital_apps_user_sessions
-         WHERE DATE(login_at) BETWEEN :frm AND :to
+          FROM usage_session
+         WHERE login_at::date BETWEEN :frm AND :to
            AND app_source IN :apps
          GROUP BY app_source
     """).bindparams(bindparam("apps", expanding=True)),
@@ -691,8 +706,8 @@ def person(emp_id: str, request: Request,
            day_from: date | None = Query(None),
            day_to: date | None = Query(None),
            app_source: str = Query(APP),
-           db: Session = Depends(get_db),
-           pg: Session = Depends(get_minehub_db)) -> dict:
+           pg: Session = Depends(get_minehub_db),
+           db: Session = Depends(get_db)) -> dict:   # the SAP master only
     """One person: every session, every screen, everything they changed.
 
     The first thing anybody asks of an aggregate is which of these rows is me,
@@ -707,12 +722,12 @@ def person(emp_id: str, request: Request,
     frm, to = _window(days, day_from, day_to)
     p = {"app": app_source, "frm": frm, "to": to, "e": emp_id}
 
-    sessions = [dict(r) for r in db.execute(text("""
+    sessions = [dict(r) for r in pg.execute(text("""
         SELECT session_id, login_at, logout_at, duration_minutes, end_reason,
                is_active, browser, os, device_type, ip_address
-          FROM digital_apps_user_sessions
+          FROM usage_session
          WHERE app_source = :app AND emp_id = :e
-           AND DATE(login_at) BETWEEN :frm AND :to
+           AND login_at::date BETWEEN :frm AND :to
          ORDER BY login_at DESC LIMIT 100
     """), p).mappings().all()]
     for r in sessions:
@@ -720,14 +735,14 @@ def person(emp_id: str, request: Request,
         _numbers(r, "duration_minutes", "is_active")
 
     screens = []
-    for r in db.execute(text("""
+    for r in pg.execute(text("""
         SELECT page_path, COUNT(*) AS views,
                COALESCE(ROUND(AVG(time_spent_seconds)), 0) AS avg_seconds,
                COALESCE(SUM(time_spent_seconds), 0) AS total_seconds,
                MAX(viewed_at) AS last_seen
-          FROM digital_apps_page_views
+          FROM usage_page_view
          WHERE app_source = :app AND emp_id = :e
-           AND DATE(viewed_at) BETWEEN :frm AND :to
+           AND viewed_at::date BETWEEN :frm AND :to
          GROUP BY page_path ORDER BY views DESC
     """), p).mappings().all():
         o = _numbers(dict(r), "views", "avg_seconds", "total_seconds")
@@ -737,16 +752,16 @@ def person(emp_id: str, request: Request,
     # One row per day they were here, so the drill-down can show the shape of
     # somebody's month rather than only its total.
     by_day = [{"day": str(r[0]), "sessions": _int(r[1]), "minutes": _int(r[2])}
-              for r in db.execute(text("""
-        SELECT DATE(login_at), COUNT(*), COALESCE(SUM(duration_minutes), 0)
-          FROM digital_apps_user_sessions
+              for r in pg.execute(text("""
+        SELECT login_at::date, COUNT(*), COALESCE(SUM(duration_minutes), 0)
+          FROM usage_session
          WHERE app_source = :app AND emp_id = :e
-           AND DATE(login_at) BETWEEN :frm AND :to
+           AND login_at::date BETWEEN :frm AND :to
          GROUP BY 1 ORDER BY 1
     """), p).all()]
 
-    who = db.execute(text("""
-        SELECT emp_name, department, role FROM digital_apps_user_sessions
+    who = pg.execute(text("""
+        SELECT emp_name, department, role FROM usage_session
          WHERE app_source = :app AND emp_id = :e
          ORDER BY login_at DESC LIMIT 1
     """), p).mappings().first()
