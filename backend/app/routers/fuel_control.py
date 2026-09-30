@@ -143,7 +143,18 @@ def masters(request: Request, pg: Session = Depends(get_minehub_db)) -> dict:
           FROM fuel_tolerance ORDER BY scope
     """)).mappings()]
 
-    return {"points": points, "consumers": consumers, "tolerances": tolerances,
+    nozzles_ = [{
+        "nozzle_id": r["nozzle_id"], "issuing_point_id": r["issuing_point_id"],
+        "code": r["code"], "label": r["label"], "kind": r["kind"],
+        "has_totaliser": r["has_totaliser"], "is_active": r["is_active"],
+    } for r in pg.execute(text("""
+        SELECT nozzle_id, issuing_point_id, code, label, kind,
+               has_totaliser, is_active
+          FROM fuel_nozzle ORDER BY issuing_point_id, code
+    """)).mappings()]
+
+    return {"points": points, "nozzles": nozzles_,
+            "consumers": consumers, "tolerances": tolerances,
             "can_record": bool(set(RECORD) & set(
                 getattr(request.state, "permissions", None) or set())),
             "can_manage": bool(set(MANAGE) & set(
@@ -423,25 +434,63 @@ def issue(request: Request, body: dict = Body(...),
     if not c:
         raise HTTPException(404, "That consumer is not on the list.")
 
+    # The nozzle must belong to the point it is being issued from. Getting
+    # this wrong would put a fill against a totaliser that never dispensed it,
+    # and the reconciliation would then chase a gap that does not exist.
+    if body.get("nozzle_id"):
+        ok = pg.execute(text("""
+            SELECT 1 FROM fuel_nozzle
+             WHERE nozzle_id = :n AND issuing_point_id = :p
+        """), {"n": body["nozzle_id"], "p": body["issuing_point_id"]}).first()
+        if not ok:
+            raise HTTPException(422, "That nozzle is not on that issuing point.")
+
     row = pg.execute(text("""
         INSERT INTO fuel_issue (
-            on_date, shift, issuing_point_id, consumer_id, litres,
-            meter_reading, meter_kind, capture_mode, source,
-            issued_by, received_by, note, entered_by)
-        VALUES (:on, :shift, :pid, :cid, :litres, :meter,
-                NULLIF(:mkind, 'NONE'), :cap, :src,
-                :issued_by, :received_by, :note, :by)
-        RETURNING issue_id
+            on_date, shift, issuing_point_id, nozzle_id, consumer_id, litres,
+            meter_reading, meter_kind, capture_mode, source, order_id,
+            filled_at, filled_location, issued_by, received_by, note, entered_by)
+        VALUES (:on, :shift, :pid, :nid, :cid, :litres, :meter,
+                NULLIF(:mkind, 'NONE'), :cap, :src, :oid,
+                -- The time the diesel actually went in. Defaults to now,
+                -- which is right when it is booked at the nozzle and wrong
+                -- when it is keyed in next morning -- so the form sends it.
+                COALESCE(CAST(:filled_at AS timestamptz), now()),
+                :where, :issued_by, :received_by, :note, :by)
+        RETURNING issue_id, filled_at
     """), {"on": body["on_date"], "shift": body.get("shift") or "GEN",
-           "pid": body["issuing_point_id"], "cid": body["consumer_id"],
+           "pid": body["issuing_point_id"], "nid": body.get("nozzle_id"),
+           "cid": body["consumer_id"],
            "litres": litres, "meter": body.get("meter_reading"),
            "mkind": c["meter_kind"], "cap": c["capture_mode"],
            "src": body.get("source") or "MANUAL",
+           "oid": body.get("order_id"),
+           "filled_at": body.get("filled_at"),
+           "where": body.get("filled_location"),
            "issued_by": body.get("issued_by"),
            "received_by": body.get("received_by"),
            "note": body.get("note"), "by": _who(request)}).mappings().first()
     pg.commit()
-    return {"ok": True, "issue_id": row["issue_id"]}
+
+    # What the order it answers now stands at. The trigger has already
+    # restated it, so this is read back rather than worked out again.
+    order = None
+    if body.get("order_id"):
+        o = pg.execute(text("""
+            SELECT o.order_no, o.requested_l, o.status,
+                   COALESCE(SUM(i.litres), 0) AS filled
+              FROM fuel_order o LEFT JOIN fuel_issue i USING (order_id)
+             WHERE o.order_id = :o
+             GROUP BY o.order_no, o.requested_l, o.status
+        """), {"o": body["order_id"]}).mappings().first()
+        if o:
+            order = {"order_no": o["order_no"], "status": o["status"],
+                     "requested_l": _f(o["requested_l"]),
+                     "filled_l": _f(o["filled"]),
+                     "outstanding_l": round(
+                         max(_f(o["requested_l"]) - _f(o["filled"]), 0), 2)}
+    return {"ok": True, "issue_id": row["issue_id"],
+            "filled_at": row["filled_at"], "order": order}
 
 
 @router.post("/transfer")
@@ -1110,3 +1159,292 @@ def daybook(request: Request,
                        + sum(1 for m in meters if m["flagged"]),
         },
     }
+
+
+# ──────────────────────────────────────────────────────────────────────────
+#  The tanker arriving, against a purchase order
+# ──────────────────────────────────────────────────────────────────────────
+@router.post("/tanker")
+def tanker_in(request: Request, body: dict = Body(...),
+              pg: Session = Depends(get_minehub_db)) -> dict:
+    """A tanker arrives, is dipped, decanted, and dipped again.
+
+    THREE QUANTITIES, NOT ONE. The invoice says what was billed, the dip says
+    what the tank actually gained, and the operator signs for what he accepted.
+    They disagree more often than not -- temperature, a short load, a hose left
+    half full -- and the difference is the only thing on this form worth
+    escalating. Recording a single figure throws that question away, which is
+    what the old register did.
+
+    The purchase order is a REFERENCE. SAP owns it, this does not create one,
+    and nothing is posted back. It is here so a litre in a tank can be traced
+    to the document that bought it.
+    """
+    _require(request, RECORD, "record fuel receipts")
+    for k in ("issuing_point_id", "on_date", "litres"):
+        if body.get(k) in (None, ""):
+            raise HTTPException(
+                422, "The tank, the date and the litres accepted are needed.")
+
+    litres = float(body["litres"])
+    invoice = body.get("invoice_litres")
+    before, after = body.get("dip_before"), body.get("dip_after")
+
+    reasons = []
+    dip_gain = None
+    if before is not None and after is not None:
+        dip_gain = round(float(after) - float(before), 2)
+        if dip_gain <= 0:
+            reasons.append("the tank did not gain anything between the two dips")
+        elif abs(dip_gain - litres) > max(litres * 0.01, 25):
+            reasons.append(f"the dips say {dip_gain:g} L but {litres:g} was accepted")
+    if invoice is not None and abs(float(invoice) - litres) > max(litres * 0.005, 20):
+        short = float(invoice) - litres
+        reasons.append(f"the invoice says {float(invoice):g} L, "
+                       f"{abs(short):g} L {'more' if short > 0 else 'less'} than accepted")
+
+    row = pg.execute(text("""
+        INSERT INTO fuel_receipt (
+            issuing_point_id, on_date, litres, invoice_litres, rate_per_l,
+            po_no, challan_no, tanker_no, transporter, supplier_party_id,
+            dip_before, dip_after, arrived_at, decanted_at,
+            received_by, is_suspect, suspect_reason, note, entered_by)
+        VALUES (:pid, :on, :litres, :invoice, :rate, :po, :challan, :tanker,
+                :transporter, :supplier, :before, :after, :arrived, :decanted,
+                :received_by, :sus, :reason, :note, :by)
+        RETURNING receipt_id
+    """), {"pid": body["issuing_point_id"], "on": body["on_date"],
+           "litres": litres, "invoice": invoice,
+           "rate": body.get("rate_per_l"), "po": body.get("po_no"),
+           "challan": body.get("challan_no"), "tanker": body.get("tanker_no"),
+           "transporter": body.get("transporter"),
+           "supplier": body.get("supplier_party_id"),
+           "before": before, "after": after,
+           "arrived": body.get("arrived_at"), "decanted": body.get("decanted_at"),
+           "received_by": body.get("received_by"),
+           "sus": bool(reasons), "reason": "; ".join(reasons) or None,
+           "note": body.get("note"), "by": _who(request)}).mappings().first()
+    pg.commit()
+    return {"ok": True, "receipt_id": row["receipt_id"],
+            "dip_gain": dip_gain, "flagged": bool(reasons),
+            "message": ("Recorded, and flagged: " + "; ".join(reasons))
+                       if reasons else "Recorded."}
+
+
+@router.get("/tankers")
+def tankers(request: Request,
+            day_from: date | None = Query(None),
+            day_to: date | None = Query(None),
+            pg: Session = Depends(get_minehub_db)) -> list[dict]:
+    """Deliveries in the range, with the invoice-against-dip question visible."""
+    _require(request, VIEW, "see fuel management")
+    frm, to = _window(day_from, day_to)
+    return [{
+        "receipt_id": r["receipt_id"], "on_date": r["on_date"],
+        "point": r["point"], "po_no": r["po_no"], "challan_no": r["challan_no"],
+        "tanker_no": r["tanker_no"], "transporter": r["transporter"],
+        "litres": _f(r["litres"]), "invoice_litres": _f(r["invoice_litres"]) or None,
+        "dip_gain": (_f(r["dip_after"]) - _f(r["dip_before"]))
+                    if r["dip_after"] is not None and r["dip_before"] is not None
+                    else None,
+        "rate_per_l": _f(r["rate_per_l"]) or None,
+        "arrived_at": r["arrived_at"], "decanted_at": r["decanted_at"],
+        "received_by": r["received_by"],
+        "flagged": r["is_suspect"], "reason": r["suspect_reason"],
+    } for r in pg.execute(text("""
+        SELECT r.*, p.label AS point
+          FROM fuel_receipt r
+          JOIN fuel_issuing_point p USING (issuing_point_id)
+         WHERE r.on_date BETWEEN :frm AND :to
+         ORDER BY r.on_date DESC, r.receipt_id DESC
+    """), {"frm": frm, "to": to}).mappings()]
+
+
+# ──────────────────────────────────────────────────────────────────────────
+#  An order, and then the fill that answers it
+# ──────────────────────────────────────────────────────────────────────────
+@router.post("/order")
+def raise_order(request: Request, body: dict = Body(...),
+                pg: Session = Depends(get_minehub_db)) -> dict:
+    """Raise an indent for fuel.
+
+    The order number is generated rather than typed, because two people
+    raising orders at the same fuel point on the same morning will otherwise
+    pick the same number.
+    """
+    _require(request, RECORD, "raise fuel orders")
+    for k in ("consumer_id", "requested_l", "on_date"):
+        if body.get(k) in (None, ""):
+            raise HTTPException(422, "A machine, a quantity and a date are needed.")
+    want = float(body["requested_l"])
+    if not (0 < want < 20000):
+        raise HTTPException(422, "A quantity must be between 0 and 20,000 litres.")
+
+    row = pg.execute(text("""
+        INSERT INTO fuel_order (
+            order_no, on_date, shift, consumer_id, issuing_point_id, nozzle_id,
+            requested_l, purpose, requested_by, note, created_by)
+        VALUES (
+            'FO-' || TO_CHAR(CAST(:on AS date), 'YYMMDD') || '-' ||
+            LPAD((SELECT COUNT(*) + 1 FROM fuel_order
+                   WHERE on_date = CAST(:on AS date))::text, 3, '0'),
+            :on, :shift, :cid, :pid, :nid, :want, :purpose, :req, :note, :by)
+        RETURNING order_id, order_no
+    """), {"on": body["on_date"], "shift": body.get("shift") or "GEN",
+           "cid": body["consumer_id"],
+           "pid": body.get("issuing_point_id"), "nid": body.get("nozzle_id"),
+           "want": want, "purpose": body.get("purpose"),
+           "req": body.get("requested_by"), "note": body.get("note"),
+           "by": _who(request)}).mappings().first()
+    pg.commit()
+    return {"ok": True, "order_id": row["order_id"], "order_no": row["order_no"]}
+
+
+@router.get("/orders")
+def orders(request: Request,
+           on: date | None = Query(None),
+           status: str = Query("PENDING"),
+           pg: Session = Depends(get_minehub_db)) -> list[dict]:
+    """Orders, with how much of each has actually been filled.
+
+    `filled_l` is summed from the issues rather than stored, so it cannot
+    drift from them. PENDING means anything still expecting fuel.
+    """
+    _require(request, VIEW, "see fuel management")
+    day = on or date.today()
+    st = status.upper()
+    return [{
+        "order_id": r["order_id"], "order_no": r["order_no"],
+        "on_date": r["on_date"], "shift": r["shift"], "status": r["status"],
+        "consumer_id": r["consumer_id"], "code": r["code"],
+        "consumer": r["consumer"], "meter_kind": r["meter_kind"],
+        "point": r["point"], "nozzle": r["nozzle"],
+        "requested_l": _f(r["requested_l"]),
+        "filled_l": _f(r["filled_l"]),
+        "outstanding_l": round(max(_f(r["requested_l"]) - _f(r["filled_l"]), 0), 2),
+        "fills": r["fills"],
+        "purpose": r["purpose"], "requested_by": r["requested_by"],
+    } for r in pg.execute(text("""
+        SELECT o.*, c.code, c.label AS consumer, c.meter_kind,
+               p.label AS point, n.label AS nozzle,
+               COALESCE((SELECT SUM(i.litres) FROM fuel_issue i
+                          WHERE i.order_id = o.order_id), 0) AS filled_l,
+               (SELECT COUNT(*) FROM fuel_issue i
+                 WHERE i.order_id = o.order_id) AS fills
+          FROM fuel_order o
+          JOIN fuel_consumer c USING (consumer_id)
+          LEFT JOIN fuel_issuing_point p USING (issuing_point_id)
+          LEFT JOIN fuel_nozzle n ON n.nozzle_id = o.nozzle_id
+         WHERE (:st = 'PENDING' AND o.status IN ('OPEN', 'PART_FILLED')
+                OR :st = 'ALL'
+                OR o.status = :st)
+           AND (:st = 'PENDING' OR o.on_date = :d)
+         ORDER BY o.on_date DESC, o.order_no DESC
+         LIMIT 200
+    """), {"st": st, "d": day}).mappings()]
+
+
+@router.put("/order/{order_id}")
+def set_order(order_id: int, request: Request, body: dict = Body(...),
+              pg: Session = Depends(get_minehub_db)) -> dict:
+    """Approve or cancel an order.
+
+    OPEN, PART_FILLED and FILLED are derived from the fills by a trigger and
+    cannot be set here — a status somebody types is a status that disagrees
+    with the litres.
+    """
+    _require(request, RECORD, "change fuel orders")
+    st = (body.get("status") or "").upper()
+    if st not in ("CANCELLED", "EXPIRED", ""):
+        raise HTTPException(
+            422, "Only CANCELLED or EXPIRED can be set by hand; the rest "
+                 "follows from what was actually filled.")
+    sets, params = [], {"id": order_id}
+    if st:
+        sets.append("status = :st"); params["st"] = st
+    if "approved_by" in body:
+        sets.append("approved_by = :ab, approved_at = now()")
+        params["ab"] = body.get("approved_by") or _who(request)
+    if "note" in body:
+        sets.append("note = :note"); params["note"] = body.get("note")
+    if not sets:
+        raise HTTPException(422, "Nothing to change.")
+    done = pg.execute(text(
+        f"UPDATE fuel_order SET {', '.join(sets)} "
+        f"WHERE order_id = :id RETURNING order_id"), params).first()
+    if not done:
+        raise HTTPException(404, "No such order.")
+    pg.commit()
+    return {"ok": True}
+
+
+# ──────────────────────────────────────────────────────────────────────────
+#  Nozzles, maintained from the screen
+# ──────────────────────────────────────────────────────────────────────────
+@router.get("/nozzles")
+def nozzles(request: Request, pg: Session = Depends(get_minehub_db)) -> list[dict]:
+    _require(request, VIEW, "see fuel management")
+    return [{
+        "nozzle_id": r["nozzle_id"], "issuing_point_id": r["issuing_point_id"],
+        "point": r["point"], "code": r["code"], "label": r["label"],
+        "kind": r["kind"], "has_totaliser": r["has_totaliser"],
+        "is_active": r["is_active"], "note": r["note"],
+    } for r in pg.execute(text("""
+        SELECT n.*, p.label AS point FROM fuel_nozzle n
+          JOIN fuel_issuing_point p USING (issuing_point_id)
+         ORDER BY p.code, n.code
+    """)).mappings()]
+
+
+@router.post("/nozzle")
+def add_nozzle(request: Request, body: dict = Body(...),
+               pg: Session = Depends(get_minehub_db)) -> dict:
+    """Another nozzle, or a point that has grown one."""
+    _require(request, MANAGE, "change fuel masters")
+    for k in ("issuing_point_id", "code", "label"):
+        if not body.get(k):
+            raise HTTPException(422, "A point, a code and a name are needed.")
+    kind = body.get("kind") or "FIXED"
+    if kind not in ("FIXED", "MOBILE"):
+        raise HTTPException(422, "kind must be FIXED or MOBILE.")
+    try:
+        row = pg.execute(text("""
+            INSERT INTO fuel_nozzle (issuing_point_id, code, label, kind,
+                                     has_totaliser, note, created_by)
+            VALUES (:pid, :code, :label, :kind, :tot, :note, :by)
+            RETURNING nozzle_id
+        """), {"pid": body["issuing_point_id"], "code": body["code"].strip(),
+               "label": body["label"].strip(), "kind": kind,
+               "tot": bool(body.get("has_totaliser", True)),
+               "note": body.get("note"), "by": _who(request)}).mappings().first()
+        pg.commit()
+    except Exception as exc:                            # noqa: BLE001
+        pg.rollback()
+        raise HTTPException(409, "That nozzle code is already on this point.") from exc
+    return {"ok": True, "nozzle_id": row["nozzle_id"]}
+
+
+@router.put("/nozzle/{nozzle_id}")
+def set_nozzle(nozzle_id: int, request: Request, body: dict = Body(...),
+               pg: Session = Depends(get_minehub_db)) -> dict:
+    _require(request, MANAGE, "change fuel masters")
+    sets, params = [], {"id": nozzle_id}
+    for k in ("label", "note"):
+        if k in body:
+            sets.append(f"{k} = :{k}"); params[k] = body[k]
+    for k in ("has_totaliser", "is_active"):
+        if k in body:
+            sets.append(f"{k} = :{k}"); params[k] = bool(body[k])
+    if "kind" in body:
+        if body["kind"] not in ("FIXED", "MOBILE"):
+            raise HTTPException(422, "kind must be FIXED or MOBILE.")
+        sets.append("kind = :kind"); params["kind"] = body["kind"]
+    if not sets:
+        raise HTTPException(422, "Nothing to change.")
+    done = pg.execute(text(
+        f"UPDATE fuel_nozzle SET {', '.join(sets)} "
+        f"WHERE nozzle_id = :id RETURNING nozzle_id"), params).first()
+    if not done:
+        raise HTTPException(404, "No such nozzle.")
+    pg.commit()
+    return {"ok": True}

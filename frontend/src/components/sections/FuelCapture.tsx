@@ -25,53 +25,101 @@ interface ConsumerLite {
 interface PointLite {
   issuing_point_id: number; label: string; is_active: boolean;
 }
+interface NozzleLite {
+  nozzle_id: number; issuing_point_id: number; code: string; label: string;
+  kind: "FIXED" | "MOBILE"; is_active: boolean;
+}
+/* The order this fill answers, handed down when somebody clicks Fill on the
+ * pending list. Null for a fill nobody indented, which happens. */
+export interface FillTarget {
+  order_id: number; order_no: string; consumer_id: number;
+  outstanding_l: number; issuing_point_id?: number | null;
+}
 
 const L = (n: number | null | undefined, dp = 0) =>
   n == null ? "—" : n.toLocaleString("en-IN",
     { minimumFractionDigits: dp, maximumFractionDigits: dp });
 
 /* ── booking an issue: the screen the fuel point actually uses ─────────── */
-export function IssuePanel({ points, consumers, busy, write }: {
+export function IssuePanel({ points, nozzles, consumers, busy, write, target }: {
   points: PointLite[];
+  nozzles: NozzleLite[];
   consumers: ConsumerLite[];
   busy: boolean;
   write: (fn: () => Promise<unknown>, ok: string) => Promise<void>;
+  target: FillTarget | null;
 }) {
   const today = new Date().toISOString().slice(0, 10);
   const [pid, setPid] = useState<number | "">("");
+  const [nid, setNid] = useState<number | "">("");
   const [cid, setCid] = useState<number | "">("");
   const [on, setOn] = useState(today);
   const [shift, setShift] = useState("A");
   const [litres, setLitres] = useState("");
   const [meter, setMeter] = useState("");
+  const [filledAt, setFilledAt] = useState("");
+  const [where, setWhere] = useState("");
   const [issuedBy, setIssuedBy] = useState("");
   const [receivedBy, setReceivedBy] = useState("");
 
+  /* Clicking Fill on a pending order fills this form in rather than making
+   * somebody re-type what the order already says. */
+  useEffect(() => {
+    if (!target) return;
+    setCid(target.consumer_id);
+    if (target.issuing_point_id) setPid(target.issuing_point_id);
+    setLitres(String(target.outstanding_l));
+  }, [target]);
+
   const machine = consumers.find((c) => c.consumer_id === cid);
+  const forPoint = nozzles.filter(
+    (n) => n.is_active && (pid === "" || n.issuing_point_id === pid));
+  const nozzle = nozzles.find((n) => n.nozzle_id === nid);
   const unit = machine?.meter_kind === "KM" ? "odometer, km"
     : machine?.meter_kind === "HMR" ? "hour meter" : null;
 
   const submit = () =>
     write(() => api.post("/fuel-control/issue", {
-      issuing_point_id: pid, consumer_id: cid, on_date: on, shift,
-      litres: Number(litres),
+      issuing_point_id: pid, nozzle_id: nid || null, consumer_id: cid,
+      on_date: on, shift, litres: Number(litres),
       meter_reading: meter === "" ? null : Number(meter),
+      order_id: target?.order_id ?? null,
+      // Left blank, the server stamps now — right at the nozzle, wrong when
+      // it is keyed in next morning, so the form offers the field.
+      filled_at: filledAt || null,
+      filled_location: where || null,
       issued_by: issuedBy || null, received_by: receivedBy || null,
-    }), `${litres} litres booked to ${machine?.code ?? "the machine"}.`)
-      .then(() => { setLitres(""); setMeter(""); });
+    }), `${litres} litres booked to ${machine?.code ?? "the machine"}${
+      target ? " against " + target.order_no : ""}.`)
+      .then(() => { setLitres(""); setMeter(""); setWhere(""); });
 
   return (
     <Card>
       <CardHeader icon={Fuel} tone="gold" subtitleOnIcon
-        title="Issue diesel"
-        subtitle="Booked here as it is handed over, not written on a sheet and typed up later. The meter reading is what turns these litres into litres per hour." />
+        title={target ? "Fill against " + target.order_no : "Issue diesel"}
+        subtitle="Booked here as it is handed over, not written on a sheet and typed up later. The meter reading is what turns these litres into litres per hour."
+        actions={target
+          ? <Chip tone="amber">{L(target.outstanding_l)} L still due</Chip>
+          : undefined} />
       <div className="p-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 items-end">
         <Field label="From" required>
           <select value={pid} disabled={busy} className={inputClass}
-            onChange={(e) => setPid(e.target.value ? Number(e.target.value) : "")}>
+            onChange={(e) => { setPid(e.target.value ? Number(e.target.value) : ""); setNid(""); }}>
             <option value="">Choose…</option>
             {points.filter((p) => p.is_active).map((p) => (
               <option key={p.issuing_point_id} value={p.issuing_point_id}>{p.label}</option>
+            ))}
+          </select>
+        </Field>
+        {/* Which nozzle, because two machines filled at the same tank on the
+            same shift may have come off different ones — and that is the
+            first thing worth knowing when a totaliser disagrees. */}
+        <Field label="Nozzle" hint={pid === "" ? "pick a point first" : undefined}>
+          <select value={nid} disabled={busy || pid === ""} className={inputClass}
+            onChange={(e) => setNid(e.target.value ? Number(e.target.value) : "")}>
+            <option value="">not recorded</option>
+            {forPoint.map((n) => (
+              <option key={n.nozzle_id} value={n.nozzle_id}>{n.label}</option>
             ))}
           </select>
         </Field>
@@ -110,6 +158,19 @@ export function IssuePanel({ points, consumers, busy, write }: {
             ))}
           </select>
         </Field>
+        {/* The actual time, distinct from the production day it is booked to
+            and from when somebody typed it. */}
+        <Field label="Filled at" hint="blank means now">
+          <input type="datetime-local" value={filledAt} disabled={busy}
+            className={inputClass} onChange={(e) => setFilledAt(e.target.value)} />
+        </Field>
+        {nozzle?.kind === "MOBILE" && (
+          <Field label="Where" hint="the tanker went to the machine">
+            <input value={where} disabled={busy} className={inputClass}
+              placeholder="e.g. Pit Bottom, LG Dump"
+              onChange={(e) => setWhere(e.target.value)} />
+          </Field>
+        )}
         <Field label="Issued by">
           <input value={issuedBy} disabled={busy} className={inputClass}
             placeholder="who handed it over"

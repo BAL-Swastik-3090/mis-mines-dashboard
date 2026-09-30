@@ -27,6 +27,9 @@ import { Card, CardHeader, Th, Td, EmptyRow, Chip, Button, Field,
 import type { SortWay } from "@/components/minehub/ui";
 import { IssuePanel, MachineMeterPanel, DayBookPanel,
          ChainPanel } from "./FuelCapture";
+import type { FillTarget } from "./FuelCapture";
+import { TankerPanel, OrdersPanel } from "./FuelErp";
+import type { PendingOrder } from "./FuelErp";
 
 /* ── what the endpoints return ───────────────────────────────────────── */
 interface Point {
@@ -61,6 +64,8 @@ interface Overview {
 interface Masters {
   points: { issuing_point_id: number; code: string; label: string;
             kind: string; has_totaliser: boolean; is_active: boolean }[];
+  nozzles: { nozzle_id: number; issuing_point_id: number; code: string;
+             label: string; kind: "FIXED" | "MOBILE"; is_active: boolean }[];
   consumers: Consumer[];
   tolerances: { scope: string; pct: number | null; absolute_l: number | null;
                 is_active: boolean; note: string | null }[];
@@ -83,6 +88,9 @@ export default function FuelControlSection() {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [showMasters, setShowMasters] = useState(false);
+  /* Clicking Fill on a pending order carries it up to the issue form rather
+   * than making somebody re-key what the order already says. */
+  const [target, setTarget] = useState<FillTarget | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -122,11 +130,36 @@ export default function FuelControlSection() {
       {err && <Alert tone="error">{err}</Alert>}
       {note && <Alert tone="info">{note}</Alert>}
 
-      {/* ── 1. capture. The portal is the record, so this comes first. ── */}
+      {/* ── 1. the flow, in the order the work actually happens ────────
+              a tanker arrives -> an order is raised -> fuel goes in.       */}
       {masters?.can_record && (
         <>
-          <IssuePanel points={masters.points} consumers={masters.consumers}
-            busy={busy} write={write} />
+          <TankerPanel points={masters.points} busy={busy} write={write} />
+
+          <OrdersPanel points={masters.points} nozzles={masters.nozzles}
+            consumers={masters.consumers} busy={busy} write={write}
+            onPick={(o: PendingOrder) => setTarget({
+              order_id: o.order_id, order_no: o.order_no,
+              consumer_id: o.consumer_id, outstanding_l: o.outstanding_l,
+              issuing_point_id: null,
+            })} />
+
+          {target && (
+            <p className="text-[11px] text-txt-muted flex items-center gap-2">
+              <span>
+                Filling against <strong className="text-navy">{target.order_no}</strong>.
+              </span>
+              <button type="button" onClick={() => setTarget(null)}
+                className="underline text-txt-light hover:text-navy">
+                book a fill with no order instead
+              </button>
+            </p>
+          )}
+
+          <IssuePanel points={masters.points} nozzles={masters.nozzles}
+            consumers={masters.consumers} busy={busy} write={write}
+            target={target} />
+
           <MachineMeterPanel consumers={masters.consumers} busy={busy} write={write} />
         </>
       )}
