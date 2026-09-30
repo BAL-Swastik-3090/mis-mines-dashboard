@@ -65,7 +65,10 @@ VIEW = ("usage.view", "access.users.view")
 # Application: that is somebody else's staff, on somebody else's screen. Two —
 # the systems this site actually runs — and anything else is refused rather
 # than quietly answered.
-ALLOWED_APPS = ("MINES", "IMOS")
+# One application. IMOS was here because the screen could report on it; it no
+# longer does, and the mirror stopped carrying it. Adding another back is this
+# line and nothing else.
+ALLOWED_APPS = ("MINES",)
 
 # Where a page path maps to a name somebody would recognise. The paths are
 # what the browser reported; these are what the sidebar calls them.
@@ -671,10 +674,10 @@ def apps(request: Request, days: int = Query(30, ge=1, le=365),
          day_from: date | None = Query(None),
          day_to: date | None = Query(None),
          pg: Session = Depends(get_minehub_db)) -> list[dict]:
-    """The applications this screen may report on — MINES and IMOS.
+    """The applications this screen may report on.
 
-    Not all twenty-five that share the table. The others belong to other
-    departments and their staff are not this page's business.
+    Not the twenty-five that share the session table. The others belong to
+    other departments and their staff are not this page's business.
     """
     _require(request)
     frm, to = _window(days, day_from, day_to)

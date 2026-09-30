@@ -10,9 +10,10 @@ database.
 So the rows are mirrored into minehub, where the index costs nobody anything,
 and the screen reads them there. See migration 072.
 
-WHAT IS COPIED. MINES and IMOS, which is all the screen has ever shown. Not
-the rest of the company's sign-in history; we have no use for it and copying
-it would be collecting it for nothing.
+WHAT IS COPIED. MINES, and nothing else. IMOS was mirrored at first because
+the screen could report on it; it no longer does, and 2,273 of its sessions
+were sitting in our database being kept current for a page nobody looks at.
+Copying data we have no use for is collecting it for nothing.
 
 A COPY, NEVER THE RECORD. balcorpdb stays the place a session is written. This
 table can be dropped and rebuilt from the source at any time, and on an empty
@@ -44,8 +45,10 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-# What the screen shows, and therefore all we copy.
-APPS = ("MINES", "IMOS")
+# What the screen shows, and therefore all we copy. One application: a tuple
+# rather than a bare string because the queries below use IN, and because the
+# day another of ours needs reporting on, this is the only line that changes.
+APPS = ("MINES",)
 
 # How often a pass runs. The screen holds its assembled answer for sixty
 # seconds anyway, so a shorter cycle would buy nothing a reader could see.

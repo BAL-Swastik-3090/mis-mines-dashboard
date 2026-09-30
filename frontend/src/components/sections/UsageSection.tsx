@@ -454,14 +454,17 @@ export default function UsageSection() {
         actions={
           <span className="flex flex-wrap items-center gap-2">
             {loading && <Loader2 className="w-3.5 h-3.5 animate-spin text-gold" />}
-            {/* Two applications, not the twenty-five that share the session
-                table. The rest belong to other departments. */}
-            <SearchSelect value={app} onChange={setApp} narrow
-              options={apps.map((a) => ({
-                value: a.app_source, label: a.app_source,
-                hint: `${a.people} people`,
-                meta: <span className="text-txt-light">{a.sessions}</span>,
-              }))} />
+{/* Only shown when there is something to choose between. The screen
+                reports on one application now, and a dropdown offering a
+                single option asks the reader a question with one answer. */}
+            {apps.length > 1 && (
+              <SearchSelect value={app} onChange={setApp} narrow
+                options={apps.map((a) => ({
+                  value: a.app_source, label: a.app_source,
+                  hint: `${a.people} people`,
+                  meta: <span className="text-txt-light">{a.sessions}</span>,
+                }))} />
+            )}
             <button type="button" onClick={() => setWithBuilders((v) => !v)}
               title={withBuilders
                 ? "Counting the people who build and test this platform. Their sessions flatter every figure on the page."
