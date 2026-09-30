@@ -25,7 +25,14 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+import os
+from decimal import Decimal
+from pathlib import Path
+from uuid import uuid4
+
+from fastapi import (APIRouter, Body, Depends, File, HTTPException, Query,
+                     Request, UploadFile)
+from fastapi.responses import FileResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -33,6 +40,22 @@ from app.database import get_db
 from app.minehub_db import get_minehub_db
 
 router = APIRouter(prefix="/api/fuel-control", tags=["fuel-control"])
+
+# Where the paperwork lives. Same arrangement as the equipment register's
+# documents, which has been working since migration 004.
+FUEL_DOCUMENT_ROOT = Path(os.environ.get(
+    "FUEL_DOCUMENT_ROOT",
+    Path(__file__).resolve().parents[2] / "storage" / "fuel"))
+FUEL_MAX_UPLOAD = 15 * 1024 * 1024
+FUEL_FILE_TYPES = {
+    "application/pdf": ".pdf",
+    "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp",
+    "image/heic": ".heic",
+    "application/msword": ".doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.ms-excel": ".xls",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+}
 
 VIEW = ("dashboard.fuel", "fuel.record", "fuel.manage")
 RECORD = ("fuel.record", "fuel.manage")
@@ -1167,18 +1190,23 @@ def daybook(request: Request,
 @router.post("/tanker")
 def tanker_in(request: Request, body: dict = Body(...),
               pg: Session = Depends(get_minehub_db)) -> dict:
-    """A tanker arrives, is dipped, decanted, and dipped again.
+    """A tanker arrives, is checked, dipped, decanted and signed for.
 
-    THREE QUANTITIES, NOT ONE. The invoice says what was billed, the dip says
-    what the tank actually gained, and the operator signs for what he accepted.
+    THREE QUANTITIES, NOT ONE. What the PO allows, what the vendor invoiced,
+    what the dips say the tank gained, and what the storekeeper accepted.
     They disagree more often than not -- temperature, a short load, a hose left
-    half full -- and the difference is the only thing on this form worth
-    escalating. Recording a single figure throws that question away, which is
-    what the old register did.
+    part full -- and the differences are the only things here worth escalating.
 
-    The purchase order is a REFERENCE. SAP owns it, this does not create one,
-    and nothing is posted back. It is here so a litre in a tank can be traced
-    to the document that bought it.
+    AND THE SEAL, WHICH IS NOT A FORMALITY. A quantity recorded without the
+    seal's condition throws away the only evidence that tells a short delivery
+    apart from a load opened on the road.
+
+    QUALITY IS CHECKED AGAINST A SPECIFICATION, not against a number in this
+    file. Out of range raises a question; it does not reject the load, because
+    the man at the gate is not the person who decides to turn a tanker away.
+
+    SAP owns the purchase order and the GRN. po_no, po_litres and grn_ref are
+    references. Nothing is posted.
     """
     _require(request, RECORD, "record fuel receipts")
     for k in ("issuing_point_id", "on_date", "litres"):
@@ -1187,10 +1215,15 @@ def tanker_in(request: Request, body: dict = Body(...),
                 422, "The tank, the date and the litres accepted are needed.")
 
     litres = float(body["litres"])
+    if not (0 < litres < 100000):
+        raise HTTPException(422, "Accepted litres must be between 0 and 100,000.")
     invoice = body.get("invoice_litres")
+    po_litres = body.get("po_litres")
     before, after = body.get("dip_before"), body.get("dip_after")
+    material_id = body.get("material_id")
 
-    reasons = []
+    # ── the questions this delivery raises ───────────────────────────────
+    reasons: list[str] = []
     dip_gain = None
     if before is not None and after is not None:
         dip_gain = round(float(after) - float(before), 2)
@@ -1202,33 +1235,304 @@ def tanker_in(request: Request, body: dict = Body(...),
         short = float(invoice) - litres
         reasons.append(f"the invoice says {float(invoice):g} L, "
                        f"{abs(short):g} L {'more' if short > 0 else 'less'} than accepted")
+    if po_litres is not None and litres > float(po_litres) * 1.02:
+        reasons.append(f"more was accepted than the purchase order allows "
+                       f"({float(po_litres):g} L)")
+
+    seal = body.get("seal_condition")
+    if seal in ("BROKEN", "MISSING"):
+        reasons.append(f"the seal was {seal.lower()} on arrival")
+
+    # Against the specification in force, not against a constant here.
+    spec = None
+    if material_id:
+        spec = pg.execute(text("""
+            SELECT density_min, density_max, density_ref_temp_c, temp_max_c,
+                   water_sediment_allowed
+              FROM fuel_quality_spec
+             WHERE material_id = :m AND effective_to IS NULL
+             ORDER BY effective_from DESC LIMIT 1
+        """), {"m": material_id}).mappings().first()
+    density = body.get("density")
+    temp = body.get("temperature_c")
+    water = body.get("water_sediment")
+    if spec:
+        if density is not None:
+            lo, hi = spec["density_min"], spec["density_max"]
+            if lo is not None and hi is not None and not (
+                    float(lo) <= float(density) <= float(hi)):
+                reasons.append(f"density {float(density):g} is outside the "
+                               f"{float(lo):g}-{float(hi):g} range for this material")
+        if temp is not None and spec["temp_max_c"] is not None \
+                and float(temp) > float(spec["temp_max_c"]):
+            reasons.append(f"temperature {float(temp):g} C is above the "
+                           f"{float(spec['temp_max_c']):g} C limit")
+        if water and not spec["water_sediment_allowed"]:
+            reasons.append("water or sediment was found")
 
     row = pg.execute(text("""
         INSERT INTO fuel_receipt (
-            issuing_point_id, on_date, litres, invoice_litres, rate_per_l,
-            po_no, challan_no, tanker_no, transporter, supplier_party_id,
+            receipt_no,
+            issuing_point_id, on_date, material_id, litres, invoice_litres,
+            po_litres, rate_per_l,
+            po_no, po_line, challan_no, grn_ref, storage_location,
+            supplier_party_id, transporter_party_id, transporter,
+            tanker_no, driver_name, driver_mobile, driver_licence,
+            seal_no, seal_condition,
             dip_before, dip_after, arrived_at, decanted_at,
-            received_by, is_suspect, suspect_reason, note, entered_by)
-        VALUES (:pid, :on, :litres, :invoice, :rate, :po, :challan, :tanker,
-                :transporter, :supplier, :before, :after, :arrived, :decanted,
-                :received_by, :sus, :reason, :note, :by)
-        RETURNING receipt_id
+            density, temperature_c, water_sediment, sample_ref,
+            quality_status, quality_remarks,
+            received_by, approval_status, is_suspect, suspect_reason,
+            note, entered_by)
+        VALUES (
+            'FR-' || TO_CHAR(CAST(:on AS date), 'YYMMDD') || '-' ||
+            LPAD((SELECT COUNT(*) + 1 FROM fuel_receipt
+                   WHERE on_date = CAST(:on AS date))::text, 3, '0'),
+            :pid, :on, :mid, :litres, :invoice, :po_litres, :rate,
+            :po, :po_line, :challan, :grn, :storeloc,
+            :supplier, :transporter_id, :transporter,
+            :tanker, :driver, :mobile, :licence,
+            :seal_no, :seal_cond,
+            :before, :after, :arrived, :decanted,
+            :density, :temp, :water, :sample,
+            :qstatus, :qremarks,
+            :received_by, 'DRAFT', :sus, :reason, :note, :by)
+        RETURNING receipt_id, receipt_no
     """), {"pid": body["issuing_point_id"], "on": body["on_date"],
-           "litres": litres, "invoice": invoice,
-           "rate": body.get("rate_per_l"), "po": body.get("po_no"),
-           "challan": body.get("challan_no"), "tanker": body.get("tanker_no"),
-           "transporter": body.get("transporter"),
+           "mid": material_id, "litres": litres, "invoice": invoice,
+           "po_litres": po_litres, "rate": body.get("rate_per_l"),
+           "po": body.get("po_no"), "po_line": body.get("po_line"),
+           "challan": body.get("challan_no"), "grn": body.get("grn_ref"),
+           "storeloc": body.get("storage_location"),
            "supplier": body.get("supplier_party_id"),
+           "transporter_id": body.get("transporter_party_id"),
+           "transporter": body.get("transporter"),
+           "tanker": body.get("tanker_no"), "driver": body.get("driver_name"),
+           "mobile": body.get("driver_mobile"),
+           "licence": body.get("driver_licence"),
+           "seal_no": body.get("seal_no"), "seal_cond": seal,
            "before": before, "after": after,
            "arrived": body.get("arrived_at"), "decanted": body.get("decanted_at"),
+           "density": density, "temp": temp, "water": water,
+           "sample": body.get("sample_ref"),
+           "qstatus": body.get("quality_status"),
+           "qremarks": body.get("quality_remarks"),
            "received_by": body.get("received_by"),
            "sus": bool(reasons), "reason": "; ".join(reasons) or None,
            "note": body.get("note"), "by": _who(request)}).mappings().first()
     pg.commit()
     return {"ok": True, "receipt_id": row["receipt_id"],
-            "dip_gain": dip_gain, "flagged": bool(reasons),
-            "message": ("Recorded, and flagged: " + "; ".join(reasons))
-                       if reasons else "Recorded."}
+            "receipt_no": row["receipt_no"], "dip_gain": dip_gain,
+            "flagged": bool(reasons), "questions": reasons,
+            "message": (f"{row['receipt_no']} recorded, with "
+                        f"{len(reasons)} thing{'s' if len(reasons) != 1 else ''} "
+                        f"to ask about.") if reasons
+                       else f"{row['receipt_no']} recorded."}
+
+
+@router.get("/receipt-masters")
+def receipt_masters(request: Request,
+                    pg: Session = Depends(get_minehub_db)) -> dict:
+    """Everything the tanker form needs to offer instead of a free-text box.
+
+    DRIVERS ARE DELIBERATELY NOT A MASTER. A tanker driver changes week to
+    week, and a master nobody maintains is worse than free text -- it goes
+    stale and people work around it. Past receipts are the suggestion list
+    instead, so the names on offer are the ones actually seen at this gate.
+    """
+    _require(request, VIEW, "see fuel management")
+
+    materials = [{"material_id": r["material_id"], "code": r["code"],
+                  "label": r["label"], "uom": r["uom"]}
+                 for r in pg.execute(text("""
+        SELECT material_id, code, label, uom FROM fuel_material
+         WHERE is_active ORDER BY code
+    """)).mappings()]
+
+    specs = {r["material_id"]: {
+        "density_min": _f(r["density_min"]) or None,
+        "density_max": _f(r["density_max"]) or None,
+        "density_ref_temp_c": _f(r["density_ref_temp_c"]) or None,
+        "temp_max_c": _f(r["temp_max_c"]) or None,
+        "water_sediment_allowed": r["water_sediment_allowed"],
+    } for r in pg.execute(text("""
+        SELECT * FROM fuel_quality_spec WHERE effective_to IS NULL
+    """)).mappings()}
+
+    # Organisations only. party also holds people, and offering an operator as
+    # a fuel vendor is the kind of list that gets ignored.
+    parties = [{"party_id": r["party_id"], "name": r["display_name"],
+                "gstin": r["gstin"]}
+               for r in pg.execute(text("""
+        SELECT party_id, display_name, gstin FROM party
+         WHERE party_type <> 'PERSON' AND COALESCE(status, 'ACTIVE') = 'ACTIVE'
+         ORDER BY display_name LIMIT 500
+    """)).mappings()]
+
+    def seen(col: str) -> list[str]:
+        return [r[0] for r in pg.execute(text(f"""
+            SELECT DISTINCT {col} FROM fuel_receipt
+             WHERE {col} IS NOT NULL AND TRIM({col}) <> ''
+             ORDER BY {col} LIMIT 200
+        """)).all()]
+
+    return {
+        "materials": materials, "specs": specs, "parties": parties,
+        # The suggestion lists, built from what has actually come through.
+        "drivers": seen("driver_name"), "tankers": seen("tanker_no"),
+        "transporters": seen("transporter"),
+        "storage_locations": seen("storage_location"),
+        "seal_conditions": ["INTACT", "BROKEN", "MISSING", "NOT_SEALED"],
+        "quality_statuses": ["PASSED", "FAILED", "PENDING", "NOT_TESTED"],
+        "document_kinds": ["INVOICE", "CHALLAN", "EWAY_BILL", "DELIVERY_NOTE",
+                           "TANKER_PHOTO", "SEAL_PHOTO", "DIP_EVIDENCE",
+                           "QUALITY_REPORT", "OTHER"],
+    }
+
+
+@router.get("/receipt/{receipt_id}")
+def receipt_detail(receipt_id: int, request: Request,
+                   pg: Session = Depends(get_minehub_db)) -> dict:
+    """One delivery in full, with its paperwork."""
+    _require(request, VIEW, "see fuel management")
+    r = pg.execute(text("""
+        SELECT r.*, p.label AS point, m.code AS material,
+               s.display_name AS supplier, t.display_name AS transporter_name
+          FROM fuel_receipt r
+          JOIN fuel_issuing_point p USING (issuing_point_id)
+          LEFT JOIN fuel_material m ON m.material_id = r.material_id
+          LEFT JOIN party s ON s.party_id = r.supplier_party_id
+          LEFT JOIN party t ON t.party_id = r.transporter_party_id
+         WHERE r.receipt_id = :id
+    """), {"id": receipt_id}).mappings().first()
+    if not r:
+        raise HTTPException(404, "No such delivery.")
+    out = {k: (_f(v) if isinstance(v, Decimal) else v) for k, v in r.items()}
+    out["dip_gain"] = (_f(r["dip_after"]) - _f(r["dip_before"])) \
+        if r["dip_after"] is not None and r["dip_before"] is not None else None
+    out["documents"] = [{
+        "fuel_document_id": d["fuel_document_id"], "kind": d["kind"],
+        "title": d["title"], "file_name": d["file_name"],
+        "content_type": d["content_type"], "size_bytes": d["size_bytes"],
+        "uploaded_by": d["uploaded_by"], "uploaded_at": d["uploaded_at"],
+    } for d in pg.execute(text("""
+        SELECT * FROM fuel_receipt_document WHERE receipt_id = :id
+         ORDER BY uploaded_at
+    """), {"id": receipt_id}).mappings()]
+    return out
+
+
+@router.put("/receipt/{receipt_id}/verify")
+def verify_receipt(receipt_id: int, request: Request, body: dict = Body(...),
+                   pg: Session = Depends(get_minehub_db)) -> dict:
+    """A second person checks the delivery, or accepts it into stock.
+
+    Received and verified are two people and two moments. One name against
+    both is not a control, so this refuses to let the person who entered a
+    delivery be the one who verifies it.
+    """
+    _require(request, RECORD, "verify fuel receipts")
+    st = (body.get("approval_status") or "").upper()
+    if st not in ("VERIFIED", "APPROVED", "REJECTED"):
+        raise HTTPException(
+            422, "approval_status must be VERIFIED, APPROVED or REJECTED.")
+    if st == "REJECTED" and not (body.get("quality_remarks") or "").strip():
+        raise HTTPException(422, "A rejected delivery needs a reason.")
+
+    who = _who(request)
+    was = pg.execute(text(
+        "SELECT entered_by, approval_status FROM fuel_receipt WHERE receipt_id = :id"),
+        {"id": receipt_id}).mappings().first()
+    if not was:
+        raise HTTPException(404, "No such delivery.")
+    if st == "VERIFIED" and who and was["entered_by"] == who:
+        raise HTTPException(
+            409, "The person who recorded a delivery cannot also verify it. "
+                 "That is the whole point of the second check.")
+
+    pg.execute(text("""
+        UPDATE fuel_receipt
+           SET approval_status = :st,
+               verified_by = COALESCE(:vb, verified_by),
+               verified_at = now(),
+               grn_ref = COALESCE(:grn, grn_ref),
+               quality_remarks = COALESCE(:qr, quality_remarks)
+         WHERE receipt_id = :id
+    """), {"id": receipt_id, "st": st, "vb": body.get("verified_by") or who,
+           "grn": body.get("grn_ref"), "qr": body.get("quality_remarks")})
+    pg.commit()
+    return {"ok": True, "approval_status": st}
+
+
+@router.post("/receipt/{receipt_id}/document")
+async def upload_receipt_document(receipt_id: int, request: Request,
+                                  file: UploadFile = File(...),
+                                  kind: str = Query("OTHER"),
+                                  title: str = Query(""),
+                                  pg: Session = Depends(get_minehub_db)) -> dict:
+    """Attach the invoice, the challan, the seal photograph, the dip slip.
+
+    A challan number is a promise that a document exists. The document is what
+    settles an argument, and the argument happens months later.
+
+    Same shape as asset_document, which already works: the bytes on disk, the
+    row in the database, and the original filename kept because 'scan_0041.pdf'
+    is not what anybody will search for.
+    """
+    _require(request, RECORD, "attach fuel documents")
+    if not pg.execute(text("SELECT 1 FROM fuel_receipt WHERE receipt_id = :id"),
+                      {"id": receipt_id}).first():
+        raise HTTPException(404, "No such delivery.")
+
+    suffix = FUEL_FILE_TYPES.get(file.content_type or "")
+    if not suffix:
+        raise HTTPException(
+            400, "That file type cannot be attached. PDFs, images, Word and "
+                 f"Excel files can (this was {file.content_type or 'unrecognised'}).")
+    payload = await file.read()
+    if not payload:
+        raise HTTPException(400, "That file is empty.")
+    if len(payload) > FUEL_MAX_UPLOAD:
+        raise HTTPException(400, "That file is larger than 15 MB.")
+
+    FUEL_DOCUMENT_ROOT.mkdir(parents=True, exist_ok=True)
+    stored = f"{receipt_id}-{uuid4().hex}{suffix}"
+    (FUEL_DOCUMENT_ROOT / stored).write_bytes(payload)
+
+    row = pg.execute(text("""
+        INSERT INTO fuel_receipt_document (receipt_id, kind, title, file_name,
+                                          stored_name, content_type,
+                                          size_bytes, uploaded_by)
+        VALUES (:r, :k, :t, :fn, :sn, :ct, :sz, :by)
+        RETURNING fuel_document_id, kind, title, file_name, size_bytes,
+                  uploaded_at
+    """), {"r": receipt_id, "k": (kind or "OTHER").upper(),
+           "t": title.strip() or None, "fn": file.filename or stored,
+           "sn": stored, "ct": file.content_type, "sz": len(payload),
+           "by": _who(request)}).mappings().first()
+    pg.commit()
+    return dict(row)
+
+
+@router.get("/receipt/{receipt_id}/document/{document_id}")
+def download_receipt_document(receipt_id: int, document_id: int,
+                              request: Request,
+                              pg: Session = Depends(get_minehub_db)):
+    """Hand back the file. Streamed from disk under its original name."""
+    _require(request, VIEW, "see fuel management")
+    d = pg.execute(text("""
+        SELECT stored_name, file_name, content_type FROM fuel_receipt_document
+         WHERE fuel_document_id = :d AND receipt_id = :r
+    """), {"d": document_id, "r": receipt_id}).mappings().first()
+    if not d:
+        raise HTTPException(404, "No such document.")
+    path = FUEL_DOCUMENT_ROOT / d["stored_name"]
+    if not path.exists():
+        raise HTTPException(
+            410, "The record of that file is here but the file itself is not "
+                 "on disk any more.")
+    return FileResponse(path, media_type=d["content_type"] or "application/octet-stream",
+                        filename=d["file_name"])
 
 
 @router.get("/tankers")

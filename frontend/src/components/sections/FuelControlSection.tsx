@@ -18,17 +18,17 @@
  * in the ledger.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Gauge, Fuel, ArrowLeftRight, TriangleAlert, WifiOff,
-         PlusCircle, ClipboardList, Settings2 } from "lucide-react";
+import { Gauge, Fuel, WifiOff, ClipboardList, Settings2, Truck,
+         ClipboardCheck, BookOpen, TrendingDown, Scale } from "lucide-react";
 import api from "@/lib/api";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import { Card, CardHeader, Th, Td, EmptyRow, Chip, Button, Field,
-         inputClass, Alert, SortTh, sortRows } from "@/components/minehub/ui";
+         inputClass, Alert, SortTh, sortRows, Tabs } from "@/components/minehub/ui";
 import type { SortWay } from "@/components/minehub/ui";
 import { IssuePanel, MachineMeterPanel, DayBookPanel,
          ChainPanel } from "./FuelCapture";
 import type { FillTarget } from "./FuelCapture";
-import { TankerPanel, OrdersPanel } from "./FuelErp";
+import { TankerPanel, TankerListPanel, OrdersPanel } from "./FuelErp";
 import type { PendingOrder } from "./FuelErp";
 
 /* ── what the endpoints return ───────────────────────────────────────── */
@@ -79,6 +79,22 @@ const CAPTURE: Record<string, string> = {
   A: "sensor + dispenser", B: "dispenser + typed meter", C: "by hand",
 };
 
+type Stage = "receipts" | "orders" | "issue" | "daybook" | "reconcile"
+           | "intelligence" | "masters";
+
+/* In the order the work happens: diesel arrives, somebody asks for it, it
+ * goes into a machine, and only then is there anything to reconcile or
+ * reason about. */
+const STAGES: { id: Stage; label: string; icon: React.ElementType }[] = [
+  { id: "receipts",     label: "Deliveries",     icon: Truck },
+  { id: "orders",       label: "Orders",         icon: ClipboardCheck },
+  { id: "issue",        label: "Issue fuel",     icon: Fuel },
+  { id: "daybook",      label: "Day book",       icon: BookOpen },
+  { id: "reconcile",    label: "Reconciliation", icon: Scale },
+  { id: "intelligence", label: "Per cubic metre", icon: TrendingDown },
+  { id: "masters",      label: "Machines",       icon: Settings2 },
+];
+
 export default function FuelControlSection() {
   const { apiFrom, apiTo } = useDateFilter();
   const [data, setData] = useState<Overview | null>(null);
@@ -91,6 +107,13 @@ export default function FuelControlSection() {
   /* Clicking Fill on a pending order carries it up to the issue form rather
    * than making somebody re-key what the order already says. */
   const [target, setTarget] = useState<FillTarget | null>(null);
+  /* One page per stage. These are separate jobs done by different people at
+   * different times, and seven panels on one scroll is a page nobody reads
+   * to the bottom of. */
+  const [stage, setStage] = useState<Stage>("receipts");
+  /* Bumped when a delivery is saved, so the list below it refreshes without
+   * reloading the masters the forms are built from. */
+  const [savedTick, setSavedTick] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -130,20 +153,44 @@ export default function FuelControlSection() {
       {err && <Alert tone="error">{err}</Alert>}
       {note && <Alert tone="info">{note}</Alert>}
 
-      {/* ── 1. the flow, in the order the work actually happens ────────
-              a tanker arrives -> an order is raised -> fuel goes in.       */}
-      {masters?.can_record && (
-        <>
-          <TankerPanel points={masters.points} busy={busy} write={write} />
+      {/* One page per stage, in the order the work happens. */}
+      <Tabs tabs={STAGES} value={stage} onChange={setStage} />
 
-          <OrdersPanel points={masters.points} nozzles={masters.nozzles}
-            consumers={masters.consumers} busy={busy} write={write}
-            onPick={(o: PendingOrder) => setTarget({
+      {/* ── a tanker arrives ─────────────────────────────────────────── */}
+      {stage === "receipts" && (
+        <>
+          {masters?.can_record && (
+            <TankerPanel points={masters.points} busy={busy} write={write}
+              onSaved={() => setSavedTick((t) => t + 1)} />
+          )}
+          <TankerListPanel apiFrom={apiFrom} apiTo={apiTo}
+            canRecord={!!masters?.can_record} busy={busy} write={write}
+            reload={savedTick} />
+        </>
+      )}
+
+      {/* ── an order is raised, then filled ──────────────────────────── */}
+      {stage === "orders" && masters?.can_record && (
+        <OrdersPanel points={masters.points} nozzles={masters.nozzles}
+          consumers={masters.consumers} busy={busy} write={write}
+          onPick={(o: PendingOrder) => {
+            setTarget({
               order_id: o.order_id, order_no: o.order_no,
               consumer_id: o.consumer_id, outstanding_l: o.outstanding_l,
               issuing_point_id: null,
-            })} />
+            });
+            setStage("issue");
+          }} />
+      )}
+      {stage === "orders" && !masters?.can_record && (
+        <Alert tone="info">
+          Raising orders needs the fuel recording permission.
+        </Alert>
+      )}
 
+      {/* ── fuel goes in ─────────────────────────────────────────────── */}
+      {stage === "issue" && masters?.can_record && (
+        <>
           {target && (
             <p className="text-[11px] text-txt-muted flex items-center gap-2">
               <span>
@@ -155,168 +202,54 @@ export default function FuelControlSection() {
               </button>
             </p>
           )}
-
           <IssuePanel points={masters.points} nozzles={masters.nozzles}
             consumers={masters.consumers} busy={busy} write={write}
             target={target} />
+          <MachineMeterPanel consumers={masters.consumers} busy={busy}
+            write={write} />
+        </>
+      )}
+      {stage === "issue" && !masters?.can_record && (
+        <Alert tone="info">
+          Booking issues needs the fuel recording permission.
+        </Alert>
+      )}
 
-          <MachineMeterPanel consumers={masters.consumers} busy={busy} write={write} />
+      {/* ── what the portal captured ─────────────────────────────────── */}
+      {stage === "daybook" && <DayBookPanel />}
+
+      {/* ── does it reconcile ────────────────────────────────────────── */}
+      {stage === "reconcile" && (
+        <>
+          <ReconcilePanel data={data} loading={loading} />
+          {masters?.can_record && (
+            <RecordPanel masters={masters} busy={busy} write={write} />
+          )}
+          <CoveragePanel data={data} />
         </>
       )}
 
-      {/* ── 2. what it captured today ─────────────────────────────────── */}
-      <DayBookPanel />
+      {/* ── a litre, and the rock it moved ───────────────────────────── */}
+      {stage === "intelligence" && <ChainPanel apiFrom={apiFrom} apiTo={apiTo} />}
 
-      {/* ── 3. a litre, and the rock it moved ─────────────────────────── */}
-      <ChainPanel apiFrom={apiFrom} apiTo={apiTo} />
-
-      {/* ── 4. the four issuing points, and whether they reconcile ───── */}
-      <Card>
-        <CardHeader icon={Gauge} tone="gold" subtitleOnIcon
-          title="Issued against the pump"
-          subtitle="What was booked to machines, against what the totaliser says was dispensed. The gap is a question, not a finding — a misread digit, a late entry or a transfer booked on one side will all show here."
-          actions={
-            <span className="flex items-center gap-2 text-[11px] text-txt-muted">
-              {data && (
-                <>
-                  <Chip tone="emerald">{data.headline.points_reconciled} reconciled</Chip>
-                  {data.headline.points_flagged > 0 && (
-                    <Chip tone="amber">{data.headline.points_flagged} to ask about</Chip>
-                  )}
-                  {data.headline.points_unchecked > 0 && (
-                    <Chip tone="slate">{data.headline.points_unchecked} unchecked</Chip>
-                  )}
-                </>
-              )}
-            </span>
-          } />
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[820px]">
-            <thead>
-              <tr>
-                <Th>Issuing point</Th>
-                <Th className="text-right">Booked</Th>
-                <Th className="text-right">Pump says</Th>
-                <Th className="text-right">Gap</Th>
-                <Th className="text-right">Received</Th>
-                <Th className="text-right">Transferred</Th>
-                <Th className="text-right">Readings</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading && !data && <EmptyRow colSpan={7}>Reading the fuel records…</EmptyRow>}
-              {data?.points.length === 0 && (
-                <EmptyRow colSpan={7}>No issuing points are set up.</EmptyRow>
-              )}
-              {data?.points.map((p) => (
-                <tr key={p.issuing_point_id}
-                  className={`border-t border-border-light ${
-                    p.gap_flagged ? "bg-amber-bg/30" : ""}`}>
-                  <Td>
-                    <span className="font-semibold text-navy">{p.label}</span>
-                    <span className="block text-[10px] text-txt-light">
-                      {p.kind.toLowerCase()} · {p.issues} issue{p.issues === 1 ? "" : "s"}
-                    </span>
-                  </Td>
-                  <Td className="text-right font-mono text-[12px]">{L(p.booked_l)}</Td>
-                  <Td className="text-right font-mono text-[12px] text-txt-muted">
-                    {L(p.totaliser_l)}
-                  </Td>
-                  <Td className="text-right">
-                    {p.gap_l == null ? (
-                      /* Why there is nothing to show, said plainly. A blank
-                       * cell reads as "no gap", which is a different claim. */
-                      <span className="text-[10.5px] text-txt-light"
-                        title={p.why_no_gap ?? ""}>{p.why_no_gap}</span>
-                    ) : (
-                      <span className={`font-mono text-[12px] font-semibold ${
-                        p.gap_flagged ? "text-amber-dark" : "text-emerald"}`}>
-                        {p.gap_l > 0 ? "+" : ""}{L(p.gap_l)}
-                      </span>
-                    )}
-                  </Td>
-                  <Td className="text-right font-mono text-[12px] text-txt-muted">
-                    {L(p.receipts_l)}
-                  </Td>
-                  <Td className="text-right font-mono text-[11.5px] text-txt-muted">
-                    {p.transfer_out_l || p.transfer_in_l
-                      ? `−${L(p.transfer_out_l)} / +${L(p.transfer_in_l)}`
-                      : "—"}
-                  </Td>
-                  <Td className="text-right text-[11.5px] text-txt-muted">
-                    {p.readings}
-                    {p.suspect_readings > 0 && (
-                      <span className="block text-[9.5px] text-amber"
-                        title="Recorded, and flagged for review">
-                        {p.suspect_readings} flagged
-                      </span>
-                    )}
-                  </Td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
-
-      {/* ── 5. the pump reading that the reconciliation above rests on ── */}
-      {masters?.can_record && <RecordPanel masters={masters} busy={busy} write={write} />}
-
-      {/* ── 6. what this screen cannot see ───────────────────────────── */}
-      <Card>
-        <CardHeader icon={WifiOff} tone="slate" subtitleOnIcon
-          title="What is not covered"
-          subtitle="Every screen has blind spots. These are ours, named rather than left for somebody to discover." />
-        <div className="p-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {data && ([
-            ["Machines drawing fuel", data.coverage.active_consumers, null],
-            ["Entered by hand", data.coverage.manual_capture,
-             "No metered dispenser exists yet, so every issue is typed. Each machine moves off this count as hardware arrives."],
-            ["No fuel sensor mapped", data.coverage.sensor_unmapped,
-             "A sensor may exist and simply not be matched to the machine yet. Mapping is done below."],
-            ["Nothing to measure by", data.coverage.no_meter_kind,
-             "Neither an hour meter nor an odometer, so consumption cannot be worked out for these."],
-          ] as [string, number, string | null][]).map(([label, n, hint]) => (
-            <div key={label} className="rounded-lg bg-bg-soft px-3 py-2" title={hint ?? ""}>
-              <div className="text-[18px] font-bold text-navy font-mono">{n}</div>
-              <div className="text-[10.5px] text-txt-muted leading-tight">{label}</div>
-            </div>
-          ))}
-        </div>
-        {data && data.silent_sensors.length > 0 && (
-          <div className="border-t border-border-light px-3 py-2">
-            <p className="text-[11px] text-txt-muted mb-1.5">
-              Sensors that have stopped reporting. A quiet sensor is not a
-              machine that stopped working, and the two need different answers.
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {data.silent_sensors.map((s) => (
-                <Chip key={s.sensor_name} tone={s.days >= 7 ? "amber" : "slate"}
-                  title={`Last reported ${s.last_seen}`}>
-                  {s.sensor_name} · {s.days}d
-                </Chip>
-              ))}
-            </div>
-          </div>
-        )}
-      </Card>
-
-      {/* ── 7. the masters, because none of this is constant ──────────── */}
-      <Card>
-        <CardHeader icon={Settings2} tone="violet" subtitleOnIcon
-          title="Machines, meters and names"
-          subtitle="What each machine is measured in, how its fuel is captured, and what the other systems call it. All of it editable — a fleet that can only be changed by a developer is a fleet that goes stale."
-          actions={
-            <Button variant="secondary" size="sm"
-              onClick={() => setShowMasters((v) => !v)}>
-              {showMasters ? "Hide" : `Show ${masters?.consumers.length ?? 0}`}
-            </Button>
-          } />
-        {showMasters && masters && (
-          <ConsumerTable masters={masters} busy={busy} write={write} />
-        )}
-      </Card>
-    </div>
+      {/* ── the masters, because none of this is constant ────────────── */}
+      {stage === "masters" && (
+        <Card>
+          <CardHeader icon={Settings2} tone="violet" subtitleOnIcon
+            title="Machines, meters and names"
+            subtitle="What each machine is measured in, how its fuel is captured, and what the other systems call it. All of it editable — a fleet that can only be changed by a developer is a fleet that goes stale."
+            actions={
+              <Button variant="secondary" size="sm"
+                onClick={() => setShowMasters((v) => !v)}>
+                {showMasters ? "Hide" : `Show ${masters?.consumers.length ?? 0}`}
+              </Button>
+            } />
+          {showMasters && masters && (
+            <ConsumerTable masters={masters} busy={busy} write={write} />
+          )}
+        </Card>
+      )}
+</div>
   );
 }
 
@@ -570,5 +503,144 @@ function IdentityCell({ consumer, system, value, busy, canEdit, write }: {
         className={`${inputClass} w-[190px] py-1 text-[11px] font-mono ${
           value ? "" : "placeholder:text-txt-light"}`} />
     </Td>
+  );
+}
+
+
+/* ── does the pump agree with the register ───────────────────────────── */
+function ReconcilePanel({ data, loading }: {
+  data: Overview | null; loading: boolean;
+}) {
+  return (
+    <Card>
+      <CardHeader icon={Gauge} tone="gold" subtitleOnIcon
+        title="Issued against the pump"
+        subtitle="What was booked to machines, against what the totaliser says was dispensed. The gap is a question, not a finding — a misread digit, a late entry or a transfer booked on one side will all show here."
+        actions={
+          <span className="flex items-center gap-2 text-[11px] text-txt-muted">
+            {data && (
+              <>
+                <Chip tone="emerald">{data.headline.points_reconciled} reconciled</Chip>
+                {data.headline.points_flagged > 0 && (
+                  <Chip tone="amber">{data.headline.points_flagged} to ask about</Chip>
+                )}
+                {data.headline.points_unchecked > 0 && (
+                  <Chip tone="slate">{data.headline.points_unchecked} unchecked</Chip>
+                )}
+              </>
+            )}
+          </span>
+        } />
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[820px]">
+          <thead>
+            <tr>
+              <Th>Issuing point</Th>
+              <Th className="text-right">Booked</Th>
+              <Th className="text-right">Pump says</Th>
+              <Th className="text-right">Gap</Th>
+              <Th className="text-right">Received</Th>
+              <Th className="text-right">Transferred</Th>
+              <Th className="text-right">Readings</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && !data && <EmptyRow colSpan={7}>Reading the fuel records…</EmptyRow>}
+            {data?.points.length === 0 && (
+              <EmptyRow colSpan={7}>No issuing points are set up.</EmptyRow>
+            )}
+            {data?.points.map((p) => (
+              <tr key={p.issuing_point_id}
+                className={`border-t border-border-light ${
+                  p.gap_flagged ? "bg-amber-bg/30" : ""}`}>
+                <Td>
+                  <span className="font-semibold text-navy">{p.label}</span>
+                  <span className="block text-[10px] text-txt-light">
+                    {p.kind.toLowerCase()} · {p.issues} issue{p.issues === 1 ? "" : "s"}
+                  </span>
+                </Td>
+                <Td className="text-right font-mono text-[12px]">{L(p.booked_l)}</Td>
+                <Td className="text-right font-mono text-[12px] text-txt-muted">
+                  {L(p.totaliser_l)}
+                </Td>
+                <Td className="text-right">
+                  {p.gap_l == null ? (
+                    /* Why there is nothing to show, said plainly. A blank cell
+                     * reads as "no gap", which is a different claim. */
+                    <span className="text-[10.5px] text-txt-light"
+                      title={p.why_no_gap ?? ""}>{p.why_no_gap}</span>
+                  ) : (
+                    <span className={`font-mono text-[12px] font-semibold ${
+                      p.gap_flagged ? "text-amber-dark" : "text-emerald"}`}>
+                      {p.gap_l > 0 ? "+" : ""}{L(p.gap_l)}
+                    </span>
+                  )}
+                </Td>
+                <Td className="text-right font-mono text-[12px] text-txt-muted">
+                  {L(p.receipts_l)}
+                </Td>
+                <Td className="text-right font-mono text-[11.5px] text-txt-muted">
+                  {p.transfer_out_l || p.transfer_in_l
+                    ? `−${L(p.transfer_out_l)} / +${L(p.transfer_in_l)}`
+                    : "—"}
+                </Td>
+                <Td className="text-right text-[11.5px] text-txt-muted">
+                  {p.readings}
+                  {p.suspect_readings > 0 && (
+                    <span className="block text-[9.5px] text-amber"
+                      title="Recorded, and flagged for review">
+                      {p.suspect_readings} flagged
+                    </span>
+                  )}
+                </Td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+/* ── what this screen cannot see ─────────────────────────────────────── */
+function CoveragePanel({ data }: { data: Overview | null }) {
+  return (
+    <Card>
+      <CardHeader icon={WifiOff} tone="slate" subtitleOnIcon
+        title="What is not covered"
+        subtitle="Every screen has blind spots. These are ours, named rather than left for somebody to discover." />
+      <div className="p-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {data && ([
+          ["Machines drawing fuel", data.coverage.active_consumers, null],
+          ["Entered by hand", data.coverage.manual_capture,
+           "No metered dispenser exists yet, so every issue is typed. Each machine moves off this count as hardware arrives."],
+          ["No fuel sensor mapped", data.coverage.sensor_unmapped,
+           "A sensor may exist and simply not be matched to the machine yet. Mapping is done under Machines."],
+          ["Nothing to measure by", data.coverage.no_meter_kind,
+           "Neither an hour meter nor an odometer, so consumption cannot be worked out for these."],
+        ] as [string, number, string | null][]).map(([label, n, hint]) => (
+          <div key={label} className="rounded-lg bg-bg-soft px-3 py-2" title={hint ?? ""}>
+            <div className="text-[18px] font-bold text-navy font-mono">{n}</div>
+            <div className="text-[10.5px] text-txt-muted leading-tight">{label}</div>
+          </div>
+        ))}
+      </div>
+      {data && data.silent_sensors.length > 0 && (
+        <div className="border-t border-border-light px-3 py-2">
+          <p className="text-[11px] text-txt-muted mb-1.5">
+            Sensors that have stopped reporting. A quiet sensor is not a machine
+            that stopped working, and the two need different answers.
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {data.silent_sensors.map((s) => (
+              <Chip key={s.sensor_name} tone={s.days >= 7 ? "amber" : "slate"}
+                title={`Last reported ${s.last_seen}`}>
+                {s.sensor_name} · {s.days}d
+              </Chip>
+            ))}
+          </div>
+        </div>
+      )}
+    </Card>
   );
 }
