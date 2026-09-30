@@ -865,6 +865,169 @@ def driver_search(request: Request,
     return rows
 
 
+@router.get("/drivers/summary")
+def driver_summary(request: Request, db: Session = Depends(get_db),
+                   pg: Session = Depends(get_minehub_db)) -> dict:
+    """How many drivers this box is actually searching.
+
+    The screen used to say "all 211 are contractors' drivers" in fixed text.
+    It was 211 the day it was written; it is 244 now, and a number that goes
+    stale in the interface teaches people not to trust the numbers in it.
+    """
+    _require(db, request, VIEW)
+    r = pg.execute(text("""
+        SELECT COUNT(*) FILTER (WHERE kind = 'OPERATOR') AS operators,
+               COUNT(*) FILTER (WHERE kind = 'VISITOR')  AS visitors,
+               COUNT(*)                                  AS total
+          FROM weighable_driver
+         WHERE status NOT IN ('BLACKLISTED', 'INACTIVE')
+    """)).mappings().first()
+    return dict(r or {"operators": 0, "visitors": 0, "total": 0})
+
+
+@router.get("/vehicles/{asset_id}/context")
+def vehicle_context(asset_id: int, request: Request,
+                    db: Session = Depends(get_db),
+                    pg: Session = Depends(get_minehub_db)) -> dict:
+    """Everything the weigh and tare dialogs should already know.
+
+    One call rather than three. The dialog opens on a vehicle and immediately
+    needs the same three answers every time; three requests would be three
+    chances for one panel to disagree with the one beside it.
+    """
+    _require(db, request, VIEW)
+
+    # ── who normally drives it ───────────────────────────────────────────
+    #
+    # The shift board first: an ACTIVE assignment is somebody saying, today,
+    # that this man is on this machine. Then whoever actually drove it,
+    # most-recent and most-often, which catches the machine nobody has got
+    # round to assigning.
+    #
+    # Suggested, never filled in. A weighbridge ticket names the man
+    # responsible for a load, and a name that typed itself is a name nobody
+    # checked.
+    suggestions = [dict(r) for r in pg.execute(text("""
+        WITH assigned AS (
+            SELECT oa.operator_id, 0 AS rank, NULL::timestamptz AS last_at,
+                   0 AS trips, oa.shift
+              FROM operator_assignment oa
+             WHERE oa.asset_id = :a AND oa.status = 'ACTIVE'
+               AND (oa.valid_to IS NULL OR oa.valid_to >= CURRENT_DATE)
+        ), drove AS (
+            SELECT t.operator_id, 1 AS rank, MAX(t.created_at) AS last_at,
+                   COUNT(*)::int AS trips, NULL::text AS shift
+              FROM trip t
+             WHERE t.asset_id = :a AND t.operator_id IS NOT NULL
+               AND t.status <> 'CANCELLED'
+               AND t.created_at > now() - interval '60 days'
+             GROUP BY t.operator_id
+        ), pooled AS (
+            -- Not "both": BOTH is reserved in Postgres, from TRIM(BOTH ...),
+            -- and the parser rejects it as a name with a message that points
+            -- at the line after the mistake.
+            SELECT * FROM assigned UNION ALL SELECT * FROM drove
+        )
+        SELECT d.kind, d.operator_id, d.visiting_driver_id, d.full_name,
+               d.reference, d.licence_no, d.licence_valid_upto, d.phone,
+               d.employer, d.designation, d.visits,
+               CASE WHEN d.licence_valid_upto IS NULL THEN NULL
+                    ELSE (d.licence_valid_upto - CURRENT_DATE) END AS licence_days_left,
+               MIN(b.rank) AS rank, MAX(b.trips) AS trips,
+               MAX(b.last_at) AS last_at,
+               MAX(b.shift) AS shift
+          FROM pooled b
+          JOIN weighable_driver d ON d.operator_id = b.operator_id
+         WHERE d.status NOT IN ('BLACKLISTED', 'INACTIVE')
+         GROUP BY d.kind, d.operator_id, d.visiting_driver_id, d.full_name,
+                  d.reference, d.licence_no, d.licence_valid_upto, d.phone,
+                  d.employer, d.designation, d.visits
+         ORDER BY MIN(b.rank), MAX(b.trips) DESC, MAX(b.last_at) DESC NULLS LAST
+         LIMIT 4
+    """), {"a": asset_id}).mappings()]
+    for r in suggestions:
+        left = r["licence_days_left"]
+        r["licence_expired"] = left is not None and left < 0
+        r["licence_expiring"] = left is not None and 0 <= left <= 30
+        r["licence_recorded"] = r["licence_no"] is not None
+        r["why"] = "on the shift board" if r["rank"] == 0 else (
+            f"drove it {r['trips']} time{'' if r['trips'] == 1 else 's'} recently")
+
+    # ── hauls still waiting for their empty weight ───────────────────────
+    #
+    # A gross with no tare beside it. Its net is currently worked out from the
+    # standing tare, which is a figure from whenever somebody last weighed the
+    # vehicle empty -- right enough to plan with, wrong enough to argue about.
+    awaiting = [dict(r) for r in pg.execute(text("""
+        SELECT t.trip_id, t.trip_no, t.production_date, t.shift_code,
+               w.gross_kg, w.gross_at, w.tare_kg AS standing_tare_kg,
+               w.net_kg AS net_on_standing_kg, w.tare_age_days,
+               m.name AS material,
+               src.name AS source, dst.name AS destination,
+               COALESCE(p.display_name, p.legal_name) AS driver
+          FROM trip t
+          JOIN trip_weights w ON w.trip_id = t.trip_id
+          LEFT JOIN material m ON m.material_id = t.material_id
+          LEFT JOIN location src ON src.location_id = t.source_location_id
+          LEFT JOIN location dst ON dst.location_id = t.dest_location_id
+          LEFT JOIN operator o ON o.operator_id = t.operator_id
+          LEFT JOIN party p ON p.party_id = o.party_id
+         WHERE t.asset_id = :a
+           AND t.status <> 'CANCELLED'
+           AND w.gross_kg IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM weighment x
+                            WHERE x.trip_id = t.trip_id AND x.kind = 'TARE')
+           AND w.gross_at > now() - interval '3 days'
+         ORDER BY w.gross_at DESC
+         LIMIT 10
+    """), {"a": asset_id}).mappings()]
+
+    return {"asset_id": asset_id, "suggested_drivers": suggestions,
+            "awaiting_tare": awaiting}
+
+
+@router.get("/recent")
+def recent(request: Request, limit: int = Query(8, ge=1, le=40),
+           db: Session = Depends(get_db),
+           pg: Session = Depends(get_minehub_db)) -> list[dict]:
+    """The last few weighings, for the space under the scale.
+
+    An operator who has just keyed a load into the wrong material finds out
+    tomorrow, from a report, when the lorry is long gone. Showing the last
+    handful on the same screen is the cheapest correction there is.
+    """
+    _require(db, request, VIEW)
+    rows = [dict(r) for r in pg.execute(text("""
+        SELECT t.trip_id, t.trip_no, t.status, t.shift_code,
+               w.gross_kg, w.tare_kg, w.net_kg, w.tare_source, w.has_manual,
+               w.gross_at,
+               COALESCE(v.registration_no, vv.registration_no) AS vehicle,
+               v.fleet_code,
+               m.name AS material,
+               COALESCE(p.display_name, p.legal_name, vd.full_name) AS driver
+          FROM trip t
+          JOIN trip_weights w ON w.trip_id = t.trip_id
+          LEFT JOIN weighable_vehicle v
+                 ON v.kind = 'ASSET' AND v.asset_id = t.asset_id
+          LEFT JOIN weighable_vehicle vv
+                 ON vv.kind = 'VISITOR' AND vv.visiting_vehicle_id = t.visiting_vehicle_id
+          LEFT JOIN material m ON m.material_id = t.material_id
+          LEFT JOIN operator o ON o.operator_id = t.operator_id
+          LEFT JOIN party p ON p.party_id = o.party_id
+          LEFT JOIN visiting_driver vd ON vd.visiting_driver_id = t.visiting_driver_id
+         WHERE t.status <> 'CANCELLED' AND w.gross_at IS NOT NULL
+         ORDER BY w.gross_at DESC
+         LIMIT :lim
+    """), {"lim": limit}).mappings()]
+    for r in rows:
+        for k in ("gross_kg", "tare_kg", "net_kg"):
+            r[k] = _f(r[k])
+        # A haul whose empty weight was never taken against it. The figure is
+        # not wrong, it is estimated, and the two should not look alike.
+        r["net_is_estimated"] = r["tare_source"] == "STANDING"
+    return rows
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # The gate — twice in a vehicle's life, not twice a day
 # ═══════════════════════════════════════════════════════════════════════════

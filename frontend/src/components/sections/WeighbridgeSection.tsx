@@ -96,6 +96,101 @@ interface Driver {
   visits: number | null;
 }
 
+/** A driver the screen offers before being asked, and why it is offering him. */
+interface Suggested extends Driver { why: string; rank: number; trips: number }
+
+/** A haul weighed in loaded whose empty weight was never taken against it.
+ *  Its net is currently the standing tare subtracted from the gross, which is
+ *  an estimate wearing the same clothes as a measurement. */
+interface AwaitingTare {
+  trip_id: number; trip_no: string; production_date: string | null;
+  shift_code: string | null; gross_kg: number | null; gross_at: string | null;
+  standing_tare_kg: number | null; net_on_standing_kg: number | null;
+  tare_age_days: number | null; material: string | null;
+  source: string | null; destination: string | null; driver: string | null;
+}
+
+interface RecentRow {
+  trip_id: number; trip_no: string; status: string; shift_code: string | null;
+  gross_kg: number | null; tare_kg: number | null; net_kg: number | null;
+  tare_source: string | null; has_manual: boolean; gross_at: string | null;
+  vehicle: string | null; fleet_code: string | null;
+  material: string | null; driver: string | null; net_is_estimated: boolean;
+}
+
+/** "14:32" from a timestamp, or an em dash. The operator is looking for the
+ *  load they did ten minutes ago, not for a date. */
+const clock = (t: string | null) =>
+  t ? new Date(t).toLocaleTimeString("en-IN",
+        { hour: "2-digit", minute: "2-digit", hour12: false }) : "—";
+
+/* ── What has just been weighed ──────────────────────────────────────────
+ *
+ * Its own small fetch rather than a slice of the trips list: this asks for
+ * eight rows across every bridge, newest first, and the trips tab asks for a
+ * filtered day. Sharing one query would have made both of them worse.
+ */
+function RecentWeighings() {
+  const [rows, setRows] = useState<RecentRow[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const r = await api.get("/weighbridge/recent", { params: { limit: 8 } });
+        if (alive) setRows(r.data ?? []);
+      } catch { /* the bridge above still works */ }
+      finally { if (alive) setLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  return (
+    <Card>
+      <CardHeader title="Just weighed" tone="slate" icon={Clock}
+                  subtitle="The last few loads, newest first — the cheapest place to catch your own mistake." />
+      {loading ? (
+        <div className="py-8 text-center"><Loader2 className="w-4 h-4 animate-spin text-gold mx-auto" /></div>
+      ) : rows.length === 0 ? (
+        <p className="px-5 py-8 text-[12px] text-txt-muted text-center">
+          Nothing weighed yet.
+        </p>
+      ) : (
+        <div className="divide-y divide-border-light">
+          {rows.map((r) => (
+            <div key={r.trip_id} className="px-4 py-2.5 flex items-center gap-3">
+              <span className="text-[11px] text-txt-light tabular-nums shrink-0 w-[38px]">
+                {clock(r.gross_at)}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[12px] font-semibold text-navy truncate">
+                  {r.vehicle ?? r.fleet_code ?? "—"}
+                </span>
+                <span className="block text-[10.5px] text-txt-light truncate">
+                  {[r.material, r.driver].filter(Boolean).join(" · ") || r.trip_no}
+                </span>
+              </span>
+              <span className="text-right shrink-0">
+                <span className="block text-[12.5px] font-semibold tabular-nums text-navy">
+                  {kg(r.net_kg)} <span className="text-[10px] font-normal text-txt-light">kg net</span>
+                </span>
+                <span className="flex items-center justify-end gap-1 mt-0.5">
+                  {/* An estimate and a measurement should not look alike. */}
+                  {r.net_is_estimated && (
+                    <Chip tone="slate" dot={false}>standing tare</Chip>
+                  )}
+                  {r.has_manual && <Chip tone="rose" dot={false}>typed</Chip>}
+                </span>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 const kg = (n: number | null | undefined) =>
   n === null || n === undefined ? "—" : n.toLocaleString("en-IN", { maximumFractionDigits: 0 });
 
@@ -205,6 +300,30 @@ export default function WeighbridgeSection() {
   const refresh = useCallback(async () => { await Promise.all([loadLive(), loadRest()]); },
                               [loadLive, loadRest]);
 
+  /* Come back to the tab and the screen catches up.
+   *
+   * A weighbridge is worked with the register open in a second tab: somebody
+   * is added to Manpower there, then looked for here, and this screen was
+   * still showing the lists it loaded when it opened. Nothing was broken --
+   * it was simply answering a question from an hour ago, and the only cure
+   * anybody had was to reload the page and lose whatever was half-typed.
+   *
+   * Refetching when the tab is looked at again is the whole fix. It costs one
+   * request at the moment somebody's attention returns, which is exactly when
+   * a stale list is about to be believed. */
+  useEffect(() => {
+    const again = () => { if (!document.hidden) void refresh(); };
+    window.addEventListener("focus", again);
+    document.addEventListener("visibilitychange", again);
+    return () => {
+      window.removeEventListener("focus", again);
+      document.removeEventListener("visibilitychange", again);
+    };
+  }, [refresh]);
+
+  // Bumped on every refresh so the recent list reloads with everything else.
+  const refreshKey = trips.length + vehicles.length;
+
   const today = new Date().toISOString().slice(0, 10);
   const todayTrips = useMemo(() => trips.filter((t) => t.production_date === today), [trips, today]);
   const tonnes = useMemo(
@@ -273,6 +392,12 @@ export default function WeighbridgeSection() {
                 <p className="text-[13px] text-txt-muted">No weighbridge is set up yet.</p>
               </div></Card>
             )}
+
+            {/* The column under the scale was empty and the page was short.
+                The last few weighings belong here: an operator who has just
+                keyed a load against the wrong material otherwise finds out
+                tomorrow from a report, with the lorry long gone. */}
+            <RecentWeighings key={refreshKey} />
           </div>
 
           <Card>
@@ -486,6 +611,12 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
   const [driverQ, setDriverQ] = useState("");
   const [driver, setDriver] = useState<Driver | null>(null);
   const [hits, setHits] = useState<Driver[]>([]);
+  /* Who normally drives this one, from the shift board and from who has
+   * actually driven it. Offered, never filled in: a weighbridge ticket names
+   * the man answerable for a load, and a name that typed itself is a name
+   * nobody checked. */
+  const [suggested, setSuggested] = useState<Suggested[]>([]);
+  const [driverTotal, setDriverTotal] = useState<number | null>(null);
   // Only when the operator register genuinely does not have him.
   const [newDriver, setNewDriver] = useState(false);
   const [dName, setDName] = useState("");
@@ -508,6 +639,26 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
     }, 250);
     return () => clearTimeout(t);
   }, [driverQ]);
+
+  /* Asked when the dialog opens, not when the page loaded. Somebody added to
+   * the register a minute ago in another tab is in this answer. */
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const [ctx, sum] = await Promise.all([
+          vehicle.asset_id
+            ? api.get(`/weighbridge/vehicles/${vehicle.asset_id}/context`)
+            : Promise.resolve({ data: { suggested_drivers: [] } }),
+          api.get("/weighbridge/drivers/summary"),
+        ]);
+        if (!alive) return;
+        setSuggested(ctx.data?.suggested_drivers ?? []);
+        setDriverTotal(sum.data?.total ?? null);
+      } catch { /* suggestions are a convenience, never a requirement */ }
+    })();
+    return () => { alive = false; };
+  }, [vehicle.asset_id]);
 
   const bridge = bridges.find((b) => b.weighbridge_id === bridgeId) ?? null;
   const ready = bridge?.is_live && bridge.is_stable;
@@ -752,7 +903,8 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
           {!newDriver ? (
             <div>
               <Field label="Driver" required
-                     hint="From the operator register — all 211 are contractors' drivers.">
+                     hint={`From the operator register${
+                       driverTotal ? ` — ${driverTotal} drivers` : ""}.`}>
                 {driver ? (
                   <div className="flex items-center gap-2 px-3 py-2 rounded-lg
                                   bg-indigo-bg ring-1 ring-indigo-ring">
@@ -770,6 +922,26 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
                   </div>
                 ) : (
                   <>
+                    {/* One tap for the usual man, the box for anyone else. */}
+                    {suggested.length > 0 && !driverQ && (
+                      <div className="mb-2 flex flex-wrap gap-1.5">
+                        {suggested.map((d) => (
+                          <button key={d.operator_id}
+                                  onClick={() => setDriver(d)}
+                                  title={d.why}
+                                  className={`px-2.5 py-1 rounded-lg text-[11.5px] ring-1
+                                              transition-colors
+                                              ${d.licence_expired || !d.licence_recorded
+                                                ? "bg-amber-bg ring-amber-ring text-amber hover:bg-amber-bg/70"
+                                                : "bg-indigo-bg ring-indigo-ring text-navy hover:bg-indigo-bg/70"}`}>
+                            <span className="font-semibold">{d.full_name}</span>
+                            <span className="opacity-70"> · {d.why}</span>
+                            {d.licence_expired && " · licence expired"}
+                            {!d.licence_recorded && " · no licence on file"}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                     <div className="relative">
                       <Search className="w-3.5 h-3.5 text-txt-light absolute left-3
                                          top-1/2 -translate-y-1/2" />
@@ -864,15 +1036,55 @@ function TareDialog({ vehicle, bridges, onClose, onDone, onError }: {
   const bridge = bridges.find((b) => b.weighbridge_id === bridgeId) ?? null;
   const ready = bridge?.is_live && bridge.is_stable;
 
+  /* Hauls this empty weight might actually belong to.
+   *
+   * A tipper weighs in loaded, tips, and comes back empty some minutes later.
+   * That empty weight is the true tare for THAT haul -- but the button only
+   * ever wrote the vehicle's standing figure, so the exact weight was thrown
+   * away and the net stayed an estimate from whenever the vehicle was last
+   * weighed empty. Now the loads still waiting for one are listed, and the
+   * operator says which. */
+  const [awaiting, setAwaiting] = useState<AwaitingTare[]>([]);
+  const [applyTo, setApplyTo] = useState<number | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      if (!vehicle.asset_id) return;
+      try {
+        const r = await api.get(`/weighbridge/vehicles/${vehicle.asset_id}/context`);
+        if (!alive) return;
+        const rows: AwaitingTare[] = r.data?.awaiting_tare ?? [];
+        setAwaiting(rows);
+        // The most recent haul is the one it almost always belongs to, but it
+        // is proposed, not assumed — the operator can clear it.
+        setApplyTo(rows[0]?.trip_id ?? null);
+      } catch { /* the standing tare still works on its own */ }
+    })();
+    return () => { alive = false; };
+  }, [vehicle.asset_id]);
+
   const save = async () => {
     if (!bridgeId || !vehicle.asset_id) return;
     setBusy(true);
     try {
+      // The vehicle's standing figure is written either way: this IS its
+      // empty weight as of now, whatever else the reading is used for.
       const r = await api.post(`/weighbridge/vehicles/${vehicle.asset_id}/tare`,
                                { weighbridge_id: bridgeId });
+      const taken = r.data?.standing_tare_kg;
       const d = r.data?.change_kg;
-      onDone(`${vehicle.vehicle} tare set to ${kg(r.data?.standing_tare_kg)} kg`
-             + (d ? ` (${d > 0 ? "+" : ""}${kg(d)} kg on the last one)` : ""));
+      let extra = "";
+      if (applyTo) {
+        const chosen = awaiting.find((a) => a.trip_id === applyTo);
+        await api.post(`/weighbridge/trips/${applyTo}/weigh`,
+                       { kind: "TARE", weighbridge_id: bridgeId,
+                         capture_mode: "CAPTURED" });
+        extra = ` and recorded against ${chosen?.trip_no ?? "the chosen haul"}`;
+      }
+      onDone(`${vehicle.vehicle} tare set to ${kg(taken)} kg`
+             + (d ? ` (${d > 0 ? "+" : ""}${kg(d)} kg on the last one)` : "")
+             + extra);
     } catch (e) { onError(errorOf(e, "Could not set the tare.")); }
     finally { setBusy(false); }
   };
@@ -902,6 +1114,46 @@ function TareDialog({ vehicle, bridges, onClose, onDone, onError }: {
             {vehicle.tare_age_days === null ? "at some point" : `${vehicle.tare_age_days} days ago`}.
           </p>
         )}
+        {/* Which haul this belongs to. Only shown when there is one to
+            choose: a vehicle that has not weighed in loaded has nothing for
+            this reading to be the tare OF. */}
+        {awaiting.length > 0 && (
+          <Field label="Is this the empty weight for a load already weighed in?">
+            <div className="rounded-lg border border-border-light divide-y divide-border-light">
+              {awaiting.map((a) => (
+                <button key={a.trip_id} type="button"
+                        onClick={() => setApplyTo(applyTo === a.trip_id ? null : a.trip_id)}
+                        className={`w-full flex items-center gap-3 px-3 py-2 text-left
+                                    ${applyTo === a.trip_id ? "bg-gold-bg" : "hover:bg-bg-soft"}`}>
+                  <span className={`w-3.5 h-3.5 rounded-full shrink-0 ring-1
+                                    ${applyTo === a.trip_id
+                                      ? "bg-gold ring-gold-dark" : "bg-white ring-border"}`} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[12px] font-semibold text-navy truncate">
+                      {a.trip_no} · {clock(a.gross_at)}
+                      {a.shift_code ? ` · shift ${a.shift_code}` : ""}
+                    </span>
+                    <span className="block text-[10.5px] text-txt-light truncate">
+                      {[a.material, a.source, a.driver].filter(Boolean).join(" · ") || "—"}
+                    </span>
+                  </span>
+                  <span className="text-right shrink-0 text-[11px] tabular-nums">
+                    <span className="block text-txt">{kg(a.gross_kg)} kg gross</span>
+                    <span className="block text-txt-light">
+                      net now {kg(a.net_on_standing_kg)} kg, estimated
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+            <p className="mt-1.5 text-[11px] text-txt-muted">
+              {applyTo
+                ? "This reading is recorded against that haul, so its net becomes exact rather than an estimate."
+                : "Nothing selected — the reading updates the vehicle's standing tare only."}
+            </p>
+          </Field>
+        )}
+
         {usable.length > 1 && (
           <Field label="Bridge">
             <SearchSelect field value={String(bridgeId ?? "")}
