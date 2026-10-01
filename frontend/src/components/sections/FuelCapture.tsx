@@ -627,7 +627,7 @@ function Row({ label, plan, actual, pct, dp = 0, emphasise }: {
         emphasise ? "font-semibold text-navy" : ""}`}>{L(actual, dp)}</Td>
       <Td className="text-right font-mono text-[12px]">
         {pct == null ? <span className="text-txt-light">—</span> : (
-          <span className={pct > 115 ? "text-amber-dark"
+          <span className={pct > 115 ? "text-amber"
             : pct < 85 ? "text-sky-dark" : "text-emerald"}>{L(pct, 1)}%</span>
         )}
       </Td>

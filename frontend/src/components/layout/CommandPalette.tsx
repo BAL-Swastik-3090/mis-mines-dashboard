@@ -149,7 +149,7 @@ export default function CommandPalette() {
                       </kbd>
                     ))}
                   </span>
-                  <span className="text-[12px] text-txt">{s.what}</span>
+                  <span className="text-[12px] text-txt-primary">{s.what}</span>
                 </div>
               ))}
             </div>
@@ -199,9 +199,9 @@ export default function CommandPalette() {
                     onMouseEnter={() => setCursor(i)}
                     onClick={() => go(it)}
                     className={`w-full flex items-center gap-3 px-4 py-2 text-left
-                                ${on ? "bg-gold-bg" : "hover:bg-bg-soft"}`}>
+                                ${on ? "bg-gold/10" : "hover:bg-bg-soft"}`}>
                     <Icon className={`w-4 h-4 shrink-0 ${on ? "text-gold-dark" : "text-txt-light"}`} />
-                    <span className={`flex-1 text-[12.5px] ${on ? "font-semibold text-navy" : "text-txt"}`}>
+                    <span className={`flex-1 text-[12.5px] ${on ? "font-semibold text-navy" : "text-txt-primary"}`}>
                       {it.label}
                     </span>
                     {it.kind === "link"

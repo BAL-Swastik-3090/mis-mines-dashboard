@@ -571,7 +571,7 @@ function ReconcilePanel({ data, loading }: {
                       title={p.why_no_gap ?? ""}>{p.why_no_gap}</span>
                   ) : (
                     <span className={`font-mono text-[12px] font-semibold ${
-                      p.gap_flagged ? "text-amber-dark" : "text-emerald"}`}>
+                      p.gap_flagged ? "text-amber" : "text-emerald"}`}>
                       {p.gap_l > 0 ? "+" : ""}{L(p.gap_l)}
                     </span>
                   )}

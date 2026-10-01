@@ -162,7 +162,7 @@ export default function ProfileMenu() {
                 database could not be reached, the roles above are the old
                 smaller list and nobody should read them as a decision. */}
             {user.access_source === "legacy" && (
-              <p className="text-[10.5px] text-amber-dark mt-1.5 leading-snug">
+              <p className="text-[10.5px] text-amber mt-1.5 leading-snug">
                 The access database could not be reached, so this is a reduced
                 standby list — not what you actually hold. Screens may be
                 missing until the connection is back.

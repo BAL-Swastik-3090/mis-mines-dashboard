@@ -195,7 +195,7 @@ export default function TareRegister({ onError }: { onError?: (m: string) => voi
                       <span className="text-[10px] text-txt-light ml-1">kg</span>
                     </Td>
                     <Td className="text-[11.5px]">
-                      <span className={isStale ? "text-amber-dark font-semibold"
+                      <span className={isStale ? "text-amber font-semibold"
                                                : "text-txt-muted"}>
                         {when(v.current_taken_at)}
                       </span>
@@ -212,7 +212,7 @@ export default function TareRegister({ onError }: { onError?: (m: string) => voi
                         <span className="text-txt-light">—</span>
                       ) : (
                         <span className={Math.abs(v.drift_kg) >= 500
-                          ? "text-amber-dark font-semibold" : "text-txt-muted"}>
+                          ? "text-amber font-semibold" : "text-txt-muted"}>
                           {v.drift_kg > 0 ? "+" : ""}{KG(v.drift_kg)}
                         </span>
                       )}

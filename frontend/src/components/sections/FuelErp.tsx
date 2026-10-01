@@ -846,7 +846,7 @@ export function OrdersPanel({ points, nozzles, consumers, busy, write, onPick }:
                     </span>
                   )}
                 </Td>
-                <Td className="text-right font-mono text-[12px] font-semibold text-amber-dark">
+                <Td className="text-right font-mono text-[12px] font-semibold text-amber">
                   {L(o.outstanding_l)}
                 </Td>
                 <Td className="text-right">
