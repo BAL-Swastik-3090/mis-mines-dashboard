@@ -31,6 +31,7 @@ import api from "@/lib/api";
 import { formatIndian } from "@/lib/utils";
 import { buildRows, dayLabel, todayISO, type KpiRow } from "@/lib/prevDay";
 import type { ProductionDaywiseResponse, DespatchDaywiseResponse } from "@/types";
+import DateField from "@/components/minehub/DateField";
 
 export interface StoredValue {
   value: number;
@@ -201,15 +202,8 @@ export default function PrevDayEntryModal({
           <label htmlFor="prev-day-date" className="text-[11px] font-extrabold tracking-[.12em] text-txt-secondary uppercase">
             Date
           </label>
-          <input
-            id="prev-day-date"
-            type="date"
-            value={day}
-            max={maxDay}
-            onChange={(e) => setDay(e.target.value)}
-            className="rounded border border-border bg-white px-2 py-1 text-[12px] font-mono text-navy
-              focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30"
-          />
+          <DateField id="prev-day-date" value={day} max={maxDay}
+                     onChange={setDay} className="w-[140px]" />
           <span className="text-[11px] text-txt-muted">{dayLabel(day)}</span>
           {loading && <Loader2 size={12} className="animate-spin text-txt-light" />}
           {futureDay && (

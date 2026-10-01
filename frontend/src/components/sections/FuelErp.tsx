@@ -18,6 +18,7 @@ import { Truck, ClipboardCheck, ChevronRight, Paperclip, ShieldCheck,
 import api from "@/lib/api";
 import { Card, CardHeader, Th, Td, EmptyRow, Chip, Button, Field,
          inputClass, Alert } from "@/components/minehub/ui";
+import DateField from "@/components/minehub/DateField";
 
 interface PointLite { issuing_point_id: number; label: string; is_active: boolean }
 interface NozzleLite {
@@ -241,8 +242,8 @@ export function TankerPanel({ points, busy, write, onSaved }: {
           </select>
         </Field>
         <Field label="Date" required>
-          <input type="date" value={f.on_date} disabled={busy} className={inputClass}
-            onChange={(e) => set("on_date", e.target.value)} />
+          <DateField value={f.on_date} disabled={busy}
+                     onChange={(v) => set("on_date", v)} />
         </Field>
         <Field label="Storage location">
           <Suggest id="fuel-storeloc" value={f.storage_location} disabled={busy}

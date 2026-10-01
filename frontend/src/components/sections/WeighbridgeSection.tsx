@@ -37,6 +37,7 @@ import {
 } from "@/components/minehub/ui";
 import Dialog from "@/components/minehub/Dialog";
 import TareRegister from "./TareRegister";
+import DateField from "@/components/minehub/DateField";
 
 /* ── Shapes ──────────────────────────────────────────────────────────────── */
 interface Bridge {
@@ -1023,8 +1024,7 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
                          className={inputClass} />
                 </Field>
                 <Field label="Valid until">
-                  <input type="date" value={dValid} onChange={(e) => setDValid(e.target.value)}
-                         className={inputClass} />
+                  <DateField value={dValid} onChange={setDValid} />
                 </Field>
               </div>
               <button onClick={() => setNewDriver(false)}
@@ -1300,12 +1300,8 @@ function TripTable({ trips, summary, sources, categories, bridges, mayTare,
                    q ? "border-gold" : ""}`} />
         </div>
 
-        <input type="date" value={day} onChange={(e) => setDay(e.target.value)}
-               title="One production day"
-               className={`rounded-lg border bg-bg-base px-2.5 py-1.5 text-[12px]
-                           text-txt-primary transition-colors focus:outline-none
-                           focus:border-gold focus:ring-2 focus:ring-gold/15 ${
-                 day ? "border-gold font-semibold" : "border-border text-txt-muted"}`} />
+        <DateField value={day} onChange={setDay} title="One production day"
+                   className={`w-[140px] ${day ? "border-gold font-semibold" : ""}`} />
 
         <select value={shift} onChange={(e) => setShift(e.target.value)}
                 title="Shift" className={filterSelectClass(!!shift)}>

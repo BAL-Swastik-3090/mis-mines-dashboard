@@ -30,6 +30,7 @@ import { IssuePanel, MachineMeterPanel, DayBookPanel,
 import type { FillTarget } from "./FuelCapture";
 import { TankerPanel, TankerListPanel, OrdersPanel } from "./FuelErp";
 import type { PendingOrder } from "./FuelErp";
+import DateField from "@/components/minehub/DateField";
 
 /* ── what the endpoints return ───────────────────────────────────────── */
 interface Point {
@@ -299,8 +300,7 @@ function RecordPanel({ masters, busy, write }: {
           </select>
         </Field>
         <Field label="Date" required>
-          <input type="date" value={on} disabled={busy} className={inputClass}
-            onChange={(e) => setOn(e.target.value)} />
+          <DateField value={on} onChange={setOn} disabled={busy} />
         </Field>
         <Field label="Shift">
           <select value={shift} disabled={busy} className={inputClass}

@@ -30,6 +30,7 @@ import { X, Save, Loader2, AlertTriangle, Boxes } from "lucide-react";
 import api from "@/lib/api";
 import { formatIndian } from "@/lib/utils";
 import { dayLabel, todayISO } from "@/lib/prevDay";
+import DateField from "@/components/minehub/DateField";
 
 const GRADES = [
   { key: "HG", label: "High Grade" },
@@ -380,15 +381,8 @@ export default function MinesStockEntryModal({
           <label htmlFor="stock-date" className={th.replace("px-2 py-1.5 ", "")}>
             Stock Date
           </label>
-          <input
-            id="stock-date"
-            type="date"
-            value={day}
-            max={maxDay}
-            onChange={(e) => setDay(e.target.value)}
-            className="rounded border border-border bg-white px-2 py-1 text-[12px] font-mono text-navy
-              focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30"
-          />
+          <DateField id="stock-date" value={day} max={maxDay}
+                     onChange={setDay} className="w-[140px]" />
           <span className="text-[11px] text-txt-muted">{dayLabel(day)}</span>
           {existing.isFetching && <Loader2 size={12} className="animate-spin text-txt-light" />}
           {existing.data?.has_data && (

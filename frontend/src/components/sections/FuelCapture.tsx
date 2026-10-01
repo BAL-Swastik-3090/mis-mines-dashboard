@@ -16,6 +16,7 @@ import { Fuel, Gauge, BookOpen, TrendingDown, Droplets, Mountain } from "lucide-
 import api from "@/lib/api";
 import { Card, CardHeader, Th, Td, EmptyRow, Chip, Button, Field,
          inputClass, Alert } from "@/components/minehub/ui";
+import DateField from "@/components/minehub/DateField";
 
 interface ConsumerLite {
   consumer_id: number; code: string; label: string;
@@ -147,8 +148,7 @@ export function IssuePanel({ points, nozzles, consumers, busy, write, target }: 
             onChange={(e) => setMeter(e.target.value)} />
         </Field>
         <Field label="Date" required>
-          <input type="date" value={on} disabled={busy} className={inputClass}
-            onChange={(e) => setOn(e.target.value)} />
+          <DateField value={on} onChange={setOn} disabled={busy} />
         </Field>
         <Field label="Shift">
           <select value={shift} disabled={busy} className={inputClass}
@@ -255,8 +255,7 @@ export function MachineMeterPanel({ consumers, busy, write }: {
           </select>
         </Field>
         <Field label="Date" required>
-          <input type="date" value={on} disabled={busy} className={inputClass}
-            onChange={(e) => setOn(e.target.value)} />
+          <DateField value={on} onChange={setOn} disabled={busy} />
         </Field>
         <Field label="Shift">
           <select value={shift} disabled={busy} className={inputClass}
@@ -365,8 +364,7 @@ export function DayBookPanel() {
                 )}
               </>
             )}
-            <input type="date" value={day} className={`${inputClass} w-[140px] py-1`}
-              onChange={(e) => setDay(e.target.value)} />
+            <DateField value={day} onChange={setDay} className="w-[140px]" />
           </span>
         } />
 

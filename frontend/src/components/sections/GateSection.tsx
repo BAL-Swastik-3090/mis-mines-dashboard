@@ -30,6 +30,7 @@ import {
   StatBar, Tabs, Td, Th, inputClass, type Tone,
 } from "@/components/minehub/ui";
 import Dialog from "@/components/minehub/Dialog";
+import DateField from "@/components/minehub/DateField";
 
 interface Vehicle {
   gate_pass_id: number; gate_pass_no: string; purpose: string;
@@ -670,8 +671,7 @@ function AdmitDialog({ onClose, onDone, onError }: {
           </Field>
 
           <Field label="Expected until" hint="When the contract ends, if known.">
-            <input type="date" value={until} onChange={(e) => setUntil(e.target.value)}
-                   className={inputClass} />
+            <DateField value={until} onChange={setUntil} />
           </Field>
 
           <p className="text-[11px] text-txt-light leading-relaxed border-t
