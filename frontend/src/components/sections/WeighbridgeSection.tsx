@@ -657,18 +657,37 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
     useState<{ top: number; left: number; width: number } | null>(null);
   const [lit, setLit] = useState(0);
 
+  /* Under the field, the width of the field, clamped to the window.
+   *
+   * It opened to the RIGHT of the input first, which put it outside the
+   * dialog — and the dialog is z-[10001] while the list was 9999, so the
+   * panel was painted OVER it and every name lost its first few letters.
+   * Beside the field only looks like more room; it is room the dialog is
+   * already using.
+   *
+   * Under the input it stays within the dialog's own width, which is where
+   * the eye already is. It is still a portal, so nothing in the form moves
+   * when it opens — that was the point — and it still sits above the dialog
+   * rather than inside the part of it that scrolls.
+   *
+   * Flipped above the field when the window has no room below, and never
+   * allowed past either edge. */
   const placeDrivers = useCallback(() => {
     const el = driverBox.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    const W = 300, GAP = 10;
-    // Beside the field when the window has room to its right; under it when
-    // not. Either way it is fixed to the viewport, so the form cannot move it.
-    const rightRoom = window.innerWidth - r.right;
-    const beside = rightRoom > W + GAP;
-    setDriverAt(beside
-      ? { top: r.top, left: r.right + GAP, width: W }
-      : { top: r.bottom + 4, left: r.left, width: Math.max(r.width, 240) });
+    const GAP = 4, MARGIN = 8, MAXH = 320;
+    const width = Math.max(r.width, 260);
+    const below = window.innerHeight - r.bottom > 180
+      || window.innerHeight - r.bottom > r.top;
+    const left = Math.min(Math.max(MARGIN, r.left),
+                          window.innerWidth - width - MARGIN);
+    setDriverAt({
+      top: below ? r.bottom + GAP
+                 : Math.max(MARGIN, r.top - GAP - MAXH),
+      left,
+      width,
+    });
   }, []);
 
   useEffect(() => {
@@ -1086,9 +1105,11 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
                         below this field moves while somebody is typing. */}
                     {driverQ && hits.length > 0 && driverAt && createPortal(
                       <div id="driver-hits" role="listbox"
+                           /* Above the dialog, which is z-[10001]. Below it,
+                              the panel paints over the list and clips it. */
                            style={{ position: "fixed", top: driverAt.top,
                                     left: driverAt.left, width: driverAt.width,
-                                    maxHeight: "min(320px, 60vh)", zIndex: 9999 }}
+                                    maxHeight: "min(320px, 60vh)", zIndex: 10002 }}
                            className="overflow-y-auto scrollbar-thin rounded-xl bg-white
                                       border border-border shadow-xl py-1">
                         <div className="px-3 py-1.5 text-[10px] font-semibold uppercase
