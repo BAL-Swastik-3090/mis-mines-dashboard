@@ -796,7 +796,7 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
 
   return (
     <Dialog
-      open tone={manual ? "warning" : "info"} width={960} bare
+      open tone={manual ? "warning" : "info"} width={1180} bare
       titleAlign="center"
       ariaLabel={`Weigh a load — ${vehicleName(vehicle)}`}
       /* The vehicle IS the subject of this dialog, so it is the heading
@@ -844,10 +844,6 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
       confirmLabel={manual ? "Record typed weight" : "Capture and record trip"}
       onCancel={onClose} onConfirm={() => void save()} busy={blocked}
     >
-      <p className="text-[12px] text-txt-light text-center -mt-1 mb-4">
-        Capture the weighment against this vehicle&apos;s gate pass.
-      </p>
-
       {/* Two columns and a floor under them.
        *
        * One column ran to nine stacked blocks and the operator scrolled past
