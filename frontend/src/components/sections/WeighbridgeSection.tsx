@@ -1813,13 +1813,50 @@ function Choices({ label, options, value, onChange, required, hint, tone = "navy
           Nothing set up — add one under Customise lists.
         </p>
       ) : (
-        <div className="flex flex-wrap gap-1.5">
-          {options.map((o) => {
+        /* A row of chips is a radio group, so it behaves like one.
+         *
+         * It looked like one and did not act like one: Tab stopped on every
+         * chip in turn, so reaching the driver box past Category, Ore type,
+         * Source, Dump Yard, Destination and Shift was twenty-odd presses,
+         * and the arrow keys did nothing at all. An operator at a bridge has
+         * one hand on a keyboard and a lorry waiting.
+         *
+         * Now: Tab reaches the group once and lands on the chosen chip, the
+         * arrows move between chips and pick as they go, Home and End jump to
+         * the ends, and Tab leaves for the next field. That is what every
+         * radio group on the web does, and the reason it is worth matching is
+         * that the operator already knows it. */
+        <div role="radiogroup" aria-label={label} className="flex flex-wrap gap-1.5">
+          {options.map((o, i) => {
             const picked = o.id === value;
+            // One stop for the whole group: the chosen chip, or the first
+            // when nothing is chosen yet.
+            const stop = picked || (value === null && i === 0);
             return (
-              <button key={o.id} type="button" onClick={() => onChange(o.id)}
+              <button key={o.id} type="button" role="radio" aria-checked={picked}
+                tabIndex={stop ? 0 : -1}
+                data-choice={`${label}-${i}`}
+                onClick={() => onChange(o.id)}
+                onKeyDown={(e) => {
+                  const last = options.length - 1;
+                  let to: number | null = null;
+                  if (e.key === "ArrowRight" || e.key === "ArrowDown") to = i === last ? 0 : i + 1;
+                  else if (e.key === "ArrowLeft" || e.key === "ArrowUp") to = i === 0 ? last : i - 1;
+                  else if (e.key === "Home") to = 0;
+                  else if (e.key === "End") to = last;
+                  if (to === null) return;
+                  e.preventDefault();
+                  onChange(options[to].id);
+                  // Focus follows selection, as a radio group's does; without
+                  // it the next arrow press would move from where it started.
+                  const next = e.currentTarget.parentElement
+                    ?.querySelector<HTMLButtonElement>(`[data-choice="${label}-${to}"]`);
+                  next?.focus();
+                }}
                 className={`px-3 py-2 rounded-lg text-[12.5px] font-semibold border
                             transition-all duration-100 leading-none
+                            focus:outline-none focus-visible:ring-2
+                            focus-visible:ring-gold/60 focus-visible:border-gold
                             ${picked ? on
                               : "bg-bg-base text-txt-secondary border-border "
                                 + "hover:border-gold hover:text-navy"}`}>
