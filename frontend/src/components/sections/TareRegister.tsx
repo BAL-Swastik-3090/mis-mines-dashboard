@@ -25,6 +25,8 @@ interface Reading {
   fleet_code: string | null; registration_no: string | null;
   nickname: string | null;
   weight_kg: number; taken_at: string; taken_by: string | null;
+  /** The name behind taken_by, when the employee master has one. */
+  taken_by_name: string | null;
   capture_mode: string; manual_reason: string | null; note: string | null;
   bridge: string | null;
   previous_kg: number | null; change_kg: number | null;
@@ -274,8 +276,16 @@ export default function TareRegister({ onError }: { onError?: (m: string) => voi
                                 </span>
                               )}
                               {r.taken_by && (
-                                <span className="text-[10.5px] text-txt-light">
-                                  by {r.taken_by}
+                                /* The name first, because that is what a
+                                   reviewer recognises; the number kept after
+                                   it, because that is what every other
+                                   system and every export is keyed on. */
+                                <span className="text-[10.5px] text-txt-light"
+                                      title={`Employee ${r.taken_by}`}>
+                                  by {r.taken_by_name ?? r.taken_by}
+                                  {r.taken_by_name && (
+                                    <span className="text-txt-light/70"> · {r.taken_by}</span>
+                                  )}
                                 </span>
                               )}
                               {(r.manual_reason || r.note) && (

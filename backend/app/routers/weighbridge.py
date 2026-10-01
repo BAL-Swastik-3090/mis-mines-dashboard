@@ -37,6 +37,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.minehub_db import get_minehub_db
 from app.services import access as access_svc
+from app.services import people
 
 router = APIRouter(prefix="/api/weighbridge", tags=["Weighbridge"])
 
@@ -1534,7 +1535,18 @@ def tare_register(request: Request,
                 OR h.asset_id = CAST(:aid AS bigint))
          ORDER BY h.fleet_code, h.taken_at DESC
     """), {"d": days, "aid": asset_id}).mappings()]
+    # The name, not just the number somebody authenticates with.
+    #
+    # "by 3101" is technically complete and practically unreadable: nobody
+    # reviewing a tare recognises the person who took it, so nobody checks it,
+    # which is the whole point of keeping a register. names_for batches the
+    # lookup and caches it, and falls back to the id rather than failing the
+    # screen -- a reading attributed to a number is worse than one attributed
+    # to a name, and far better than one attributed to nobody.
+    takers = people.names_for(db, [r.get("taken_by") for r in rows])
+
     for r in rows:
+        r["taken_by_name"] = takers.get(str(r.get("taken_by") or ""))
         for k in ("weight_kg", "previous_kg", "change_kg", "payload_capacity_kg"):
             r[k] = _f(r.get(k))
         # Worth a second look rather than a verdict. A tare that moves by more
