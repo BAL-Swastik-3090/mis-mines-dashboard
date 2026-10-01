@@ -746,11 +746,54 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
   return (
     <Dialog
       open tone={manual ? "warning" : "info"} width={960} bare
-      title={`Weigh a load — ${vehicleName(vehicle)}`}
+      titleAlign="center"
+      ariaLabel={`Weigh a load — ${vehicleName(vehicle)}`}
+      /* The vehicle IS the subject of this dialog, so it is the heading
+         rather than a word inside one, and it carries a colour that means
+         something: whether a net can be worked out for it at all.
+             green  a tare taken recently — the net will be exact
+             amber  a tare, but an old one — the net is an estimate
+             red    no tare at all — there is no net to record
+         The same three states the row behind it already shows, said once
+         more at the moment it decides whether this weighment is worth
+         anything. A colour chosen for decoration would be worth nothing. */
+      title={(() => {
+        const tone = !vehicle.has_tare
+          ? { ring: "ring-rose-ring", bg: "bg-rose-bg", fg: "text-rose",
+              say: "no tare — no net can be worked out" }
+          : vehicle.tare_is_stale
+            ? { ring: "ring-amber-ring", bg: "bg-amber-bg", fg: "text-amber",
+                say: `tare is ${vehicle.tare_age_days ?? "?"} days old — net will be an estimate` }
+            : { ring: "ring-emerald-ring", bg: "bg-emerald-bg", fg: "text-emerald",
+                say: "tare is current — the net will be exact" };
+        return (
+          <span className="block">
+            <span className="block text-[10.5px] font-sans font-semibold uppercase
+                             tracking-[.16em] text-txt-light">
+              Weigh a load
+            </span>
+            <span className={`inline-flex items-baseline gap-2.5 mt-1.5 px-4 py-1.5
+                              rounded-xl ring-1 ${tone.ring} ${tone.bg}`}>
+              <span className={`text-[22px] leading-none ${tone.fg}`}>
+                {vehicle.fleet_code || vehicle.vehicle}
+              </span>
+              {vehicle.fleet_code && vehicle.vehicle
+                && vehicle.fleet_code !== vehicle.vehicle && (
+                <span className="font-sans font-semibold text-[12.5px] text-txt-muted">
+                  {vehicle.vehicle}
+                </span>
+              )}
+            </span>
+            <span className={`block mt-1.5 text-[11px] font-sans font-semibold ${tone.fg}`}>
+              {tone.say}
+            </span>
+          </span>
+        );
+      })()}
       confirmLabel={manual ? "Record typed weight" : "Capture and record trip"}
       onCancel={onClose} onConfirm={() => void save()} busy={blocked}
     >
-      <p className="text-[12px] text-txt-light -mt-1 mb-4">
+      <p className="text-[12px] text-txt-light text-center -mt-1 mb-4">
         Capture the weighment against this vehicle&apos;s gate pass.
       </p>
 
