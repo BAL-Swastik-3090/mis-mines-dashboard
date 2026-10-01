@@ -103,6 +103,13 @@ interface Driver {
   /** Why this driver sorted near the top — set when the search was given a
    *  vehicle and this man is attached to it. */
   why?: string | null;
+  /** More than one person on the register answers to this name. */
+  shares_name?: boolean;
+  /** The one detail that tells him from the others: his licence, else his
+   *  father's name, else his date of birth. */
+  tell_apart?: string | null;
+  father_name?: string | null;
+  date_of_birth?: string | null;
 }
 
 /** A haul weighed in loaded whose empty weight was never taken against it.
@@ -1072,10 +1079,21 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
                 {driver ? (
                   <div className="flex items-center gap-2 px-3 py-2 rounded-lg
                                   bg-indigo-bg ring-1 ring-indigo-ring">
-                    <span className="text-[12.5px] font-semibold text-navy flex-1 truncate">
-                      {driver.full_name}
-                      {driver.reference && (
-                        <span className="font-normal text-txt-muted"> · {driver.reference}</span>
+                    <span className="text-[12.5px] font-semibold text-navy flex-1 min-w-0">
+                      <span className="block truncate">
+                        {driver.full_name}
+                        {driver.reference && (
+                          <span className="font-normal text-txt-muted"> · {driver.reference}</span>
+                        )}
+                      </span>
+                      {/* Kept after choosing, not just while choosing: the
+                          operator should be able to check the man on the
+                          ticket is the man they meant. */}
+                      {driver.tell_apart && (
+                        <span className={`block truncate text-[10.5px] font-normal
+                                          ${driver.shares_name ? "text-amber" : "text-txt-muted"}`}>
+                          {driver.tell_apart}
+                        </span>
                       )}
                     </span>
                     {driver.licence_expired && <Chip tone="rose" dot={false}>licence expired</Chip>}
@@ -1164,8 +1182,22 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
                                 {d.why}
                               </span>
                             )}
+                            {/* Three men on this register are called Khageswar
+                                Mohanta. Offered as identical rows, the operator
+                                picks one and the load goes against a man who may
+                                not have been driving — so when a name is shared
+                                the detail that separates them is on the row, and
+                                marked, rather than left for somebody to go and
+                                look up. */}
+                            {d.shares_name && d.tell_apart && (
+                              <span className="block text-[10.5px] font-semibold text-amber">
+                                {d.tell_apart} — {`${d.full_name} is on the register more than once`}
+                              </span>
+                            )}
                             <span className="block text-[10.5px] text-txt-light">
-                              {[d.reference, d.employer].filter(Boolean).join(" · ")}
+                              {[d.reference, d.employer,
+                                !d.shares_name && d.tell_apart ? d.tell_apart : null]
+                                .filter(Boolean).join(" · ")}
                               {d.licence_expired ? " · licence expired"
                                 : !d.licence_recorded ? " · no licence on file" : ""}
                             </span>

@@ -871,6 +871,14 @@ def driver_search(request: Request,
         SELECT d.kind, d.operator_id, d.visiting_driver_id, d.full_name,
                d.reference, d.licence_no, d.licence_valid_upto, d.phone,
                d.employer, d.designation, d.visits,
+               d.father_name, d.date_of_birth,
+               -- How many people on the register answer to this name. Counted
+               -- across the WHOLE register, not the rows returned: a search
+               -- narrow enough to return one Khageswar Mohanta is exactly the
+               -- search where picking him without looking is a mistake.
+               (SELECT COUNT(*) FROM weighable_driver x
+                 WHERE x.full_name = d.full_name
+                   AND x.status NOT IN ('BLACKLISTED', 'INACTIVE')) AS same_name,
                a.rank AS vehicle_rank, a.trips AS vehicle_trips,
                CASE WHEN d.licence_valid_upto IS NULL THEN NULL
                     ELSE (d.licence_valid_upto - CURRENT_DATE) END AS licence_days_left
@@ -900,6 +908,23 @@ def driver_search(request: Request,
         r["licence_expired"] = left is not None and left < 0
         r["licence_expiring"] = left is not None and 0 <= left <= 30
         r["licence_recorded"] = r["licence_no"] is not None
+
+        # Two men of the same name need telling apart, and the screen should
+        # say which detail does it rather than printing everything on every
+        # row. The licence first, because it is the one a gate or a policeman
+        # would ask for; the father's name next, which is how it is done on
+        # paper here; the date of birth last, which almost everyone has.
+        r["shares_name"] = int(r.pop("same_name", 1) or 1) > 1
+        dob = r.pop("date_of_birth", None)
+        father = r.pop("father_name", None)
+        r["father_name"] = father
+        r["date_of_birth"] = dob.isoformat() if dob else None
+        r["tell_apart"] = (
+            f"licence {r['licence_no']}" if r["licence_no"] else
+            f"son of {father}" if father else
+            f"born {dob.strftime('%d-%m-%Y')}" if dob else
+            None)
+
         # Why this one is near the top, in the words the row will show. An
         # order the reader cannot account for is an order they distrust.
         rank, trips = r.pop("vehicle_rank", None), r.pop("vehicle_trips", None)
