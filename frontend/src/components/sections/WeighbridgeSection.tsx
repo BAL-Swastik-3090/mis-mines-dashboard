@@ -803,7 +803,7 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
        * the live weight to reach the confirm button — backwards for a screen
        * used with a truck on the deck. min-height keeps the panel from
        * jumping as the cascade opens and closes beneath the cursor. */}
-      <div className="grid gap-5 md:grid-cols-[286px_minmax(0,1fr)] items-start
+      <div className="grid gap-5 md:grid-cols-[330px_minmax(0,1fr)] items-start
                       md:min-h-[430px]">
 
         {/* ── left: the deck, and what is standing on it ────────────── */}
@@ -899,6 +899,119 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
             </div>
           </div>
 
+          {/* The driver, beside the load rather than below it.
+
+              It was the last field in the right-hand column, under six
+              choice groups, so the operator scrolled to reach it and the
+              suggestion list then opened further down still — on the one
+              screen where somebody is working against a lorry on the deck.
+              The left column meanwhile ended halfway and sat empty.
+
+              So it moves here, where there was room all along: the deck and
+              who is driving on one side, what the load is on the other, and
+              nothing to scroll past. */}
+          {!newDriver ? (
+            <div>
+              <Field label="Driver" required
+                     hint={`From the operator register${
+                       driverTotal ? ` — ${driverTotal} drivers` : ""}.`}>
+                {driver ? (
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg
+                                  bg-indigo-bg ring-1 ring-indigo-ring">
+                    <span className="text-[12.5px] font-semibold text-navy flex-1 truncate">
+                      {driver.full_name}
+                      {driver.reference && (
+                        <span className="font-normal text-txt-muted"> · {driver.reference}</span>
+                      )}
+                    </span>
+                    {driver.licence_expired && <Chip tone="rose" dot={false}>licence expired</Chip>}
+                    <button onClick={() => { setDriver(null); setDriverQ(""); }}
+                            className="text-txt-light hover:text-navy shrink-0">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    {/* One tap for the usual man, the box for anyone else. */}
+                    {suggested.length > 0 && !driverQ && (
+                      <div className="mb-2 flex flex-wrap gap-1.5">
+                        {suggested.map((d) => (
+                          <button key={d.operator_id}
+                                  onClick={() => setDriver(d)}
+                                  title={d.why}
+                                  className={`px-2.5 py-1 rounded-lg text-[11.5px] ring-1
+                                              transition-colors
+                                              ${d.licence_expired || !d.licence_recorded
+                                                ? "bg-amber-bg ring-amber-ring text-amber hover:bg-amber-bg/70"
+                                                : "bg-indigo-bg ring-indigo-ring text-navy hover:bg-indigo-bg/70"}`}>
+                            <span className="font-semibold">{d.full_name}</span>
+                            <span className="opacity-70"> · {d.why}</span>
+                            {d.licence_expired && " · licence expired"}
+                            {!d.licence_recorded && " · no licence on file"}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <div className="relative">
+                      <Search className="w-3.5 h-3.5 text-txt-light absolute left-3
+                                         top-1/2 -translate-y-1/2" />
+                      <input value={driverQ} onChange={(e) => setDriverQ(e.target.value)}
+                             placeholder="Name, operator number or licence"
+                             className={`${inputClass} pl-8`} />
+                    </div>
+                    {driverQ && hits.length > 0 && (
+                      <div className="mt-1 max-h-[232px] overflow-y-auto scrollbar-thin
+                                      rounded-lg border border-border-light">
+                        {hits.map((d) => (
+                          <button key={`${d.kind}-${d.operator_id ?? d.visiting_driver_id}`}
+                                  onClick={() => setDriver(d)}
+                                  className="w-full text-left px-3 py-1.5 hover:bg-bg-section
+                                             border-b border-border-light last:border-0">
+                            <span className="text-[12.5px] text-txt-primary">{d.full_name}</span>
+                            {d.reference && (
+                              <span className="text-[11px] text-txt-light"> · {d.reference}</span>
+                            )}
+                            {d.licence_expired && (
+                              <Chip tone="rose" dot={false} className="ml-1.5">expired</Chip>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+              </Field>
+              <button onClick={() => { setNewDriver(true); setDriver(null); setDName(driverQ); }}
+                      className="mt-1.5 text-[11.5px] text-txt-muted hover:text-navy
+                                 underline underline-offset-2">
+                Not on the register — a one-time driver
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-3 rounded-xl border border-amber-ring bg-amber-bg/40 p-3">
+              <p className="text-[11px] text-amber leading-relaxed">
+                Recorded once against the licence number and found by it every time after.
+                Not the operator register — no competency or medical behind it.
+              </p>
+              <Field label="Driver's name" required>
+                <input value={dName} onChange={(e) => setDName(e.target.value)} className={inputClass} />
+              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Licence number" required>
+                  <input value={dLicence} onChange={(e) => setDLicence(e.target.value.toUpperCase())}
+                         className={inputClass} />
+                </Field>
+                <Field label="Valid until">
+                  <DateField value={dValid} onChange={setDValid} />
+                </Field>
+              </div>
+              <button onClick={() => setNewDriver(false)}
+                      className="text-[11.5px] text-amber hover:text-navy underline underline-offset-2">
+                Back to searching the operator register
+              </button>
+            </div>
+          )}
+
           {usable.length > 1 && (
             <Choices label="Bridge"
                      options={usable.map((b) => ({ id: b.weighbridge_id, name: b.code }))}
@@ -974,108 +1087,6 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
                    options={[{ id: 1, name: "A" }, { id: 2, name: "B" }, { id: 3, name: "C" }]}
                    value={{ A: 1, B: 2, C: 3 }[shift] ?? 1}
                    onChange={(id) => setShift(["A", "B", "C"][id - 1])} />
-
-          {!newDriver ? (
-            <div>
-              <Field label="Driver" required
-                     hint={`From the operator register${
-                       driverTotal ? ` — ${driverTotal} drivers` : ""}.`}>
-                {driver ? (
-                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg
-                                  bg-indigo-bg ring-1 ring-indigo-ring">
-                    <span className="text-[12.5px] font-semibold text-navy flex-1 truncate">
-                      {driver.full_name}
-                      {driver.reference && (
-                        <span className="font-normal text-txt-muted"> · {driver.reference}</span>
-                      )}
-                    </span>
-                    {driver.licence_expired && <Chip tone="rose" dot={false}>licence expired</Chip>}
-                    <button onClick={() => { setDriver(null); setDriverQ(""); }}
-                            className="text-txt-light hover:text-navy shrink-0">
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                ) : (
-                  <>
-                    {/* One tap for the usual man, the box for anyone else. */}
-                    {suggested.length > 0 && !driverQ && (
-                      <div className="mb-2 flex flex-wrap gap-1.5">
-                        {suggested.map((d) => (
-                          <button key={d.operator_id}
-                                  onClick={() => setDriver(d)}
-                                  title={d.why}
-                                  className={`px-2.5 py-1 rounded-lg text-[11.5px] ring-1
-                                              transition-colors
-                                              ${d.licence_expired || !d.licence_recorded
-                                                ? "bg-amber-bg ring-amber-ring text-amber hover:bg-amber-bg/70"
-                                                : "bg-indigo-bg ring-indigo-ring text-navy hover:bg-indigo-bg/70"}`}>
-                            <span className="font-semibold">{d.full_name}</span>
-                            <span className="opacity-70"> · {d.why}</span>
-                            {d.licence_expired && " · licence expired"}
-                            {!d.licence_recorded && " · no licence on file"}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    <div className="relative">
-                      <Search className="w-3.5 h-3.5 text-txt-light absolute left-3
-                                         top-1/2 -translate-y-1/2" />
-                      <input value={driverQ} onChange={(e) => setDriverQ(e.target.value)}
-                             placeholder="Name, operator number or licence"
-                             className={`${inputClass} pl-8`} />
-                    </div>
-                    {driverQ && hits.length > 0 && (
-                      <div className="mt-1 max-h-[116px] overflow-y-auto scrollbar-thin
-                                      rounded-lg border border-border-light">
-                        {hits.map((d) => (
-                          <button key={`${d.kind}-${d.operator_id ?? d.visiting_driver_id}`}
-                                  onClick={() => setDriver(d)}
-                                  className="w-full text-left px-3 py-1.5 hover:bg-bg-section
-                                             border-b border-border-light last:border-0">
-                            <span className="text-[12.5px] text-txt-primary">{d.full_name}</span>
-                            {d.reference && (
-                              <span className="text-[11px] text-txt-light"> · {d.reference}</span>
-                            )}
-                            {d.licence_expired && (
-                              <Chip tone="rose" dot={false} className="ml-1.5">expired</Chip>
-                            )}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </>
-                )}
-              </Field>
-              <button onClick={() => { setNewDriver(true); setDriver(null); setDName(driverQ); }}
-                      className="mt-1.5 text-[11.5px] text-txt-muted hover:text-navy
-                                 underline underline-offset-2">
-                Not on the register — a one-time driver
-              </button>
-            </div>
-          ) : (
-            <div className="space-y-3 rounded-xl border border-amber-ring bg-amber-bg/40 p-3">
-              <p className="text-[11px] text-amber leading-relaxed">
-                Recorded once against the licence number and found by it every time after.
-                Not the operator register — no competency or medical behind it.
-              </p>
-              <Field label="Driver's name" required>
-                <input value={dName} onChange={(e) => setDName(e.target.value)} className={inputClass} />
-              </Field>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Licence number" required>
-                  <input value={dLicence} onChange={(e) => setDLicence(e.target.value.toUpperCase())}
-                         className={inputClass} />
-                </Field>
-                <Field label="Valid until">
-                  <DateField value={dValid} onChange={setDValid} />
-                </Field>
-              </div>
-              <button onClick={() => setNewDriver(false)}
-                      className="text-[11.5px] text-amber hover:text-navy underline underline-offset-2">
-                Back to searching the operator register
-              </button>
-            </div>
-          )}
 
           {/* The missing tare is stated once, on the vehicle it is about, with
               the thing to do about it attached.
