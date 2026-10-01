@@ -24,7 +24,8 @@
  */
 import SearchSelect from "@/components/minehub/SearchSelect";
 import { matchesSearch, rank } from "@/lib/search";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowRight, Clock, Gauge, Hand, Loader2, Plus, Radio, Scale, Search,
   SlidersHorizontal, Truck, Weight, Wifi, WifiOff, X,
@@ -660,6 +661,49 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
   const [driverOpen, setDriverOpen] = useState(false);
   const [lit, setLit] = useState(0);
   useEffect(() => { setLit(0); }, [driverQ]);
+
+  /* It has to leave the dialog to be seen.
+   *
+   * Inline, the dialog's own overflow-y-auto cut it off at the footer: six
+   * matches, two visible, and the rest behind the Cancel button. A list you
+   * have to scroll a dialog to read is the thing this was meant to stop.
+   *
+   * So it is a portal again -- but anchored UNDER the field, the width of the
+   * field, and stacked ABOVE the dialog rather than beside it or beneath it,
+   * which is what went wrong the first two times. It is allowed to run over
+   * the footer, because that is where the room is and the footer has two
+   * buttons nobody is reaching for mid-search.
+   */
+  const driverBox = useRef<HTMLDivElement | null>(null);
+  const [driverAt, setDriverAt] =
+    useState<{ top: number; left: number; width: number; height: number } | null>(null);
+
+  const placeDrivers = useCallback(() => {
+    const el = driverBox.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const GAP = 4, MARGIN = 10, WANT = 320;
+    // Measured against the WINDOW, not the dialog: the whole point is to be
+    // able to overflow the dialog.
+    const room = window.innerHeight - r.bottom - GAP - MARGIN;
+    setDriverAt({
+      top: r.bottom + GAP,
+      left: r.left,
+      width: Math.max(r.width, 260),
+      height: Math.max(150, Math.min(WANT, room)),
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!driverOpen) return;
+    placeDrivers();
+    window.addEventListener("scroll", placeDrivers, true);
+    window.addEventListener("resize", placeDrivers);
+    return () => {
+      window.removeEventListener("scroll", placeDrivers, true);
+      window.removeEventListener("resize", placeDrivers);
+    };
+  }, [driverOpen, hits.length, placeDrivers]);
   // Only when the operator register genuinely does not have him.
   const [newDriver, setNewDriver] = useState(false);
   const [dName, setDName] = useState("");
@@ -1022,7 +1066,7 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
                      * Inline is what was asked for and what works: it pushes
                      * what is below it down a little, which is the one
                      * behaviour everybody already understands. */}
-                    <div className="relative">
+                    <div className="relative" ref={driverBox}>
                       <Search className="w-3.5 h-3.5 text-txt-light absolute left-3
                                          top-1/2 -translate-y-1/2" />
                       <input value={driverQ} onChange={(e) => setDriverQ(e.target.value)}
@@ -1053,10 +1097,16 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
                     {/* Open on focus, before a letter is typed. The men who
                         drive THIS lorry are already at the top of it, so the
                         common case is one click and no typing at all. */}
-                    {driverOpen && hits.length > 0 && (
+                    {driverOpen && hits.length > 0 && driverAt && createPortal(
                       <div id="driver-hits" role="listbox"
-                           className="mt-1 max-h-[244px] overflow-y-auto scrollbar-thin
-                                      rounded-lg border border-border bg-white">
+                           /* 10002, because the dialog is z-[10001]. Below it,
+                              the dialog paints over the list and clips it. */
+                           style={{ position: "fixed", top: driverAt.top,
+                                    left: driverAt.left, width: driverAt.width,
+                                    maxHeight: driverAt.height, zIndex: 10002 }}
+                           onMouseDown={(e) => e.preventDefault()}
+                           className="overflow-y-auto scrollbar-thin rounded-lg
+                                      border border-border bg-white shadow-xl">
                         <div className="sticky top-0 bg-bg-soft px-3 py-1.5 text-[10px]
                                         font-semibold uppercase tracking-[.12em] text-txt-light
                                         border-b border-border-light">
@@ -1090,8 +1140,7 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
                             </span>
                           </button>
                         ))}
-                      </div>
-                    )}
+                      </div>, document.body)}
                   </>
                 )}
               </Field>
