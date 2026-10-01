@@ -710,7 +710,41 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
   const [dLicence, setDLicence] = useState("");
   const [dPhone, setDPhone] = useState("");
   const [dValid, setDValid] = useState("");
+  /* The shift the clock is already in.
+   *
+   * It defaulted to A whatever the hour, so every load weighed on B or C was
+   * filed under A unless somebody remembered — and nobody remembers at four
+   * in the morning. The times come from shift_calendar, which the roster and
+   * the production day already use; hard-coding them here would be a second
+   * definition for the day somebody moves a shift by an hour.
+   *
+   * Pre-selected, never forced: the operator can still choose, which matters
+   * on the loads that straddle a handover. */
   const [shift, setShift] = useState("A");
+  const [shiftNow, setShiftNow] =
+    useState<{ code: string; from: string; to: string } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const r = await api.get("/weighbridge/current-shift");
+        if (!alive || !r.data?.code) return;
+        setShiftNow(r.data);
+        setShift(r.data.code);
+      } catch { /* A is as good a guess as any if the calendar cannot be read */ }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const shiftField = (
+    <Choices label="Shift" required
+             hint={shiftNow && shiftNow.code === shift
+               ? `${shiftNow.from}–${shiftNow.to}, running now`
+               : shiftNow ? `now it is ${shiftNow.code}` : undefined}
+             options={[{ id: 1, name: "A" }, { id: 2, name: "B" }, { id: 3, name: "C" }]}
+             value={{ A: 1, B: 2, C: 3 }[shift] ?? 1}
+             onChange={(id) => setShift(["A", "B", "C"][id - 1])} />
+  );
   const [manual, setManual] = useState(!mayWeigh);
   const [typed, setTyped] = useState("");
   const [reason, setReason] = useState("");
@@ -972,11 +1006,16 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
                    onChange={(id) => pickCategory(categories.find((c) => c.material_category_id === id)!)} />
 
           {category && category.materials.length > 1 && (
-            <Choices label={`${category.name} type`} required tone="gold"
-                     options={category.materials.map((m) => ({ id: m.material_id, name: m.name }))}
-                     value={material ? Number(material) : null}
-                     onChange={(id) => setMaterial(String(id))} />
+            <div className="flex flex-wrap items-start gap-x-8 gap-y-3">
+              <Choices label={`${category.name} type`} required tone="gold"
+                       options={category.materials.map((m) => ({ id: m.material_id, name: m.name }))}
+                       value={material ? Number(material) : null}
+                       onChange={(id) => setMaterial(String(id))} />
+              {shiftField}
+            </div>
           )}
+          {/* No ore type beside it, so Shift stands on its own row. */}
+          {!(category && category.materials.length > 1) && shiftField}
           {category && category.materials.length === 1 && (
             <p className="text-[11.5px] text-txt-muted">
               {category.name} type:{" "}
@@ -1017,10 +1056,6 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
             </div>
           </div>
 
-          <Choices label="Shift" required
-                   options={[{ id: 1, name: "A" }, { id: 2, name: "B" }, { id: 3, name: "C" }]}
-                   value={{ A: 1, B: 2, C: 3 }[shift] ?? 1}
-                   onChange={(id) => setShift(["A", "B", "C"][id - 1])} />
 
           {/* The driver, under Shift, where the form's order already put
               him: what is being moved, where from, where to, which shift,

@@ -909,6 +909,42 @@ def driver_search(request: Request,
     return rows
 
 
+@router.get("/current-shift")
+def current_shift(request: Request, db: Session = Depends(get_db),
+                  pg: Session = Depends(get_minehub_db)) -> dict:
+    """Which shift is running right now, from the shift calendar.
+
+    READ, NOT ASSUMED. The mine's shift times are a row in shift_calendar --
+    A 06:00-14:00, B 14:00-22:00, C 22:00-06:00 as it stands -- and the roster,
+    the production day and every report already work from them. Hard-coding
+    the same hours into the weighbridge would be a second definition, and the
+    day somebody moves a shift by an hour the two would disagree with nobody
+    told.
+
+    C crosses midnight, so it is the one that cannot be tested with a plain
+    BETWEEN: 23:00 and 03:00 are both inside 22:00-06:00.
+    """
+    _require(db, request, VIEW)
+    row = pg.execute(text("""
+        SELECT code, name, start_time, end_time, crosses_midnight
+          FROM shift_calendar
+         WHERE code <> 'GENERAL'
+           AND (valid_to IS NULL OR valid_to >= CURRENT_DATE)
+           AND valid_from <= CURRENT_DATE
+           AND CASE WHEN crosses_midnight
+                    THEN LOCALTIME >= start_time OR LOCALTIME < end_time
+                    ELSE LOCALTIME >= start_time AND LOCALTIME < end_time
+               END
+         ORDER BY start_time
+         LIMIT 1
+    """)).mappings().first()
+    if not row:
+        return {"code": None, "name": None, "from": None, "to": None}
+    return {"code": row["code"], "name": row["name"],
+            "from": row["start_time"].strftime("%H:%M"),
+            "to": row["end_time"].strftime("%H:%M")}
+
+
 @router.get("/drivers/summary")
 def driver_summary(request: Request, db: Session = Depends(get_db),
                    pg: Session = Depends(get_minehub_db)) -> dict:
