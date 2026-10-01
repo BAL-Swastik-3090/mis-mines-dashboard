@@ -39,6 +39,11 @@ from sqlalchemy import text
 
 TABLE = "mines_stock_entry"
 
+# Entered on the same form, against the same date. SKD = Sukinda, BLS =
+# Balasore. Qty is never stored — it is the sum, computed here as on the form.
+DESPATCH_TABLE = "mines_proposed_despatch"
+DESPATCH_TO = [("SKD", "Sukinda"), ("BLS", "Balasore")]
+
 # The four positions at the mine. Their sum is Total Stock, and the same rows
 # read per grade give the grade split — two views of one set of facts, so they
 # cannot disagree.
@@ -96,6 +101,37 @@ def _f(v) -> float:
         return float(v or 0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _proposed_despatch(db: Session, day: date | None) -> dict:
+    """What the mine proposed to send on the snapshot day, split by plant.
+
+    Separate from the stock figures on purpose: this is an intention for the
+    day, not tonnage standing somewhere, and it is stored in its own table so it
+    can never be summed into the stock position by accident.
+    """
+    empty = {"total": 0.0, "by_destination": {k: 0.0 for k, _ in DESPATCH_TO},
+             "labels": {k: lbl for k, lbl in DESPATCH_TO}, "has_data": False}
+    if day is None:
+        return empty
+    rows = db.execute(text(f"""
+        SELECT Destination, SUM(Qty) AS qty
+        FROM   {DESPATCH_TABLE}
+        WHERE  Despatch_Date = :d
+        GROUP  BY Destination
+    """), {"d": day}).fetchall()
+    if not rows:
+        return empty
+    by = {k: 0.0 for k, _ in DESPATCH_TO}
+    for r in rows:
+        if r.Destination in by:
+            by[r.Destination] = round(_f(r.qty), 2)
+    return {
+        "total": round(sum(by.values()), 2),
+        "by_destination": by,
+        "labels": {k: lbl for k, lbl in DESPATCH_TO},
+        "has_data": True,
+    }
 
 
 def _clearance_head() -> list[dict]:
@@ -182,6 +218,7 @@ def get_stock_position(db: Session, as_on: date | None = None) -> dict:
                           "lg_for_cob": 0.0, "total": 0.0},
             "clearance": {"grades": _clearance_head(), "rows": []},
             "location_grid": {"columns": _location_head(), "rows": []},
+            "proposed_despatch": _proposed_despatch(db, None),
         }
 
     # ── everything at the mine, per grade and per status ─────────────────────
@@ -269,4 +306,5 @@ def get_stock_position(db: Session, as_on: date | None = None) -> dict:
             "columns": _location_head(),
             "rows":    _location_table(cell),
         },
+        "proposed_despatch": _proposed_despatch(db, snap),
     }

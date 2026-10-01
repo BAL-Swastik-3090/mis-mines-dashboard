@@ -34,6 +34,11 @@ router = APIRouter(prefix="/api/stock-entry", tags=["Mines Stock Entry"])
 
 GRADES = ("HG", "MG", "COB", "LG")
 
+# Proposed despatch for the day, entered on the same form and saved with it.
+# SKD = Sukinda, BLS = Balasore. Qty is not stored: the form shows SKD + BLS,
+# and a stored total is a thing that can disagree with its parts.
+DESPATCH_DESTINATIONS = ("SKD", "BLS")
+
 # Bucket -> whether it sits at the mine. Must match the CHECK constraint in
 # scripts/sql/005_mines_stock_entry.sql; this is its only counterpart in code.
 BUCKETS: dict[str, bool] = {
@@ -76,11 +81,18 @@ def get_day(
          WHERE Stock_Date = :d
     """), {"d": on_date}).mappings().all()
 
+    proposed = db.execute(text("""
+        SELECT Destination, Qty
+          FROM mines_proposed_despatch
+         WHERE Despatch_Date = :d
+    """), {"d": on_date}).mappings().all()
+
     # Keyed "GRADE|BUCKET" so the form reads one cell without searching.
     return {
         "on_date": on_date,
         "has_data": len(rows) > 0,
         "cells": {f"{r['Grade']}|{r['Bucket']}": float(r["Qty"]) for r in rows},
+        "proposed_despatch": {r["Destination"]: float(r["Qty"]) for r in proposed},
         "entered_by": rows[0]["Entry_Id"] if rows else None,
         "entered_at": (rows[0]["Entry_Date"].isoformat()
                        if rows and rows[0]["Entry_Date"] else None),
@@ -93,6 +105,8 @@ def put_day(
     on_date: date = Body(..., embed=True),
     # [{grade, bucket, qty}] — the whole day.
     cells: list[dict] = Body(..., embed=True),
+    # {"SKD": 120, "BLS": 300} — the day's proposed despatch, optional.
+    proposed_despatch: dict | None = Body(None, embed=True),
     db: Session = Depends(get_db),
 ) -> dict:
     if STOCK_PERMISSION:
@@ -125,6 +139,20 @@ def put_day(
             raise HTTPException(400, f"{grade} / {bucket} cannot be negative.")
         clean.append((grade, bucket, qty))
 
+    # Same rule as the cells: validate all of it before writing any of it.
+    proposed: list[tuple[str, float]] = []
+    for dest, raw in (proposed_despatch or {}).items():
+        d = str(dest).strip().upper()
+        if d not in DESPATCH_DESTINATIONS:
+            raise HTTPException(400, f"'{dest}' is not a despatch destination.")
+        try:
+            qty = float(raw if raw not in (None, "") else 0)
+        except (TypeError, ValueError):
+            raise HTTPException(400, f"'{raw}' is not a number for {d}.")
+        if qty < 0:
+            raise HTTPException(400, f"Proposed despatch to {d} cannot be negative.")
+        proposed.append((d, qty))
+
     if not clean:
         raise HTTPException(400, "Nothing to submit.")
 
@@ -135,9 +163,22 @@ def put_day(
         INSERT INTO mines_stock_entry (Stock_Date, Grade, Bucket, Qty, Entry_Id)
         VALUES (:d, :g, :b, :q, :who)
     """), [{"d": on_date, "g": g, "b": b, "q": q, "who": who} for g, b, q in clean])
+
+    # Replaced wholesale alongside the stock, in the same transaction, so the
+    # day is never half one submission and half the one before it.
+    db.execute(text("DELETE FROM mines_proposed_despatch WHERE Despatch_Date = :d"),
+               {"d": on_date})
+    if proposed:
+        db.execute(text("""
+            INSERT INTO mines_proposed_despatch
+                   (Despatch_Date, Destination, Qty, Entry_Id)
+            VALUES (:d, :dest, :q, :who)
+        """), [{"d": on_date, "dest": dest, "q": q, "who": who}
+               for dest, q in proposed])
     db.commit()
 
-    return {"on_date": on_date, "saved": len(clean), "entered_by": who}
+    return {"on_date": on_date, "saved": len(clean),
+            "proposed_saved": len(proposed), "entered_by": who}
 
 
 @router.delete("", summary="Remove a day's stock position entirely")
@@ -152,5 +193,11 @@ def delete_day(
             raise HTTPException(403, "You may not enter stock figures.")
     r = db.execute(text("DELETE FROM mines_stock_entry WHERE Stock_Date = :d"),
                    {"d": on_date})
+    # The day's proposed despatch goes with it. It is entered on the same form
+    # and against the same date; leaving it behind would strand a proposal with
+    # no stock position it was judged against.
+    p = db.execute(text("DELETE FROM mines_proposed_despatch WHERE Despatch_Date = :d"),
+                   {"d": on_date})
     db.commit()
-    return {"on_date": on_date, "removed": r.rowcount or 0}
+    return {"on_date": on_date, "removed": r.rowcount or 0,
+            "proposed_removed": p.rowcount or 0}

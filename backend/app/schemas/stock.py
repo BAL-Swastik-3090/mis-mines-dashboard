@@ -60,6 +60,18 @@ class StockLocationTable(BaseModel):
     rows:    list[StockLocationRow] = []
 
 
+class ProposedDespatch(BaseModel):
+    """What the mine proposed to send on the snapshot day, split by plant.
+
+    Not a stock figure — an intention for the day, kept apart so it can never be
+    summed into the position. `total` is SKD + BLS, computed, never stored.
+    """
+    total:          float = 0.0
+    by_destination: dict[str, float] = {}
+    labels:         dict[str, str] = {}
+    has_data:       bool = False
+
+
 class StockPosition(BaseModel):
     # Entry is not daily, so the snapshot shown may predate the requested date.
     snapshot_date:  Optional[date] = None
@@ -82,3 +94,4 @@ class StockPosition(BaseModel):
     # renders headers with nothing under them.
     clearance:     StockClearanceTable = StockClearanceTable()
     location_grid: StockLocationTable  = StockLocationTable()
+    proposed_despatch: ProposedDespatch = ProposedDespatch()

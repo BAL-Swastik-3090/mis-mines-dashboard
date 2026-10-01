@@ -29,7 +29,7 @@ import { useQuery } from "@tanstack/react-query";
 import { X, Save, Loader2, AlertTriangle, Boxes } from "lucide-react";
 import api from "@/lib/api";
 import { formatIndian } from "@/lib/utils";
-import { dayLabel, todayISO, targetDayISO } from "@/lib/prevDay";
+import { dayLabel, todayISO } from "@/lib/prevDay";
 
 const GRADES = [
   { key: "HG", label: "High Grade" },
@@ -38,12 +38,34 @@ const GRADES = [
   { key: "LG", label: "Low Grade" },
 ] as const;
 
+/**
+ * The location table lists Low Grade before COB, the clearance table the other
+ * way round. That is how the mine's own sheet has it, and the read-only section
+ * already follows the same two orders — so the form a figure is typed into and
+ * the panel it is read back from agree.
+ *
+ * Order only. Both are the same four grades, so nothing can be entered into one
+ * that has nowhere to go in the other.
+ */
+const LOCATION_GRADES = [
+  GRADES[0],  // High Grade
+  GRADES[1],  // Medium Grade
+  GRADES[3],  // Low Grade
+  GRADES[2],  // COB / COB Mix Grade
+] as const;
+
 /** The four positions at the mine, in the order the IMOS form lists them. */
 const MINE_BUCKETS = [
   { key: "MINE_PERMISSION_IN_HAND", label: "Permission in Hand" },
   { key: "MINE_AWAITING_PERMISSION", label: "Awaiting Permission" },
   { key: "MINE_AWAITING_VERIFICATION", label: "Awaiting Verification" },
   { key: "MINE_AWAITING_STACKING", label: "Awaiting Stacking" },
+] as const;
+
+/** Where a proposed despatch can go. Qty is SKD + BLS and is never entered. */
+const DESPATCH_TO = [
+  { key: "SKD", label: "SKD" },
+  { key: "BLS", label: "BLS" },
 ] as const;
 
 const PLANT_BUCKETS = [
@@ -141,23 +163,29 @@ export default function MinesStockEntryModal({
   onClose: () => void;
   onSaved: (day: string) => void | Promise<void>;
 }) {
-  // Stock is filed for a day that has finished, so yesterday is the useful
-  // default; any past date can be picked.
-  const [day, setDay] = useState(targetDayISO);
+  // TODAY, not yesterday. The stock position is the mine's standing at the
+  // moment it is filed, and the proposed despatch above it is for the day
+  // ahead — both belong to today. Defaulting to yesterday filed each day's
+  // figures one day back. Any past date can still be picked.
+  const [day, setDay] = useState(todayISO);
   const [cells, setCells] = useState<Cells>({});
+  /** The day's proposed despatch, keyed by destination. Qty is never held —
+   *  it is SKD + BLS, worked out where it is shown. */
+  const [proposed, setProposed] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const maxDay = todayISO();
 
   useEffect(() => {
     if (!open) return;
-    setDay(targetDayISO());
+    setDay(todayISO());
     setError(null);
   }, [open]);
 
   const existing = useQuery<{
     has_data: boolean;
     cells: Record<string, number>;
+    proposed_despatch?: Record<string, number>;
     entered_by: string | null;
     entered_at: string | null;
   }>({
@@ -177,6 +205,11 @@ export default function MinesStockEntryModal({
     const next: Cells = {};
     for (const [k, v] of Object.entries(existing.data.cells)) next[k] = String(v);
     setCells(next);
+    const pd: Record<string, string> = {};
+    for (const [k, v] of Object.entries(existing.data.proposed_despatch ?? {})) {
+      pd[k] = String(v);
+    }
+    setProposed(pd);
   }, [open, existing.data, day]);
 
   const get = (g: string, b: string) => cells[cellKey(g, b)] ?? "";
@@ -230,11 +263,11 @@ export default function MinesStockEntryModal({
   const pastePlant = useCallback((r: number, c: number, grid: string[][]) =>
     pasteInto(grid, r, c,
       (rr, cc) => {
-        const g = GRADES[rr], b = PLANT_BUCKETS[cc];
+        const g = LOCATION_GRADES[rr], b = PLANT_BUCKETS[cc];
         if (b.lgOnly && g.key !== "LG") return null;
         return { grade: g.key, bucket: b.key };
       },
-      GRADES.length, PLANT_BUCKETS.length),
+      LOCATION_GRADES.length, PLANT_BUCKETS.length),
     [pasteInto]);
 
   // ── everything derived ───────────────────────────────────────────────────
@@ -281,7 +314,12 @@ export default function MinesStockEntryModal({
           payload.push({ grade: g.key, bucket: b.key, qty: num(get(g.key, b.key)) });
         }
       }
-      await api.put("/stock-entry", { on_date: day, cells: payload });
+      await api.put("/stock-entry", {
+        on_date: day,
+        cells: payload,
+        proposed_despatch: Object.fromEntries(
+          DESPATCH_TO.map((d) => [d.key, num(proposed[d.key] ?? "")])),
+      });
       await onSaved(day);
       onClose();
     } catch (e) {
@@ -366,6 +404,71 @@ export default function MinesStockEntryModal({
         </div>
 
         <div className="px-4 py-3 space-y-5">
+          {/* ── proposed despatch ───────────────────────────────────────────
+              What the mine intends to send today, split by plant. It sits above
+              the stock because it is the decision the stock is read in order to
+              make, and it is entered against the same date so the proposal and
+              the position it was judged against stay together.
+
+              Qty is SKD + BLS and is never typed or stored — the same rule as
+              every other total on this form, which is why none of them can
+              disagree with their parts. */}
+          <div>
+            <div className="text-[11px] font-extrabold tracking-[.14em] text-navy uppercase mb-1.5">
+              Proposed Today&apos;s Despatch
+            </div>
+            <table className="w-full border-collapse">
+              <thead>
+                <tr className="bg-bg-section">
+                  <th className={`${th} text-left`}>Destination</th>
+                  {DESPATCH_TO.map((d) => (
+                    <th key={d.key} className={`${th} text-right`}>{d.label}</th>
+                  ))}
+                  <th className={`${th} text-right`} title="SKD + BLS — worked out, not entered">
+                    Qty (MT)
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="border-b border-border-light/70">
+                  <td className="py-1.5 text-[12px] font-semibold text-txt-primary">
+                    Proposed despatch
+                  </td>
+                  {DESPATCH_TO.map((d) => (
+                    <td key={d.key} className="py-1.5 pl-2 w-[110px]">
+                      <Cell
+                        value={proposed[d.key] ?? ""}
+                        invalid={bad(proposed[d.key] ?? "")}
+                        onChange={(v) =>
+                          setProposed((prev) => ({ ...prev, [d.key]: v }))}
+                        onPasteGrid={(grid) => {
+                          // One row, two boxes — a pasted block fills across
+                          // from wherever it landed and the rest is ignored.
+                          const line = grid[0] ?? [];
+                          const from = DESPATCH_TO.findIndex((x) => x.key === d.key);
+                          setProposed((prev) => {
+                            const next = { ...prev };
+                            line.forEach((raw, i) => {
+                              const t = DESPATCH_TO[from + i];
+                              if (t) next[t.key] = raw.trim();
+                            });
+                            return next;
+                          });
+                        }}
+                      />
+                    </td>
+                  ))}
+                  <td className="py-1.5 pl-2 text-right w-[110px]">
+                    <Derived
+                      v={DESPATCH_TO.reduce((t, d) => t + num(proposed[d.key] ?? ""), 0)}
+                      strong
+                    />
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
           {/* ── at the mine ─────────────────────────────────────────────── */}
           <div>
             <div className="text-[11px] font-extrabold tracking-[.14em] text-navy uppercase mb-1.5">
@@ -434,7 +537,7 @@ export default function MinesStockEntryModal({
                 </tr>
               </thead>
               <tbody>
-                {GRADES.map((g, ri) => (
+                {LOCATION_GRADES.map((g, ri) => (
                   <tr key={g.key} className="border-b border-border-light/70">
                     <td className="py-1.5 text-[12px] font-semibold text-txt-primary">{g.label}</td>
                     <td className="py-1.5 pl-2 text-right w-[110px]">
