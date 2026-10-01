@@ -24,8 +24,7 @@
  */
 import SearchSelect from "@/components/minehub/SearchSelect";
 import { matchesSearch, rank } from "@/lib/search";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowRight, Clock, Gauge, Hand, Loader2, Plus, Radio, Scale, Search,
   SlidersHorizontal, Truck, Weight, Wifi, WifiOff, X,
@@ -104,9 +103,6 @@ interface Driver {
    *  vehicle and this man is attached to it. */
   why?: string | null;
 }
-
-/** A driver the screen offers before being asked, and why it is offering him. */
-interface Suggested extends Driver { why: string; rank: number; trips: number }
 
 /** A haul weighed in loaded whose empty weight was never taken against it.
  *  Its net is currently the standing tare subtracted from the gross, which is
@@ -572,8 +568,18 @@ function VehiclePicker({ vehicles, onPick, onTare, disabled }: {
           <div key={v.gate_pass_id} className="px-4 py-3 flex items-center gap-3 flex-wrap">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-[13.5px] font-semibold text-txt-primary">{v.vehicle}</span>
-                {v.fleet_code && <Chip tone="slate" dot={false}>{v.fleet_code}</Chip>}
+                {/* The fleet code first, the registration after it in light.
+                    MAN-14 is what the mine calls this lorry — on the shift
+                    board, over the radio, in the plan — and OD 04 B 8778 is
+                    what the RTO calls it. The dialog that opens from this row
+                    already led with the fleet code; the row did not, so the
+                    same lorry was named two different ways one click apart. */}
+                <span className="text-[13.5px] font-semibold text-txt-primary">
+                  {v.fleet_code || v.vehicle}
+                </span>
+                {v.fleet_code && v.vehicle && v.fleet_code !== v.vehicle && (
+                  <span className="text-[12px] text-txt-light">{v.vehicle}</span>
+                )}
                 {v.vehicle_type && <Chip tone="indigo" dot={false}>{v.vehicle_type}</Chip>}
                 {!v.has_tare
                   ? <Chip tone="rose">no tare</Chip>
@@ -646,67 +652,13 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
   const [driverQ, setDriverQ] = useState("");
   const [driver, setDriver] = useState<Driver | null>(null);
   const [hits, setHits] = useState<Driver[]>([]);
-  /* Who normally drives this one, from the shift board and from who has
-   * actually driven it. Offered, never filled in: a weighbridge ticket names
-   * the man answerable for a load, and a name that typed itself is a name
-   * nobody checked. */
-  const [suggested, setSuggested] = useState<Suggested[]>([]);
   const [driverTotal, setDriverTotal] = useState<number | null>(null);
-  /* The list is a portal, so it needs the input's rectangle to sit against,
-   * and a highlighted row of its own because the focus never leaves the
-   * input -- a list you have to Tab into is a list you cannot type through. */
-  const driverBox = useRef<HTMLDivElement | null>(null);
-  const [driverAt, setDriverAt] =
-    useState<{ top: number; left: number; width: number; height: number } | null>(null);
+
+  /* The list is open when the box has focus, and closes a moment after it
+   * loses it -- a moment, because a blur fires before the click on a row is
+   * delivered and an instant close loses the choice. */
+  const [driverOpen, setDriverOpen] = useState(false);
   const [lit, setLit] = useState(0);
-
-  /* ALWAYS below the field. Never over the form above it.
-   *
-   * It flipped upward when the window had little room underneath, and what
-   * it covered was Category, Source and Destination — the choices the
-   * operator had just made. Hiding answered questions behind a list of names
-   * is worse than a short list: a figure nobody can see is a figure nobody
-   * re-checks, and this screen is worked at speed with a lorry on the deck.
-   *
-   * So it stays below and takes whatever height is left, and when that is
-   * not enough the FIELD moves instead — scrolled up inside the dialog until
-   * there is room. Moving the thing you are typing into is expected; moving
-   * what you already filled in is not.
-   */
-  const placeDrivers = useCallback(() => {
-    const el = driverBox.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const GAP = 4, MARGIN = 10, WANT = 300;
-    const room = window.innerHeight - r.bottom - GAP - MARGIN;
-    if (room < 170) {
-      // Not enough underneath: bring the field up and measure again next frame.
-      el.scrollIntoView({ block: "center", behavior: "smooth" });
-      requestAnimationFrame(() => {
-        const r2 = el.getBoundingClientRect();
-        const room2 = window.innerHeight - r2.bottom - GAP - MARGIN;
-        setDriverAt({ top: r2.bottom + GAP, left: r2.left,
-                      width: Math.max(r2.width, 260),
-                      height: Math.max(140, Math.min(WANT, room2)) });
-      });
-      return;
-    }
-    setDriverAt({ top: r.bottom + GAP, left: r.left,
-                  width: Math.max(r.width, 260),
-                  height: Math.min(WANT, room) });
-  }, []);
-
-  useEffect(() => {
-    if (!driverQ || driver) return;
-    placeDrivers();
-    window.addEventListener("scroll", placeDrivers, true);
-    window.addEventListener("resize", placeDrivers);
-    return () => {
-      window.removeEventListener("scroll", placeDrivers, true);
-      window.removeEventListener("resize", placeDrivers);
-    };
-  }, [driverQ, driver, hits.length, placeDrivers]);
-
   useEffect(() => { setLit(0); }, [driverQ]);
   // Only when the operator register genuinely does not have him.
   const [newDriver, setNewDriver] = useState(false);
@@ -738,14 +690,8 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
     let alive = true;
     void (async () => {
       try {
-        const [ctx, sum] = await Promise.all([
-          vehicle.asset_id
-            ? api.get(`/weighbridge/vehicles/${vehicle.asset_id}/context`)
-            : Promise.resolve({ data: { suggested_drivers: [] } }),
-          api.get("/weighbridge/drivers/summary"),
-        ]);
+        const sum = await api.get("/weighbridge/drivers/summary");
         if (!alive) return;
-        setSuggested(ctx.data?.suggested_drivers ?? []);
         setDriverTotal(sum.data?.total ?? null);
       } catch { /* suggestions are a convenience, never a requirement */ }
     })();
@@ -1065,96 +1011,87 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
                   </div>
                 ) : (
                   <>
-                    {/* One tap for the usual man, the box for anyone else. */}
-                    {suggested.length > 0 && !driverQ && (
-                      <div className="mb-2 flex flex-wrap gap-1.5">
-                        {suggested.map((d) => (
-                          <button key={d.operator_id}
-                                  onClick={() => setDriver(d)}
-                                  title={d.why}
-                                  className={`px-2.5 py-1 rounded-lg text-[11.5px] ring-1
-                                              transition-colors
-                                              ${d.licence_expired || !d.licence_recorded
-                                                ? "bg-amber-bg ring-amber-ring text-amber hover:bg-amber-bg/70"
-                                                : "bg-indigo-bg ring-indigo-ring text-navy hover:bg-indigo-bg/70"}`}>
-                            <span className="font-semibold">{d.full_name}</span>
-                            <span className="opacity-70"> · {d.why}</span>
-                            {d.licence_expired && " · licence expired"}
-                            {!d.licence_recorded && " · no licence on file"}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    <div className="relative" ref={driverBox}>
+                    {/* Back in the form, under the field.
+                     *
+                     * It was a portal so that opening it would not move the
+                     * form. It did not move the form -- it covered it, or sat
+                     * beneath the dialog, or ran off the edge, depending on
+                     * where the field happened to be. Three placement bugs for
+                     * a problem nobody had complained about.
+                     *
+                     * Inline is what was asked for and what works: it pushes
+                     * what is below it down a little, which is the one
+                     * behaviour everybody already understands. */}
+                    <div className="relative">
                       <Search className="w-3.5 h-3.5 text-txt-light absolute left-3
                                          top-1/2 -translate-y-1/2" />
                       <input value={driverQ} onChange={(e) => setDriverQ(e.target.value)}
                              placeholder="Name, operator number or licence"
-                             role="combobox" aria-expanded={hits.length > 0 && !!driverQ}
-                             aria-controls="driver-hits"
-                             autoComplete="off"
+                             role="combobox" aria-expanded={driverOpen && hits.length > 0}
+                             aria-controls="driver-hits" autoComplete="off"
+                             onFocus={() => setDriverOpen(true)}
+                             onBlur={() => window.setTimeout(() => setDriverOpen(false), 150)}
                              onKeyDown={(e) => {
-                               if (!hits.length) return;
+                               if (e.key === "Escape") {
+                                 e.preventDefault(); setDriverOpen(false); return;
+                               }
+                               if (!driverOpen || !hits.length) return;
                                if (e.key === "ArrowDown") {
                                  e.preventDefault(); setLit((i) => Math.min(i + 1, hits.length - 1));
                                } else if (e.key === "ArrowUp") {
                                  e.preventDefault(); setLit((i) => Math.max(i - 1, 0));
                                } else if (e.key === "Enter") {
                                  e.preventDefault();
-                                 if (hits[lit]) { setDriver(hits[lit]); setDriverQ(""); }
-                               } else if (e.key === "Escape") {
-                                 e.preventDefault(); setDriverQ("");
+                                 if (hits[lit]) {
+                                   setDriver(hits[lit]); setDriverQ(""); setDriverOpen(false);
+                                 }
                                }
                              }}
                              className={`${inputClass} pl-8`} />
                     </div>
-                    {/* Out of the form entirely — see placeDrivers. Nothing
-                        below this field moves while somebody is typing. */}
-                    {driverQ && hits.length > 0 && driverAt && createPortal(
+
+                    {/* Open on focus, before a letter is typed. The men who
+                        drive THIS lorry are already at the top of it, so the
+                        common case is one click and no typing at all. */}
+                    {driverOpen && hits.length > 0 && (
                       <div id="driver-hits" role="listbox"
-                           /* Above the dialog, which is z-[10001]. Below it,
-                              the panel paints over the list and clips it. */
-                           style={{ position: "fixed", top: driverAt.top,
-                                    left: driverAt.left, width: driverAt.width,
-                                    maxHeight: driverAt.height, zIndex: 10002 }}
-                           className="overflow-y-auto scrollbar-thin rounded-xl bg-white
-                                      border border-border shadow-xl py-1">
-                        <div className="px-3 py-1.5 text-[10px] font-semibold uppercase
-                                        tracking-[.12em] text-txt-light border-b border-border-light">
-                          {hits.length} match{hits.length === 1 ? "" : "es"} · ↑↓ then Enter
+                           className="mt-1 max-h-[244px] overflow-y-auto scrollbar-thin
+                                      rounded-lg border border-border bg-white">
+                        <div className="sticky top-0 bg-bg-soft px-3 py-1.5 text-[10px]
+                                        font-semibold uppercase tracking-[.12em] text-txt-light
+                                        border-b border-border-light">
+                          {driverQ
+                            ? `${hits.length} match${hits.length === 1 ? "" : "es"}`
+                            : "who usually drives this one"} · up/down then Enter
                         </div>
                         {hits.map((d, i) => (
                           <button key={`${d.kind}-${d.operator_id ?? d.visiting_driver_id}`}
                                   role="option" aria-selected={i === lit}
                                   onMouseEnter={() => setLit(i)}
-                                  onClick={() => { setDriver(d); setDriverQ(""); }}
-                                  className={`w-full text-left px-3 py-2 border-b
+                                  onClick={() => {
+                                    setDriver(d); setDriverQ(""); setDriverOpen(false);
+                                  }}
+                                  className={`w-full text-left px-3 py-1.5 border-b
                                               border-border-light last:border-0
                                               ${i === lit ? "bg-gold/10" : "hover:bg-bg-section"}`}>
                             <span className={`text-[12.5px] ${i === lit
                               ? "font-semibold text-navy" : "text-txt-primary"}`}>
                               {d.full_name}
                             </span>
-                            {d.reference && (
-                              <span className="block text-[10.5px] text-txt-light">
-                                {d.reference}{d.employer ? ` · ${d.employer}` : ""}
-                              </span>
-                            )}
-                            {/* An order the reader cannot account for is an
-                                order they stop trusting. */}
                             {d.why && (
-                              <span className="block text-[10.5px] font-semibold text-indigo">
+                              <span className="ml-1.5 text-[10.5px] font-semibold text-indigo">
                                 {d.why}
                               </span>
                             )}
-                            {d.licence_expired
-                              ? <Chip tone="rose" dot={false} className="mt-0.5">licence expired</Chip>
-                              : !d.licence_recorded
-                                ? <Chip tone="amber" dot={false} className="mt-0.5">no licence on file</Chip>
-                                : null}
+                            <span className="block text-[10.5px] text-txt-light">
+                              {[d.reference, d.employer].filter(Boolean).join(" · ")}
+                              {d.licence_expired ? " · licence expired"
+                                : !d.licence_recorded ? " · no licence on file" : ""}
+                            </span>
                           </button>
                         ))}
-                      </div>, document.body)}
+                      </div>
+                    )}
                   </>
                 )}
               </Field>
