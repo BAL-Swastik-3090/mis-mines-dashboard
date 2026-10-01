@@ -871,7 +871,7 @@ def driver_search(request: Request,
         SELECT d.kind, d.operator_id, d.visiting_driver_id, d.full_name,
                d.reference, d.licence_no, d.licence_valid_upto, d.phone,
                d.employer, d.designation, d.visits,
-               d.father_name, d.date_of_birth,
+               d.father_name, d.date_of_birth, d.emp_id, d.licence_source,
                -- How many people on the register answer to this name. Counted
                -- across the WHOLE register, not the rows returned: a search
                -- narrow enough to return one Khageswar Mohanta is exactly the
@@ -924,6 +924,12 @@ def driver_search(request: Request,
             f"son of {father}" if father else
             f"born {dob.strftime('%d-%m-%Y')}" if dob else
             None)
+
+        # The number the mine uses, not the one this platform minted.
+        # OPR-2026-0152 is on no card, no muster and no gate register; 17110 is
+        # on all three. The internal reference stays in the payload for the
+        # drill-downs that link on it, but it is not what the row shows.
+        r["badge"] = r.get("emp_id") or r.get("reference")
 
         # Why this one is near the top, in the words the row will show. An
         # order the reader cannot account for is an order they distrust.

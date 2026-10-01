@@ -110,6 +110,13 @@ interface Driver {
   tell_apart?: string | null;
   father_name?: string | null;
   date_of_birth?: string | null;
+  /** The number the mine knows him by — his employee number, falling back to
+   *  the platform's own reference only when he has none. */
+  badge?: string | null;
+  emp_id?: string | null;
+  /** RECORD when the licence has an expiry behind it, IDENTITY when it is the
+   *  number alone, as the HR import supplied it. */
+  licence_source?: string | null;
 }
 
 /** A haul weighed in loaded whose empty weight was never taken against it.
@@ -1082,8 +1089,8 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
                     <span className="text-[12.5px] font-semibold text-navy flex-1 min-w-0">
                       <span className="block truncate">
                         {driver.full_name}
-                        {driver.reference && (
-                          <span className="font-normal text-txt-muted"> · {driver.reference}</span>
+                        {driver.badge && (
+                          <span className="font-normal text-txt-muted"> · {driver.badge}</span>
                         )}
                       </span>
                       {/* Kept after choosing, not just while choosing: the
@@ -1195,7 +1202,7 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
                               </span>
                             )}
                             <span className="block text-[10.5px] text-txt-light">
-                              {[d.reference, d.employer,
+                              {[d.badge, d.employer,
                                 !d.shares_name && d.tell_apart ? d.tell_apart : null]
                                 .filter(Boolean).join(" · ")}
                               {d.licence_expired ? " · licence expired"
