@@ -807,6 +807,9 @@ def vehicle_search(request: Request,
 def driver_search(request: Request,
                   q: str = Query("", max_length=60),
                   limit: int = Query(25, ge=1, le=100),
+                  # Which lorry is on the deck. Given it, the men who drive
+                  # that one sort above everybody else — see the ORDER BY.
+                  asset_id: int | None = Query(None),
                   db: Session = Depends(get_db),
                   pg: Session = Depends(get_minehub_db)) -> list[dict]:
     """Find a driver, across the operator register and the visiting drivers.
@@ -824,7 +827,8 @@ def driver_search(request: Request,
     reference = _sql_normalised("d.reference")
     terms = _terms(q)
     params: dict = {"lim": limit, "needle": _squashed(q),
-                    "first": terms[0][1] if terms else ""}
+                    "first": terms[0][1] if terms else "",
+                    "aid": asset_id}
 
     # Each word matched separately, so a name types in either order. A man
     # entered as "RAM KUMAR SAHU" is found by "sahu ram", which is how someone
@@ -840,16 +844,46 @@ def driver_search(request: Request,
                 OR d.designation       ILIKE '%' || :w{i} || '%')""")
     where = " AND ".join(conditions) if conditions else "TRUE"
 
+    # Who is attached to the lorry on the deck: assigned to it on the shift
+    # board, or has actually driven it lately. Null asset_id makes the whole
+    # thing a no-op, so the plain search is unchanged.
     rows = [dict(r) for r in pg.execute(text(f"""
+        WITH theirs AS (
+            SELECT oa.operator_id, 0 AS rank, 0 AS trips
+              FROM operator_assignment oa
+             WHERE CAST(:aid AS bigint) IS NOT NULL
+               AND oa.asset_id = CAST(:aid AS bigint)
+               AND oa.status = 'ACTIVE'
+               AND (oa.valid_to IS NULL OR oa.valid_to >= CURRENT_DATE)
+             UNION ALL
+            SELECT t.operator_id, 1 AS rank, COUNT(*)::int AS trips
+              FROM trip t
+             WHERE CAST(:aid AS bigint) IS NOT NULL
+               AND t.asset_id = CAST(:aid AS bigint)
+               AND t.operator_id IS NOT NULL
+               AND t.status <> 'CANCELLED'
+               AND t.created_at > now() - interval '60 days'
+             GROUP BY t.operator_id
+        ), attached AS (
+            SELECT operator_id, MIN(rank) AS rank, MAX(trips) AS trips
+              FROM theirs GROUP BY operator_id
+        )
         SELECT d.kind, d.operator_id, d.visiting_driver_id, d.full_name,
                d.reference, d.licence_no, d.licence_valid_upto, d.phone,
                d.employer, d.designation, d.visits,
+               a.rank AS vehicle_rank, a.trips AS vehicle_trips,
                CASE WHEN d.licence_valid_upto IS NULL THEN NULL
                     ELSE (d.licence_valid_upto - CURRENT_DATE) END AS licence_days_left
           FROM weighable_driver d
+          LEFT JOIN attached a ON a.operator_id = d.operator_id
          WHERE d.status NOT IN ('BLACKLISTED', 'INACTIVE')
            AND ({where})
-         ORDER BY CASE
+         ORDER BY
+                  -- The lorry's own men first, however the name was typed.
+                  (a.operator_id IS NULL),
+                  a.rank,
+                  a.trips DESC,
+                  CASE
                     WHEN :needle = '' THEN 3
                     WHEN d.licence_normalised = :needle THEN 0
                     WHEN {reference} = :needle THEN 1
@@ -866,6 +900,12 @@ def driver_search(request: Request,
         r["licence_expired"] = left is not None and left < 0
         r["licence_expiring"] = left is not None and 0 <= left <= 30
         r["licence_recorded"] = r["licence_no"] is not None
+        # Why this one is near the top, in the words the row will show. An
+        # order the reader cannot account for is an order they distrust.
+        rank, trips = r.pop("vehicle_rank", None), r.pop("vehicle_trips", None)
+        r["why"] = (None if rank is None else
+                    "on the shift board for this vehicle" if rank == 0 else
+                    f"drove this vehicle {trips} time{'' if trips == 1 else 's'} recently")
     return rows
 
 

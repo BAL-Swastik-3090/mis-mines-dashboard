@@ -100,6 +100,9 @@ interface Driver {
   licence_expiring: boolean; licence_recorded: boolean;
   phone: string | null; employer: string | null; designation: string | null;
   visits: number | null;
+  /** Why this driver sorted near the top — set when the search was given a
+   *  vehicle and this man is attached to it. */
+  why?: string | null;
 }
 
 /** A driver the screen offers before being asked, and why it is offering him. */
@@ -654,40 +657,43 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
    * input -- a list you have to Tab into is a list you cannot type through. */
   const driverBox = useRef<HTMLDivElement | null>(null);
   const [driverAt, setDriverAt] =
-    useState<{ top: number; left: number; width: number } | null>(null);
+    useState<{ top: number; left: number; width: number; height: number } | null>(null);
   const [lit, setLit] = useState(0);
 
-  /* Under the field, the width of the field, clamped to the window.
+  /* ALWAYS below the field. Never over the form above it.
    *
-   * It opened to the RIGHT of the input first, which put it outside the
-   * dialog — and the dialog is z-[10001] while the list was 9999, so the
-   * panel was painted OVER it and every name lost its first few letters.
-   * Beside the field only looks like more room; it is room the dialog is
-   * already using.
+   * It flipped upward when the window had little room underneath, and what
+   * it covered was Category, Source and Destination — the choices the
+   * operator had just made. Hiding answered questions behind a list of names
+   * is worse than a short list: a figure nobody can see is a figure nobody
+   * re-checks, and this screen is worked at speed with a lorry on the deck.
    *
-   * Under the input it stays within the dialog's own width, which is where
-   * the eye already is. It is still a portal, so nothing in the form moves
-   * when it opens — that was the point — and it still sits above the dialog
-   * rather than inside the part of it that scrolls.
-   *
-   * Flipped above the field when the window has no room below, and never
-   * allowed past either edge. */
+   * So it stays below and takes whatever height is left, and when that is
+   * not enough the FIELD moves instead — scrolled up inside the dialog until
+   * there is room. Moving the thing you are typing into is expected; moving
+   * what you already filled in is not.
+   */
   const placeDrivers = useCallback(() => {
     const el = driverBox.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    const GAP = 4, MARGIN = 8, MAXH = 320;
-    const width = Math.max(r.width, 260);
-    const below = window.innerHeight - r.bottom > 180
-      || window.innerHeight - r.bottom > r.top;
-    const left = Math.min(Math.max(MARGIN, r.left),
-                          window.innerWidth - width - MARGIN);
-    setDriverAt({
-      top: below ? r.bottom + GAP
-                 : Math.max(MARGIN, r.top - GAP - MAXH),
-      left,
-      width,
-    });
+    const GAP = 4, MARGIN = 10, WANT = 300;
+    const room = window.innerHeight - r.bottom - GAP - MARGIN;
+    if (room < 170) {
+      // Not enough underneath: bring the field up and measure again next frame.
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      requestAnimationFrame(() => {
+        const r2 = el.getBoundingClientRect();
+        const room2 = window.innerHeight - r2.bottom - GAP - MARGIN;
+        setDriverAt({ top: r2.bottom + GAP, left: r2.left,
+                      width: Math.max(r2.width, 260),
+                      height: Math.max(140, Math.min(WANT, room2)) });
+      });
+      return;
+    }
+    setDriverAt({ top: r.bottom + GAP, left: r.left,
+                  width: Math.max(r.width, 260),
+                  height: Math.min(WANT, room) });
   }, []);
 
   useEffect(() => {
@@ -718,12 +724,13 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
     const t = setTimeout(async () => {
       try {
         const r = await api.get("/weighbridge/drivers/search",
-                                { params: { q: driverQ, limit: 20 } });
+                                { params: { q: driverQ, limit: 20,
+                                            asset_id: vehicle.asset_id } });
         setHits(r.data ?? []);
       } catch { /* the form still works without suggestions */ }
     }, 250);
     return () => clearTimeout(t);
-  }, [driverQ]);
+  }, [driverQ, vehicle.asset_id]);
 
   /* Asked when the dialog opens, not when the page loaded. Somebody added to
    * the register a minute ago in another tab is in this answer. */
@@ -1109,7 +1116,7 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
                               the panel paints over the list and clips it. */
                            style={{ position: "fixed", top: driverAt.top,
                                     left: driverAt.left, width: driverAt.width,
-                                    maxHeight: "min(320px, 60vh)", zIndex: 10002 }}
+                                    maxHeight: driverAt.height, zIndex: 10002 }}
                            className="overflow-y-auto scrollbar-thin rounded-xl bg-white
                                       border border-border shadow-xl py-1">
                         <div className="px-3 py-1.5 text-[10px] font-semibold uppercase
@@ -1131,6 +1138,13 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
                             {d.reference && (
                               <span className="block text-[10.5px] text-txt-light">
                                 {d.reference}{d.employer ? ` · ${d.employer}` : ""}
+                              </span>
+                            )}
+                            {/* An order the reader cannot account for is an
+                                order they stop trusting. */}
+                            {d.why && (
+                              <span className="block text-[10.5px] font-semibold text-indigo">
+                                {d.why}
                               </span>
                             )}
                             {d.licence_expired
