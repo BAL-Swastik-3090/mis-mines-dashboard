@@ -44,19 +44,30 @@
  * Two dates on one page is two answers to "which day am I looking at", and the
  * header's is the one that wins.
  *
+ * STEPPING. The ‹ › pair in the control bar walks the panel day by day, for
+ * the meeting that wants last Tuesday, or the 30th while the filter still ends
+ * on the 29th, without disturbing the date every other section on the screen
+ * is obeying. It is an offset from the header's day, not a date of its own, so
+ * it resets to zero whenever the header moves. Back is unbounded; forward
+ * stops at today, the last day anything can be posted or entered against.
+ * While it is stepped away the date reads in orange and says how far, and the
+ * entry dialog opens on the day being looked at — which is the day somebody
+ * who stepped to a missed morning wants to file against.
+ *
  * UNITS follow DaywiseTable: ore, COB and despatch in MT; OB and total
  * excavation in CuM. VARIANCE = shown value - Plan; positive is ahead of plan.
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarCheck } from "lucide-react";
+import { CalendarCheck, ChevronLeft, ChevronRight } from "lucide-react";
 import api from "@/lib/api";
 import { formatIndian } from "@/lib/utils";
 import PrevDayEntryModal, { type StoredValue } from "@/components/tables/PrevDayEntryModal";
 import { useEntryDialog } from "@/contexts/useEntryDialog";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import {
-  ORE_T_PER_M3, buildRows, dayBefore, dayLabel, type KpiRow,
+  ORE_T_PER_M3, buildRows, daysBetween, dayBefore, dayLabel, reportDay,
+  shiftDays, todayISO, type KpiRow,
 } from "@/lib/prevDay";
 import type { ProductionDaywiseResponse, DespatchDaywiseResponse } from "@/types";
 
@@ -88,7 +99,41 @@ export default function PrevDayVarianceTable() {
   // day before it — that is what "previous day" means, whichever day is being
   // reported on.
   const asOn = useDateFilter((s) => s.apiTo);
-  const day = useMemo(() => dayBefore(asOn), [asOn]);
+  /** The day the header puts this panel on, and where stepping starts.
+   *
+   *  It used to be dayBefore(asOn), which subtracted a day the filter had
+   *  already subtracted: a range ending on 30 September, set on 1 October,
+   *  landed this panel on the 29th while the stock panel beside it said the
+   *  30th. reportDay is the last day that has ENDED within the filter, which
+   *  is the 30th in that case and yesterday when the filter runs to today. */
+  const headDay = useMemo(() => reportDay(asOn), [asOn]);
+
+  // ── STEPPING THROUGH THE DAYS ────────────────────────────────────────────
+  // Days from headDay to the day being shown; negative is into the past. Zero
+  // is the day the header asks for, which is where it always opens.
+  //
+  // A COUNT, NOT A DATE. Stored as an offset so that moving the header's date
+  // moves this panel with it rather than stranding it on a date the rest of
+  // the screen has left behind — the one thing the header-follows rule above
+  // exists to prevent. Stepping is a look around; it is not a second answer to
+  // "which day is this screen about", so it resets the moment the header moves.
+  const [offset, setOffset] = useState(0);
+  useEffect(() => setOffset(0), [asOn]);
+  const day = useMemo(() => shiftDays(headDay, offset), [headDay, offset]);
+
+  // FORWARD STOPS AT TODAY, NOT AT THE HEADER'S DAY. It used to stop at the
+  // header's day, on the argument that there is no "previous day" past it.
+  // That argument ignored where the date filter usually sits: a range ending
+  // on the last of the month puts this panel on the 29th, and the 30th — a day
+  // that has figures, and is the one the meeting on the 1st actually wants —
+  // could not be reached without editing the filter. Today is the real limit,
+  // because no day after it has anything posted or entered against it.
+  //
+  // Recomputed on each render rather than held in state: it is only read in
+  // response to a click, so a session left open across midnight gets the right
+  // answer without a timer.
+  const maxForward = Math.max(0, daysBetween(headDay, todayISO()));
+
   /** The day before that, for the "Both Days" view. */
   const older = useMemo(() => dayBefore(day), [day]);
   const [view, setView] = useState<View>("actual");
@@ -213,7 +258,17 @@ export default function PrevDayVarianceTable() {
               the control is at the top of the page and not next to it. */}
           <span className="inline-flex items-center gap-1.5">
             <span className="text-[12px] font-bold text-navy">{dayLabel(day)}</span>
-            <span className="text-[10px] text-txt-light">· from the date at the top</span>
+            {offset === 0 ? (
+              <span className="text-[10px] text-txt-light">· from the date at the top</span>
+            ) : (
+              // Says both that this is not the header's day and how far off it
+              // is, so a figure read off a panel somebody left stepped away is
+              // not mistaken for the day the rest of the screen is on.
+              <span className="text-[10px] font-bold text-warning">
+                · {Math.abs(offset)} day{Math.abs(offset) === 1 ? "" : "s"}{" "}
+                {offset < 0 ? "back" : "on"} from the top date
+              </span>
+            )}
           </span>
           <span className="h-4 w-px bg-border" />
           {([
@@ -244,9 +299,61 @@ export default function PrevDayVarianceTable() {
               </span>
             </label>
           ))}
-          <span className="text-[10px] text-txt-light/70 ml-auto">
+          {/* ── step to another day ─────────────────────────────────────────
+              Here rather than beside the date on the left because this is the
+              last thing in the bar before the figures, and the bar is read
+              left to right: which day, which figure, then how to move the day.
+
+              The date it changes is the one on the left of this same row —
+              there is exactly one date on this panel, and these arrows move
+              it. A second date printed between the arrows would be a second
+              thing to read and, the moment anything got out of step, a second
+              thing to believe. */}
+          <div className="ml-auto flex items-center gap-1">
+            <span className="text-[10px] text-txt-light/70 mr-0.5">Day</span>
+            <button
+              type="button"
+              onClick={() => setOffset((o) => o - 1)}
+              title={`Previous day — ${dayLabel(shiftDays(day, -1))}`}
+              aria-label="Previous day"
+              className="w-6 h-6 inline-flex items-center justify-center rounded border
+                         border-border bg-white text-navy hover:bg-bg-soft
+                         focus:outline-none focus:ring-1 focus:ring-navy"
+            >
+              <ChevronLeft size={13} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setOffset((o) => Math.min(maxForward, o + 1))}
+              disabled={offset >= maxForward}
+              title={offset >= maxForward
+                ? "Today is the last day there can be figures for"
+                : `Next day — ${dayLabel(shiftDays(day, 1))}`}
+              aria-label="Next day"
+              className="w-6 h-6 inline-flex items-center justify-center rounded border
+                         border-border bg-white text-navy hover:bg-bg-soft
+                         disabled:opacity-35 disabled:cursor-not-allowed disabled:hover:bg-white
+                         focus:outline-none focus:ring-1 focus:ring-navy"
+            >
+              <ChevronRight size={13} />
+            </button>
+            {offset !== 0 && (
+              <button
+                type="button"
+                onClick={() => setOffset(0)}
+                title={`Back to ${dayLabel(headDay)}, the day the date at the top asks for`}
+                className="text-[10px] font-bold text-navy underline underline-offset-2
+                           px-1 hover:text-navy/70"
+              >
+                Reset
+              </button>
+            )}
+          </div>
+          <span className="text-[10px] text-txt-light/70">
             {view === "actual"
-              ? "Posted figures — may still be incomplete for yesterday"
+              ? (offset === 0
+                ? "Posted figures — may still be incomplete for yesterday"
+                : "Posted figures for the day shown")
               : view === "est"
                 ? "Hand-entered — three-dot menu, Enter Est Actual"
                 : `${dayLabel(older)} on the right — estimate against what was posted`}

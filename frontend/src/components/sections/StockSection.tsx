@@ -123,8 +123,16 @@ export default function StockSection() {
         <div className="px-4 py-2 bg-[#fff8e1] border-b border-[#ffe082] flex items-start gap-2.5">
           <AlertTriangle size={14} className="text-[#c8960c] shrink-0 mt-[1px]" />
           <div className="text-[11px] text-txt-secondary leading-relaxed">
+            {/* Not "before the selected date" any more. The date asked for is
+                the morning after the day being reported on, which is derived
+                rather than picked — telling a reader their selected date is a
+                day they did not select is the confusion this change exists to
+                remove. It names the day asked for instead. */}
             Latest entry is <span className="font-bold text-navy">{niceDate(data.snapshot_date)}</span>
-            {data.days_stale ? <> — {data.days_stale} day{data.days_stale > 1 ? "s" : ""} before the selected date</> : null}.
+            {data.days_stale
+              ? <> — {data.days_stale} day{data.days_stale > 1 ? "s" : ""} before{" "}
+                  {niceDate(data.requested_date ?? null)}, the morning asked for</>
+              : null}.
             Stock is not entered every day.
           </div>
         </div>

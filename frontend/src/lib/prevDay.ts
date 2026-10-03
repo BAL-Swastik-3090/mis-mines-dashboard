@@ -59,9 +59,95 @@ export function targetDayISO(now: Date = new Date()): string {
  * wrong date, and setDate handles month and year ends on its own.
  */
 export function dayBefore(iso: string): string {
+  return shiftDays(iso, -1);
+}
+
+/**
+ * A YYYY-MM-DD moved by n days, local. Negative goes back.
+ *
+ * Same reasoning as dayBefore, which is now written in terms of it: setDate
+ * carries across month and year ends by itself, and it counts calendar days
+ * rather than 24-hour spans, so the two days a year that are not 24 hours long
+ * do not shift the answer onto the wrong date.
+ */
+export function shiftDays(iso: string, n: number): string {
   const d = new Date(iso + "T00:00:00");
-  d.setDate(d.getDate() - 1);
+  d.setDate(d.getDate() + n);
   return localISO(d);
+}
+
+/**
+ * THE DAY THE DASHBOARD REPORTS ON: the last day that has ENDED, no later than
+ * the date filter's end date.
+ *
+ * ── THE CONFUSION THIS EXISTS TO END ────────────────────────────────────────
+ * Two panels on the stock screen each worked out their own day, and on a
+ * perfectly ordinary filter they named two different ones:
+ *
+ *     filter 1 Sep – 30 Sep, today 1 Oct
+ *     Previous Day — Plan vs Actual   showed 29 Sep   (it subtracted a day
+ *                                                      from the filter's end)
+ *     Mines Stock Position            showed 30 Sep   (it used the end itself)
+ *
+ * Neither was the day the mine had just finished. 30 September was, and the
+ * filter already said so — the panel subtracted a day that had already been
+ * subtracted by whoever set the range.
+ *
+ * So "previous day" is not "the filter's end, minus one". It is the most
+ * recent day there can be a complete set of figures for, which is the filter's
+ * end except when the filter runs to today or beyond — then it is yesterday,
+ * because today has not finished.
+ *
+ *     filter ends 30 Sep, today 1 Oct   ->  30 Sep   (the filter's end)
+ *     filter ends 1 Oct,  today 1 Oct   ->  30 Sep   (today has not ended)
+ *     filter ends 31 Aug, today 1 Oct   ->  31 Aug   (looking back at August)
+ *
+ * It agrees with the entry form by construction: the Est Actual dialog files
+ * against today − 1, which is exactly what this returns while the filter runs
+ * to today.
+ */
+export function reportDay(apiTo: string, now: Date = new Date()): string {
+  const yesterday = targetDayISO(now);
+  return apiTo < yesterday ? apiTo : yesterday;
+}
+
+/**
+ * The stock snapshot that shows where reportDay left the mine: the one filed
+ * the MORNING AFTER it.
+ *
+ * ── WHY IT IS THE NEXT DAY'S SNAPSHOT, NOT THAT DAY'S ───────────────────────
+ * The stock form is filled in at the start of a day and dated that day — it
+ * says what is standing at the mine as the shift begins, which is what the day
+ * before it left behind. So the position resulting from 30 September's work is
+ * the snapshot dated 1 October, not the one dated 30 September; that one
+ * describes the morning of the 30th, before any of it happened.
+ *
+ * This is why the two panels could not be made to agree by pointing them at
+ * the same date. They are a day apart by nature, and the right fix is to make
+ * them a day apart about the SAME day's work rather than accidentally two.
+ *
+ * Never past today: there is no tomorrow to have filed anything. The service
+ * then resolves the latest snapshot on or before this and says how stale it is,
+ * so a morning where nobody has filed yet still shows the last real position.
+ */
+export function stockAsOn(apiTo: string, now: Date = new Date()): string {
+  const next = shiftDays(reportDay(apiTo, now), 1);
+  const today = todayISO(now);
+  return next < today ? next : today;
+}
+
+/**
+ * Whole calendar days from `a` to `b`, local. Positive when b is later.
+ *
+ * Both ends are pinned to local midnight before subtracting, so the answer
+ * counts dates rather than elapsed time — otherwise a 23-hour or 25-hour day
+ * would round the count onto the wrong number and the panel's forward stop
+ * would sit a day out twice a year.
+ */
+export function daysBetween(a: string, b: string): number {
+  const ms = new Date(b + "T00:00:00").getTime()
+    - new Date(a + "T00:00:00").getTime();
+  return Math.round(ms / 86_400_000);
 }
 
 /** Today, local. The latest date the entry dialog will accept. */
