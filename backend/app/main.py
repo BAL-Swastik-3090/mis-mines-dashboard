@@ -152,6 +152,44 @@ async def _usage_mirror():
         await asyncio.sleep(usage_sync.SYNC_SECONDS)
 
 
+async def _fuel_mirror():
+    """Keep our copy of the SAP fuel rows current.
+
+    The fuel screen read scm_zmm_stock_mb5b directly: 4,130,084 rows of every
+    material at every plant, of which 2,068 are fuel at ours. Its index does
+    not carry matgroup, so a thirty-day window read 635,937 rows to find a few
+    dozen, and the screen took eight and a half seconds.
+
+    The rows are mirrored into minehub instead, where they are indexed for the
+    four questions this screen asks. SAP posts one snapshot a day, so a pass
+    every fifteen minutes is about how soon a new day appears rather than how
+    fresh any figure is.
+    """
+    from app.database import SessionLocal
+    from app.minehub_db import SessionLocal as MineHubSession
+    from app.services import fuel_sync
+
+    await asyncio.sleep(40)     # after the usage mirror, not against it
+    while True:
+        try:
+            def go() -> dict:
+                if MineHubSession is None:
+                    return {"errors": ["minehub is not configured"]}
+                with SessionLocal() as db, MineHubSession() as pg:
+                    return fuel_sync.run_once(db, pg)
+            out = await run_in_threadpool(go)
+            if out.get("errors"):
+                logger.warning("fuel mirror: %s", "; ".join(out["errors"]))
+            elif out.get("stock") or out.get("orders"):
+                logger.debug("fuel mirror: %d stock rows, %d order lines",
+                             out["stock"], out["orders"])
+        except asyncio.CancelledError:
+            raise
+        except Exception:                               # noqa: BLE001
+            logger.warning("fuel mirror pass failed", exc_info=True)
+        await asyncio.sleep(fuel_sync.SYNC_SECONDS)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ── Startup — retry up to 5 times for transient errors (e.g. too many connections) ──
@@ -183,6 +221,9 @@ async def lifespan(app: FastAPI):
     # Our own copy of the sign-in log, so the usage screen never reads a
     # table twenty-five other applications are writing to.
     usage_task = asyncio.create_task(_usage_mirror())
+    # The SAP fuel rows, for the same reason: 2,068 rows we were reading four
+    # million to find.
+    fuel_task = asyncio.create_task(_fuel_mirror())
     # Release pooled connections when the app goes quiet. The MySQL instance is
     # shared and has been refusing connections, so holding idle ones costs
     # somebody else their connection.
@@ -195,6 +236,7 @@ async def lifespan(app: FastAPI):
     digest_task.cancel()
     market_task.cancel()
     usage_task.cancel()
+    fuel_task.cancel()
     reaper_task.cancel()
     # Close every pooled connection rather than leaving the server to time them
     # out eight hours later.
