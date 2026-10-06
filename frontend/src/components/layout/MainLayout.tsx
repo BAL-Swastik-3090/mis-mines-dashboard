@@ -1,5 +1,6 @@
 "use client";
 import AppSidebar              from "./AppSidebar";
+import CommandPalette          from "./CommandPalette";
 import SectionTabBar           from "./SectionTabBar";
 import IntelligenceTabBar      from "./IntelligenceTabBar";
 import FuelManagementSection   from "@/components/sections/FuelManagementSection";
@@ -43,11 +44,26 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
 
   return (
     <>
+      {/* The first thing Tab reaches, and invisible until it is.
+          Twenty screens behind a sidebar means a keyboard user tabs through
+          every nav row before reaching the page they are already on. */}
+      <a href="#main"
+         className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2
+                    focus:z-[90] focus:px-3 focus:py-2 focus:rounded-lg
+                    focus:bg-navy focus:text-white focus:text-[12px]">
+        Skip to the page
+      </a>
+
+      {/* Ctrl-K from anywhere. Mounted here rather than inside a page so it
+          survives changing screens, which is the whole point of it. */}
+      <CommandPalette />
+
       <AppSidebar />
       {isMis && <SectionTabBar />}
       {isIntel && <IntelligenceTabBar />}
 
       <main
+        id="main" tabIndex={-1}
         style={{ marginLeft: sideW }}
         className={`
           min-h-screen pb-8

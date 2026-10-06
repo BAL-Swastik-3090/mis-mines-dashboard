@@ -38,6 +38,7 @@ import OperatorPanel from "@/components/minehub/OperatorPanel";
 import AssessmentPanel from "@/components/minehub/AssessmentPanel";
 import ManpowerAnalytics from "@/components/minehub/ManpowerAnalytics";
 import AttendancePanel from "@/components/minehub/AttendancePanel";
+import ShiftTimings from "@/components/minehub/ShiftTimings";
 
 type TabId = "register" | "capability" | "attendance" | "assessment" | "analytics";
 
@@ -307,7 +308,15 @@ export default function ManpowerSection() {
           onChanged={() => setChanged((n) => n + 1)} />
       )}
 
-      {tab === "attendance" && <AttendancePanel filter={filter} />}
+      {tab === "attendance" && (
+        <div className="space-y-4">
+          <AttendancePanel filter={filter} />
+          {/* The hours behind everything above: what counts as A, B or C.
+              They move with the season and had only ever been settable in
+              the database. */}
+          <ShiftTimings mayEdit={mayManage} />
+        </div>
+      )}
 
       {tab === "analytics" && <ManpowerAnalytics key={changed} filter={filter} />}
 

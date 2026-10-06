@@ -37,6 +37,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.minehub_db import get_minehub_db
 from app.services import access as access_svc
+from app.services import people
 
 router = APIRouter(prefix="/api/weighbridge", tags=["Weighbridge"])
 
@@ -272,7 +273,10 @@ def trips(request: Request,
                src.name AS source, dst.name AS destination,
                w.code AS bridge,
                tw.gross_kg, tw.tare_kg, tw.net_kg, tw.tare_source,
-               tw.tare_age_days, tw.has_manual, tw.gross_at
+               tw.tare_age_days, tw.has_manual, tw.gross_at,
+               -- The empty weight was taken after the load was tipped, which
+               -- is the order a loaded truck actually arrives in.
+               tw.tare_after_gross
           FROM trip t
           JOIN gate_pass g        ON g.gate_pass_id = t.gate_pass_id
           LEFT JOIN asset a       ON a.asset_id = t.asset_id
@@ -803,6 +807,9 @@ def vehicle_search(request: Request,
 def driver_search(request: Request,
                   q: str = Query("", max_length=60),
                   limit: int = Query(25, ge=1, le=100),
+                  # Which lorry is on the deck. Given it, the men who drive
+                  # that one sort above everybody else — see the ORDER BY.
+                  asset_id: int | None = Query(None),
                   db: Session = Depends(get_db),
                   pg: Session = Depends(get_minehub_db)) -> list[dict]:
     """Find a driver, across the operator register and the visiting drivers.
@@ -820,7 +827,8 @@ def driver_search(request: Request,
     reference = _sql_normalised("d.reference")
     terms = _terms(q)
     params: dict = {"lim": limit, "needle": _squashed(q),
-                    "first": terms[0][1] if terms else ""}
+                    "first": terms[0][1] if terms else "",
+                    "aid": asset_id}
 
     # Each word matched separately, so a name types in either order. A man
     # entered as "RAM KUMAR SAHU" is found by "sahu ram", which is how someone
@@ -836,16 +844,54 @@ def driver_search(request: Request,
                 OR d.designation       ILIKE '%' || :w{i} || '%')""")
     where = " AND ".join(conditions) if conditions else "TRUE"
 
+    # Who is attached to the lorry on the deck: assigned to it on the shift
+    # board, or has actually driven it lately. Null asset_id makes the whole
+    # thing a no-op, so the plain search is unchanged.
     rows = [dict(r) for r in pg.execute(text(f"""
+        WITH theirs AS (
+            SELECT oa.operator_id, 0 AS rank, 0 AS trips
+              FROM operator_assignment oa
+             WHERE CAST(:aid AS bigint) IS NOT NULL
+               AND oa.asset_id = CAST(:aid AS bigint)
+               AND oa.status = 'ACTIVE'
+               AND (oa.valid_to IS NULL OR oa.valid_to >= CURRENT_DATE)
+             UNION ALL
+            SELECT t.operator_id, 1 AS rank, COUNT(*)::int AS trips
+              FROM trip t
+             WHERE CAST(:aid AS bigint) IS NOT NULL
+               AND t.asset_id = CAST(:aid AS bigint)
+               AND t.operator_id IS NOT NULL
+               AND t.status <> 'CANCELLED'
+               AND t.created_at > now() - interval '60 days'
+             GROUP BY t.operator_id
+        ), attached AS (
+            SELECT operator_id, MIN(rank) AS rank, MAX(trips) AS trips
+              FROM theirs GROUP BY operator_id
+        )
         SELECT d.kind, d.operator_id, d.visiting_driver_id, d.full_name,
                d.reference, d.licence_no, d.licence_valid_upto, d.phone,
                d.employer, d.designation, d.visits,
+               d.father_name, d.date_of_birth, d.emp_id, d.licence_source,
+               -- How many people on the register answer to this name. Counted
+               -- across the WHOLE register, not the rows returned: a search
+               -- narrow enough to return one Khageswar Mohanta is exactly the
+               -- search where picking him without looking is a mistake.
+               (SELECT COUNT(*) FROM weighable_driver x
+                 WHERE x.full_name = d.full_name
+                   AND x.status NOT IN ('BLACKLISTED', 'INACTIVE')) AS same_name,
+               a.rank AS vehicle_rank, a.trips AS vehicle_trips,
                CASE WHEN d.licence_valid_upto IS NULL THEN NULL
                     ELSE (d.licence_valid_upto - CURRENT_DATE) END AS licence_days_left
           FROM weighable_driver d
+          LEFT JOIN attached a ON a.operator_id = d.operator_id
          WHERE d.status NOT IN ('BLACKLISTED', 'INACTIVE')
            AND ({where})
-         ORDER BY CASE
+         ORDER BY
+                  -- The lorry's own men first, however the name was typed.
+                  (a.operator_id IS NULL),
+                  a.rank,
+                  a.trips DESC,
+                  CASE
                     WHEN :needle = '' THEN 3
                     WHEN d.licence_normalised = :needle THEN 0
                     WHEN {reference} = :needle THEN 1
@@ -862,6 +908,234 @@ def driver_search(request: Request,
         r["licence_expired"] = left is not None and left < 0
         r["licence_expiring"] = left is not None and 0 <= left <= 30
         r["licence_recorded"] = r["licence_no"] is not None
+
+        # Two men of the same name need telling apart, and the screen should
+        # say which detail does it rather than printing everything on every
+        # row. The licence first, because it is the one a gate or a policeman
+        # would ask for; the father's name next, which is how it is done on
+        # paper here; the date of birth last, which almost everyone has.
+        r["shares_name"] = int(r.pop("same_name", 1) or 1) > 1
+        dob = r.pop("date_of_birth", None)
+        father = r.pop("father_name", None)
+        r["father_name"] = father
+        r["date_of_birth"] = dob.isoformat() if dob else None
+        r["tell_apart"] = (
+            f"licence {r['licence_no']}" if r["licence_no"] else
+            f"son of {father}" if father else
+            f"born {dob.strftime('%d-%m-%Y')}" if dob else
+            None)
+
+        # The number the mine uses, not the one this platform minted.
+        # OPR-2026-0152 is on no card, no muster and no gate register; 17110 is
+        # on all three. The internal reference stays in the payload for the
+        # drill-downs that link on it, but it is not what the row shows.
+        r["badge"] = r.get("emp_id") or r.get("reference")
+
+        # Why this one is near the top, in the words the row will show. An
+        # order the reader cannot account for is an order they distrust.
+        rank, trips = r.pop("vehicle_rank", None), r.pop("vehicle_trips", None)
+        r["why"] = (None if rank is None else
+                    "on the shift board for this vehicle" if rank == 0 else
+                    f"drove this vehicle {trips} time{'' if trips == 1 else 's'} recently")
+    return rows
+
+
+@router.get("/current-shift")
+def current_shift(request: Request, db: Session = Depends(get_db),
+                  pg: Session = Depends(get_minehub_db)) -> dict:
+    """Which shift is running right now, from the shift calendar.
+
+    READ, NOT ASSUMED. The mine's shift times are a row in shift_calendar --
+    A 06:00-14:00, B 14:00-22:00, C 22:00-06:00 as it stands -- and the roster,
+    the production day and every report already work from them. Hard-coding
+    the same hours into the weighbridge would be a second definition, and the
+    day somebody moves a shift by an hour the two would disagree with nobody
+    told.
+
+    C crosses midnight, so it is the one that cannot be tested with a plain
+    BETWEEN: 23:00 and 03:00 are both inside 22:00-06:00.
+    """
+    _require(db, request, VIEW)
+    row = pg.execute(text("""
+        SELECT code, name, start_time, end_time, crosses_midnight
+          FROM shift_calendar
+         WHERE code <> 'GENERAL'
+           AND (valid_to IS NULL OR valid_to >= CURRENT_DATE)
+           AND valid_from <= CURRENT_DATE
+           AND CASE WHEN crosses_midnight
+                    THEN LOCALTIME >= start_time OR LOCALTIME < end_time
+                    ELSE LOCALTIME >= start_time AND LOCALTIME < end_time
+               END
+         ORDER BY start_time
+         LIMIT 1
+    """)).mappings().first()
+    if not row:
+        return {"code": None, "name": None, "from": None, "to": None}
+    return {"code": row["code"], "name": row["name"],
+            "from": row["start_time"].strftime("%H:%M"),
+            "to": row["end_time"].strftime("%H:%M")}
+
+
+@router.get("/drivers/summary")
+def driver_summary(request: Request, db: Session = Depends(get_db),
+                   pg: Session = Depends(get_minehub_db)) -> dict:
+    """How many drivers this box is actually searching.
+
+    The screen used to say "all 211 are contractors' drivers" in fixed text.
+    It was 211 the day it was written; it is 244 now, and a number that goes
+    stale in the interface teaches people not to trust the numbers in it.
+    """
+    _require(db, request, VIEW)
+    r = pg.execute(text("""
+        SELECT COUNT(*) FILTER (WHERE kind = 'OPERATOR') AS operators,
+               COUNT(*) FILTER (WHERE kind = 'VISITOR')  AS visitors,
+               COUNT(*)                                  AS total
+          FROM weighable_driver
+         WHERE status NOT IN ('BLACKLISTED', 'INACTIVE')
+    """)).mappings().first()
+    return dict(r or {"operators": 0, "visitors": 0, "total": 0})
+
+
+@router.get("/vehicles/{asset_id}/context")
+def vehicle_context(asset_id: int, request: Request,
+                    db: Session = Depends(get_db),
+                    pg: Session = Depends(get_minehub_db)) -> dict:
+    """Everything the weigh and tare dialogs should already know.
+
+    One call rather than three. The dialog opens on a vehicle and immediately
+    needs the same three answers every time; three requests would be three
+    chances for one panel to disagree with the one beside it.
+    """
+    _require(db, request, VIEW)
+
+    # ── who normally drives it ───────────────────────────────────────────
+    #
+    # The shift board first: an ACTIVE assignment is somebody saying, today,
+    # that this man is on this machine. Then whoever actually drove it,
+    # most-recent and most-often, which catches the machine nobody has got
+    # round to assigning.
+    #
+    # Suggested, never filled in. A weighbridge ticket names the man
+    # responsible for a load, and a name that typed itself is a name nobody
+    # checked.
+    suggestions = [dict(r) for r in pg.execute(text("""
+        WITH assigned AS (
+            SELECT oa.operator_id, 0 AS rank, NULL::timestamptz AS last_at,
+                   0 AS trips, oa.shift
+              FROM operator_assignment oa
+             WHERE oa.asset_id = :a AND oa.status = 'ACTIVE'
+               AND (oa.valid_to IS NULL OR oa.valid_to >= CURRENT_DATE)
+        ), drove AS (
+            SELECT t.operator_id, 1 AS rank, MAX(t.created_at) AS last_at,
+                   COUNT(*)::int AS trips, NULL::text AS shift
+              FROM trip t
+             WHERE t.asset_id = :a AND t.operator_id IS NOT NULL
+               AND t.status <> 'CANCELLED'
+               AND t.created_at > now() - interval '60 days'
+             GROUP BY t.operator_id
+        ), pooled AS (
+            -- Not "both": BOTH is reserved in Postgres, from TRIM(BOTH ...),
+            -- and the parser rejects it as a name with a message that points
+            -- at the line after the mistake.
+            SELECT * FROM assigned UNION ALL SELECT * FROM drove
+        )
+        SELECT d.kind, d.operator_id, d.visiting_driver_id, d.full_name,
+               d.reference, d.licence_no, d.licence_valid_upto, d.phone,
+               d.employer, d.designation, d.visits,
+               CASE WHEN d.licence_valid_upto IS NULL THEN NULL
+                    ELSE (d.licence_valid_upto - CURRENT_DATE) END AS licence_days_left,
+               MIN(b.rank) AS rank, MAX(b.trips) AS trips,
+               MAX(b.last_at) AS last_at,
+               MAX(b.shift) AS shift
+          FROM pooled b
+          JOIN weighable_driver d ON d.operator_id = b.operator_id
+         WHERE d.status NOT IN ('BLACKLISTED', 'INACTIVE')
+         GROUP BY d.kind, d.operator_id, d.visiting_driver_id, d.full_name,
+                  d.reference, d.licence_no, d.licence_valid_upto, d.phone,
+                  d.employer, d.designation, d.visits
+         ORDER BY MIN(b.rank), MAX(b.trips) DESC, MAX(b.last_at) DESC NULLS LAST
+         LIMIT 4
+    """), {"a": asset_id}).mappings()]
+    for r in suggestions:
+        left = r["licence_days_left"]
+        r["licence_expired"] = left is not None and left < 0
+        r["licence_expiring"] = left is not None and 0 <= left <= 30
+        r["licence_recorded"] = r["licence_no"] is not None
+        r["why"] = "on the shift board" if r["rank"] == 0 else (
+            f"drove it {r['trips']} time{'' if r['trips'] == 1 else 's'} recently")
+
+    # ── hauls still waiting for their empty weight ───────────────────────
+    #
+    # A gross with no tare beside it. Its net is currently worked out from the
+    # standing tare, which is a figure from whenever somebody last weighed the
+    # vehicle empty -- right enough to plan with, wrong enough to argue about.
+    awaiting = [dict(r) for r in pg.execute(text("""
+        SELECT t.trip_id, t.trip_no, t.production_date, t.shift_code,
+               w.gross_kg, w.gross_at, w.tare_kg AS standing_tare_kg,
+               w.net_kg AS net_on_standing_kg, w.tare_age_days,
+               m.name AS material,
+               src.name AS source, dst.name AS destination,
+               COALESCE(p.display_name, p.legal_name) AS driver
+          FROM trip t
+          JOIN trip_weights w ON w.trip_id = t.trip_id
+          LEFT JOIN material m ON m.material_id = t.material_id
+          LEFT JOIN location src ON src.location_id = t.source_location_id
+          LEFT JOIN location dst ON dst.location_id = t.dest_location_id
+          LEFT JOIN operator o ON o.operator_id = t.operator_id
+          LEFT JOIN party p ON p.party_id = o.party_id
+         WHERE t.asset_id = :a
+           AND t.status <> 'CANCELLED'
+           AND w.gross_kg IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM weighment x
+                            WHERE x.trip_id = t.trip_id AND x.kind = 'TARE')
+           AND w.gross_at > now() - interval '3 days'
+         ORDER BY w.gross_at DESC
+         LIMIT 10
+    """), {"a": asset_id}).mappings()]
+
+    return {"asset_id": asset_id, "suggested_drivers": suggestions,
+            "awaiting_tare": awaiting}
+
+
+@router.get("/recent")
+def recent(request: Request, limit: int = Query(8, ge=1, le=40),
+           db: Session = Depends(get_db),
+           pg: Session = Depends(get_minehub_db)) -> list[dict]:
+    """The last few weighings, for the space under the scale.
+
+    An operator who has just keyed a load into the wrong material finds out
+    tomorrow, from a report, when the lorry is long gone. Showing the last
+    handful on the same screen is the cheapest correction there is.
+    """
+    _require(db, request, VIEW)
+    rows = [dict(r) for r in pg.execute(text("""
+        SELECT t.trip_id, t.trip_no, t.status, t.shift_code,
+               w.gross_kg, w.tare_kg, w.net_kg, w.tare_source, w.has_manual,
+               w.gross_at,
+               COALESCE(v.registration_no, vv.registration_no) AS vehicle,
+               v.fleet_code,
+               m.name AS material,
+               COALESCE(p.display_name, p.legal_name, vd.full_name) AS driver
+          FROM trip t
+          JOIN trip_weights w ON w.trip_id = t.trip_id
+          LEFT JOIN weighable_vehicle v
+                 ON v.kind = 'ASSET' AND v.asset_id = t.asset_id
+          LEFT JOIN weighable_vehicle vv
+                 ON vv.kind = 'VISITOR' AND vv.visiting_vehicle_id = t.visiting_vehicle_id
+          LEFT JOIN material m ON m.material_id = t.material_id
+          LEFT JOIN operator o ON o.operator_id = t.operator_id
+          LEFT JOIN party p ON p.party_id = o.party_id
+          LEFT JOIN visiting_driver vd ON vd.visiting_driver_id = t.visiting_driver_id
+         WHERE t.status <> 'CANCELLED' AND w.gross_at IS NOT NULL
+         ORDER BY w.gross_at DESC
+         LIMIT :lim
+    """), {"lim": limit}).mappings()]
+    for r in rows:
+        for k in ("gross_kg", "tare_kg", "net_kg"):
+            r[k] = _f(r[k])
+        # A haul whose empty weight was never taken against it. The figure is
+        # not wrong, it is estimated, and the two should not look alike.
+        r["net_is_estimated"] = r["tare_source"] == "STANDING"
     return rows
 
 
@@ -1280,22 +1554,53 @@ def set_tare(asset_id: int, request: Request, body: dict = Body(...),
     if not bridge_id:
         raise HTTPException(400, "Which bridge?")
 
-    reading = pg.execute(text("""
-        SELECT reading_id, weight_kg FROM weighbridge_reading
-         WHERE weighbridge_id = :b AND is_stable
-           AND received_at > now() - interval '30 seconds'
-         ORDER BY read_at DESC LIMIT 1
-    """), {"b": bridge_id}).mappings().first()
-    if not reading:
-        raise HTTPException(409,
-            "The bridge is not showing a settled weight. Drive the empty vehicle "
-            "onto the deck and let it steady.")
-
-    weight = float(reading["weight_kg"])
     prev = pg.execute(text("""SELECT standing_tare_kg, tare_taken_at FROM asset
                                WHERE asset_id = :a"""), {"a": asset_id}).mappings().first()
     if prev is None:
         raise HTTPException(404, "No such vehicle on the register.")
+
+    # A typed weight, when the bridge is down. The gross weighing has always
+    # allowed this; the tare could not, which meant a bridge outage stopped
+    # tares being taken at all and every net that week fell back to a figure
+    # that was already stale.
+    typed = body.get("weight_kg")
+    reason = (body.get("manual_reason") or "").strip()
+    if typed is not None:
+        if not reason:
+            raise HTTPException(
+                400, "A typed tare needs a reason beside it. A weight nobody "
+                     "watched settle has to be explainable later, and \"the "
+                     "bridge was down\" is a perfectly good reason.")
+        weight = float(typed)
+        if not (0 < weight < 200000):
+            raise HTTPException(400, "That is not a believable empty weight.")
+        reading_id, mode = None, "MANUAL"
+    else:
+        reading = pg.execute(text("""
+            SELECT reading_id, weight_kg FROM weighbridge_reading
+             WHERE weighbridge_id = :b AND is_stable
+               AND received_at > now() - interval '30 seconds'
+             ORDER BY read_at DESC LIMIT 1
+        """), {"b": bridge_id}).mappings().first()
+        if not reading:
+            raise HTTPException(409,
+                "The bridge is not showing a settled weight. Drive the empty "
+                "vehicle onto the deck and let it steady, or type the weight "
+                "with a reason if the bridge is down.")
+        weight = float(reading["weight_kg"])
+        reading_id, mode = reading["reading_id"], "BRIDGE"
+
+    # The series first, then the standing figure. asset.standing_tare_kg is
+    # what every net is computed from; this table is where it came from and
+    # what it used to be.
+    pg.execute(text("""
+        INSERT INTO vehicle_tare_reading (asset_id, weight_kg, taken_by,
+                                          weighbridge_id, reading_id,
+                                          capture_mode, manual_reason, note)
+        VALUES (:a, :w, :by, :b, :r, :mode, :reason, :note)
+    """), {"a": asset_id, "w": weight, "by": _actor(request), "b": bridge_id,
+           "r": reading_id, "mode": mode, "reason": reason or None,
+           "note": body.get("note")})
 
     pg.execute(text("""
         UPDATE asset SET standing_tare_kg = :w, tare_taken_at = now(), tare_taken_by = :by
@@ -1306,7 +1611,206 @@ def set_tare(asset_id: int, request: Request, body: dict = Body(...),
     before = _f(prev["standing_tare_kg"])
     return {"standing_tare_kg": weight, "previous_kg": before,
             "change_kg": round(weight - before, 2) if before is not None else None,
-            "previous_taken_at": prev["tare_taken_at"]}
+            "previous_taken_at": prev["tare_taken_at"],
+            "capture_mode": mode}
+
+
+@router.get("/tare-register")
+def tare_register(request: Request,
+                  asset_id: int | None = Query(None),
+                  days: int = Query(365, ge=1, le=3650),
+                  db: Session = Depends(get_db),
+                  pg: Session = Depends(get_minehub_db)) -> dict:
+    """Every empty weight ever taken, as a series per vehicle.
+
+    ONE NUMBER CANNOT SHOW A DRIFT. A tare moves for honest reasons -- a body
+    repair, a spare wheel, mud packed into the chassis after a wet week -- and
+    a tipper that has gained 400 kg across three months has something in it.
+    Nobody sees that from a single overwritten figure, which is what this
+    replaces.
+    """
+    _require(db, request, VIEW)
+
+    rows = [dict(r) for r in pg.execute(text("""
+        SELECT h.*, a.payload_capacity_kg
+          FROM vehicle_tare_history h
+          LEFT JOIN asset a ON a.asset_id = h.asset_id
+         WHERE h.taken_at > now() - make_interval(days => :d)
+           -- Cast, because Postgres cannot infer the type of a bare
+           -- NULL parameter and refuses the whole statement.
+           AND (CAST(:aid AS bigint) IS NULL
+                OR h.asset_id = CAST(:aid AS bigint))
+         ORDER BY h.fleet_code, h.taken_at DESC
+    """), {"d": days, "aid": asset_id}).mappings()]
+    # The name, not just the number somebody authenticates with.
+    #
+    # "by 3101" is technically complete and practically unreadable: nobody
+    # reviewing a tare recognises the person who took it, so nobody checks it,
+    # which is the whole point of keeping a register. names_for batches the
+    # lookup and caches it, and falls back to the id rather than failing the
+    # screen -- a reading attributed to a number is worse than one attributed
+    # to a name, and far better than one attributed to nobody.
+    takers = people.names_for(db, [r.get("taken_by") for r in rows])
+
+    for r in rows:
+        r["taken_by_name"] = takers.get(str(r.get("taken_by") or ""))
+        for k in ("weight_kg", "previous_kg", "change_kg", "payload_capacity_kg"):
+            r[k] = _f(r.get(k))
+        # Worth a second look rather than a verdict. A tare that moves by more
+        # than about a tonne between readings is usually a real change to the
+        # vehicle, and occasionally a weighing nobody checked.
+        r["is_big_change"] = (r["change_kg"] is not None
+                              and abs(r["change_kg"]) >= 1000)
+
+    # One line per vehicle: where it stands now and how far it has moved.
+    per_vehicle: dict = {}
+    for r in rows:
+        key = r["fleet_code"] or r["registration_no"] or "—"
+        v = per_vehicle.setdefault(key, {
+            "fleet_code": r["fleet_code"], "registration_no": r["registration_no"],
+            "nickname": r["nickname"], "asset_id": r["asset_id"],
+            "readings": 0, "current_kg": None, "current_taken_at": None,
+            "first_kg": None, "lowest_kg": None, "highest_kg": None,
+            "payload_capacity_kg": r["payload_capacity_kg"],
+        })
+        v["readings"] += 1
+        if r["is_current"]:
+            v["current_kg"] = r["weight_kg"]
+            v["current_taken_at"] = r["taken_at"]
+        w = r["weight_kg"]
+        v["first_kg"] = w        # rows come newest first, so this ends oldest
+        v["lowest_kg"] = w if v["lowest_kg"] is None else min(v["lowest_kg"], w)
+        v["highest_kg"] = w if v["highest_kg"] is None else max(v["highest_kg"], w)
+    for v in per_vehicle.values():
+        v["drift_kg"] = (round(v["current_kg"] - v["first_kg"], 2)
+                         if v["current_kg"] is not None
+                         and v["first_kg"] is not None else None)
+        v["spread_kg"] = (round(v["highest_kg"] - v["lowest_kg"], 2)
+                          if v["highest_kg"] is not None else None)
+
+    return {"readings": rows,
+            "vehicles": sorted(per_vehicle.values(),
+                               key=lambda x: str(x["fleet_code"] or "")),
+            "stale_after_days": TARE_STALE_DAYS}
+
+
+@router.post("/trips/{trip_id}/tare")
+def pin_tare_to_trip(trip_id: int, request: Request, body: dict = Body(...),
+                     db: Session = Depends(get_db),
+                     pg: Session = Depends(get_minehub_db)) -> dict:
+    """Attach an empty weight to the trip it was taken for.
+
+    THE ORDER A LOADED TRUCK ACTUALLY ARRIVES IN. It weighs gross, tips, and
+    only then goes over the bridge empty. Until now that empty weight became
+    the vehicle's standing tare and the trip's net was computed from it by
+    luck -- the view falls back to the standing figure. The moment another
+    tare was taken, that trip's net silently changed, because net is computed
+    on read.
+
+    Pinning it makes the trip's net stop floating. The figure can come from
+    the bridge now, from a tare already in the register, or be typed with a
+    reason when the bridge is down.
+    """
+    _require(db, request, TARE)
+
+    trip = pg.execute(text("""
+        SELECT t.trip_id, t.asset_id, t.weighbridge_id, tw.gross_kg, tw.gross_at,
+               tw.tare_kg, tw.tare_source
+          FROM trip t LEFT JOIN trip_weights tw ON tw.trip_id = t.trip_id
+         WHERE t.trip_id = :t
+    """), {"t": trip_id}).mappings().first()
+    if not trip:
+        raise HTTPException(404, "No such trip.")
+    if trip["gross_kg"] is None:
+        raise HTTPException(
+            409, "That trip has no gross weight yet. A tare on its own gives "
+                 "nothing to subtract it from.")
+    if trip["tare_source"] == "WEIGHED":
+        raise HTTPException(
+            409, "That trip already has its own tare weighing. Re-weighing "
+                 "replaces it through the weighing screen, which keeps the "
+                 "correction in the revision history.")
+
+    bridge_id = body.get("weighbridge_id") or trip["weighbridge_id"]
+    source = (body.get("source") or "BRIDGE").upper()
+    reason = (body.get("manual_reason") or "").strip()
+
+    if source == "REGISTER":
+        # A tare already in the series, chosen deliberately.
+        rid = body.get("tare_reading_id")
+        if not rid:
+            raise HTTPException(400, "Which tare reading?")
+        r = pg.execute(text("""
+            SELECT weight_kg, taken_at FROM vehicle_tare_reading
+             WHERE tare_reading_id = :r AND asset_id = :a
+        """), {"r": rid, "a": trip["asset_id"]}).mappings().first()
+        if not r:
+            raise HTTPException(
+                404, "That tare is not on this vehicle's register. A tare "
+                     "belonging to another vehicle is not a tare for this trip.")
+        weight, mode, reading_id = float(r["weight_kg"]), "MANUAL", None
+        reason = reason or (f"Taken from this vehicle's tare register, "
+                            f"weighed {r['taken_at']:%d-%m-%Y %H:%M}.")
+    elif source == "MANUAL":
+        if body.get("weight_kg") is None:
+            raise HTTPException(400, "A weight is needed.")
+        if not reason:
+            raise HTTPException(400, "A typed tare needs a reason beside it.")
+        weight, mode, reading_id = float(body["weight_kg"]), "MANUAL", None
+    else:
+        reading = pg.execute(text("""
+            SELECT reading_id, weight_kg FROM weighbridge_reading
+             WHERE weighbridge_id = :b AND is_stable
+               AND received_at > now() - interval '30 seconds'
+             ORDER BY read_at DESC LIMIT 1
+        """), {"b": bridge_id}).mappings().first()
+        if not reading:
+            raise HTTPException(409,
+                "The bridge is not showing a settled weight. Drive the empty "
+                "vehicle onto the deck and let it steady.")
+        weight, mode = float(reading["weight_kg"]), "BRIDGE"
+        reading_id = reading["reading_id"]
+
+    if weight >= float(trip["gross_kg"]):
+        raise HTTPException(
+            422, f"An empty weight of {weight:,.0f} kg is not less than the "
+                 f"gross of {float(trip['gross_kg']):,.0f} kg, which would "
+                 f"make the load weigh nothing or less.")
+
+    pg.execute(text("""
+        INSERT INTO weighment (trip_id, weighbridge_id, kind, weight_kg,
+                               capture_mode, reading_id, manual_reason,
+                               weighed_at, weighed_by, remarks)
+        VALUES (:t, :b, 'TARE', :w, :mode, :r, :reason, now(), :by, :note)
+    """), {"t": trip_id, "b": bridge_id, "w": weight, "mode": mode,
+           "r": reading_id, "reason": reason or None, "by": _actor(request),
+           "note": body.get("note")})
+
+    # A tare weighed at the bridge is also this vehicle's newest empty weight.
+    # Not when it was chosen from the register — that figure is already there.
+    if mode == "BRIDGE" and trip["asset_id"]:
+        pg.execute(text("""
+            INSERT INTO vehicle_tare_reading (asset_id, weight_kg, taken_by,
+                                              weighbridge_id, reading_id,
+                                              capture_mode, note)
+            VALUES (:a, :w, :by, :b, :r, 'BRIDGE',
+                    'Weighed empty after the load was tipped, on trip ' || :t)
+        """), {"a": trip["asset_id"], "w": weight, "by": _actor(request),
+               "b": bridge_id, "r": reading_id, "t": str(trip_id)})
+        pg.execute(text("""
+            UPDATE asset SET standing_tare_kg = :w, tare_taken_at = now(),
+                             tare_taken_by = :by
+             WHERE asset_id = :a
+        """), {"a": trip["asset_id"], "w": weight, "by": _actor(request)})
+
+    pg.commit()
+    after = pg.execute(text(
+        "SELECT gross_kg, tare_kg, net_kg, tare_source, tare_after_gross "
+        "FROM trip_weights WHERE trip_id = :t"), {"t": trip_id}).mappings().first()
+    return {"ok": True, "weight_kg": weight, "capture_mode": mode,
+            "gross_kg": _f(after["gross_kg"]), "tare_kg": _f(after["tare_kg"]),
+            "net_kg": _f(after["net_kg"]), "tare_source": after["tare_source"],
+            "tare_after_gross": after["tare_after_gross"]}
 
 
 # ═══════════════════════════════════════════════════════════════════════════

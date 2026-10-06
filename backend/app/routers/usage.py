@@ -2,6 +2,13 @@
 
 TWO LOGS, AND NEITHER IS THE WHOLE STORY.
 
+  usage_session, usage_page_view   our own mirror in minehub of two tables
+  in the shared balcorpdb, kept current by services/usage_sync.py. The source
+  has no index led by app_source, so reading it meant scanning every other
+  application's rows; the mirror is indexed on (app_source, date) and the
+  screen never touches a shared server. The source of record is still
+  balcorpdb -- see the sync.
+
   digital_apps_user_sessions   MySQL, shared by 22 applications. Who signed
   digital_apps_page_views      in, from what browser, for how long, and which
                                screens they opened.
@@ -28,6 +35,7 @@ screen.
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
@@ -37,6 +45,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.minehub_db import get_minehub_db
+from app.services import usage_sync
 
 router = APIRouter(prefix="/api/usage", tags=["Usage"])
 
@@ -56,7 +65,10 @@ VIEW = ("usage.view", "access.users.view")
 # Application: that is somebody else's staff, on somebody else's screen. Two —
 # the systems this site actually runs — and anything else is refused rather
 # than quietly answered.
-ALLOWED_APPS = ("MINES", "IMOS")
+# One application. IMOS was here because the screen could report on it; it no
+# longer does, and the mirror stopped carrying it. Adding another back is this
+# line and nothing else.
+ALLOWED_APPS = ("MINES",)
 
 # Where a page path maps to a name somebody would recognise. The paths are
 # what the browser reported; these are what the sidebar calls them.
@@ -99,6 +111,20 @@ def _numbers(row: dict, *keys: str) -> dict:
         if k in row:
             row[k] = _int(row[k])
     return row
+
+
+# The assembled answer, held briefly.
+#
+# The endpoint is fourteen quick queries rather than one slow one, and nearly
+# all of the three seconds is round trips to a MySQL server on another host.
+# That is long enough that somebody switching tabs aborts it — which is exactly
+# what happened at 13:38 today, and the screen reported it as a failure of
+# ours.
+#
+# A past range cannot change and today's changes slowly.
+_ANSWER: "OrderedDict[tuple, tuple[float, dict]]" = OrderedDict()
+_ANSWER_TTL = 60.0
+_ANSWER_MAX = 12
 
 
 def _superadmins(pg: Session) -> list[str]:
@@ -172,8 +198,12 @@ def usage(request: Request,
           day_to: date | None = Query(None),
           app_source: str = Query(APP),
           include_admins: bool = Query(False),
-          db: Session = Depends(get_db),
-          pg: Session = Depends(get_minehub_db)) -> dict:
+          pg: Session = Depends(get_minehub_db),
+          # Still MySQL, and rightly: this is the SAP employee master, not the
+          # usage log. It is the one thing on this screen the mirror does not
+          # hold, because it is not ours to mirror and it is read by name, not
+          # scanned by range.
+          db: Session = Depends(get_db)) -> dict:
     """Everything the page draws, in one request.
 
     One call rather than six. The page is read top to bottom in a meeting and
@@ -184,49 +214,115 @@ def usage(request: Request,
     app_source = _app(app_source)
     frm, to = _window(days, day_from, day_to)
 
-    # Superadmins are excluded by default — see _superadmins. A comma-joined
-    # string rather than an expanding IN: the exclusion reaches a dozen queries
-    # across two tables, and one plain parameter threads through all of them.
+    # The same answer was assembled a moment ago for somebody else, or for
+    # this reader before they changed tab. Fourteen round trips to another host
+    # is long enough to be abandoned mid-flight.
+    import time as _time
+    # `cache_key`, not `key`: this function reuses `key` twice further down —
+    # for the day loop and for the employee master — and the cache is written
+    # at the very end, by which time a plain `key` holds the last employee
+    # number read. Every answer was filed under '17331' and none was ever found
+    # again.
+    cache_key = (app_source, frm, to, bool(include_admins))
+    hit = _ANSWER.get(cache_key)
+    if hit and _time.monotonic() - hit[0] < _ANSWER_TTL:
+        _ANSWER.move_to_end(cache_key)
+        return hit[1]
+
+    # Superadmins are excluded by default — see _superadmins. A real array
+    # now that this reads Postgres: `= ANY(:skip)` takes the list directly,
+    # where MySQL had no arrays and needed it comma-joined into a string.
     # Empty excludes nobody, so "include them" needs no second code path.
     skipped = [] if include_admins else _superadmins(pg)
-    p = {"app": app_source, "frm": frm, "to": to, "skip": ",".join(skipped)}
+    p = {"app": app_source, "frm": frm, "to": to, "skip": list(skipped)}
+
+    # ── the month, fetched whole, twice ──────────────────────────────────
+    #
+    # Everything below used to be its own query. Twenty of them, each walking
+    # a table shared by every application in the company to pick out the few
+    # hundred rows that are ours: 128,725 scanned for 604 sessions, 155,551
+    # for 2,419 page views, and 5.4 seconds of it.
+    #
+    # They are all the same rows grouped differently, so they are fetched once
+    # and grouped here. The worst offender was the people list, whose page-view
+    # count was a correlated subquery -- one full scan of the page-view table
+    # per person on the list.
+    ses = pg.execute(text("""
+        SELECT session_id, emp_id, emp_name, department, role,
+               login_at, logout_at, last_active_at, duration_minutes,
+               end_reason, browser, os, device_type, ip_address, is_active
+          FROM usage_session
+         WHERE app_source = :app AND login_at::date BETWEEN :frm AND :to
+           AND NOT (emp_id = ANY(:skip))
+    """), p).mappings().all()
+
+    views_rows = pg.execute(text("""
+        SELECT emp_id, session_id, page_path, viewed_at, time_spent_seconds
+          FROM usage_page_view
+         WHERE app_source = :app AND viewed_at::date BETWEEN :frm AND :to
+           AND NOT (emp_id = ANY(:skip))
+    """), p).mappings().all()
+
+    def _n(v) -> int:
+        """A count, whatever the driver handed back. Pydantic serialises a
+        Decimal as a JSON string and the browser then concatenates it."""
+        return 0 if v is None else int(v)
+
+    def _biggest(vals) -> str | None:
+        """MAX() over a text column, which ignores nulls."""
+        real = [v for v in vals if v is not None]
+        return max(real) if real else None
 
     # ── who signed in ────────────────────────────────────────────────────
-    head = db.execute(text("""
-        SELECT COUNT(*)                                    AS sessions,
-               COUNT(DISTINCT emp_id)                      AS people,
-               COALESCE(SUM(duration_minutes), 0)          AS minutes,
-               COALESCE(ROUND(AVG(duration_minutes), 1), 0) AS avg_minutes,
-               COUNT(DISTINCT CASE WHEN is_active = 1
-                                   THEN emp_id END)        AS live
-          FROM digital_apps_user_sessions
-         WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
-           AND NOT FIND_IN_SET(emp_id, :skip)
-    """), p).mappings().first()
+    _mins = [_n(r["duration_minutes"]) for r in ses
+             if r["duration_minutes"] is not None]
+    head = {
+        "sessions": len(ses),
+        "people": len({r["emp_id"] for r in ses}),
+        "minutes": sum(_mins),
+        "avg_minutes": round(sum(_mins) / len(_mins), 1) if _mins else 0,
+        "live": len({r["emp_id"] for r in ses if r["is_active"]}),
+    }
 
-    people = [dict(r) for r in db.execute(text("""
-        SELECT s.emp_id, MAX(s.emp_name) AS name, MAX(s.department) AS department,
-               MAX(s.role) AS role,
-               COUNT(*) AS sessions,
-               COALESCE(SUM(s.duration_minutes), 0) AS minutes,
-               -- On how many separate days, which says something sessions
-               -- cannot: 40 sessions on 3 days is a week of work, 40 across
-               -- 20 days is a habit.
-               COUNT(DISTINCT DATE(s.login_at)) AS active_days,
-               MIN(s.login_at) AS first_seen,
-               MAX(s.last_active_at) AS last_seen,
-               MAX(s.browser) AS browser, MAX(s.device_type) AS device,
-               SUM(s.end_reason = 'TIMEOUT') AS timed_out,
-               (SELECT COUNT(*) FROM digital_apps_page_views v
-                 WHERE v.emp_id = s.emp_id AND v.app_source = :app
-                   AND DATE(v.viewed_at) BETWEEN :frm AND :to) AS views
-          FROM digital_apps_user_sessions s
-         WHERE s.app_source = :app AND DATE(s.login_at) BETWEEN :frm AND :to
-           AND NOT FIND_IN_SET(s.emp_id, :skip)
-         GROUP BY s.emp_id ORDER BY minutes DESC
-    """), p).mappings().all()]
-    for r in people:
-        _numbers(r, "sessions", "minutes", "views", "timed_out", "active_days")
+    # Page views per person, in one pass rather than one query each.
+    views_by_emp: dict = {}
+    for v in views_rows:
+        views_by_emp[v["emp_id"]] = views_by_emp.get(v["emp_id"], 0) + 1
+
+    by_emp: dict = {}
+    for r in ses:
+        by_emp.setdefault(r["emp_id"], []).append(r)
+
+    people = []
+    for emp_id, rs in by_emp.items():
+        mins = [_n(r["duration_minutes"]) for r in rs
+                if r["duration_minutes"] is not None]
+        people.append({
+            "emp_id": emp_id,
+            "name": _biggest(r["emp_name"] for r in rs),
+            "department": _biggest(r["department"] for r in rs),
+            "role": _biggest(r["role"] for r in rs),
+            "sessions": len(rs),
+            "minutes": sum(mins),
+            # On how many separate days, which says something sessions cannot:
+            # 40 sessions on 3 days is a week of work, 40 across 20 days is a
+            # habit.
+            "active_days": len({r["login_at"].date() for r in rs
+                                if r["login_at"]}),
+            "first_seen": min((r["login_at"] for r in rs if r["login_at"]),
+                              default=None),
+            "last_seen": max((r["last_active_at"] for r in rs
+                              if r["last_active_at"]), default=None),
+            "browser": _biggest(r["browser"] for r in rs),
+            "device": _biggest(r["device_type"] for r in rs),
+            "timed_out": sum(1 for r in rs if r["end_reason"] == "TIMEOUT"),
+            "views": views_by_emp.get(emp_id, 0),
+        })
+    # Longest first, and the employee number settles a tie. Ordering by
+    # minutes alone leaves everyone on the same total in whatever order they
+    # arrived, which is not the same order twice -- two readers comparing the
+    # same screen would see the same people in different places.
+    people.sort(key=lambda o: (-o["minutes"], str(o["emp_id"])))
 
     # ── everyone who was GIVEN it, used or not ───────────────────────────
     #
@@ -249,38 +345,28 @@ def usage(request: Request,
 
     # The same people over three windows. One number cannot separate a tool
     # somebody opens every morning from one they opened once this month.
-    reach = db.execute(text("""
-        SELECT COUNT(DISTINCT CASE WHEN DATE(login_at) = CURDATE()
-                                   THEN emp_id END)                  AS dau,
-               COUNT(DISTINCT CASE WHEN login_at >= NOW() - INTERVAL 7 DAY
-                                   THEN emp_id END)                  AS wau,
-               COUNT(DISTINCT emp_id)                                AS mau,
-               SUM(DATE(login_at) = CURDATE())                       AS sessions_today
-          FROM digital_apps_user_sessions
-         WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
-           AND NOT FIND_IN_SET(emp_id, :skip)
-    """), p).mappings().first()
+    _today = date.today()
+    _week_ago = datetime.now() - timedelta(days=7)
+    reach = {
+        "dau": len({r["emp_id"] for r in ses
+                    if r["login_at"] and r["login_at"].date() == _today}),
+        "wau": len({r["emp_id"] for r in ses
+                    if r["login_at"] and r["login_at"] >= _week_ago}),
+        "mau": len({r["emp_id"] for r in ses}),
+        "sessions_today": sum(1 for r in ses
+                              if r["login_at"] and r["login_at"].date() == _today),
+    }
 
     # Every finished session's length, for a median. A mean is moved by one
     # person who left a tab open over lunch; a median is not, and the two
     # printed together say whether that happened.
-    durations = sorted(
-        int(r[0]) for r in db.execute(text("""
-            SELECT duration_minutes FROM digital_apps_user_sessions
-             WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
-           AND NOT FIND_IN_SET(emp_id, :skip)
-               AND duration_minutes IS NOT NULL
-        """), p).all() if r[0] is not None)
+    durations = sorted(_mins)
     median_minutes = (durations[len(durations) // 2] if durations else 0)
 
     # Sessions that reached at least one screen. A sign-in that arrived
     # nowhere is not use, and dividing page views by ALL sessions quietly
     # counts it as though it were.
-    engaged = int(db.execute(text("""
-        SELECT COUNT(DISTINCT session_id) FROM digital_apps_page_views
-         WHERE app_source = :app AND DATE(viewed_at) BETWEEN :frm AND :to
-           AND NOT FIND_IN_SET(emp_id, :skip)
-    """), p).scalar() or 0)
+    engaged = len({v["session_id"] for v in views_rows})
 
     # Who is in there right now — one row per PERSON, not per session.
     #
@@ -291,7 +377,11 @@ def usage(request: Request,
     #
     # The session count is kept, because two tabs is worth seeing once you know
     # it is one person.
-    online = [dict(r) for r in db.execute(text("""
+    #
+    # Still its own query: this one is not bounded by the range at all -- it
+    # asks who is signed in NOW, which is a different question from what the
+    # rest of the screen reports on.
+    online = [dict(r) for r in pg.execute(text("""
         SELECT emp_id,
                MAX(emp_name)       AS emp_name,
                MAX(department)     AS department,
@@ -299,9 +389,9 @@ def usage(request: Request,
                MAX(last_active_at) AS last_active_at,
                MIN(login_at)       AS login_at,
                COUNT(*)            AS sessions
-          FROM digital_apps_user_sessions
-         WHERE app_source = :app AND is_active = 1
-           AND NOT FIND_IN_SET(emp_id, :skip)
+          FROM usage_session
+         WHERE app_source = :app AND is_active
+           AND NOT (emp_id = ANY(:skip))
          GROUP BY emp_id
          ORDER BY last_active_at DESC
     """), p).mappings().all()]
@@ -309,40 +399,37 @@ def usage(request: Request,
         _numbers(r, "sessions")
 
     # ── what they opened ─────────────────────────────────────────────────
+    by_path: dict = {}
+    for v in views_rows:
+        by_path.setdefault(v["page_path"], []).append(v)
     screens = []
-    for r in db.execute(text("""
-        SELECT page_path,
-               COUNT(*) AS views,
-               COUNT(DISTINCT emp_id) AS people,
-               COALESCE(ROUND(AVG(time_spent_seconds)), 0) AS avg_seconds,
-               COALESCE(SUM(time_spent_seconds), 0) AS total_seconds,
-               SUM(time_spent_seconds IS NULL) AS no_dwell
-          FROM digital_apps_page_views
-         WHERE app_source = :app AND DATE(viewed_at) BETWEEN :frm AND :to
-           AND NOT FIND_IN_SET(emp_id, :skip)
-         GROUP BY page_path ORDER BY views DESC
-    """), p).mappings().all():
-        o = _numbers(dict(r), "views", "people", "avg_seconds",
-                     "total_seconds", "no_dwell")
-        o["screen"] = SCREEN_NAMES.get(o["page_path"], o["page_path"])
-        screens.append(o)
+    for path, vs in by_path.items():
+        dwell = [_n(v["time_spent_seconds"]) for v in vs
+                 if v["time_spent_seconds"] is not None]
+        screens.append({
+            "page_path": path,
+            "views": len(vs),
+            "people": len({v["emp_id"] for v in vs}),
+            "avg_seconds": round(sum(dwell) / len(dwell)) if dwell else 0,
+            "total_seconds": sum(dwell),
+            "no_dwell": sum(1 for v in vs if v["time_spent_seconds"] is None),
+            "screen": SCREEN_NAMES.get(path, path),
+        })
+    screens.sort(key=lambda o: (-o["views"], o["page_path"]))
 
     # ── when ─────────────────────────────────────────────────────────────
-    by_hour = {int(r[0]): int(r[1]) for r in db.execute(text("""
-        SELECT HOUR(viewed_at), COUNT(*) FROM digital_apps_page_views
-         WHERE app_source = :app AND DATE(viewed_at) BETWEEN :frm AND :to
-           AND NOT FIND_IN_SET(emp_id, :skip)
-         GROUP BY 1
-    """), p).all()}
-    # Monday is 2 in MySQL's DAYOFWEEK; shifted so 0 is Monday, which is how
-    # a mine week is read.
-    by_weekday = {int(r[0]): int(r[1]) for r in db.execute(text("""
-        SELECT (DAYOFWEEK(viewed_at) + 5) % 7, COUNT(*)
-          FROM digital_apps_page_views
-         WHERE app_source = :app AND DATE(viewed_at) BETWEEN :frm AND :to
-           AND NOT FIND_IN_SET(emp_id, :skip)
-         GROUP BY 1
-    """), p).all()}
+    by_hour: dict = {}
+    for v in views_rows:
+        if v["viewed_at"]:
+            h = v["viewed_at"].hour
+            by_hour[h] = by_hour.get(h, 0) + 1
+    # Monday is 0, which is how a mine week is read.
+    by_weekday: dict = {}
+    for v in views_rows:
+        if v["viewed_at"]:
+            w = v["viewed_at"].weekday()
+            by_weekday[w] = by_weekday.get(w, 0) + 1
+
     # Weekday against hour, as a grid. "Busy on Thursday" and "busy at 3pm"
     # are two totals that cannot tell you about Thursday at 3pm, which is the
     # question somebody scheduling a shift handover is actually asking.
@@ -350,24 +437,20 @@ def usage(request: Request,
     # Sessions rather than page views: this is about when people come to the
     # dashboard, not how much they clicked once they were in.
     heatmap = [[0] * 24 for _ in range(7)]
-    for r in db.execute(text("""
-        SELECT (DAYOFWEEK(login_at) + 5) % 7 AS wd, HOUR(login_at) AS hr,
-               COUNT(*) AS n
-          FROM digital_apps_user_sessions
-         WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
-           AND NOT FIND_IN_SET(emp_id, :skip)
-         GROUP BY 1, 2
-    """), p).all():
-        heatmap[int(r[0])][int(r[1])] = int(r[2])
+    for r in ses:
+        if r["login_at"]:
+            heatmap[r["login_at"].weekday()][r["login_at"].hour] += 1
 
-    by_weekday_sessions = {int(r[0]): {"sessions": int(r[1]), "people": int(r[2])}
-                           for r in db.execute(text("""
-        SELECT (DAYOFWEEK(login_at) + 5) % 7, COUNT(*), COUNT(DISTINCT emp_id)
-          FROM digital_apps_user_sessions
-         WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
-           AND NOT FIND_IN_SET(emp_id, :skip)
-         GROUP BY 1
-    """), p).all()}
+    _wd: dict = {}
+    for r in ses:
+        if r["login_at"]:
+            w = r["login_at"].weekday()
+            b = _wd.setdefault(w, {"sessions": 0, "people": set()})
+            b["sessions"] += 1
+            b["people"].add(r["emp_id"])
+    by_weekday_sessions = {w: {"sessions": b["sessions"],
+                               "people": len(b["people"])}
+                           for w, b in _wd.items()}
 
     # Every day in the range, including the ones nobody signed in.
     #
@@ -376,58 +459,55 @@ def usage(request: Request,
     # range of 1-28 September opened at the 12th, and the three quiet days
     # before it — which are the interesting ones on an adoption screen —
     # simply were not there to see.
-    seen_days = {str(r[0]): {"sessions": _int(r[1]), "people": _int(r[2])}
-                 for r in db.execute(text("""
-        SELECT DATE(login_at), COUNT(*), COUNT(DISTINCT emp_id)
-          FROM digital_apps_user_sessions
-         WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
-           AND NOT FIND_IN_SET(emp_id, :skip)
-         GROUP BY 1 ORDER BY 1
-    """), p).all()}
+    seen_days: dict = {}
+    for r in ses:
+        if r["login_at"]:
+            k = r["login_at"].date().isoformat()
+            b = seen_days.setdefault(k, {"sessions": 0, "people": set()})
+            b["sessions"] += 1
+            b["people"].add(r["emp_id"])
     by_day_sessions = {}
     day = frm
     while day <= to:
         key = day.isoformat()
-        by_day_sessions[key] = seen_days.get(key, {"sessions": 0, "people": 0})
+        got = seen_days.get(key)
+        by_day_sessions[key] = ({"sessions": got["sessions"],
+                                 "people": len(got["people"])} if got
+                                else {"sessions": 0, "people": 0})
         day += timedelta(days=1)
 
-    by_day = [{"day": str(r[0]), "views": int(r[1]), "people": int(r[2])}
-              for r in db.execute(text("""
-        SELECT DATE(viewed_at), COUNT(*), COUNT(DISTINCT emp_id)
-          FROM digital_apps_page_views
-         WHERE app_source = :app AND DATE(viewed_at) BETWEEN :frm AND :to
-           AND NOT FIND_IN_SET(emp_id, :skip)
-         GROUP BY 1 ORDER BY 1
-    """), p).all()]
+    _vd: dict = {}
+    for v in views_rows:
+        if v["viewed_at"]:
+            k = v["viewed_at"].date().isoformat()
+            b = _vd.setdefault(k, {"views": 0, "people": set()})
+            b["views"] += 1
+            b["people"].add(v["emp_id"])
+    by_day = [{"day": k, "views": b["views"], "people": len(b["people"])}
+              for k, b in sorted(_vd.items())]
 
     # ── how sessions ended, and on what ──────────────────────────────────
-    endings = {str(r[0] or "still open"): int(r[1]) for r in db.execute(text("""
-        SELECT COALESCE(end_reason, 'still open'), COUNT(*)
-          FROM digital_apps_user_sessions
-         WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
-           AND NOT FIND_IN_SET(emp_id, :skip)
-         GROUP BY 1
-    """), p).all()}
-    browsers = {str(r[0] or "unknown"): int(r[1]) for r in db.execute(text("""
-        SELECT COALESCE(browser, 'unknown'), COUNT(*)
-          FROM digital_apps_user_sessions
-         WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
-           AND NOT FIND_IN_SET(emp_id, :skip)
-         GROUP BY 1 ORDER BY 2 DESC
-    """), p).all()}
+    endings: dict = {}
+    for r in ses:
+        k = r["end_reason"] or "still open"
+        endings[k] = endings.get(k, 0) + 1
+    _br: dict = {}
+    for r in ses:
+        k = r["browser"] or "unknown"
+        _br[k] = _br.get(k, 0) + 1
+    browsers = dict(sorted(_br.items(), key=lambda kv: -kv[1]))
 
-    recent = [dict(r) for r in db.execute(text("""
-        SELECT session_id, emp_id, emp_name, login_at, logout_at,
-               duration_minutes, end_reason, is_active, browser, os,
-               device_type, ip_address
-          FROM digital_apps_user_sessions
-         WHERE app_source = :app AND DATE(login_at) BETWEEN :frm AND :to
-           AND NOT FIND_IN_SET(emp_id, :skip)
-         ORDER BY login_at DESC LIMIT 60
-    """), p).mappings().all()]
-    for r in recent:
-        r["session_id"] = (r["session_id"] or "")[:8]   # enough to tell apart
-        _numbers(r, "duration_minutes", "is_active")
+    recent = []
+    # ORDER BY login_at DESC, and MySQL sorts NULLs last that way round.
+    for r in sorted(ses, key=lambda r: r["login_at"] or datetime.min,
+                    reverse=True)[:60]:
+        o = {k: r[k] for k in (
+            "session_id", "emp_id", "emp_name", "login_at", "logout_at",
+            "duration_minutes", "end_reason", "is_active", "browser", "os",
+            "device_type", "ip_address")}
+        o["session_id"] = (o["session_id"] or "")[:8]   # enough to tell apart
+        _numbers(o, "duration_minutes", "is_active")
+        recent.append(o)
 
     # ── what they changed, from the other database ───────────────────────
     raw = pg.execute(text("""
@@ -538,8 +618,11 @@ def usage(request: Request,
         "payload": e["payload"],
     } for e in shown[:80]]
 
-    return {
+    answer = {
         "app_source": app_source, "from": frm.isoformat(), "to": to.isoformat(),
+        # This screen reads a mirror, so it is by design a little behind. A
+        # figure whose age cannot be established is a figure nobody can defend.
+        "mirror": usage_sync.freshness(pg),
         "days": (to - frm).days + 1,
         "headline": {
             **{k: _int(v) for k, v in dict(head or {}).items()
@@ -579,29 +662,34 @@ def usage(request: Request,
                          for k, v in sorted(unattributed.items(),
                                             key=lambda x: -x[1])],
     }
+    _ANSWER[cache_key] = (_time.monotonic(), answer)
+    _ANSWER.move_to_end(cache_key)
+    while len(_ANSWER) > _ANSWER_MAX:
+        _ANSWER.popitem(last=False)
+    return answer
 
 
 @router.get("/apps")
 def apps(request: Request, days: int = Query(30, ge=1, le=365),
          day_from: date | None = Query(None),
          day_to: date | None = Query(None),
-         db: Session = Depends(get_db)) -> list[dict]:
-    """The applications this screen may report on — MINES and IMOS.
+         pg: Session = Depends(get_minehub_db)) -> list[dict]:
+    """The applications this screen may report on.
 
-    Not all twenty-five that share the table. The others belong to other
-    departments and their staff are not this page's business.
+    Not the twenty-five that share the session table. The others belong to
+    other departments and their staff are not this page's business.
     """
     _require(request)
     frm, to = _window(days, day_from, day_to)
     rows = {r["app_source"]: _numbers(dict(r), "sessions", "people", "minutes")
-            for r in db.execute(text("""
+            for r in pg.execute(text("""
         SELECT app_source,
                COUNT(*) AS sessions,
                COUNT(DISTINCT emp_id) AS people,
                COALESCE(SUM(duration_minutes), 0) AS minutes,
                MAX(last_active_at) AS last_seen
-          FROM digital_apps_user_sessions
-         WHERE DATE(login_at) BETWEEN :frm AND :to
+          FROM usage_session
+         WHERE login_at::date BETWEEN :frm AND :to
            AND app_source IN :apps
          GROUP BY app_source
     """).bindparams(bindparam("apps", expanding=True)),
@@ -621,8 +709,8 @@ def person(emp_id: str, request: Request,
            day_from: date | None = Query(None),
            day_to: date | None = Query(None),
            app_source: str = Query(APP),
-           db: Session = Depends(get_db),
-           pg: Session = Depends(get_minehub_db)) -> dict:
+           pg: Session = Depends(get_minehub_db),
+           db: Session = Depends(get_db)) -> dict:   # the SAP master only
     """One person: every session, every screen, everything they changed.
 
     The first thing anybody asks of an aggregate is which of these rows is me,
@@ -637,12 +725,12 @@ def person(emp_id: str, request: Request,
     frm, to = _window(days, day_from, day_to)
     p = {"app": app_source, "frm": frm, "to": to, "e": emp_id}
 
-    sessions = [dict(r) for r in db.execute(text("""
+    sessions = [dict(r) for r in pg.execute(text("""
         SELECT session_id, login_at, logout_at, duration_minutes, end_reason,
                is_active, browser, os, device_type, ip_address
-          FROM digital_apps_user_sessions
+          FROM usage_session
          WHERE app_source = :app AND emp_id = :e
-           AND DATE(login_at) BETWEEN :frm AND :to
+           AND login_at::date BETWEEN :frm AND :to
          ORDER BY login_at DESC LIMIT 100
     """), p).mappings().all()]
     for r in sessions:
@@ -650,14 +738,14 @@ def person(emp_id: str, request: Request,
         _numbers(r, "duration_minutes", "is_active")
 
     screens = []
-    for r in db.execute(text("""
+    for r in pg.execute(text("""
         SELECT page_path, COUNT(*) AS views,
                COALESCE(ROUND(AVG(time_spent_seconds)), 0) AS avg_seconds,
                COALESCE(SUM(time_spent_seconds), 0) AS total_seconds,
                MAX(viewed_at) AS last_seen
-          FROM digital_apps_page_views
+          FROM usage_page_view
          WHERE app_source = :app AND emp_id = :e
-           AND DATE(viewed_at) BETWEEN :frm AND :to
+           AND viewed_at::date BETWEEN :frm AND :to
          GROUP BY page_path ORDER BY views DESC
     """), p).mappings().all():
         o = _numbers(dict(r), "views", "avg_seconds", "total_seconds")
@@ -667,16 +755,16 @@ def person(emp_id: str, request: Request,
     # One row per day they were here, so the drill-down can show the shape of
     # somebody's month rather than only its total.
     by_day = [{"day": str(r[0]), "sessions": _int(r[1]), "minutes": _int(r[2])}
-              for r in db.execute(text("""
-        SELECT DATE(login_at), COUNT(*), COALESCE(SUM(duration_minutes), 0)
-          FROM digital_apps_user_sessions
+              for r in pg.execute(text("""
+        SELECT login_at::date, COUNT(*), COALESCE(SUM(duration_minutes), 0)
+          FROM usage_session
          WHERE app_source = :app AND emp_id = :e
-           AND DATE(login_at) BETWEEN :frm AND :to
+           AND login_at::date BETWEEN :frm AND :to
          GROUP BY 1 ORDER BY 1
     """), p).all()]
 
-    who = db.execute(text("""
-        SELECT emp_name, department, role FROM digital_apps_user_sessions
+    who = pg.execute(text("""
+        SELECT emp_name, department, role FROM usage_session
          WHERE app_source = :app AND emp_id = :e
          ORDER BY login_at DESC LIMIT 1
     """), p).mappings().first()

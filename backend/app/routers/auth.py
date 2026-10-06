@@ -143,6 +143,9 @@ def track_time(request: Request, body: dict = Body(...), db: Session = Depends(g
 def heartbeat(request: Request, db: Session = Depends(get_db)) -> dict:
     """Keep a session alive while a dashboard is left open on a wall display."""
     sid = request.cookies.get(COOKIE)
-    if sid:
-        auth.touch(db, sid)
-    return {"ok": True}
+    if not sid:
+        return {"ok": True, "written": False}
+    # Written now, not noted for later. This is the only thing holding a
+    # session open for somebody reading one screen, and until it wrote
+    # directly no session in eleven days survived past thirty-one minutes.
+    return {"ok": True, "written": auth.touch_now(db, sid)}

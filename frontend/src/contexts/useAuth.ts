@@ -15,6 +15,9 @@ export interface AuthUser {
   /** The roles this person holds. Roles are data now — never branch on a role
    *  name in the UI; test the permission that role carries. */
   roles: UserRole[];
+  /** Where roles and permissions came from. "legacy" means the access
+   *  database was unreachable and this is the old, smaller fallback set. */
+  access_source?: "minehub" | "legacy";
   /** Everything this person may do. The single source of truth for the UI. */
   permissions: string[];
   /** Pages this user may open, derived server-side from the dashboard.*

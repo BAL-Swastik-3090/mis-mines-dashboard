@@ -90,8 +90,14 @@ interface Machine {
   asset_id: number; fleet_code: string; nickname: string | null;
   ownership: string | null; plan_name: string | null;
   standard_bucket: number | null; capacity_uom: string | null;
+  /** What the machine was built to carry. The benchmark. */
+  rated_bucket_cum: number | null;
+  /** What is bolted on this morning. What productivity is worked out from. */
   fitted_bucket_cum: number | null; bucket_used: number | null;
-  bucket_is_fitted: boolean; owner: string | null;
+  /** Which of the two the hourly figure came from: fitted, rated or legacy. */
+  bucket_source: "fitted" | "rated" | "legacy" | null;
+  bucket_is_fitted: boolean; bucket_below_rated: boolean;
+  owner: string | null;
   fill_factor: number; swell_factor: number;
   cycle_sec: number; cycles_per_hour: number; cum_per_scoop: number;
   cum_per_hour: number; cycle_is_overridden: boolean;
@@ -216,11 +222,15 @@ export default function CapacitySection() {
     } finally { setBusy(false); }
   };
 
-  const setBucket = async (assetId: number, cum: number | null) => {
+  /* One number or the other. A key left out is left alone, so the two boxes
+   * on a row cannot wipe each other. */
+  const setBucket = async (
+    assetId: number,
+    patch: { fitted_bucket_cum?: number | null; rated_bucket_cum?: number | null },
+  ) => {
     setBusy(true);
     try {
-      await api.put(`/productivity/machines/${assetId}/bucket`,
-        { fitted_bucket_cum: cum });
+      await api.put(`/productivity/machines/${assetId}/bucket`, patch);
       await load();
     } finally { setBusy(false); }
   };
@@ -554,7 +564,7 @@ export default function CapacitySection() {
                           const raw = e.target.value.trim();
                           const v = raw === "" ? null : Number(raw);
                           const had = f.bucket_is_fitted ? f.bucket_cum : null;
-                          if (v !== had) void setBucket(f.asset_id, v);
+                          if (v !== had) void setBucket(f.asset_id, { fitted_bucket_cum: v });
                         }}
                         className={`${inputClass} w-[72px] py-1 text-[12px] text-right ${
                           f.bucket_is_fitted ? "border-gold" : ""}`} />
@@ -690,7 +700,8 @@ export default function CapacitySection() {
 
 function MachinesTab({ machines, onBucket, onCycle, onPlanName, busy }: {
   machines: Machine[];
-  onBucket: (assetId: number, cum: number | null) => void;
+  onBucket: (assetId: number, patch: {
+    fitted_bucket_cum?: number | null; rated_bucket_cum?: number | null }) => void;
   onCycle: (m: Machine) => void;
   onPlanName: (assetId: number, name: string) => void;
   busy: boolean;
@@ -699,14 +710,14 @@ function MachinesTab({ machines, onBucket, onCycle, onPlanName, busy }: {
     <Card>
       <CardHeader icon={Boxes} tone="sky" title="What each machine moves in an hour"
         subtitleOnIcon
-        subtitle="The standard bucket is the machine's. The fitted bucket is what is on it now — a long boom reaching deep runs a smaller one, and productivity is worked out from that." />
+        subtitle="Rated is the bucket the machine was built for. Fitted is what is on it this morning — a long boom reaching deep runs a smaller one, and that is the figure productivity is worked out from. Both save straight to the equipment master." />
       <div className="overflow-x-auto">
         <table className="w-full min-w-[900px]">
           <thead>
             <tr>
               <Th>Machine</Th><Th>Plan calls it</Th><Th>Owned</Th>
-              <Th className="text-right">Standard</Th>
-              <Th className="text-right">Fitted</Th>
+              <Th className="text-right">Rated</Th>
+              <Th className="text-right">Fitted now</Th>
               <Th className="text-right">Per scoop</Th>
               <Th className="text-right">Cycle</Th>
               <Th className="text-right">Cum/hr</Th>
@@ -749,19 +760,56 @@ function MachinesTab({ machines, onBucket, onCycle, onPlanName, busy }: {
                 <Td className="text-[11.5px] text-txt-muted">
                   {(m.ownership ?? "").toLowerCase() || "—"}
                 </Td>
-                <Td className="text-right text-[12px] font-mono text-txt-muted">
-                  {m.standard_bucket ?? "—"}
-                </Td>
+                {/* The rating, typed. It used to show asset.capacity and be
+                    read-only, which is why EX-1 and EX-5 — whose capacity is
+                    engine power — had nowhere to record a bucket at all. */}
                 <Td className="text-right">
                   <input type="number" min={0} max={50} step={0.05}
-                    defaultValue={m.fitted_bucket_cum ?? ""} disabled={busy}
-                    placeholder={m.standard_bucket != null ? String(m.standard_bucket) : "—"}
+                    defaultValue={m.rated_bucket_cum ?? ""} disabled={busy}
+                    placeholder="—"
+                    title="The bucket this machine was built to carry. Changes when the machine does."
                     onBlur={(e) => {
                       const raw = e.target.value.trim();
                       const v = raw === "" ? null : Number(raw);
-                      if (v !== (m.fitted_bucket_cum ?? null)) onBucket(m.asset_id, v);
+                      if (v !== (m.rated_bucket_cum ?? null)) {
+                        onBucket(m.asset_id, { rated_bucket_cum: v });
+                      }
                     }}
-                    className={`${inputClass} w-[76px] py-1 text-[12px] text-right`} />
+                    className={`${inputClass} w-[76px] py-1 text-[12px] text-right ${
+                      m.rated_bucket_cum == null ? "" : "text-txt-muted"}`} />
+                  {m.rated_bucket_cum == null && m.bucket_source === "legacy" && (
+                    <span className="block text-[9.5px] text-txt-light">
+                      {m.standard_bucket} from the register
+                    </span>
+                  )}
+                </Td>
+                {/* And what is actually on it. Empty means the rated one. */}
+                <Td className="text-right">
+                  <input type="number" min={0} max={50} step={0.05}
+                    defaultValue={m.fitted_bucket_cum ?? ""} disabled={busy}
+                    placeholder={m.rated_bucket_cum != null
+                      ? String(m.rated_bucket_cum)
+                      : m.standard_bucket != null && m.bucket_source === "legacy"
+                        ? String(m.standard_bucket) : "—"}
+                    title="What is on the machine now. Empty means the rated bucket is fitted."
+                    onBlur={(e) => {
+                      const raw = e.target.value.trim();
+                      const v = raw === "" ? null : Number(raw);
+                      if (v !== (m.fitted_bucket_cum ?? null)) {
+                        onBucket(m.asset_id, { fitted_bucket_cum: v });
+                      }
+                    }}
+                    className={`${inputClass} w-[76px] py-1 text-[12px] text-right ${
+                      m.bucket_is_fitted ? "border-gold font-semibold" : ""}`} />
+                  {/* Running under its rating. Deliberate on a long boom
+                      reaching deep; worth asking about on anything else. */}
+                  {m.bucket_below_rated && m.rated_bucket_cum != null
+                    && m.fitted_bucket_cum != null && (
+                    <span className="block text-[9.5px] text-gold-dark"
+                      title={`Rated ${m.rated_bucket_cum} Cum, running ${m.fitted_bucket_cum}`}>
+                      {Math.round(100 * m.fitted_bucket_cum / m.rated_bucket_cum)}% of rated
+                    </span>
+                  )}
                 </Td>
                 <Td className="text-right text-[12px] font-mono">
                   {m.needs_bucket ? "—" : m.cum_per_scoop.toFixed(3)}

@@ -24,7 +24,8 @@
  */
 import SearchSelect from "@/components/minehub/SearchSelect";
 import { matchesSearch, rank } from "@/lib/search";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowRight, Clock, Gauge, Hand, Loader2, Plus, Radio, Scale, Search,
   SlidersHorizontal, Truck, Weight, Wifi, WifiOff, X,
@@ -33,9 +34,11 @@ import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
 import {
   Alert, Button, Card, CardHeader, Chip, EmptyRow, Field, PageHeader,
-  StatBar, Tabs, Td, Th, inputClass, type Tone,
+  StatBar, Tabs, Td, Th, inputClass, filterSelectClass, type Tone,
 } from "@/components/minehub/ui";
 import Dialog from "@/components/minehub/Dialog";
+import TareRegister from "./TareRegister";
+import DateField from "@/components/minehub/DateField";
 
 /* ── Shapes ──────────────────────────────────────────────────────────────── */
 interface Bridge {
@@ -67,6 +70,9 @@ interface Trip {
   tare_source: string | null; tare_age_days: number | null;
   tare_is_stale: boolean; has_manual: boolean; overload_kg: number | null;
   created_by: string | null; gross_at: string | null;
+  /** The empty weight was taken after the load was tipped — the normal order
+   *  for a loaded truck, and it makes the net firmer rather than weaker. */
+  tare_after_gross?: boolean;
 }
 interface Mat {
   material_id: number; code: string; name: string; material_class: string;
@@ -94,6 +100,115 @@ interface Driver {
   licence_expiring: boolean; licence_recorded: boolean;
   phone: string | null; employer: string | null; designation: string | null;
   visits: number | null;
+  /** Why this driver sorted near the top — set when the search was given a
+   *  vehicle and this man is attached to it. */
+  why?: string | null;
+  /** More than one person on the register answers to this name. */
+  shares_name?: boolean;
+  /** The one detail that tells him from the others: his licence, else his
+   *  father's name, else his date of birth. */
+  tell_apart?: string | null;
+  father_name?: string | null;
+  date_of_birth?: string | null;
+  /** The number the mine knows him by — his employee number, falling back to
+   *  the platform's own reference only when he has none. */
+  badge?: string | null;
+  emp_id?: string | null;
+  /** RECORD when the licence has an expiry behind it, IDENTITY when it is the
+   *  number alone, as the HR import supplied it. */
+  licence_source?: string | null;
+}
+
+/** A haul weighed in loaded whose empty weight was never taken against it.
+ *  Its net is currently the standing tare subtracted from the gross, which is
+ *  an estimate wearing the same clothes as a measurement. */
+interface AwaitingTare {
+  trip_id: number; trip_no: string; production_date: string | null;
+  shift_code: string | null; gross_kg: number | null; gross_at: string | null;
+  standing_tare_kg: number | null; net_on_standing_kg: number | null;
+  tare_age_days: number | null; material: string | null;
+  source: string | null; destination: string | null; driver: string | null;
+}
+
+interface RecentRow {
+  trip_id: number; trip_no: string; status: string; shift_code: string | null;
+  gross_kg: number | null; tare_kg: number | null; net_kg: number | null;
+  tare_source: string | null; has_manual: boolean; gross_at: string | null;
+  vehicle: string | null; fleet_code: string | null;
+  material: string | null; driver: string | null; net_is_estimated: boolean;
+}
+
+/** "14:32" from a timestamp, or an em dash. The operator is looking for the
+ *  load they did ten minutes ago, not for a date. */
+const clock = (t: string | null) =>
+  t ? new Date(t).toLocaleTimeString("en-IN",
+        { hour: "2-digit", minute: "2-digit", hour12: false }) : "—";
+
+/* ── What has just been weighed ──────────────────────────────────────────
+ *
+ * Its own small fetch rather than a slice of the trips list: this asks for
+ * eight rows across every bridge, newest first, and the trips tab asks for a
+ * filtered day. Sharing one query would have made both of them worse.
+ */
+function RecentWeighings() {
+  const [rows, setRows] = useState<RecentRow[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const r = await api.get("/weighbridge/recent", { params: { limit: 8 } });
+        if (alive) setRows(r.data ?? []);
+      } catch { /* the bridge above still works */ }
+      finally { if (alive) setLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  return (
+    <Card>
+      <CardHeader title="Just weighed" tone="slate" icon={Clock}
+                  subtitle="The last few loads, newest first — the cheapest place to catch your own mistake." />
+      {loading ? (
+        <div className="py-8 text-center"><Loader2 className="w-4 h-4 animate-spin text-gold mx-auto" /></div>
+      ) : rows.length === 0 ? (
+        <p className="px-5 py-8 text-[12px] text-txt-muted text-center">
+          Nothing weighed yet.
+        </p>
+      ) : (
+        <div className="divide-y divide-border-light">
+          {rows.map((r) => (
+            <div key={r.trip_id} className="px-4 py-2.5 flex items-center gap-3">
+              <span className="text-[11px] text-txt-light tabular-nums shrink-0 w-[38px]">
+                {clock(r.gross_at)}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[12px] font-semibold text-navy truncate">
+                  {r.vehicle ?? r.fleet_code ?? "—"}
+                </span>
+                <span className="block text-[10.5px] text-txt-light truncate">
+                  {[r.material, r.driver].filter(Boolean).join(" · ") || r.trip_no}
+                </span>
+              </span>
+              <span className="text-right shrink-0">
+                <span className="block text-[12.5px] font-semibold tabular-nums text-navy">
+                  {kg(r.net_kg)} <span className="text-[10px] font-normal text-txt-light">kg net</span>
+                </span>
+                <span className="flex items-center justify-end gap-1 mt-0.5">
+                  {/* An estimate and a measurement should not look alike. */}
+                  {r.net_is_estimated && (
+                    <Chip tone="slate" dot={false}>standing tare</Chip>
+                  )}
+                  {r.has_manual && <Chip tone="rose" dot={false}>typed</Chip>}
+                </span>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
 }
 
 const kg = (n: number | null | undefined) =>
@@ -106,9 +221,29 @@ const ago = (s: number | null) =>
   s === null ? "never" : s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)} min ago`
     : `${Math.round(s / 3600)} h ago`;
 
-type Tab = "weigh" | "trips" | "bridges" | "customise";
+type Tab = "weigh" | "trips" | "tares" | "bridges" | "customise";
 
 /* ════════════════════════════════════════════════════════════════════════ */
+/* What the mine calls this vehicle, then its plate.
+ *
+ * Nobody at the bridge says "OD-04-B-8776". They say MAN-19, and the plate is
+ * how they confirm it is the right MAN-19. Putting the fleet code first means
+ * the operator reads the name he already has in his head and checks the
+ * number underneath, rather than decoding a registration to work out which
+ * truck is on the deck.
+ *
+ * Falls back to whichever exists: a visiting truck has a plate and no fleet
+ * code, and showing "— (OD 12 AB 3456)" would be worse than showing the plate.
+ */
+function vehicleName(v: { fleet_code?: string | null;
+                          vehicle?: string | null } | null | undefined): string {
+  if (!v) return "—";
+  const code = (v.fleet_code ?? "").trim();
+  const reg = (v.vehicle ?? "").trim();
+  if (code && reg && code !== reg) return `${code} (${reg})`;
+  return code || reg || "—";
+}
+
 export default function WeighbridgeSection() {
   const can = useAuth((s) => s.can);
   const mayWeigh = can("wb.weigh");
@@ -205,6 +340,30 @@ export default function WeighbridgeSection() {
   const refresh = useCallback(async () => { await Promise.all([loadLive(), loadRest()]); },
                               [loadLive, loadRest]);
 
+  /* Come back to the tab and the screen catches up.
+   *
+   * A weighbridge is worked with the register open in a second tab: somebody
+   * is added to Manpower there, then looked for here, and this screen was
+   * still showing the lists it loaded when it opened. Nothing was broken --
+   * it was simply answering a question from an hour ago, and the only cure
+   * anybody had was to reload the page and lose whatever was half-typed.
+   *
+   * Refetching when the tab is looked at again is the whole fix. It costs one
+   * request at the moment somebody's attention returns, which is exactly when
+   * a stale list is about to be believed. */
+  useEffect(() => {
+    const again = () => { if (!document.hidden) void refresh(); };
+    window.addEventListener("focus", again);
+    document.addEventListener("visibilitychange", again);
+    return () => {
+      window.removeEventListener("focus", again);
+      document.removeEventListener("visibilitychange", again);
+    };
+  }, [refresh]);
+
+  // Bumped on every refresh so the recent list reloads with everything else.
+  const refreshKey = trips.length + vehicles.length;
+
   const today = new Date().toISOString().slice(0, 10);
   const todayTrips = useMemo(() => trips.filter((t) => t.production_date === today), [trips, today]);
   const tonnes = useMemo(
@@ -254,6 +413,7 @@ export default function WeighbridgeSection() {
         tabs={[
           { id: "weigh", label: "Weigh a load", icon: Gauge, tone: "gold" },
           { id: "trips", label: "Trips", icon: ArrowRight, tone: "indigo" },
+          { id: "tares", label: "Tare register", icon: Scale, tone: "gold" },
           { id: "bridges", label: "Bridges & agents", icon: Radio, tone: "slate" },
           { id: "customise", label: "Customise lists", icon: SlidersHorizontal, tone: "violet" },
         ]}
@@ -273,6 +433,12 @@ export default function WeighbridgeSection() {
                 <p className="text-[13px] text-txt-muted">No weighbridge is set up yet.</p>
               </div></Card>
             )}
+
+            {/* The column under the scale was empty and the page was short.
+                The last few weighings belong here: an operator who has just
+                keyed a load against the wrong material otherwise finds out
+                tomorrow from a report, with the lorry long gone. */}
+            <RecentWeighings key={refreshKey} />
           </div>
 
           <Card>
@@ -290,7 +456,12 @@ export default function WeighbridgeSection() {
         </div>
       ) : tab === "trips" ? (
         <TripTable trips={trips} summary={summary}
-                   sources={sources} categories={categories} />
+                   sources={sources} categories={categories}
+                   bridges={bridges} mayTare={mayTare}
+                   onChanged={(m) => { setNotice(m); void refresh(); }}
+                   onError={setError} />
+      ) : tab === "tares" ? (
+        <TareRegister onError={setError} />
       ) : tab === "customise" ? (
         <Customise mayEdit={mayMasters}
                    onChanged={(m) => { setNotice(m); void refresh(); }} onError={setError} />
@@ -412,8 +583,18 @@ function VehiclePicker({ vehicles, onPick, onTare, disabled }: {
           <div key={v.gate_pass_id} className="px-4 py-3 flex items-center gap-3 flex-wrap">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-[13.5px] font-semibold text-txt-primary">{v.vehicle}</span>
-                {v.fleet_code && <Chip tone="slate" dot={false}>{v.fleet_code}</Chip>}
+                {/* The fleet code first, the registration after it in light.
+                    MAN-14 is what the mine calls this lorry — on the shift
+                    board, over the radio, in the plan — and OD 04 B 8778 is
+                    what the RTO calls it. The dialog that opens from this row
+                    already led with the fleet code; the row did not, so the
+                    same lorry was named two different ways one click apart. */}
+                <span className="text-[13.5px] font-semibold text-txt-primary">
+                  {v.fleet_code || v.vehicle}
+                </span>
+                {v.fleet_code && v.vehicle && v.fleet_code !== v.vehicle && (
+                  <span className="text-[12px] text-txt-light">{v.vehicle}</span>
+                )}
                 {v.vehicle_type && <Chip tone="indigo" dot={false}>{v.vehicle_type}</Chip>}
                 {!v.has_tare
                   ? <Chip tone="rose">no tare</Chip>
@@ -486,13 +667,98 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
   const [driverQ, setDriverQ] = useState("");
   const [driver, setDriver] = useState<Driver | null>(null);
   const [hits, setHits] = useState<Driver[]>([]);
+  const [driverTotal, setDriverTotal] = useState<number | null>(null);
+
+  /* The list is open when the box has focus, and closes a moment after it
+   * loses it -- a moment, because a blur fires before the click on a row is
+   * delivered and an instant close loses the choice. */
+  const [driverOpen, setDriverOpen] = useState(false);
+  const [lit, setLit] = useState(0);
+  useEffect(() => { setLit(0); }, [driverQ]);
+
+  /* It has to leave the dialog to be seen.
+   *
+   * Inline, the dialog's own overflow-y-auto cut it off at the footer: six
+   * matches, two visible, and the rest behind the Cancel button. A list you
+   * have to scroll a dialog to read is the thing this was meant to stop.
+   *
+   * So it is a portal again -- but anchored UNDER the field, the width of the
+   * field, and stacked ABOVE the dialog rather than beside it or beneath it,
+   * which is what went wrong the first two times. It is allowed to run over
+   * the footer, because that is where the room is and the footer has two
+   * buttons nobody is reaching for mid-search.
+   */
+  const driverBox = useRef<HTMLDivElement | null>(null);
+  const [driverAt, setDriverAt] =
+    useState<{ top: number; left: number; width: number; height: number } | null>(null);
+
+  const placeDrivers = useCallback(() => {
+    const el = driverBox.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const GAP = 4, MARGIN = 10, WANT = 320;
+    // Measured against the WINDOW, not the dialog: the whole point is to be
+    // able to overflow the dialog.
+    const room = window.innerHeight - r.bottom - GAP - MARGIN;
+    setDriverAt({
+      top: r.bottom + GAP,
+      left: r.left,
+      width: Math.max(r.width, 260),
+      height: Math.max(150, Math.min(WANT, room)),
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!driverOpen) return;
+    placeDrivers();
+    window.addEventListener("scroll", placeDrivers, true);
+    window.addEventListener("resize", placeDrivers);
+    return () => {
+      window.removeEventListener("scroll", placeDrivers, true);
+      window.removeEventListener("resize", placeDrivers);
+    };
+  }, [driverOpen, hits.length, placeDrivers]);
   // Only when the operator register genuinely does not have him.
   const [newDriver, setNewDriver] = useState(false);
   const [dName, setDName] = useState("");
   const [dLicence, setDLicence] = useState("");
   const [dPhone, setDPhone] = useState("");
   const [dValid, setDValid] = useState("");
+  /* The shift the clock is already in.
+   *
+   * It defaulted to A whatever the hour, so every load weighed on B or C was
+   * filed under A unless somebody remembered — and nobody remembers at four
+   * in the morning. The times come from shift_calendar, which the roster and
+   * the production day already use; hard-coding them here would be a second
+   * definition for the day somebody moves a shift by an hour.
+   *
+   * Pre-selected, never forced: the operator can still choose, which matters
+   * on the loads that straddle a handover. */
   const [shift, setShift] = useState("A");
+  const [shiftNow, setShiftNow] =
+    useState<{ code: string; from: string; to: string } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const r = await api.get("/weighbridge/current-shift");
+        if (!alive || !r.data?.code) return;
+        setShiftNow(r.data);
+        setShift(r.data.code);
+      } catch { /* A is as good a guess as any if the calendar cannot be read */ }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const shiftField = (
+    <Choices label="Shift" required
+             hint={shiftNow && shiftNow.code === shift
+               ? `${shiftNow.from}–${shiftNow.to}, running now`
+               : shiftNow ? `now it is ${shiftNow.code}` : undefined}
+             options={[{ id: 1, name: "A" }, { id: 2, name: "B" }, { id: 3, name: "C" }]}
+             value={{ A: 1, B: 2, C: 3 }[shift] ?? 1}
+             onChange={(id) => setShift(["A", "B", "C"][id - 1])} />
+  );
   const [manual, setManual] = useState(!mayWeigh);
   const [typed, setTyped] = useState("");
   const [reason, setReason] = useState("");
@@ -502,12 +768,27 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
     const t = setTimeout(async () => {
       try {
         const r = await api.get("/weighbridge/drivers/search",
-                                { params: { q: driverQ, limit: 20 } });
+                                { params: { q: driverQ, limit: 20,
+                                            asset_id: vehicle.asset_id } });
         setHits(r.data ?? []);
       } catch { /* the form still works without suggestions */ }
     }, 250);
     return () => clearTimeout(t);
-  }, [driverQ]);
+  }, [driverQ, vehicle.asset_id]);
+
+  /* Asked when the dialog opens, not when the page loaded. Somebody added to
+   * the register a minute ago in another tab is in this answer. */
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const sum = await api.get("/weighbridge/drivers/summary");
+        if (!alive) return;
+        setDriverTotal(sum.data?.total ?? null);
+      } catch { /* suggestions are a convenience, never a requirement */ }
+    })();
+    return () => { alive = false; };
+  }, [vehicle.asset_id]);
 
   const bridge = bridges.find((b) => b.weighbridge_id === bridgeId) ?? null;
   const ready = bridge?.is_live && bridge.is_stable;
@@ -563,22 +844,61 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
 
   return (
     <Dialog
-      open tone={manual ? "warning" : "info"} width={960} bare
-      title={`Weigh a load — ${vehicle.vehicle}`}
+      open tone={manual ? "warning" : "info"} width={1180} bare
+      titleAlign="center"
+      ariaLabel={`Weigh a load — ${vehicleName(vehicle)}`}
+      /* The vehicle IS the subject of this dialog, so it is the heading
+         rather than a word inside one, and it carries a colour that means
+         something: whether a net can be worked out for it at all.
+             green  a tare taken recently — the net will be exact
+             amber  a tare, but an old one — the net is an estimate
+             red    no tare at all — there is no net to record
+         The same three states the row behind it already shows, said once
+         more at the moment it decides whether this weighment is worth
+         anything. A colour chosen for decoration would be worth nothing. */
+      title={(() => {
+        const tone = !vehicle.has_tare
+          ? { ring: "ring-rose-ring", bg: "bg-rose-bg", fg: "text-rose",
+              say: "no tare — no net can be worked out" }
+          : vehicle.tare_is_stale
+            ? { ring: "ring-amber-ring", bg: "bg-amber-bg", fg: "text-amber",
+                say: `tare is ${vehicle.tare_age_days ?? "?"} days old — net will be an estimate` }
+            : { ring: "ring-emerald-ring", bg: "bg-emerald-bg", fg: "text-emerald",
+                say: "tare is current — the net will be exact" };
+        return (
+          <span className="block">
+            <span className="block text-[10.5px] font-sans font-semibold uppercase
+                             tracking-[.16em] text-txt-light">
+              Weigh a load
+            </span>
+            <span className={`inline-flex items-baseline gap-2.5 mt-1.5 px-4 py-1.5
+                              rounded-xl ring-1 ${tone.ring} ${tone.bg}`}>
+              <span className={`text-[22px] leading-none ${tone.fg}`}>
+                {vehicle.fleet_code || vehicle.vehicle}
+              </span>
+              {vehicle.fleet_code && vehicle.vehicle
+                && vehicle.fleet_code !== vehicle.vehicle && (
+                <span className="font-sans font-semibold text-[12.5px] text-txt-muted">
+                  {vehicle.vehicle}
+                </span>
+              )}
+            </span>
+            <span className={`block mt-1.5 text-[11px] font-sans font-semibold ${tone.fg}`}>
+              {tone.say}
+            </span>
+          </span>
+        );
+      })()}
       confirmLabel={manual ? "Record typed weight" : "Capture and record trip"}
       onCancel={onClose} onConfirm={() => void save()} busy={blocked}
     >
-      <p className="text-[12px] text-txt-light -mt-1 mb-4">
-        Capture the weighment against this vehicle&apos;s gate pass.
-      </p>
-
       {/* Two columns and a floor under them.
        *
        * One column ran to nine stacked blocks and the operator scrolled past
        * the live weight to reach the confirm button — backwards for a screen
        * used with a truck on the deck. min-height keeps the panel from
        * jumping as the cascade opens and closes beneath the cursor. */}
-      <div className="grid gap-5 md:grid-cols-[286px_minmax(0,1fr)] items-start
+      <div className="grid gap-5 md:grid-cols-[330px_minmax(0,1fr)] items-start
                       md:min-h-[430px]">
 
         {/* ── left: the deck, and what is standing on it ────────────── */}
@@ -645,10 +965,11 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
               </span>
               <div className="min-w-0">
                 <p className="text-[13.5px] font-semibold text-txt-primary leading-tight">
-                  {vehicle.vehicle}
+                  {vehicle.fleet_code || vehicle.vehicle}
                 </p>
                 <p className="text-[11px] text-txt-light mt-0.5">
-                  {[vehicle.fleet_code, vehicle.vehicle_type].filter(Boolean).join(" · ") || "—"}
+                  {[vehicle.fleet_code ? vehicle.vehicle : null, vehicle.vehicle_type]
+                    .filter(Boolean).join(" · ") || "—"}
                 </p>
               </div>
             </div>
@@ -699,11 +1020,16 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
                    onChange={(id) => pickCategory(categories.find((c) => c.material_category_id === id)!)} />
 
           {category && category.materials.length > 1 && (
-            <Choices label={`${category.name} type`} required tone="gold"
-                     options={category.materials.map((m) => ({ id: m.material_id, name: m.name }))}
-                     value={material ? Number(material) : null}
-                     onChange={(id) => setMaterial(String(id))} />
+            <div className="flex flex-wrap items-start gap-x-8 gap-y-3">
+              <Choices label={`${category.name} type`} required tone="gold"
+                       options={category.materials.map((m) => ({ id: m.material_id, name: m.name }))}
+                       value={material ? Number(material) : null}
+                       onChange={(id) => setMaterial(String(id))} />
+              {shiftField}
+            </div>
           )}
+          {/* No ore type beside it, so Shift stands on its own row. */}
+          {!(category && category.materials.length > 1) && shiftField}
           {category && category.materials.length === 1 && (
             <p className="text-[11.5px] text-txt-muted">
               {category.name} type:{" "}
@@ -744,22 +1070,37 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
             </div>
           </div>
 
-          <Choices label="Shift" required
-                   options={[{ id: 1, name: "A" }, { id: 2, name: "B" }, { id: 3, name: "C" }]}
-                   value={{ A: 1, B: 2, C: 3 }[shift] ?? 1}
-                   onChange={(id) => setShift(["A", "B", "C"][id - 1])} />
 
+          {/* The driver, under Shift, where the form's order already put
+              him: what is being moved, where from, where to, which shift,
+              who is driving. Moving him to the other column shortened the
+              scroll and broke the reading order, which was the worse
+              trade. The list itself is what needed fixing, not the place:
+              it opens beside the field now instead of pushing the form
+              down, so nothing below it moves while somebody is typing. */}
           {!newDriver ? (
             <div>
               <Field label="Driver" required
-                     hint="From the operator register — all 211 are contractors' drivers.">
+                     hint={`From the operator register${
+                       driverTotal ? ` — ${driverTotal} drivers` : ""}.`}>
                 {driver ? (
                   <div className="flex items-center gap-2 px-3 py-2 rounded-lg
                                   bg-indigo-bg ring-1 ring-indigo-ring">
-                    <span className="text-[12.5px] font-semibold text-navy flex-1 truncate">
-                      {driver.full_name}
-                      {driver.reference && (
-                        <span className="font-normal text-txt-muted"> · {driver.reference}</span>
+                    <span className="text-[12.5px] font-semibold text-navy flex-1 min-w-0">
+                      <span className="block truncate">
+                        {driver.full_name}
+                        {driver.badge && (
+                          <span className="font-normal text-txt-muted"> · {driver.badge}</span>
+                        )}
+                      </span>
+                      {/* Kept after choosing, not just while choosing: the
+                          operator should be able to check the man on the
+                          ticket is the man they meant. */}
+                      {driver.tell_apart && (
+                        <span className={`block truncate text-[10.5px] font-normal
+                                          ${driver.shares_name ? "text-amber" : "text-txt-muted"}`}>
+                          {driver.tell_apart}
+                        </span>
                       )}
                     </span>
                     {driver.licence_expired && <Chip tone="rose" dot={false}>licence expired</Chip>}
@@ -770,32 +1111,106 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
                   </div>
                 ) : (
                   <>
-                    <div className="relative">
+                    {/* Back in the form, under the field.
+                     *
+                     * It was a portal so that opening it would not move the
+                     * form. It did not move the form -- it covered it, or sat
+                     * beneath the dialog, or ran off the edge, depending on
+                     * where the field happened to be. Three placement bugs for
+                     * a problem nobody had complained about.
+                     *
+                     * Inline is what was asked for and what works: it pushes
+                     * what is below it down a little, which is the one
+                     * behaviour everybody already understands. */}
+                    <div className="relative" ref={driverBox}>
                       <Search className="w-3.5 h-3.5 text-txt-light absolute left-3
                                          top-1/2 -translate-y-1/2" />
                       <input value={driverQ} onChange={(e) => setDriverQ(e.target.value)}
                              placeholder="Name, operator number or licence"
+                             role="combobox" aria-expanded={driverOpen && hits.length > 0}
+                             aria-controls="driver-hits" autoComplete="off"
+                             onFocus={() => setDriverOpen(true)}
+                             onBlur={() => window.setTimeout(() => setDriverOpen(false), 150)}
+                             onKeyDown={(e) => {
+                               if (e.key === "Escape") {
+                                 e.preventDefault(); setDriverOpen(false); return;
+                               }
+                               if (!driverOpen || !hits.length) return;
+                               if (e.key === "ArrowDown") {
+                                 e.preventDefault(); setLit((i) => Math.min(i + 1, hits.length - 1));
+                               } else if (e.key === "ArrowUp") {
+                                 e.preventDefault(); setLit((i) => Math.max(i - 1, 0));
+                               } else if (e.key === "Enter") {
+                                 e.preventDefault();
+                                 if (hits[lit]) {
+                                   setDriver(hits[lit]); setDriverQ(""); setDriverOpen(false);
+                                 }
+                               }
+                             }}
                              className={`${inputClass} pl-8`} />
                     </div>
-                    {driverQ && hits.length > 0 && (
-                      <div className="mt-1 max-h-[116px] overflow-y-auto scrollbar-thin
-                                      rounded-lg border border-border-light">
-                        {hits.map((d) => (
+
+                    {/* Open on focus, before a letter is typed. The men who
+                        drive THIS lorry are already at the top of it, so the
+                        common case is one click and no typing at all. */}
+                    {driverOpen && hits.length > 0 && driverAt && createPortal(
+                      <div id="driver-hits" role="listbox"
+                           /* 10002, because the dialog is z-[10001]. Below it,
+                              the dialog paints over the list and clips it. */
+                           style={{ position: "fixed", top: driverAt.top,
+                                    left: driverAt.left, width: driverAt.width,
+                                    maxHeight: driverAt.height, zIndex: 10002 }}
+                           onMouseDown={(e) => e.preventDefault()}
+                           className="overflow-y-auto scrollbar-thin rounded-lg
+                                      border border-border bg-white shadow-xl">
+                        <div className="sticky top-0 bg-bg-soft px-3 py-1.5 text-[10px]
+                                        font-semibold uppercase tracking-[.12em] text-txt-light
+                                        border-b border-border-light">
+                          {driverQ
+                            ? `${hits.length} match${hits.length === 1 ? "" : "es"}`
+                            : "who usually drives this one"} · up/down then Enter
+                        </div>
+                        {hits.map((d, i) => (
                           <button key={`${d.kind}-${d.operator_id ?? d.visiting_driver_id}`}
-                                  onClick={() => setDriver(d)}
-                                  className="w-full text-left px-3 py-1.5 hover:bg-bg-section
-                                             border-b border-border-light last:border-0">
-                            <span className="text-[12.5px] text-txt-primary">{d.full_name}</span>
-                            {d.reference && (
-                              <span className="text-[11px] text-txt-light"> · {d.reference}</span>
+                                  role="option" aria-selected={i === lit}
+                                  onMouseEnter={() => setLit(i)}
+                                  onClick={() => {
+                                    setDriver(d); setDriverQ(""); setDriverOpen(false);
+                                  }}
+                                  className={`w-full text-left px-3 py-1.5 border-b
+                                              border-border-light last:border-0
+                                              ${i === lit ? "bg-gold/10" : "hover:bg-bg-section"}`}>
+                            <span className={`text-[12.5px] ${i === lit
+                              ? "font-semibold text-navy" : "text-txt-primary"}`}>
+                              {d.full_name}
+                            </span>
+                            {d.why && (
+                              <span className="ml-1.5 text-[10.5px] font-semibold text-indigo">
+                                {d.why}
+                              </span>
                             )}
-                            {d.licence_expired && (
-                              <Chip tone="rose" dot={false} className="ml-1.5">expired</Chip>
+                            {/* Three men on this register are called Khageswar
+                                Mohanta. Offered as identical rows, the operator
+                                picks one and the load goes against a man who may
+                                not have been driving — so when a name is shared
+                                the detail that separates them is on the row, and
+                                marked, rather than left for somebody to go and
+                                look up. */}
+                            {d.shares_name && d.tell_apart && (
+                              <span className="block text-[10.5px] font-semibold text-amber">
+                                {d.tell_apart} — {`${d.full_name} is on the register more than once`}
+                              </span>
                             )}
+                            <span className="block text-[10.5px] text-txt-light">
+                              {[d.badge, d.employer,
+                                !d.shares_name && d.tell_apart ? d.tell_apart : null]
+                                .filter(Boolean).join(" · ")}
+                              {d.licence_expired ? " · licence expired"
+                                : !d.licence_recorded ? " · no licence on file" : ""}
+                            </span>
                           </button>
                         ))}
-                      </div>
-                    )}
+                      </div>, document.body)}
                   </>
                 )}
               </Field>
@@ -820,8 +1235,7 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
                          className={inputClass} />
                 </Field>
                 <Field label="Valid until">
-                  <input type="date" value={dValid} onChange={(e) => setDValid(e.target.value)}
-                         className={inputClass} />
+                  <DateField value={dValid} onChange={setDValid} />
                 </Field>
               </div>
               <button onClick={() => setNewDriver(false)}
@@ -864,21 +1278,61 @@ function TareDialog({ vehicle, bridges, onClose, onDone, onError }: {
   const bridge = bridges.find((b) => b.weighbridge_id === bridgeId) ?? null;
   const ready = bridge?.is_live && bridge.is_stable;
 
+  /* Hauls this empty weight might actually belong to.
+   *
+   * A tipper weighs in loaded, tips, and comes back empty some minutes later.
+   * That empty weight is the true tare for THAT haul -- but the button only
+   * ever wrote the vehicle's standing figure, so the exact weight was thrown
+   * away and the net stayed an estimate from whenever the vehicle was last
+   * weighed empty. Now the loads still waiting for one are listed, and the
+   * operator says which. */
+  const [awaiting, setAwaiting] = useState<AwaitingTare[]>([]);
+  const [applyTo, setApplyTo] = useState<number | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      if (!vehicle.asset_id) return;
+      try {
+        const r = await api.get(`/weighbridge/vehicles/${vehicle.asset_id}/context`);
+        if (!alive) return;
+        const rows: AwaitingTare[] = r.data?.awaiting_tare ?? [];
+        setAwaiting(rows);
+        // The most recent haul is the one it almost always belongs to, but it
+        // is proposed, not assumed — the operator can clear it.
+        setApplyTo(rows[0]?.trip_id ?? null);
+      } catch { /* the standing tare still works on its own */ }
+    })();
+    return () => { alive = false; };
+  }, [vehicle.asset_id]);
+
   const save = async () => {
     if (!bridgeId || !vehicle.asset_id) return;
     setBusy(true);
     try {
+      // The vehicle's standing figure is written either way: this IS its
+      // empty weight as of now, whatever else the reading is used for.
       const r = await api.post(`/weighbridge/vehicles/${vehicle.asset_id}/tare`,
                                { weighbridge_id: bridgeId });
+      const taken = r.data?.standing_tare_kg;
       const d = r.data?.change_kg;
-      onDone(`${vehicle.vehicle} tare set to ${kg(r.data?.standing_tare_kg)} kg`
-             + (d ? ` (${d > 0 ? "+" : ""}${kg(d)} kg on the last one)` : ""));
+      let extra = "";
+      if (applyTo) {
+        const chosen = awaiting.find((a) => a.trip_id === applyTo);
+        await api.post(`/weighbridge/trips/${applyTo}/weigh`,
+                       { kind: "TARE", weighbridge_id: bridgeId,
+                         capture_mode: "CAPTURED" });
+        extra = ` and recorded against ${chosen?.trip_no ?? "the chosen haul"}`;
+      }
+      onDone(`${vehicle.vehicle} tare set to ${kg(taken)} kg`
+             + (d ? ` (${d > 0 ? "+" : ""}${kg(d)} kg on the last one)` : "")
+             + extra);
     } catch (e) { onError(errorOf(e, "Could not set the tare.")); }
     finally { setBusy(false); }
   };
 
   return (
-    <Dialog open tone="warning" title={`Standing tare — ${vehicle.vehicle}`}
+    <Dialog open tone="warning" title={`Standing tare — ${vehicleName(vehicle)}`}
             confirmLabel="Take this as the tare" onCancel={onClose}
             onConfirm={() => void save()} busy={busy || !ready}>
       <div className="space-y-3.5">
@@ -902,6 +1356,46 @@ function TareDialog({ vehicle, bridges, onClose, onDone, onError }: {
             {vehicle.tare_age_days === null ? "at some point" : `${vehicle.tare_age_days} days ago`}.
           </p>
         )}
+        {/* Which haul this belongs to. Only shown when there is one to
+            choose: a vehicle that has not weighed in loaded has nothing for
+            this reading to be the tare OF. */}
+        {awaiting.length > 0 && (
+          <Field label="Is this the empty weight for a load already weighed in?">
+            <div className="rounded-lg border border-border-light divide-y divide-border-light">
+              {awaiting.map((a) => (
+                <button key={a.trip_id} type="button"
+                        onClick={() => setApplyTo(applyTo === a.trip_id ? null : a.trip_id)}
+                        className={`w-full flex items-center gap-3 px-3 py-2 text-left
+                                    ${applyTo === a.trip_id ? "bg-gold/10" : "hover:bg-bg-soft"}`}>
+                  <span className={`w-3.5 h-3.5 rounded-full shrink-0 ring-1
+                                    ${applyTo === a.trip_id
+                                      ? "bg-gold ring-gold-dark" : "bg-white ring-border"}`} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[12px] font-semibold text-navy truncate">
+                      {a.trip_no} · {clock(a.gross_at)}
+                      {a.shift_code ? ` · shift ${a.shift_code}` : ""}
+                    </span>
+                    <span className="block text-[10.5px] text-txt-light truncate">
+                      {[a.material, a.source, a.driver].filter(Boolean).join(" · ") || "—"}
+                    </span>
+                  </span>
+                  <span className="text-right shrink-0 text-[11px] tabular-nums">
+                    <span className="block text-txt-primary">{kg(a.gross_kg)} kg gross</span>
+                    <span className="block text-txt-light">
+                      net now {kg(a.net_on_standing_kg)} kg, estimated
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+            <p className="mt-1.5 text-[11px] text-txt-muted">
+              {applyTo
+                ? "This reading is recorded against that haul, so its net becomes exact rather than an estimate."
+                : "Nothing selected — the reading updates the vehicle's standing tare only."}
+            </p>
+          </Field>
+        )}
+
         {usable.length > 1 && (
           <Field label="Bridge">
             <SearchSelect field value={String(bridgeId ?? "")}
@@ -923,9 +1417,12 @@ function TareDialog({ vehicle, bridges, onClose, onDone, onError }: {
  * worth pulling out on their own, because "show me every load that was typed
  * in by hand" is the question an auditor opens with.
  */
-function TripTable({ trips, summary, sources, categories }: {
+function TripTable({ trips, summary, sources, categories, bridges, mayTare,
+                    onChanged, onError }: {
   trips: Trip[]; summary: Record<string, number>;
   sources: MoveGroup[]; categories: Category[];
+  bridges: Bridge[]; mayTare: boolean;
+  onChanged: (m: string) => void; onError: (m: string) => void;
 }) {
   const [q, setQ] = useState("");
   const [day, setDay] = useState("");
@@ -953,6 +1450,8 @@ function TripTable({ trips, summary, sources, categories }: {
   const filtered = rows.length !== trips.length;
   const clear = () => { setQ(""); setDay(""); setShift(""); setSource(""); setMaterial(""); setFlag(""); };
 
+  const [pinning, setPinning] = useState<Trip | null>(null);
+
   // Every place a load can come from, flattened out of the source groups.
   const sourcePlaces = useMemo(
     () => sources.flatMap((g) => g.places.map((pl) => ({ ...pl, group: g.name }))),
@@ -964,49 +1463,87 @@ function TripTable({ trips, summary, sources, categories }: {
   return (
     <Card>
       <CardHeader
-        title="Trips" tone="indigo" icon={ArrowRight}
-        subtitle={`${rows.length}${filtered ? ` of ${trips.length}` : ""} trips · `
-                  + `${net.toFixed(1)} t net`
-                  + (summary.stale_tare ? ` · ${summary.stale_tare} on a stale tare` : "")}
-        actions={filtered
-          ? <Button size="sm" onClick={clear}><X className="w-3.5 h-3.5" /> Clear filters</Button>
-          : undefined}
+        title="Trips" tone="indigo" icon={ArrowRight} subtitleOnIcon
+        subtitle="Every load weighed over the bridge, and where its tare came from."
+        actions={
+          /* The figures belong up here beside the title, where the eye
+             already is, rather than in a sentence underneath the filters. */
+          <span className="flex flex-wrap items-center gap-1.5">
+            <span className="px-2.5 py-1 rounded-lg bg-bg-soft">
+              <span className="font-mono text-[13px] font-bold text-navy">
+                {rows.length}
+              </span>
+              <span className="text-[10.5px] text-txt-muted ml-1">
+                {filtered ? `of ${trips.length} trips` : "trips"}
+              </span>
+            </span>
+            <span className="px-2.5 py-1 rounded-lg bg-bg-soft">
+              <span className="font-mono text-[13px] font-bold text-navy">
+                {net.toFixed(1)}
+              </span>
+              <span className="text-[10.5px] text-txt-muted ml-1">t net</span>
+            </span>
+            {summary.stale_tare > 0 && (
+              <Chip tone="amber"
+                title="Their nets rest on an empty weight that has not been taken recently.">
+                {summary.stale_tare} on a stale tare
+              </Chip>
+            )}
+            {filtered && (
+              <Button size="sm" onClick={clear}>
+                <X className="w-3.5 h-3.5" /> Clear
+              </Button>
+            )}
+          </span>
+        }
       />
 
-      <div className="px-4 py-3 border-b border-border-light flex flex-wrap gap-2">
-        <input type="date" value={day} onChange={(e) => setDay(e.target.value)}
-               className={`${inputClass} w-[150px]`} />
+      <div className="px-4 py-2.5 border-b border-border-light
+                      flex flex-wrap items-center gap-2">
+        {/* The search first: it is what people reach for, and the one control
+            that earns the room to grow. */}
+        <div className="relative flex-1 min-w-[190px] max-w-[320px]">
+          <Search className="w-3.5 h-3.5 text-txt-light absolute left-2.5
+                             top-1/2 -translate-y-1/2" />
+          <input value={q} onChange={(e) => setQ(e.target.value)}
+                 placeholder="Trip, vehicle, driver"
+                 className={`${inputClass} pl-8 py-1.5 text-[12px] ${
+                   q ? "border-gold" : ""}`} />
+        </div>
+
+        <DateField value={day} onChange={setDay} title="One production day"
+                   className={`w-[140px] ${day ? "border-gold font-semibold" : ""}`} />
+
         <select value={shift} onChange={(e) => setShift(e.target.value)}
-                className={`${inputClass} w-[120px]`}>
+                title="Shift" className={filterSelectClass(!!shift)}>
           <option value="">Every shift</option>
           <option value="A">Shift A</option><option value="B">Shift B</option>
           <option value="C">Shift C</option>
         </select>
+
         <SearchSelect value={source} onChange={setSource} allLabel="Every source"
-          className="w-[180px] px-3 py-2 text-[13px]"
+          className={`${filterSelectClass(!!source)} w-[170px]`}
           searchPlaceholder="Type a pit or a stack…"
           options={sourcePlaces.map((l) => ({
             value: l.name, label: l.name, hint: l.group,
           }))} />
+
         <SearchSelect value={material} onChange={setMaterial} allLabel="Every material"
-          className="w-[190px] px-3 py-2 text-[13px]"
+          className={`${filterSelectClass(!!material)} w-[180px]`}
           searchPlaceholder="Type a material…"
           options={materialNames.map((n) => ({
             value: n.split(" · ")[1], label: n,
           }))} />
+
         <select value={flag} onChange={(e) => setFlag(e.target.value)}
-                className={`${inputClass} w-[210px]`}>
+                title="Only trips worth a second look"
+                className={filterSelectClass(!!flag)}>
           <option value="">Everything</option>
           <option value="MANUAL">Typed by hand only</option>
           <option value="STALE">On a stale tare only</option>
           <option value="STANDING">On a standing tare only</option>
           <option value="OVER">Over capacity only</option>
         </select>
-        <div className="relative flex-1 min-w-[200px]">
-          <Search className="w-3.5 h-3.5 text-txt-light absolute left-3 top-1/2 -translate-y-1/2" />
-          <input value={q} onChange={(e) => setQ(e.target.value)}
-                 placeholder="Trip, vehicle, driver" className={`${inputClass} pl-8`} />
-        </div>
       </div>
 
       <div className="overflow-x-auto">
@@ -1015,11 +1552,11 @@ function TripTable({ trips, summary, sources, categories }: {
             <Th>Trip</Th><Th>Vehicle</Th><Th>Driver</Th><Th>Material</Th>
             <Th>From → to</Th>
             <Th className="text-right">Gross</Th><Th className="text-right">Tare</Th>
-            <Th className="text-right">Net</Th><Th>Flags</Th>
+            <Th className="text-right">Net</Th><Th>Flags</Th><Th />
           </tr></thead>
           <tbody>
             {rows.length === 0 && (
-              <EmptyRow colSpan={9}>
+              <EmptyRow colSpan={10}>
                 {trips.length === 0 ? "No trips recorded yet." : "Nothing matches those filters."}
               </EmptyRow>
             )}
@@ -1032,8 +1569,12 @@ function TripTable({ trips, summary, sources, categories }: {
                   </span>
                 </Td>
                 <Td>
-                  <span className="text-txt-primary">{t.vehicle ?? "—"}</span>
-                  {t.fleet_code && <span className="block text-[11px] text-txt-light">{t.fleet_code}</span>}
+                  <span className="font-semibold text-txt-primary">
+                    {t.fleet_code || t.vehicle || "—"}
+                  </span>
+                  {t.fleet_code && t.vehicle && (
+                    <span className="block text-[11px] text-txt-light">{t.vehicle}</span>
+                  )}
                 </Td>
                 <Td>
                   {t.driver ?? "—"}
@@ -1059,14 +1600,205 @@ function TripTable({ trips, summary, sources, categories }: {
                     {t.tare_is_stale && <Chip tone="amber" dot={false}>tare {t.tare_age_days}d</Chip>}
                     {t.overload_kg ? <Chip tone="rose" dot={false}>over</Chip> : null}
                     {t.status === "CANCELLED" && <Chip tone="slate">cancelled</Chip>}
+                    {t.tare_after_gross && (
+                      <Chip tone="emerald" dot={false}
+                        title="The empty weight was taken after the load was tipped — the normal order, and it makes this net firmer than one resting on a standing figure.">
+                        weighed empty after
+                      </Chip>
+                    )}
                   </div>
+                </Td>
+                {/* Only where it would change something: the net is resting on
+                    the vehicle's standing figure, so it moves every time that
+                    figure is taken again. Pinning the empty weight that was
+                    actually taken for this load stops it floating. */}
+                <Td className="text-right">
+                  {mayTare && t.tare_source !== "WEIGHED"
+                   && t.gross_kg != null && t.status !== "CANCELLED" && (
+                    <Button size="sm" onClick={() => setPinning(t)}
+                      title="Give this trip the empty weight taken for it">
+                      <Scale className="w-3.5 h-3.5" /> Apply tare
+                    </Button>
+                  )}
                 </Td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      {pinning && (
+        <ApplyTareDialog
+          trip={pinning} bridges={bridges}
+          onClose={() => setPinning(null)}
+          onDone={(m) => { setPinning(null); onChanged(m); }}
+          onError={onError}
+        />
+      )}
     </Card>
+  );
+}
+
+/* ── Giving a trip the empty weight that was taken for it ────────────────
+ *
+ * THE ORDER A LOADED TRUCK ARRIVES IN. It weighs gross, tips, and only then
+ * goes over the bridge empty. Until that empty weight is pinned to the trip,
+ * the net is computed from the vehicle's STANDING tare — which means it
+ * silently changes the next time that figure is taken, because net is worked
+ * out on read rather than stored.
+ */
+function ApplyTareDialog({ trip, bridges, onClose, onDone, onError }: {
+  trip: Trip;
+  bridges: Bridge[];
+  onClose: () => void;
+  onDone: (m: string) => void;
+  onError: (m: string) => void;
+}) {
+  const [source, setSource] = useState<"BRIDGE" | "MANUAL" | "REGISTER">("BRIDGE");
+  const [bridgeId, setBridgeId] = useState<number | "">(bridges[0]?.weighbridge_id ?? "");
+  const [weight, setWeight] = useState("");
+  const [reason, setReason] = useState("");
+  const [readingId, setReadingId] = useState<number | "">("");
+  const [history, setHistory] = useState<{ tare_reading_id: number;
+    weight_kg: number; taken_at: string; capture_mode: string }[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!trip.asset_id) return;
+    void api.get("/weighbridge/tare-register",
+      { params: { asset_id: trip.asset_id, days: 730 } })
+      .then((r) => setHistory((r.data as { readings: typeof history }).readings ?? []))
+      .catch(() => { /* the register is a convenience here, not the point */ });
+  }, [trip.asset_id]);
+
+  const gross = trip.gross_kg ?? 0;
+  const chosen = source === "MANUAL" ? Number(weight || 0)
+    : source === "REGISTER"
+      ? (history.find((h) => h.tare_reading_id === readingId)?.weight_kg ?? 0)
+      : 0;
+  const tooHeavy = chosen > 0 && gross > 0 && chosen >= gross;
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post(`/weighbridge/trips/${trip.trip_id}/tare`, {
+        source, weighbridge_id: bridgeId || null,
+        weight_kg: source === "MANUAL" ? Number(weight) : null,
+        tare_reading_id: source === "REGISTER" ? readingId : null,
+        manual_reason: reason || null,
+      });
+      const d = r.data as { net_kg: number | null; tare_kg: number | null };
+      onDone(`${trip.trip_no}: tare ${d.tare_kg?.toLocaleString("en-IN")} kg, `
+             + `net ${d.net_kg?.toLocaleString("en-IN")} kg.`);
+    } catch (e) { onError(errorOf(e, "Could not apply the tare.")); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Dialog open tone="info" title={`Apply a tare — ${trip.trip_no}`}
+            confirmLabel="Apply this tare" onCancel={onClose}
+            onConfirm={() => void save()}
+            busy={busy || tooHeavy
+                  || (source === "MANUAL" && (!weight || !reason))
+                  || (source === "REGISTER" && !readingId)}>
+      <div className="space-y-3.5">
+        <p className="text-[12px] text-txt-light">
+          This trip&apos;s net is resting on{" "}
+          <strong className="text-txt-primary">
+            {trip.vehicle ? `${trip.fleet_code || trip.vehicle}'s` : "the vehicle's"}
+          </strong>{" "}
+          standing empty weight, so it moves every time that figure is taken
+          again. Pinning the weight actually taken for this load stops it
+          floating.
+        </p>
+
+        <div className="grid grid-cols-3 gap-2 text-center">
+          {([["Gross", trip.gross_kg], ["Tare now", trip.tare_kg],
+             ["Net now", trip.net_kg]] as [string, number | null][]).map(([k, v]) => (
+            <div key={k} className="rounded-lg bg-bg-soft px-2 py-1.5">
+              <div className="text-[10px] uppercase tracking-wide text-txt-light">{k}</div>
+              <div className="font-mono text-[14px] font-bold text-navy">
+                {v == null ? "—" : v.toLocaleString("en-IN")}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex flex-wrap gap-1.5">
+          {([["BRIDGE", "Weigh it now"], ["REGISTER", "From its tare register"],
+             ["MANUAL", "Type the weight"]] as [typeof source, string][])
+            .map(([id, label]) => (
+            <button key={id} type="button" onClick={() => setSource(id)}
+              className={`px-3 py-1.5 rounded-lg text-[12px] font-semibold border
+                          transition-colors ${source === id
+                  ? "bg-navy text-white border-navy"
+                  : "border-border text-txt-muted hover:border-slate-300"}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {source === "BRIDGE" && (
+          <>
+            <Field label="Which bridge">
+              <select value={bridgeId} className={inputClass}
+                onChange={(e) => setBridgeId(e.target.value ? Number(e.target.value) : "")}>
+                {bridges.map((b) => (
+                  <option key={b.weighbridge_id} value={b.weighbridge_id}>
+                    {b.name ?? b.code}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Alert tone="info">
+              Drive the empty vehicle onto the deck and let it settle. The
+              weight is taken from the bridge when you confirm, and becomes this
+              vehicle&apos;s standing tare as well.
+            </Alert>
+          </>
+        )}
+
+        {source === "REGISTER" && (
+          <Field label="Which reading"
+            hint="an empty weight already recorded for this vehicle">
+            <select value={readingId} className={inputClass}
+              onChange={(e) => setReadingId(e.target.value ? Number(e.target.value) : "")}>
+              <option value="">Choose…</option>
+              {history.map((h) => (
+                <option key={h.tare_reading_id} value={h.tare_reading_id}>
+                  {h.weight_kg.toLocaleString("en-IN")} kg ·{" "}
+                  {new Date(h.taken_at).toLocaleDateString("en-IN")} ·{" "}
+                  {h.capture_mode.toLowerCase()}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
+
+        {source === "MANUAL" && (
+          <>
+            <Field label="Empty weight, kg" required>
+              <input type="number" value={weight} className={inputClass}
+                onChange={(e) => setWeight(e.target.value)} />
+            </Field>
+            <Field label="Why it is being typed" required
+              hint="a weight nobody watched settle has to be explainable later">
+              <input value={reason} className={inputClass}
+                placeholder="e.g. the bridge was down"
+                onChange={(e) => setReason(e.target.value)} />
+            </Field>
+          </>
+        )}
+
+        {tooHeavy && (
+          <Alert tone="warning">
+            {chosen.toLocaleString("en-IN")} kg is not less than the gross of{" "}
+            {gross.toLocaleString("en-IN")} kg, which would make the load weigh
+            nothing or less.
+          </Alert>
+        )}
+      </div>
+    </Dialog>
   );
 }
 
@@ -1249,13 +1981,50 @@ function Choices({ label, options, value, onChange, required, hint, tone = "navy
           Nothing set up — add one under Customise lists.
         </p>
       ) : (
-        <div className="flex flex-wrap gap-1.5">
-          {options.map((o) => {
+        /* A row of chips is a radio group, so it behaves like one.
+         *
+         * It looked like one and did not act like one: Tab stopped on every
+         * chip in turn, so reaching the driver box past Category, Ore type,
+         * Source, Dump Yard, Destination and Shift was twenty-odd presses,
+         * and the arrow keys did nothing at all. An operator at a bridge has
+         * one hand on a keyboard and a lorry waiting.
+         *
+         * Now: Tab reaches the group once and lands on the chosen chip, the
+         * arrows move between chips and pick as they go, Home and End jump to
+         * the ends, and Tab leaves for the next field. That is what every
+         * radio group on the web does, and the reason it is worth matching is
+         * that the operator already knows it. */
+        <div role="radiogroup" aria-label={label} className="flex flex-wrap gap-1.5">
+          {options.map((o, i) => {
             const picked = o.id === value;
+            // One stop for the whole group: the chosen chip, or the first
+            // when nothing is chosen yet.
+            const stop = picked || (value === null && i === 0);
             return (
-              <button key={o.id} type="button" onClick={() => onChange(o.id)}
+              <button key={o.id} type="button" role="radio" aria-checked={picked}
+                tabIndex={stop ? 0 : -1}
+                data-choice={`${label}-${i}`}
+                onClick={() => onChange(o.id)}
+                onKeyDown={(e) => {
+                  const last = options.length - 1;
+                  let to: number | null = null;
+                  if (e.key === "ArrowRight" || e.key === "ArrowDown") to = i === last ? 0 : i + 1;
+                  else if (e.key === "ArrowLeft" || e.key === "ArrowUp") to = i === 0 ? last : i - 1;
+                  else if (e.key === "Home") to = 0;
+                  else if (e.key === "End") to = last;
+                  if (to === null) return;
+                  e.preventDefault();
+                  onChange(options[to].id);
+                  // Focus follows selection, as a radio group's does; without
+                  // it the next arrow press would move from where it started.
+                  const next = e.currentTarget.parentElement
+                    ?.querySelector<HTMLButtonElement>(`[data-choice="${label}-${to}"]`);
+                  next?.focus();
+                }}
                 className={`px-3 py-2 rounded-lg text-[12.5px] font-semibold border
                             transition-all duration-100 leading-none
+                            focus:outline-none focus-visible:ring-2
+                            focus-visible:ring-gold/60 focus-visible:border-gold
                             ${picked ? on
                               : "bg-bg-base text-txt-secondary border-border "
                                 + "hover:border-gold hover:text-navy"}`}>

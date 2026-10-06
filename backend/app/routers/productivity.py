@@ -120,29 +120,42 @@ BUCKET_UOM = {"CUM", "M3", "M^3", "CU.M", "CUM.", "CBM"}
 MAX_SANE_BUCKET_CUM = 50.0
 
 
-def _bucket_of(o: dict) -> tuple[float, bool, str | None]:
-    """The bucket to plan this machine with, and why, if there is none.
+def _bucket_of(o: dict) -> tuple[float, str | None, str | None]:
+    """The bucket to plan this machine with, which one it is, and why not.
 
-    Returns (cum, is_fitted, problem). A fitted bucket always wins: it is
-    entered on this screen, in cubic metres, by somebody saying what is on the
-    machine now.
+    Returns (cum, source, problem), where source is "fitted", "rated" or
+    "legacy". The fitted bucket always wins: it is what somebody entered on
+    this screen saying what is on the machine this morning, and productivity
+    is a question about this morning. The rating is the fallback — right for a
+    machine running the bucket it came with, which is most of them.
+
+    "legacy" is asset.capacity, read only when its unit says cubic metres.
+    That column is engine power for seventy machines and a bucket for six, and
+    it is where the rating lived before it had a column of its own; reading it
+    keeps those six right until their rating is entered properly.
     """
     fitted = o.get("fitted_bucket_cum")
     if fitted is not None:
-        return float(fitted), True, None
+        return float(fitted), "fitted", None
+
+    rated = o.get("rated_bucket_cum")
+    if rated is not None and 0 < float(rated) < MAX_SANE_BUCKET_CUM:
+        return float(rated), "rated", None
 
     standard = o.get("standard_bucket")
     if standard is None:
-        return 0.0, False, "no bucket recorded"
+        return 0.0, None, "no bucket recorded"
 
     uom = (o.get("capacity_uom") or "").strip().upper()
     if uom and uom not in BUCKET_UOM:
-        return 0.0, False, f"the register holds {standard:g} {uom}, which is not a bucket"
+        # Not a complaint about the register — that column is engine power and
+        # is holding it correctly. The bucket simply has not been entered yet.
+        return 0.0, None, f"no bucket recorded ({standard:g} {uom} is engine power)"
     if float(standard) > MAX_SANE_BUCKET_CUM:
-        return 0.0, False, f"{standard:g} is too large to be a bucket"
+        return 0.0, None, f"{standard:g} is too large to be a bucket"
     if float(standard) <= 0:
-        return 0.0, False, "the recorded bucket is zero"
-    return float(standard), False, None
+        return 0.0, None, "the recorded bucket is zero"
+    return float(standard), "legacy", None
 
 
 def _cycle_for(a: dict, o: dict | None) -> tuple[Cycle, float, float, bool]:
@@ -229,6 +242,7 @@ def machines(request: Request, db: Session = Depends(get_minehub_db)) -> list[di
         SELECT a.asset_id, a.fleet_code, a.nickname, a.ownership, a.status,
                COALESCE(own.display_name, sup.display_name) AS owner,
                a.capacity AS standard_bucket, a.capacity_uom,
+               a.rated_bucket_cum,
                a.fitted_bucket_cum, a.fitted_bucket_since,
                t.name AS asset_type,
                (SELECT i.external_code FROM asset_identity i
@@ -244,7 +258,7 @@ def machines(request: Request, db: Session = Depends(get_minehub_db)) -> list[di
           LEFT JOIN excavator_cycle ec ON ec.asset_id = a.asset_id
          WHERE t.name ILIKE '%%excavat%%'
            AND a.status NOT IN ('DISPOSED', 'SCRAPPED', 'CANNIBALISED')
-         ORDER BY (a.fitted_bucket_cum IS NULL AND a.capacity IS NULL),
+         ORDER BY (a.fitted_bucket_cum IS NULL AND a.rated_bucket_cum IS NULL),
                   a.ownership, a.fleet_code
     """)).mappings().all()
 
@@ -252,8 +266,9 @@ def machines(request: Request, db: Session = Depends(get_minehub_db)) -> list[di
     for r in rows:
         o = dict(r)
         cycle, fill, swell, overridden = _cycle_for(a, o)
-        bucket, is_fitted, problem = _bucket_of(o)
+        bucket, source, problem = _bucket_of(o)
         fitted = o["fitted_bucket_cum"]
+        rated = o["rated_bucket_cum"]
         standard = o["standard_bucket"]
         per_scoop = bucket * fill * swell
         out.append({
@@ -263,10 +278,20 @@ def machines(request: Request, db: Session = Depends(get_minehub_db)) -> list[di
             "status": o["status"], "plan_name": o["plan_name"],
             "standard_bucket": float(standard) if standard is not None else None,
             "capacity_uom": o["capacity_uom"],
+            "rated_bucket_cum": float(rated) if rated is not None else None,
             "fitted_bucket_cum": float(fitted) if fitted is not None else None,
             "fitted_bucket_since": o["fitted_bucket_since"],
             "bucket_used": bucket or None,
-            "bucket_is_fitted": is_fitted,
+            # Which of the two this figure came from. A machine planned on its
+            # rating is not wrong, but it is a different kind of certainty from
+            # one somebody walked out and looked at.
+            "bucket_source": source,
+            "bucket_is_fitted": source == "fitted",
+            # Running smaller than it was built for. Deliberate on a long boom
+            # reaching deep; a question on anything else.
+            "bucket_below_rated": (
+                fitted is not None and rated is not None
+                and float(fitted) < float(rated)),
             # Why this machine cannot be planned, in words, rather than a
             # figure worked out from a number that is not a bucket.
             "bucket_problem": problem,
@@ -287,35 +312,50 @@ def machines(request: Request, db: Session = Depends(get_minehub_db)) -> list[di
 @router.put("/machines/{asset_id}/bucket")
 def set_bucket(asset_id: int, request: Request, body: dict = Body(...),
                db: Session = Depends(get_minehub_db)) -> dict:
-    """Record the bucket currently fitted.
+    """Record either bucket, straight onto the equipment master.
 
-    Null clears it, which means "the standard bucket is back on" rather than
-    "unknown" — the standard one is in asset.capacity and never goes away.
+    Two numbers, two meanings. `rated_bucket_cum` is what the machine was
+    built to carry, and changes when the machine does. `fitted_bucket_cum` is
+    what is bolted on this morning, and changes when the pit does; clearing it
+    means the rated bucket is back on, not that nobody knows.
+
+    Send one or both. A key that is absent is left alone, which is what lets
+    the screen put two boxes on a row without each one wiping the other.
     """
     _require(request, MANAGE, "change a machine's bucket")
-    cum = body.get("fitted_bucket_cum")
-    if cum is not None and (float(cum) <= 0 or float(cum) >= 50):
-        raise HTTPException(422, "A bucket is between 0 and 50 cubic metres.")
+
+    sets, params = [], {"id": asset_id}
+    for key in ("fitted_bucket_cum", "rated_bucket_cum"):
+        if key not in body:
+            continue
+        cum = body.get(key)
+        if cum is not None and not (0 < float(cum) < 50):
+            raise HTTPException(422, "A bucket is between 0 and 50 cubic metres.")
+        sets.append(f"{key} = CAST(:{key} AS numeric)")
+        params[key] = cum
+    if not sets:
+        raise HTTPException(422, "Nothing to change.")
+
+    # A capacity with no date behind it cannot be questioned later.
+    if "fitted_bucket_cum" in params:
+        sets.append("fitted_bucket_since = CASE WHEN CAST(:fitted_bucket_cum AS numeric)"
+                    " IS NULL THEN NULL ELSE CURRENT_DATE END")
+
     was = db.execute(text("""
-        SELECT fleet_code, capacity, fitted_bucket_cum FROM asset WHERE asset_id = :id
+        SELECT fleet_code, capacity, rated_bucket_cum, fitted_bucket_cum
+          FROM asset WHERE asset_id = :id
     """), {"id": asset_id}).mappings().first()
 
-    done = db.execute(text("""
-        UPDATE asset
-           SET fitted_bucket_cum = CAST(:cum AS numeric),
-               fitted_bucket_since = CASE WHEN CAST(:cum AS numeric) IS NULL
-                                          THEN NULL ELSE CURRENT_DATE END,
-               updated_at = now()
-         WHERE asset_id = :id
-        RETURNING asset_id
-    """), {"cum": cum, "id": asset_id}).first()
+    done = db.execute(text(
+        f"UPDATE asset SET {', '.join(sets)}, updated_at = now() "
+        f"WHERE asset_id = :id RETURNING asset_id"), params).first()
     if not done:
         raise HTTPException(404, "That machine is not on the register.")
+
+    changed = {k: [float(was[k]) if was and was[k] is not None else None, v]
+               for k, v in params.items() if k != "id"}
     _event(db, request, "CAPACITY_BUCKET_CHANGED", asset_id=asset_id,
-           payload={"fleet_code": was["fleet_code"] if was else None,
-                    "standard_bucket": was["capacity"] if was else None,
-                    "fitted_bucket_cum": [
-                        was["fitted_bucket_cum"] if was else None, cum]})
+           payload={"fleet_code": was["fleet_code"] if was else None, **changed})
     db.commit()
     return {"ok": True}
 
@@ -739,7 +779,7 @@ def plan(request: Request, on: str | None = Query(None),
                a.fleet_code, a.nickname, a.ownership,
                COALESCE(own.display_name, sup.display_name) AS owner,
                a.capacity AS standard_bucket,
-               a.capacity_uom, a.fitted_bucket_cum,
+               a.capacity_uom, a.rated_bucket_cum, a.fitted_bucket_cum,
                (SELECT i.external_code FROM asset_identity i
                  WHERE i.asset_id = a.asset_id AND i.system = 'BUSINESS_PLAN'
                  LIMIT 1) AS plan_name,
@@ -762,7 +802,8 @@ def plan(request: Request, on: str | None = Query(None),
     for r in rows:
         o = dict(r)
         cycle, fill, swell, overridden = _cycle_for(a, o)
-        bucket, is_fitted, _problem = _bucket_of(o)
+        bucket, source, _problem = _bucket_of(o)
+        is_fitted = source == "fitted"
         cls = classes.get(o["tipper_class_id"]) or default_class
         faces.append(Face(
             face_plan_id=o["face_plan_id"], asset_id=o["asset_id"],
@@ -1013,6 +1054,7 @@ CAPACITY_EVENTS = [
 _SAID = {
     "running_hours": "hours", "tippers": "trucks", "activity": "job",
     "tipper_class_id": "kind of truck", "fitted_bucket_cum": "fitted bucket",
+    "rated_bucket_cum": "rated bucket",
     "location": "place", "material": "material", "note": "note",
     "fill_factor": "fill factor", "swell_factor": "swell factor",
     "operating_hours": "operating hours", "ore_t_per_cum": "ore density",
@@ -1064,6 +1106,10 @@ def _sentence(event_type: str, p: dict) -> str:
         return (f"Added a kind of truck: {p.get('label') or p.get('code')} — "
                 f"{p.get('payload_t')} t, {p.get('effective_cum')} Cum")
     if event_type == "CAPACITY_BUCKET_CHANGED":
+        rated = p.get("rated_bucket_cum")
+        if rated:
+            return (f"Rated bucket on {p.get('fleet_code') or 'a machine'}: "
+                    f"{rated[0] or '—'} to {rated[1] or '—'} Cum")
         pair = p.get("fitted_bucket_cum") or [None, None]
         was, now = pair[0], pair[1] if len(pair) > 1 else None
         if now is None:
@@ -1161,7 +1207,7 @@ def data_quality(request: Request, db: Session = Depends(get_minehub_db)) -> dic
     no_bucket = []
     for r in db.execute(text("""
         SELECT a.fleet_code, a.nickname, a.ownership, a.capacity AS standard_bucket,
-               a.capacity_uom, a.fitted_bucket_cum
+               a.capacity_uom, a.rated_bucket_cum, a.fitted_bucket_cum
           FROM asset a JOIN asset_type t ON t.asset_type_id = a.asset_type_id
          WHERE t.name ILIKE '%%excavat%%'
            AND a.status NOT IN ('DISPOSED','SCRAPPED','CANNIBALISED')
