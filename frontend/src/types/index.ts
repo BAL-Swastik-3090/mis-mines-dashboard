@@ -113,6 +113,9 @@ export interface StockPositionResponse {
   location_grid: { columns: { key: string; label: string }[];
                    rows: StockLocationRow[] };
   proposed_despatch: ProposedDespatch;
+  /** When this snapshot was last CHANGED, and by whom — not first filed. */
+  updated_at: string | null;
+  updated_by: string | null;
 }
 
 // ── Production API Responses ─────────────────────────────────

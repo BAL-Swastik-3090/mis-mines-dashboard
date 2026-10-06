@@ -55,13 +55,20 @@ def get_day(
     db: Session = Depends(get_db),
 ) -> dict:
     rows = db.execute(text("""
-        SELECT Material, `Plan`, Est_Actual, Entry_Id, Entry_Date
+        SELECT Material, `Plan`, Est_Actual,
+               Entry_Id, Entry_Date, Updated_At, Updated_By
           FROM mines_prev_day_actual
          WHERE `Date` = :d
     """), {"d": on_date}).mappings().all()
 
+    # The most recent change anywhere in the day, so the panel can say when the
+    # figures it is showing last moved without the client sorting five rows.
+    latest = max(rows, key=lambda r: r["Updated_At"]) if rows else None
+
     return {
         "on_date": on_date,
+        "updated_at": latest["Updated_At"].isoformat() if latest else None,
+        "updated_by": latest["Updated_By"] if latest else None,
         # Keyed by the dashboard's own column key, so the client reads
         # values[key] without searching. An unknown code is skipped rather than
         # crashing the panel.
@@ -71,6 +78,8 @@ def get_day(
                 "plan": float(r["Plan"]) if r["Plan"] is not None else None,
                 "entered_by": r["Entry_Id"],
                 "entered_at": r["Entry_Date"].isoformat() if r["Entry_Date"] else None,
+                "updated_by": r["Updated_By"],
+                "updated_at": r["Updated_At"].isoformat() if r["Updated_At"] else None,
             }
             for r in rows if r["Material"] in BY_CODE
         },
@@ -126,16 +135,26 @@ def put_day(
             """), {"d": on_date, "m": material})
             cleared += r.rowcount or 0
             continue
-        # Entry_Date is refreshed by the table's ON UPDATE clause, so a
-        # correction carries the time it was corrected, not first entered.
+        # ENTRY_DATE AND ENTRY_ID ARE NOT TOUCHED ON THE UPDATE BRANCH, so they
+        # keep saying who first filed this figure and when. Updated_At and
+        # Updated_By carry the correction.
+        #
+        # Updated_At is set explicitly rather than left to an ON UPDATE clause
+        # (which the migration removed): MySQL fires ON UPDATE only when a
+        # value actually changes, so re-entering a figure that happens to match
+        # what is already stored would not be recorded as a change at all. A
+        # save is a change to the person who pressed the button, whether or not
+        # the digits moved.
         db.execute(text("""
             INSERT INTO mines_prev_day_actual
-                   (`Date`, Material, `Plan`, Est_Actual, Entry_Id)
-            VALUES (:d, :m, :p, :v, :who)
+                   (`Date`, Material, `Plan`, Est_Actual,
+                    Entry_Id, Updated_By, Updated_At)
+            VALUES (:d, :m, :p, :v, :who, :who, NOW())
             ON DUPLICATE KEY UPDATE
                    `Plan`     = VALUES(`Plan`),
                    Est_Actual = VALUES(Est_Actual),
-                   Entry_Id   = VALUES(Entry_Id)
+                   Updated_By = VALUES(Updated_By),
+                   Updated_At = NOW()
         """), {"d": on_date, "m": material, "p": plan_of[key],
                "v": value, "who": who})
         saved += 1

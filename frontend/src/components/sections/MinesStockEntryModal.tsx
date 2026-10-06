@@ -30,6 +30,7 @@ import { X, Save, Loader2, AlertTriangle, Boxes } from "lucide-react";
 import api from "@/lib/api";
 import { formatIndian } from "@/lib/utils";
 import { dayLabel, todayISO } from "@/lib/prevDay";
+import LastChanged from "@/components/ui/LastChanged";
 
 const GRADES = [
   { key: "HG", label: "High Grade" },
@@ -188,6 +189,8 @@ export default function MinesStockEntryModal({
     proposed_despatch?: Record<string, number>;
     entered_by: string | null;
     entered_at: string | null;
+    updated_by: string | null;
+    updated_at: string | null;
   }>({
     queryKey: ["stock-entry", day],
     queryFn: async () => (await api.get("/stock-entry", {
@@ -311,7 +314,13 @@ export default function MinesStockEntryModal({
         for (const b of [...MINE_BUCKETS, ...PLANT_BUCKETS]) {
           const lgOnly = "lgOnly" in b && b.lgOnly;
           if (lgOnly && g.key !== "LG") continue;   // the database refuses it too
-          payload.push({ grade: g.key, bucket: b.key, qty: num(get(g.key, b.key)) });
+          // Read `cells` directly rather than through get(), which closes over
+          // it. Everything this callback sends must come from a value named in
+          // the dependency list below, or it sends a stale one.
+          payload.push({
+            grade: g.key, bucket: b.key,
+            qty: num(cells[cellKey(g.key, b.key)]),
+          });
         }
       }
       await api.put("/stock-entry", {
@@ -329,8 +338,17 @@ export default function MinesStockEntryModal({
     } finally {
       setSaving(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cells, day, onSaved, onClose]);
+    // `proposed` MUST be here. It was missing, and the omission was invisible
+    // on the way in and silent on the way out: this callback is rebuilt only
+    // when something in this list changes, so editing ONLY the proposed
+    // despatch — reopening a day whose stock is already filed and typing a
+    // destination — left it holding the proposed values from the last time a
+    // stock cell moved. The screen showed 830 because the inputs render from
+    // state; the request carried 0, and the server dutifully stored 0.
+    //
+    // No eslint-disable here. The rule was being suppressed for get(), and it
+    // was right about this one the whole time.
+  }, [cells, proposed, day, onSaved, onClose]);
 
   // Esc to close, and stop the page behind from scrolling while open
   useEffect(() => {
@@ -392,8 +410,22 @@ export default function MinesStockEntryModal({
           <span className="text-[11px] text-txt-muted">{dayLabel(day)}</span>
           {existing.isFetching && <Loader2 size={12} className="animate-spin text-txt-light" />}
           {existing.data?.has_data && (
-            <span className="text-[10px] text-txt-light">
-              loaded for editing{existing.data.entered_by ? ` · last by ${existing.data.entered_by}` : ""}
+            <span className="text-[10px] text-txt-light flex items-center gap-1.5">
+              {/* WHO FILED IT vs WHO LAST TOUCHED IT. This used to say "last
+                  by" and show Entry_Id, which was neither: the day was rewritten
+                  on every save, so the name belonged to the most recent writer
+                  while the label claimed it was the entry. Both are now shown,
+                  and the second only appears once they differ. */}
+              filed by {existing.data.entered_by}
+              {existing.data.updated_at
+                && existing.data.updated_at !== existing.data.entered_at && (
+                <LastChanged
+                  at={existing.data.updated_at}
+                  by={existing.data.updated_by}
+                  tone="light"
+                  prefix="· edited"
+                />
+              )}
             </span>
           )}
           {futureDay && (

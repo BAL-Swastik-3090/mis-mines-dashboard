@@ -205,6 +205,25 @@ def _resolve_snapshot_date(db: Session, as_on: date | None) -> date | None:
     ), {"d": as_on}).scalar()
 
 
+def _last_changed(db: Session, day: date) -> tuple[object | None, str | None]:
+    """When this snapshot was last changed, and by whom.
+
+    Across BOTH tables the form writes, because the form is one form: an edit
+    that only moved the proposed despatch must still show as a change to the
+    day. Taking the stock table alone would report the figures as untouched
+    while the thing the user had just corrected sat in the other table.
+    """
+    row = db.execute(text(f"""
+        SELECT Updated_At AS t, Updated_By AS who FROM {TABLE}
+         WHERE Stock_Date = :d
+        UNION ALL
+        SELECT Updated_At, Updated_By FROM {DESPATCH_TABLE}
+         WHERE Despatch_Date = :d
+        ORDER BY t DESC LIMIT 1
+    """), {"d": day}).mappings().first()
+    return (row["t"], row["who"]) if row else (None, None)
+
+
 def get_stock_position(db: Session, as_on: date | None = None) -> dict:
     snap = _resolve_snapshot_date(db, as_on)
 
@@ -219,6 +238,7 @@ def get_stock_position(db: Session, as_on: date | None = None) -> dict:
             "clearance": {"grades": _clearance_head(), "rows": []},
             "location_grid": {"columns": _location_head(), "rows": []},
             "proposed_despatch": _proposed_despatch(db, None),
+            "updated_at": None, "updated_by": None,
         }
 
     # ── everything at the mine, per grade and per status ─────────────────────
@@ -280,9 +300,12 @@ def get_stock_position(db: Session, as_on: date | None = None) -> dict:
         return grid.get((grade, bucket), 0.0)
 
     days_stale = (as_on - snap).days if as_on else 0
+    changed_at, changed_by = _last_changed(db, snap)
 
     return {
         "snapshot_date":     snap,
+        "updated_at":        changed_at,
+        "updated_by":        changed_by,
         "requested_date":    as_on,
         "days_stale":        days_stale,
         "is_stale":          days_stale > 0,
