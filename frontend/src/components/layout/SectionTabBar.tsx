@@ -3,7 +3,7 @@ import { useState } from "react";
 import {
   Package, Building2, BarChart3,
   Layers, FlaskConical, Wrench, Droplets,
-  Download, Check, GitCompareArrows, Factory,
+  Download, Check, GitCompareArrows, Factory, Scale,
 } from "lucide-react";
 import { useSectionObserver } from "@/hooks/useSectionObserver";
 import { useDateFilter }      from "@/contexts/useDateFilter";
@@ -16,6 +16,9 @@ const TABS = [
   { id: "stock",          label: "Stock",           icon: Package      },
   { id: "quality-e2e",    label: "E2E Quality",     icon: GitCompareArrows },
   { id: "plant-output",   label: "Plant Output",    icon: Factory      },
+  // After Plant Output because it closes the same chain: what was dug, what
+  // was despatched, what the plant received, and the metal lost between them.
+  { id: "amira",          label: "AMIRA Accounting", icon: Scale       },
   { id: "plant",          label: "Plant",           icon: Building2    },
   { id: "production",     label: "Production",      icon: BarChart3    },
   { id: "ob",             label: "OB Excavation",   icon: Layers       },
