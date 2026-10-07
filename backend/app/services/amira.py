@@ -55,6 +55,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.services.quality_e2e import get_quality_e2e
@@ -92,6 +93,85 @@ FECR_CR_CONTENT = 0.60
 # Rs -> Rs. Lacs, the 10^5 in the formula.
 LAKH = 100_000.0
 
+# ── ROM, STRAIGHT OFF THE WEIGHED LOTS ───────────────────────────────────────
+# PLANT 1200 / STORAGE_LOCATION 'ROM1' in pp_quality_inspection: one inspection
+# lot per day of run-of-mine ore, LOT_QUANTITY as the tonnage and the Cr2O3
+# characteristic as the grade. 602 lots since April 2024.
+#
+# THIS IS NOT WHERE THE WORKBOOK GETS ITS ROM ROW. Summary!D5 is
+# 'APRIL-26 Details'!F113, and F5 is =AC5 — the ROM STACK's FSQ — so the sheet's
+# ROM tonnage is the stack tonnage copied across, and its Cr2O3 is weighted by
+# shift quantity rather than by lot. April 2026 is 13,265.54 @ 43.7693 there
+# against ROM1's 13,976.00 @ 44.0113, a gap of 710 MT. The mine asked for ROM1,
+# so ROM1 is what this reads; the difference is a question about which figure
+# the business wants, not a defect here.
+ROM_PLANT = "1200"
+ROM_STORAGE = "ROM1"
+
+# ONE ROW PER CHARACTERISTIC, so LOT_QUANTITY repeats down the table. A plain
+# SUM reads 626,931 MT against the real 424,398 — every lot counted once per
+# characteristic it carries. The DISTINCT sub-select is the whole reason this
+# query is shaped the way it is; do not flatten it into one GROUP BY.
+_ROM_SQL = text("""
+    SELECT
+        COUNT(*) AS lots,
+        SUM(l.qty) AS ore_qty,
+        SUM(CASE WHEN c.v IS NOT NULL THEN 1 ELSE 0 END) AS lots_cr2o3,
+        SUM(CASE WHEN m.v IS NOT NULL THEN 1 ELSE 0 END) AS lots_moisture,
+        SUM(CASE WHEN c.v IS NOT NULL THEN l.qty * c.v END)
+          / NULLIF(SUM(CASE WHEN c.v IS NOT NULL THEN l.qty END), 0) AS cr2o3,
+        SUM(CASE WHEN m.v IS NOT NULL THEN l.qty * m.v END)
+          / NULLIF(SUM(CASE WHEN m.v IS NOT NULL THEN l.qty END), 0) AS moisture
+    FROM (
+        SELECT DISTINCT LOT_NUMBER, LOT_QUANTITY AS qty
+          FROM pp_quality_inspection
+         WHERE PLANT = :plant AND STORAGE_LOCATION = :sloc
+           AND QLT_START_DATE BETWEEN :frm AND :to
+           AND LOT_QUANTITY IS NOT NULL
+    ) l
+    LEFT JOIN (
+        SELECT LOT_NUMBER, MAX(CAST(NULLIF(RESULT,'') AS DECIMAL(16,6))) AS v
+          FROM pp_quality_inspection
+         WHERE PLANT = :plant AND STORAGE_LOCATION = :sloc
+           AND QLT_START_DATE BETWEEN :frm AND :to
+           AND UPPER(SHORT_TEXT_INS_CHAR) = 'CR2O3'
+         GROUP BY LOT_NUMBER
+    ) c ON c.LOT_NUMBER = l.LOT_NUMBER
+    LEFT JOIN (
+        SELECT LOT_NUMBER, MAX(CAST(NULLIF(RESULT,'') AS DECIMAL(16,6))) AS v
+          FROM pp_quality_inspection
+         WHERE PLANT = :plant AND STORAGE_LOCATION = :sloc
+           AND QLT_START_DATE BETWEEN :frm AND :to
+           AND UPPER(SHORT_TEXT_INS_CHAR) = 'MOISTURE'
+         GROUP BY LOT_NUMBER
+    ) m ON m.LOT_NUMBER = l.LOT_NUMBER
+""")
+
+
+def _rom(db: Session, frm: date, to: date) -> dict[str, float | None]:
+    """ROM tonnage and assay for the period; empty dict when there are no lots.
+
+    A CHARACTERISTIC IS REPORTED ONLY IF EVERY LOT CARRIES IT. Weighting across
+    whichever lots happen to have been tested, and presenting that as the
+    month's figure, is how a grade quietly becomes a sample of itself. Moisture
+    is the live case: ROM1 has it on 2 lots out of 602, both in May 2024, so
+    moisture reads blank — and Net Chromium with it, since the formula needs all
+    three terms. Both fill in on their own the day the lab starts posting
+    moisture against ROM lots; nothing here has to change.
+    """
+    r = db.execute(_ROM_SQL, {"plant": ROM_PLANT, "sloc": ROM_STORAGE,
+                              "frm": frm, "to": to}).fetchone()
+    if not r or not r.lots:
+        return {}
+    full = lambda n: n is not None and int(n) == int(r.lots)  # noqa: E731
+    return {
+        "ore_qty": float(r.ore_qty) if r.ore_qty is not None else None,
+        "cr2o3": float(r.cr2o3) if full(r.lots_cr2o3) and r.cr2o3 is not None else None,
+        "moisture": (float(r.moisture)
+                     if full(r.lots_moisture) and r.moisture is not None else None),
+    }
+
+
 # The chain, in the order ore physically moves through it. Order is load-bearing
 # twice over: the loss at each stage is measured against the one before it, and
 # the table is read left to right as a journey.
@@ -106,7 +186,7 @@ STAGES: tuple[tuple[str, str], ...] = (
 )
 
 # Built in phase 1. Everything else returns available=False.
-BUILT = ("mine_despatch", "plant_receipt")
+BUILT = ("rom", "mine_despatch", "plant_receipt")
 
 
 def _net_chromium(ore_qty: float | None,
@@ -149,6 +229,7 @@ def get_amira_accounting(db: Session, frm: date, to: date) -> dict[str, Any]:
     # Both destinations together: AMIRA accounts for what left the mine, not for
     # where it went. The per-plant split is the End-to-End Quality section's job.
     figures: dict[str, dict[str, float | None]] = {
+        "rom": _rom(db, frm, to),
         "mine_despatch": {
             "ore_qty":  tot.get("mines_qty"),
             "cr2o3":    tot.get("mines_cr2o3"),
