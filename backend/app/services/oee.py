@@ -29,7 +29,7 @@ Reporting-only (feeds no formula):
 """
 from __future__ import annotations
 from datetime import date
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from app.services import breakdown as bd
@@ -113,66 +113,126 @@ def _num(v) -> float:
         return 0.0
 
 
+# ── ONE READ PER SOURCE, NOT ONE PER MACHINE ─────────────────────────
+#
+# This screen used to issue twenty-five queries for a single load: the shift log
+# once per machine, the first-seen check once per hired machine, and breakdown
+# and maintenance once per owned machine. In production that measured 1,096 ms,
+# almost none of it real work — mines_tipper_details holds 5,409 rows in total,
+# so no individual read is expensive. There were simply twenty-five round trips
+# to a database on another host, and the waiting was the cost.
+#
+# Each source is now read once for the whole fleet and divided up afterwards.
+#
+# THE MATCHING STAYS IN MYSQL. Which log rows belong to which excavator is
+# decided by FIND_IN_SET plus an equality test, under a collation that ignores
+# case and trailing spaces. Re-implementing that in Python would have created a
+# second definition of the rule, free to drift from the first and wrong in ways
+# nobody would see — a machine quietly losing a day of production. So the same
+# two predicates are written into a CASE that labels every row with the machine
+# it belongs to, and the grouping happens on that label.
+
+
+def _machine_list() -> str:
+    """The fleet as a derived table of (machine, code), to join the log against.
+
+    WHY A JOIN AND NOT A CASE. A CASE labels each log row with one machine, and
+    that is not what the per-machine queries did. Each of those ran its own
+    predicate across the whole table, so a row naming two excavators was counted
+    by both of them — and seventeen rows from the CSV era do name two, for
+    instance '470-2,470-7,MAN-57,20,71,...' on 28 May, where the pair worked the
+    same shift and the log holds one line for the two of them.
+
+    Whether crediting that shift's output to both machines is right is a real
+    question, and not one a change to the query count should answer quietly. So
+    the join reproduces the existing behaviour exactly, double count and all,
+    and the question is left where it belongs — with the mine.
+    """
+    return " UNION ALL ".join(
+        f"SELECT :name{i} AS machine, CAST(:code{i} AS CHAR) AS code"
+        for i in range(len(EXCAVATORS)))
+
+
+def _machine_params() -> dict:
+    """Both keys for every machine; code is NULL for the hired ones, which is
+    what makes FIND_IN_SET fall through to the name test, exactly as it did."""
+    p: dict = {}
+    for i, ex in enumerate(EXCAVATORS):
+        p[f"name{i}"] = ex["name"]
+        p[f"code{i}"] = ex["code"]
+    return p
+
+
+# The matching rule itself, in one place: a machine owns a log row if its CSV
+# token is in equipment_name, or the whole field is its full name.
+_MATCH_ON = ("(FIND_IN_SET(m.code, t.equipment_name) > 0 "
+             "OR t.equipment_name = m.machine)")
+
+
 # ── IMOS shift log: planned losses, deviation, shift hours, excavated CuM ─────
 # Every quantity/hour column here is varchar, hence NULLIF + CAST throughout.
 # Machine matching needs BOTH branches: equipment_name switched from a CSV of the
 # excavator plus its tippers ('470-7,MAN-67,80,...') to a single full name
 # ('TATA-470(7)') in July 2026. FIND_IN_SET alone does not match the new form.
-_SHIFT_SQL = text("""
-    SELECT
-        SUM(COALESCE(CAST(NULLIF(sunday_holiday_weekly_off,'') AS DECIMAL(14,2)),0)) AS holiday_hrs,
-        SUM(COALESCE(CAST(NULLIF(no_excavation_plan,'')        AS DECIMAL(14,2)),0)) AS no_plan_hrs,
-        SUM(COALESCE(CAST(NULLIF(planned_shut_down_hr,'')      AS DECIMAL(14,2)),0)) AS planned_sd_hrs,
-        SUM(COALESCE(CAST(NULLIF(deviation_hours,'')           AS DECIMAL(14,2)),0)) AS deviation_hrs,
-        SUM(COALESCE(CAST(NULLIF(running_hours,'')             AS DECIMAL(14,2)),0)) AS running_hrs,
+_SHIFT_ALL_SQL = text(f"""
+    SELECT m.machine AS machine,
+        SUM(COALESCE(CAST(NULLIF(t.sunday_holiday_weekly_off,'') AS DECIMAL(14,2)),0)) AS holiday_hrs,
+        SUM(COALESCE(CAST(NULLIF(t.no_excavation_plan,'')        AS DECIMAL(14,2)),0)) AS no_plan_hrs,
+        SUM(COALESCE(CAST(NULLIF(t.planned_shut_down_hr,'')      AS DECIMAL(14,2)),0)) AS planned_sd_hrs,
+        SUM(COALESCE(CAST(NULLIF(t.deviation_hours,'')           AS DECIMAL(14,2)),0)) AS deviation_hrs,
+        SUM(COALESCE(CAST(NULLIF(t.running_hours,'')             AS DECIMAL(14,2)),0)) AS running_hrs,
         -- Downtime as the shift supervisor recorded it. Read only for machines
         -- whose bd_source is 'imos'; pulled unconditionally because it costs
         -- nothing here and keeps the per-machine branch to a single if.
-        SUM(COALESCE(CAST(NULLIF(breakdown,'')                 AS DECIMAL(14,2)),0)) AS log_bd_hrs,
-        SUM(COALESCE(CAST(NULLIF(maintenance,'')               AS DECIMAL(14,2)),0)) AS log_pm_hrs,
+        SUM(COALESCE(CAST(NULLIF(t.breakdown,'')                 AS DECIMAL(14,2)),0)) AS log_bd_hrs,
+        SUM(COALESCE(CAST(NULLIF(t.maintenance,'')               AS DECIMAL(14,2)),0)) AS log_pm_hrs,
         -- Zero here means the machine was not at the mine during the window at
         -- all, which is not the same as a machine that was there and idle.
         COUNT(*) AS shift_rows,
         SUM(
-            ( COALESCE(CAST(NULLIF(ore_quantity,'')   AS DECIMAL(14,2)),0)
-            + COALESCE(CAST(NULLIF(lg_quantity,'')    AS DECIMAL(14,2)),0)
-            + COALESCE(CAST(NULLIF(ob_quantity,'')    AS DECIMAL(14,2)),0)
-            + COALESCE(CAST(NULLIF(boulder,'')        AS DECIMAL(14,2)),0)
-            + COALESCE(CAST(NULLIF(tailing,'')        AS DECIMAL(14,2)),0)
-            + COALESCE(CAST(NULLIF(feed_to_cobp,'')   AS DECIMAL(14,2)),0) ) * 6
-            + COALESCE(CAST(NULLIF(silt_quantity,'')  AS DECIMAL(14,2)),0) * 4
+            ( COALESCE(CAST(NULLIF(t.ore_quantity,'')   AS DECIMAL(14,2)),0)
+            + COALESCE(CAST(NULLIF(t.lg_quantity,'')    AS DECIMAL(14,2)),0)
+            + COALESCE(CAST(NULLIF(t.ob_quantity,'')    AS DECIMAL(14,2)),0)
+            + COALESCE(CAST(NULLIF(t.boulder,'')        AS DECIMAL(14,2)),0)
+            + COALESCE(CAST(NULLIF(t.tailing,'')        AS DECIMAL(14,2)),0)
+            + COALESCE(CAST(NULLIF(t.feed_to_cobp,'')   AS DECIMAL(14,2)),0) ) * 6
+            + COALESCE(CAST(NULLIF(t.silt_quantity,'')  AS DECIMAL(14,2)),0) * 4
         ) AS actual_cum
-    FROM mines_tipper_details
-    WHERE Prod_date BETWEEN :fd AND :td
-      AND (FIND_IN_SET(:code, equipment_name) > 0 OR equipment_name = :name)
+    FROM mines_tipper_details t
+    JOIN ({_machine_list()}) m ON {_MATCH_ON}
+    WHERE t.Prod_date BETWEEN :fd AND :td
+    GROUP BY m.machine
 """)
 
 # An open notification carries no duration in SAP, so it used to contribute 0 —
 # a machine down since the 3rd and still down on the 28th counted as nothing.
 # services/breakdown.py is the single definition; it counts an open event from
 # its start to now, and needs a :bd_upto parameter.
-_BD_SQL = text(f"""
-    SELECT COALESCE(SUM({bd.DURATION_SECONDS}), 0) / 3600.0 AS bd_hours
+_BD_ALL_SQL = text(f"""
+    SELECT EQUIPMENT AS eq,
+           COALESCE(SUM({bd.DURATION_SECONDS}), 0) / 3600.0 AS bd_hours
     FROM zpm_iw29_notifications
     WHERE MAINTENANCE_PLANT = :plant
       AND NOTIFICATION_TYPE = :ntype
       AND MAIN_WORK_CENTER  = :wc
-      AND EQUIPMENT         = :eq
+      AND EQUIPMENT IN :eqs
       AND MALFUNCTION_START BETWEEN :fd AND :td
-""")
+    GROUP BY EQUIPMENT
+""").bindparams(bindparam("eqs", expanding=True))
 
 # PM hours come from WORK_HOURS. The obvious-looking
-# DATEDIFF(COMPLETION_DATE, BASIC_START_DATE) × 24 returns 0 for every BA03
+# DATEDIFF(COMPLETION_DATE, BASIC_START_DATE) x 24 returns 0 for every BA03
 # order, because they start and complete on the same day.
-_PM_SQL = text("""
-    SELECT COALESCE(SUM(WORK_HOURS), 0) AS pm_hours
+_PM_ALL_SQL = text("""
+    SELECT EQUIPMENT_NO AS eq, COALESCE(SUM(WORK_HOURS), 0) AS pm_hours
     FROM mm_plant_maint_calibration
     WHERE ORDER_TYPE    = :otype
       AND PLANT         = :plant
       AND MAIN_WORK_CTR = :wc
-      AND EQUIPMENT_NO  = :eq
+      AND EQUIPMENT_NO IN :eqs
       AND BASIC_START_DATE BETWEEN :fd AND :td
-""")
+    GROUP BY EQUIPMENT_NO
+""").bindparams(bindparam("eqs", expanding=True))
 
 
 # THE DAY A HIRED MACHINE ACTUALLY STARTED, ever — not within the window.
@@ -184,21 +244,60 @@ _PM_SQL = text("""
 #
 # So a date only counts as a start if the machine was logged again within the
 # following week. A real arrival is followed by more shifts; a typo or a one-off
-# is not. Checked against all five hired machines, this returns the date the
-# mine's own log shows them beginning work: 24 July for SANY-2 and TATA-210,
-# 9 August for TATA-490, 3 October for both TATA-350s.
-_FIRST_SEEN_SQL = text("""
-    SELECT MIN(a.Prod_date) AS first_seen
-    FROM mines_tipper_details a
-    WHERE (FIND_IN_SET(:code, a.equipment_name) > 0 OR a.equipment_name = :name)
-      AND a.Prod_date > '2020-01-01'
-      AND EXISTS (
-          SELECT 1 FROM mines_tipper_details b
-          WHERE (FIND_IN_SET(:code, b.equipment_name) > 0 OR b.equipment_name = :name)
-            AND b.Prod_date >  a.Prod_date
-            AND b.Prod_date <= a.Prod_date + INTERVAL 7 DAY
-      )
+# is not.
+#
+# The rule used to be a correlated EXISTS run once per hired machine. It is now
+# one read of the distinct dates each machine was logged on — 224 names across
+# 5,409 rows, so a handful of dates each — with the week test applied in Python
+# below. Same rule, same answers: 24 July for SANY-2 and TATA-210, 9 August for
+# TATA-490, 3 October for both TATA-350s.
+_SEEN_DAYS_SQL = text(f"""
+    SELECT m.machine AS machine, t.Prod_date AS d
+      FROM mines_tipper_details t
+      JOIN ({_machine_list()}) m ON {_MATCH_ON}
+     WHERE t.Prod_date > '2020-01-01'
+     GROUP BY m.machine, t.Prod_date
 """)
+
+
+def _shift_by_machine(db: Session, fd: date, td: date) -> dict:
+    """One row per machine that has any shift row in the window."""
+    return {r["machine"]: r for r in db.execute(
+        _SHIFT_ALL_SQL, {"fd": fd, "td": td, **_machine_params()}).mappings()}
+
+
+def _sap_hours(db: Session, fd: date, td: date) -> tuple[dict, dict]:
+    """Breakdown and maintenance hours per SAP equipment number, in two reads."""
+    eqs = [ex["sap_eq"] for ex in EXCAVATORS if ex["sap_eq"]]
+    if not eqs:
+        return {}, {}
+    bd_by = {r["eq"]: _num(r["bd_hours"]) for r in db.execute(_BD_ALL_SQL, {
+        "plant": PLANT, "ntype": BD_NOTIF_TYPE, "wc": WORK_CENTRE,
+        "eqs": eqs, "fd": fd, "td": td, **bd.params(td),
+    }).mappings()}
+    pm_by = {r["eq"]: _num(r["pm_hours"]) for r in db.execute(_PM_ALL_SQL, {
+        "otype": PM_ORDER_TYPE, "plant": PLANT, "wc": WORK_CENTRE,
+        "eqs": eqs, "fd": fd, "td": td,
+    }).mappings()}
+    return bd_by, pm_by
+
+
+def _first_seen_by_machine(db: Session) -> dict:
+    """First logged date that was followed by another within the week."""
+    days: dict = {}
+    for r in db.execute(_SEEN_DAYS_SQL, _machine_params()).mappings():
+        days.setdefault(r["machine"], []).append(r["d"])
+
+    out: dict = {}
+    for machine, ds in days.items():
+        ds.sort()
+        for i, d in enumerate(ds):
+            # ds is sorted, so the very next date is the nearest candidate: if
+            # even that one is more than a week out, no later date can qualify d.
+            if i + 1 < len(ds) and (ds[i + 1] - d).days <= 7:
+                out[machine] = d
+                break
+    return out
 
 
 def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
@@ -206,12 +305,17 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
     days            = (to_date - from_date).days + 1
     full_god_hours  = days * 24.0
 
+    # Four reads for the whole fleet, before the loop, instead of twenty-five
+    # inside it. first_seen is not restricted to the window on purpose: it asks
+    # when a machine first arrived at the mine, ever.
+    shift_by   = _shift_by_machine(db, from_date, to_date)
+    bd_by, pm_by = _sap_hours(db, from_date, to_date)
+    first_by   = _first_seen_by_machine(db)
+
     machines = []
     absent: list[str] = []
     for ex in EXCAVATORS:
-        shift = db.execute(_SHIFT_SQL, {
-            "fd": from_date, "td": to_date, "code": ex["code"], "name": ex["name"],
-        }).fetchone()
+        shift = shift_by.get(ex["name"])
 
         # A MACHINE WITH NO SHIFT ROWS IS LEFT OUT, NOT SHOWN AS ZERO.
         # Carried through the arithmetic it would read God Hours in full, no
@@ -220,7 +324,7 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
         # fleet figure down. That is an artefact of the machine not being here,
         # not a fact about it. TATA-350(1) and (2) are the live case: they do not
         # exist before 3 October, so any September range must not invent them.
-        if not shift or not shift.shift_rows:
+        if not shift or not shift["shift_rows"]:
             absent.append(ex["name"])
             continue
 
@@ -243,35 +347,27 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
         # past it, which is the safer way to be wrong.
         god_hours = full_god_hours
         if ex["hired"]:
-            first_seen = db.execute(_FIRST_SEEN_SQL,
-                                    {"code": ex["code"], "name": ex["name"]}).scalar()
+            first_seen = first_by.get(ex["name"])
             if first_seen and first_seen > from_date:
                 god_hours = max((to_date - first_seen).days + 1, 0) * 24.0
 
         if ex["bd_source"] == "sap":
-            bd_row = db.execute(_BD_SQL, {
-                "plant": PLANT, "ntype": BD_NOTIF_TYPE, "wc": WORK_CENTRE,
-                "eq": ex["sap_eq"], "fd": from_date, "td": to_date,
-                **bd.params(to_date),
-            }).fetchone()
-            pm_row = db.execute(_PM_SQL, {
-                "otype": PM_ORDER_TYPE, "plant": PLANT, "wc": WORK_CENTRE,
-                "eq": ex["sap_eq"], "fd": from_date, "td": to_date,
-            }).fetchone()
-            raw_bd = _num(bd_row.bd_hours) if bd_row else 0.0
-            raw_pm = _num(pm_row.pm_hours) if pm_row else 0.0
+            # Absent from the dict means SAP recorded no event for this machine
+            # in the window, which is zero hours down, not missing data.
+            raw_bd = bd_by.get(ex["sap_eq"], 0.0)
+            raw_pm = pm_by.get(ex["sap_eq"], 0.0)
         else:
             # Hired: no SAP equipment number exists to query, so the shift log
             # is the only record of this machine stopping.
-            raw_bd = _num(shift.log_bd_hrs)
-            raw_pm = _num(shift.log_pm_hrs)
+            raw_bd = _num(shift["log_bd_hrs"])
+            raw_pm = _num(shift["log_pm_hrs"])
 
-        holiday    = _num(shift.holiday_hrs)    if shift else 0.0
-        no_plan    = _num(shift.no_plan_hrs)    if shift else 0.0
-        planned_sd = _num(shift.planned_sd_hrs) if shift else 0.0
-        deviation  = _num(shift.deviation_hrs)  if shift else 0.0
-        running    = _num(shift.running_hrs)    if shift else 0.0
-        actual_cum = max(0.0, _num(shift.actual_cum) if shift else 0.0)
+        holiday    = _num(shift["holiday_hrs"])
+        no_plan    = _num(shift["no_plan_hrs"])
+        planned_sd = _num(shift["planned_sd_hrs"])
+        deviation  = _num(shift["deviation_hrs"])
+        running    = _num(shift["running_hrs"])
+        actual_cum = max(0.0, _num(shift["actual_cum"]))
 
         loss_hrs   = holiday + no_plan + planned_sd
         ideal_time = max(god_hours - loss_hrs, 0.0)
