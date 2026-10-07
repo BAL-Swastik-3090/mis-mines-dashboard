@@ -76,16 +76,24 @@ def get_day(
     db: Session = Depends(get_db),
 ) -> dict:
     rows = db.execute(text("""
-        SELECT Grade, Bucket, Qty, Entry_Id, Entry_Date
+        SELECT Grade, Bucket, Qty, Entry_Id, Entry_Date, Updated_At, Updated_By
           FROM mines_stock_entry
          WHERE Stock_Date = :d
     """), {"d": on_date}).mappings().all()
 
     proposed = db.execute(text("""
-        SELECT Destination, Qty
+        SELECT Destination, Qty, Entry_Date, Updated_At, Updated_By
           FROM mines_proposed_despatch
          WHERE Despatch_Date = :d
     """), {"d": on_date}).mappings().all()
+
+    # THE LATEST CHANGE ACROSS THE WHOLE DAY, stock and proposed despatch
+    # together. They are saved in one transaction but live in two tables, and
+    # the form is one form — reporting the stock table's time alone would say
+    # "unchanged" after an edit that only touched the despatch boxes, which is
+    # the exact case this was built for.
+    stamped = [*rows, *proposed]
+    latest = max(stamped, key=lambda r: r["Updated_At"]) if stamped else None
 
     # Keyed "GRADE|BUCKET" so the form reads one cell without searching.
     return {
@@ -93,9 +101,12 @@ def get_day(
         "has_data": len(rows) > 0,
         "cells": {f"{r['Grade']}|{r['Bucket']}": float(r["Qty"]) for r in rows},
         "proposed_despatch": {r["Destination"]: float(r["Qty"]) for r in proposed},
+        # First filed, and last changed. Equal until somebody edits the day.
         "entered_by": rows[0]["Entry_Id"] if rows else None,
-        "entered_at": (rows[0]["Entry_Date"].isoformat()
-                       if rows and rows[0]["Entry_Date"] else None),
+        "entered_at": (min(r["Entry_Date"] for r in stamped).isoformat()
+                       if stamped else None),
+        "updated_by": latest["Updated_By"] if latest else None,
+        "updated_at": latest["Updated_At"].isoformat() if latest else None,
     }
 
 
@@ -157,23 +168,63 @@ def put_day(
         raise HTTPException(400, "Nothing to submit.")
 
     who = _actor(request)
+
+    # ONE INSTANT FOR THE WHOLE SAVE, read from the database's clock. Both NOW()
+    # and the app's own clock were tried and both were wrong: NOW() is evaluated
+    # per STATEMENT, so the stock rows and the proposed-despatch rows landed a
+    # second apart and a brand-new day read as already edited; datetime.now() is
+    # a different machine's clock again. A save is one action, so it gets one
+    # timestamp, and "never edited" is exactly Entry_Date == Updated_At.
+    saved_at = db.execute(text("SELECT NOW()")).scalar()
+
+    # WHO FILED THIS DAY FIRST, AND WHEN — read before the delete removes it.
+    # Replacing the day would otherwise reset Entry_Date to now on every save,
+    # which is what used to make it impossible to tell an original entry from a
+    # correction. Carried forward here so Entry_Date means "first filed" and
+    # Updated_At means "last changed"; a day being filed for the first time has
+    # no earlier value, so the two are set to the same moment.
+    first = db.execute(text("""
+        SELECT Entry_Date, Entry_Id FROM mines_stock_entry
+         WHERE Stock_Date = :d ORDER BY Entry_Date LIMIT 1
+    """), {"d": on_date}).mappings().first()
+    # None on a first entry, and the INSERT falls back to NOW(). Deliberately
+    # NOT datetime.now(): that is the app server's clock while NOW() is the
+    # database's, and the two differ by about a second here — enough to make a
+    # brand-new entry look like it had already been edited, because the screen
+    # decides that by comparing these two timestamps. One clock, both columns.
+    born_at = first["Entry_Date"] if first else None
+    born_by = first["Entry_Id"] if first else who
+
     db.execute(text("DELETE FROM mines_stock_entry WHERE Stock_Date = :d"),
                {"d": on_date})
     db.execute(text("""
-        INSERT INTO mines_stock_entry (Stock_Date, Grade, Bucket, Qty, Entry_Id)
-        VALUES (:d, :g, :b, :q, :who)
-    """), [{"d": on_date, "g": g, "b": b, "q": q, "who": who} for g, b, q in clean])
+        INSERT INTO mines_stock_entry
+               (Stock_Date, Grade, Bucket, Qty,
+                Entry_Id, Entry_Date, Updated_By, Updated_At)
+        VALUES (:d, :g, :b, :q, :born_by, COALESCE(:born_at, :at), :who, :at)
+    """), [{"d": on_date, "g": g, "b": b, "q": q, "at": saved_at,
+            "who": who, "born_by": born_by, "born_at": born_at}
+           for g, b, q in clean])
 
     # Replaced wholesale alongside the stock, in the same transaction, so the
     # day is never half one submission and half the one before it.
+    p_first = db.execute(text("""
+        SELECT Entry_Date, Entry_Id FROM mines_proposed_despatch
+         WHERE Despatch_Date = :d ORDER BY Entry_Date LIMIT 1
+    """), {"d": on_date}).mappings().first()
+    p_born_at = p_first["Entry_Date"] if p_first else None   # see born_at above
+    p_born_by = p_first["Entry_Id"] if p_first else who
+
     db.execute(text("DELETE FROM mines_proposed_despatch WHERE Despatch_Date = :d"),
                {"d": on_date})
     if proposed:
         db.execute(text("""
             INSERT INTO mines_proposed_despatch
-                   (Despatch_Date, Destination, Qty, Entry_Id)
-            VALUES (:d, :dest, :q, :who)
-        """), [{"d": on_date, "dest": dest, "q": q, "who": who}
+                   (Despatch_Date, Destination, Qty,
+                    Entry_Id, Entry_Date, Updated_By, Updated_At)
+            VALUES (:d, :dest, :q, :born_by, COALESCE(:born_at, :at), :who, :at)
+        """), [{"d": on_date, "dest": dest, "q": q, "at": saved_at,
+                "who": who, "born_by": p_born_by, "born_at": p_born_at}
                for dest, q in proposed])
     db.commit()
 

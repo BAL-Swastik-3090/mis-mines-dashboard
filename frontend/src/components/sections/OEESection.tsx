@@ -66,7 +66,9 @@ function FleetKpis({ fleet, loading }: { fleet: OEEFleet | undefined; loading: b
     },
     {
       label: "Total Breakdown",
-      sub: "hrs · SAP M2 notifications",
+      // No longer one source: the owned machines carry SAP M2 notifications,
+      // the hired ones have no equipment number and carry the shift log instead.
+      sub: "hrs · SAP + shift log",
       value: loading ? null : fleet?.bd_hours ?? null,
       unit: " hrs",
       colorFn: () => "text-[#c62828]",
@@ -167,14 +169,35 @@ function OEETable({ machines, fleet, loading }: { machines: OEEMachineRow[]; fle
                 <tr key={m.machine} className="hover:bg-bg-section/50 transition-colors">
                   {/* Machine + ideal capacity underneath */}
                   <td className="px-3 py-2.5 whitespace-nowrap">
-                    <div className="font-condensed font-bold text-[12px] text-navy">{m.machine}</div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-condensed font-bold text-[12px] text-navy">{m.machine}</span>
+                      {/* Hired machines are not Balasore assets, so they have no
+                          SAP equipment number and their downtime is read from a
+                          different place. Marking them keeps that visible rather
+                          than leaving two sources silently mixed in one column. */}
+                      {m.hired && (
+                        <span
+                          title="Hired machine — no SAP equipment number; breakdown and PM come from the daily shift log"
+                          className="px-1 py-px rounded-sm bg-[#ede7f6] text-[#5e35b1] text-[8px] font-bold tracking-wide"
+                        >
+                          HIRED
+                        </span>
+                      )}
+                    </div>
                     <div className="text-[9px] text-txt-light">{fmt1(m.ideal_cap)} CuM/hr</div>
                   </td>
                   {/* God hrs */}
                   <td className="px-3 py-2.5 text-txt-secondary">{fmt1(m.god_hours)}</td>
-                  {/* BD hrs */}
+                  {/* BD hrs — and WHERE IT CAME FROM, because the two sources do
+                      not measure the same thing. SAP counts a notification from
+                      open to close including unmanned nights; the shift log
+                      counts downtime inside a manned shift. A reader comparing
+                      two rows needs to know which they are looking at. */}
                   <td className={`px-3 py-2.5 font-semibold ${m.bd_hours > 0 ? "text-[#c62828]" : "text-txt-light"}`}>
-                    {fmt2(m.bd_hours)}
+                    <div>{fmt2(m.bd_hours)}</div>
+                    <div className="text-[8px] font-normal text-txt-light tracking-wide">
+                      {m.bd_source === "sap" ? "SAP" : "SHIFT LOG"}
+                    </div>
                   </td>
                   {/* PM hrs */}
                   <td className={`px-3 py-2.5 font-semibold ${m.pm_hours > 0 ? "text-[#c8960c]" : "text-txt-light"}`}>
@@ -241,16 +264,30 @@ function OEETable({ machines, fleet, loading }: { machines: OEEMachineRow[]; fle
         </table>
       </div>
 
+      {/* A machine on the roster with no shift rows in this period is left out
+          of the table entirely rather than drawn as a row of zeros, which would
+          read as fully available and producing nothing and would pull the fleet
+          figure down. Saying so beats letting someone count the rows and wonder
+          where a machine went. */}
+      {!loading && fleet && fleet.absent_machines.length > 0 && (
+        <div className="px-3 py-1.5 border-t border-border-light/40 bg-[#fff8e1]">
+          <p className="text-[9px] text-txt-secondary leading-tight">
+            <span className="font-bold text-navy">Not at the mine in this period: </span>
+            {fleet.absent_machines.join(", ")} — no shift entries, so excluded from the table and the fleet figure.
+          </p>
+        </div>
+      )}
+
       {/* Footer */}
       <div className="px-3 py-1.5 border-t border-border-light/40 bg-bg-section/40 flex flex-wrap gap-x-4 gap-y-1">
         <p className="text-[9px] font-mono text-success/70 leading-tight">
           <span className="font-semibold text-success/60">LOSS HRS · </span>IMOS
         </p>
         <p className="text-[9px] font-mono text-success/70 leading-tight">
-          <span className="font-semibold text-success/60">BREAKDOWN · </span>SAP
+          <span className="font-semibold text-success/60">BREAKDOWN · </span>SAP (owned) · IMOS SHIFT LOG (hired)
         </p>
         <p className="text-[9px] font-mono text-success/70 leading-tight">
-          <span className="font-semibold text-success/60">PM · </span>SAP
+          <span className="font-semibold text-success/60">PM · </span>SAP (owned) · IMOS SHIFT LOG (hired)
         </p>
         <p className="text-[9px] font-mono text-success/70 leading-tight">
           <span className="font-semibold text-success/60">EXCAVATION · </span>SAP

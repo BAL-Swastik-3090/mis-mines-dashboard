@@ -39,18 +39,72 @@ WORK_CENTRE     = "MINEAUTO"
 BD_NOTIF_TYPE   = "M2"
 PM_ORDER_TYPE   = "BA03"
 
-# code      : token inside mines_tipper_details.equipment_name (pre-July CSV form)
+# WHO IS ON THIS SCREEN, AND WHERE EACH ONE'S DOWNTIME COMES FROM.
+#
+# code      : token inside mines_tipper_details.equipment_name (pre-July CSV form).
+#             None for anything that arrived after July 2026, when the mine
+#             switched to writing the full name in that column.
 # name      : full single value used from July 2026 onward
-# sap_eq     : 18-digit zero-padded SAP EQUIPMENT / EQUIPMENT_NO
+# sap_eq    : 18-digit zero-padded SAP EQUIPMENT / EQUIPMENT_NO, or None
 # ideal_cap : fixed engineering figure supplied by the mine (CuM/hr), not derived
+# hired     : contractor machine, not owned
+#
+# TWO SOURCES FOR BREAKDOWN, AND WHY. The owned machines keep SAP, which is where
+# the mine raises an M2 notification against an equipment number. The hired ones
+# have no equipment number — they are not Balasore assets, so SAP has never heard
+# of them — and their downtime is instead written into the daily shift log, in
+# mines_tipper_details.breakdown and .maintenance. Checked over 1 Jul - 3 Oct
+# 2026, those two columns are filled for every hired machine (SANY-2 41.9 h,
+# TATA-490 20.3 h breakdown plus 160.4 h maintenance, TATA-210 16.4 h), so the
+# figure is real rather than a stand-in for a missing one.
+#
+# The two do not agree where both exist — TATA-470(7) is 664.7 h in the shift log
+# against 90.0 h in SAP — because they measure different things: SAP counts from
+# notification open to close including unmanned nights, the shift log counts
+# downtime inside a manned shift. Mixing them in one column is therefore a
+# compromise the mine chose deliberately, and the table says which is which
+# rather than hiding it.
 EXCAVATORS = [
-    {"name": "TATA-470(7)", "code": "470-7", "sap_eq": "000000000000700086", "ideal_cap": 17.0},
-    {"name": "TATA-470(2)", "code": "470-2", "sap_eq": "000000000000700042", "ideal_cap": 17.0},
-    {"name": "TATA-370(5)", "code": "370-5", "sap_eq": "000000000000700064", "ideal_cap": 39.0},
-    {"name": "TATA-370(4)", "code": "370-4", "sap_eq": "000000000000700053", "ideal_cap": 39.0},
-    {"name": "TATA-220(8)", "code": "220-8", "sap_eq": "000000000000700090", "ideal_cap": 29.0},
-]
+    # ── owned: breakdown and PM from SAP ──────────────────────────────────────
+    {"name": "TATA-470(7)", "code": "470-7", "sap_eq": "000000000000700086",
+     "ideal_cap": 17.0, "bd_source": "sap", "hired": False},
+    {"name": "TATA-470(2)", "code": "470-2", "sap_eq": "000000000000700042",
+     "ideal_cap": 17.0, "bd_source": "sap", "hired": False},
+    {"name": "TATA-370(5)", "code": "370-5", "sap_eq": "000000000000700064",
+     "ideal_cap": 39.0, "bd_source": "sap", "hired": False},
+    {"name": "TATA-370(4)", "code": "370-4", "sap_eq": "000000000000700053",
+     "ideal_cap": 39.0, "bd_source": "sap", "hired": False},
+    {"name": "TATA-220(8)", "code": "220-8", "sap_eq": "000000000000700090",
+     "ideal_cap": 29.0, "bd_source": "sap", "hired": False},
 
+    # ── hired: breakdown and PM from the shift log ────────────────────────────
+    # TATA-350(1) and (2) exist only from 3 October 2026. Before that the mine
+    # logged a single "TATA-350", which is deliberately NOT listed here: it was
+    # one name over a changing number of machines (6 shift rows on 2 October, so
+    # 30.3 running hours in a 24-hour day), and splitting that history between
+    # the two successors would be guesswork. Those rows are left out.
+    {"name": "TATA-350(1)", "code": None, "sap_eq": None,
+     "ideal_cap": 58.0, "bd_source": "imos", "hired": True},
+    {"name": "TATA-350(2)", "code": None, "sap_eq": None,
+     "ideal_cap": 58.0, "bd_source": "imos", "hired": True},
+    {"name": "SANY-2",      "code": None, "sap_eq": None,
+     "ideal_cap": 17.0, "bd_source": "imos", "hired": True},
+    {"name": "TATA-490",    "code": None, "sap_eq": None,
+     "ideal_cap": 26.0, "bd_source": "imos", "hired": True},
+    {"name": "TATA-210",    "code": None, "sap_eq": None,
+     "ideal_cap": 29.0, "bd_source": "imos", "hired": True},
+
+    # NOT HERE, ON PURPOSE:
+    #   EV 1 / EV 2  — SAP 113531 / 113532, shift log and downtime both present.
+    #                  Held back only because the mine has not yet given their
+    #                  ideal capacity; add a line each when it arrives.
+    #   TATA-370(6)  — SAP 700075, in the fleet master, but has never once
+    #                  appeared in the shift log, so there is no production to
+    #                  measure. Excluded by the mine.
+    #   EV LOADER / EV GRADER — a wheel loader and a motor grader. Type 13 in
+    #                  the fleet master alongside the excavators, but not
+    #                  excavators. Excluded by the mine.
+]
 
 def _num(v) -> float:
     try:
@@ -71,6 +125,14 @@ _SHIFT_SQL = text("""
         SUM(COALESCE(CAST(NULLIF(planned_shut_down_hr,'')      AS DECIMAL(14,2)),0)) AS planned_sd_hrs,
         SUM(COALESCE(CAST(NULLIF(deviation_hours,'')           AS DECIMAL(14,2)),0)) AS deviation_hrs,
         SUM(COALESCE(CAST(NULLIF(running_hours,'')             AS DECIMAL(14,2)),0)) AS running_hrs,
+        -- Downtime as the shift supervisor recorded it. Read only for machines
+        -- whose bd_source is 'imos'; pulled unconditionally because it costs
+        -- nothing here and keeps the per-machine branch to a single if.
+        SUM(COALESCE(CAST(NULLIF(breakdown,'')                 AS DECIMAL(14,2)),0)) AS log_bd_hrs,
+        SUM(COALESCE(CAST(NULLIF(maintenance,'')               AS DECIMAL(14,2)),0)) AS log_pm_hrs,
+        -- Zero here means the machine was not at the mine during the window at
+        -- all, which is not the same as a machine that was there and idle.
+        COUNT(*) AS shift_rows,
         SUM(
             ( COALESCE(CAST(NULLIF(ore_quantity,'')   AS DECIMAL(14,2)),0)
             + COALESCE(CAST(NULLIF(lg_quantity,'')    AS DECIMAL(14,2)),0)
@@ -113,27 +175,96 @@ _PM_SQL = text("""
 """)
 
 
+# THE DAY A HIRED MACHINE ACTUALLY STARTED, ever — not within the window.
+#
+# Not simply MIN(Prod_date): one stray row would decide it, and there are stray
+# rows. TATA-210 has a single row dated 5 March 2026 standing 141 days before
+# the next one, and the table also holds dates typed as 0026-02-25 and
+# 0206-07-25. Taking the minimum would have charged TATA-210 from March.
+#
+# So a date only counts as a start if the machine was logged again within the
+# following week. A real arrival is followed by more shifts; a typo or a one-off
+# is not. Checked against all five hired machines, this returns the date the
+# mine's own log shows them beginning work: 24 July for SANY-2 and TATA-210,
+# 9 August for TATA-490, 3 October for both TATA-350s.
+_FIRST_SEEN_SQL = text("""
+    SELECT MIN(a.Prod_date) AS first_seen
+    FROM mines_tipper_details a
+    WHERE (FIND_IN_SET(:code, a.equipment_name) > 0 OR a.equipment_name = :name)
+      AND a.Prod_date > '2020-01-01'
+      AND EXISTS (
+          SELECT 1 FROM mines_tipper_details b
+          WHERE (FIND_IN_SET(:code, b.equipment_name) > 0 OR b.equipment_name = :name)
+            AND b.Prod_date >  a.Prod_date
+            AND b.Prod_date <= a.Prod_date + INTERVAL 7 DAY
+      )
+""")
+
+
 def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
     """Per-excavator OEE plus a weighted fleet roll-up."""
-    days      = (to_date - from_date).days + 1
-    god_hours = days * 24.0
+    days            = (to_date - from_date).days + 1
+    full_god_hours  = days * 24.0
 
     machines = []
+    absent: list[str] = []
     for ex in EXCAVATORS:
         shift = db.execute(_SHIFT_SQL, {
             "fd": from_date, "td": to_date, "code": ex["code"], "name": ex["name"],
         }).fetchone()
 
-        bd_row = db.execute(_BD_SQL, {
-            "plant": PLANT, "ntype": BD_NOTIF_TYPE, "wc": WORK_CENTRE,
-            "eq": ex["sap_eq"], "fd": from_date, "td": to_date,
-            **bd.params(to_date),
-        }).fetchone()
+        # A MACHINE WITH NO SHIFT ROWS IS LEFT OUT, NOT SHOWN AS ZERO.
+        # Carried through the arithmetic it would read God Hours in full, no
+        # breakdown, Availability 100% and Performance 0% — a machine that looks
+        # perfectly available and produced nothing, which then drags the weighted
+        # fleet figure down. That is an artefact of the machine not being here,
+        # not a fact about it. TATA-350(1) and (2) are the live case: they do not
+        # exist before 3 October, so any September range must not invent them.
+        if not shift or not shift.shift_rows:
+            absent.append(ex["name"])
+            continue
 
-        pm_row = db.execute(_PM_SQL, {
-            "otype": PM_ORDER_TYPE, "plant": PLANT, "wc": WORK_CENTRE,
-            "eq": ex["sap_eq"], "fd": from_date, "td": to_date,
-        }).fetchone()
+        # ── GOD HOURS START WHEN A HIRED MACHINE ARRIVED ────────────────────
+        # The spec says days x 24 and the OWNED fleet keeps exactly that — those
+        # five are permanent, so their clock has always been running and nothing
+        # about their figures changes.
+        #
+        # Hired machines come and go, and charging one for time before it reached
+        # the mine says more about the date range than about the machine:
+        # TATA-350(1) first appears on 3 October, so a 1 July - 3 October range
+        # charged it 2,280 hours of which it was present for 24, and its
+        # Performance read 0.40%.
+        #
+        # ONLY THE START MOVES, NEVER THE END. Trimming the end to the last
+        # logged shift would look identical whether the machine had left or the
+        # log had simply not been filled in yet, and the second is ordinary — on
+        # 6 October several machines' latest row is still 2 October. A machine
+        # that has left therefore keeps accruing God Hours until the window moves
+        # past it, which is the safer way to be wrong.
+        god_hours = full_god_hours
+        if ex["hired"]:
+            first_seen = db.execute(_FIRST_SEEN_SQL,
+                                    {"code": ex["code"], "name": ex["name"]}).scalar()
+            if first_seen and first_seen > from_date:
+                god_hours = max((to_date - first_seen).days + 1, 0) * 24.0
+
+        if ex["bd_source"] == "sap":
+            bd_row = db.execute(_BD_SQL, {
+                "plant": PLANT, "ntype": BD_NOTIF_TYPE, "wc": WORK_CENTRE,
+                "eq": ex["sap_eq"], "fd": from_date, "td": to_date,
+                **bd.params(to_date),
+            }).fetchone()
+            pm_row = db.execute(_PM_SQL, {
+                "otype": PM_ORDER_TYPE, "plant": PLANT, "wc": WORK_CENTRE,
+                "eq": ex["sap_eq"], "fd": from_date, "td": to_date,
+            }).fetchone()
+            raw_bd = _num(bd_row.bd_hours) if bd_row else 0.0
+            raw_pm = _num(pm_row.pm_hours) if pm_row else 0.0
+        else:
+            # Hired: no SAP equipment number exists to query, so the shift log
+            # is the only record of this machine stopping.
+            raw_bd = _num(shift.log_bd_hrs)
+            raw_pm = _num(shift.log_pm_hrs)
 
         holiday    = _num(shift.holiday_hrs)    if shift else 0.0
         no_plan    = _num(shift.no_plan_hrs)    if shift else 0.0
@@ -145,8 +276,8 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
         loss_hrs   = holiday + no_plan + planned_sd
         ideal_time = max(god_hours - loss_hrs, 0.0)
 
-        bd_hrs = min(_num(bd_row.bd_hours) if bd_row else 0.0, god_hours)
-        pm_hrs = max(0.0, _num(pm_row.pm_hours) if pm_row else 0.0)
+        bd_hrs = min(raw_bd, god_hours)
+        pm_hrs = max(0.0, raw_pm)
 
         operating_hrs = max(ideal_time - bd_hrs - pm_hrs, 0.0)
         ideal_cum     = ex["ideal_cap"] * operating_hrs
@@ -162,6 +293,10 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
         machines.append({
             "machine":        ex["name"],
             "ideal_cap":      ex["ideal_cap"],
+            # So the table can say where this row's BD/PM came from instead of
+            # one footer claiming SAP for every machine.
+            "bd_source":      ex["bd_source"],
+            "hired":          ex["hired"],
             "god_hours":      round(god_hours, 2),
             "holiday_hrs":    round(holiday, 2),
             "no_plan_hrs":    round(no_plan, 2),
@@ -198,7 +333,10 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
     f_oee   = f_avail * f_perf * f_qual / 10000.0
 
     fleet = {
-        "god_hours":     round(god_hours * len(machines), 2),
+        # Summed, not len(machines) x the window: machines no longer all carry
+        # the same God Hours once a mid-window arrival is clamped to its own
+        # start date.
+        "god_hours":     round(sum(m["god_hours"] for m in machines), 2),
         "loss_hrs":      round(sum(m["loss_hrs"] for m in machines), 2),
         "ideal_time":    round(sum_ideal_time, 2),
         "bd_hours":      round(sum(m["bd_hours"] for m in machines), 2),
@@ -214,6 +352,9 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
         "shift_hours":   round(sum_shift_hrs, 2),
         "deviation_pct": round(sum_deviation / sum_shift_hrs * 100, 1) if sum_shift_hrs > 0 else None,
         "machine_count": len(machines),
+        # Named rather than merely absent, so a reader who expects twelve rows
+        # and counts ten is told why instead of wondering.
+        "absent_machines": absent,
     }
 
     return {"machines": machines, "fleet": fleet}

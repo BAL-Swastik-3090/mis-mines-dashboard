@@ -113,6 +113,9 @@ export interface StockPositionResponse {
   location_grid: { columns: { key: string; label: string }[];
                    rows: StockLocationRow[] };
   proposed_despatch: ProposedDespatch;
+  /** When this snapshot was last CHANGED, and by whom — not first filed. */
+  updated_at: string | null;
+  updated_by: string | null;
 }
 
 // ── Production API Responses ─────────────────────────────────
@@ -775,6 +778,8 @@ export interface EvVehicleHistoryResponse {
 export interface OEEMachineRow {
   machine:        string;
   ideal_cap:      number;
+  bd_source:      "sap" | "imos";   // where this row's BD/PM came from
+  hired:          boolean;          // contractor machine, not a Balasore asset
   god_hours:      number;
   holiday_hrs:    number;
   no_plan_hrs:    number;
@@ -816,6 +821,9 @@ export interface OEEFleet {
   shift_hours:   number;
   deviation_pct: number | null;
   machine_count: number;
+  /** Roster excavators with no shift rows in this period, so not shown at all
+   *  rather than shown as zeros. */
+  absent_machines: string[];
 }
 
 export interface OEEResponse {

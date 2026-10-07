@@ -27,6 +27,7 @@ import { useStockPosition } from "@/hooks/useStock";
 import { formatIndian } from "@/lib/utils";
 import { useEntryDialog } from "@/contexts/useEntryDialog";
 import MinesStockEntryModal from "@/components/sections/MinesStockEntryModal";
+import LastChanged from "@/components/ui/LastChanged";
 
 function mt(v: number | null | undefined) {
   return v == null ? "—" : formatIndian(Math.round(v));
@@ -55,8 +56,14 @@ export default function StockSection() {
 
   // A saved position changes what this section shows, so the snapshot query is
   // refetched rather than waiting for its stale time.
+  // BOTH KEYS, or an edit is only half visible. ["stock"] refreshes this
+  // section; ["stock-entry"] is the form's own copy of the day, and leaving it
+  // stale meant reopening the dialog within its 30-second window showed the
+  // figures as they were BEFORE the save that had just succeeded — which reads
+  // exactly like the save having failed.
   const afterSave = useCallback(() => {
     void qc.invalidateQueries({ queryKey: ["stock"] });
+    void qc.invalidateQueries({ queryKey: ["stock-entry"] });
   }, [qc]);
 
   const entryModal = (
@@ -101,9 +108,17 @@ export default function StockSection() {
             Mines Stock Position
           </span>
         </div>
-        <span className="text-[11px] font-mono text-white/75">
-          {isLoading ? <Shimmer w="w-32" h="h-4" />
-                     : <>As on {niceDate(data?.snapshot_date ?? null)}</>}
+        <span className="flex items-center gap-2.5 flex-wrap justify-end">
+          <span className="text-[11px] font-mono text-white/75">
+            {isLoading ? <Shimmer w="w-32" h="h-4" />
+                       : <>As on {niceDate(data?.snapshot_date ?? null)}</>}
+          </span>
+          {/* Beside the date, not under it: "which day" and "how current" are
+              read together, and a reader who sees only the first can quote a
+              figure that was corrected an hour ago. */}
+          {!isLoading && (
+            <LastChanged at={data?.updated_at} by={data?.updated_by} />
+          )}
         </span>
       </div>
 

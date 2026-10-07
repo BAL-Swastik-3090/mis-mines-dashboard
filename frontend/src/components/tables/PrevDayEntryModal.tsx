@@ -36,8 +36,14 @@ import DateField from "@/components/minehub/DateField";
 export interface StoredValue {
   value: number;
   plan: number | null;
+  /** Who FIRST filed this figure, and when — these stop moving after the
+   *  first save, so a correction does not erase the original entry. */
   entered_by: string;
   entered_at: string | null;
+  /** Who last CHANGED it, and when. Equal to the pair above until somebody
+   *  edits, which is what makes an edit visible on the panel. */
+  updated_by: string | null;
+  updated_at: string | null;
 }
 
 /** Empty means "not stated", which clears the stored row — deliberately not the

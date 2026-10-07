@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
 
@@ -95,3 +95,11 @@ class StockPosition(BaseModel):
     clearance:     StockClearanceTable = StockClearanceTable()
     location_grid: StockLocationTable  = StockLocationTable()
     proposed_despatch: ProposedDespatch = ProposedDespatch()
+
+    # When the snapshot was last CHANGED, and by whom — not when it was first
+    # filed. The header shows this so an edit made after the morning meeting is
+    # visible as an edit rather than silently replacing what people discussed.
+    # Declared here for the same reason as the two tables above: undeclared
+    # keys never reach the browser.
+    updated_at: Optional[datetime] = None
+    updated_by: Optional[str]      = None

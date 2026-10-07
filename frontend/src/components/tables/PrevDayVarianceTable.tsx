@@ -63,6 +63,7 @@ import { CalendarCheck, ChevronLeft, ChevronRight } from "lucide-react";
 import api from "@/lib/api";
 import { formatIndian } from "@/lib/utils";
 import PrevDayEntryModal, { type StoredValue } from "@/components/tables/PrevDayEntryModal";
+import LastChanged from "@/components/ui/LastChanged";
 import { useEntryDialog } from "@/contexts/useEntryDialog";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import {
@@ -217,6 +218,10 @@ export default function PrevDayVarianceTable() {
 
   // Invalidate the day that was actually saved — the dialog may have been on a
   // different date from the one this table is showing.
+  //
+  // One key covers both the main day and the "Both Days" comparison column:
+  // each query is keyed by the date it actually fetches, so whichever of them
+  // is showing savedDay is the one this invalidates.
   const refetchEntries = useCallback(
     (savedDay: string) =>
       qc.invalidateQueries({ queryKey: ["prev-day", "entered", savedDay] }),
@@ -226,9 +231,14 @@ export default function PrevDayVarianceTable() {
   const loading = prod.isLoading || desp.isLoading || entries.isLoading
     || (wantOlder && (olderProd.isLoading || olderDesp.isLoading
                       || olderEntries.isLoading));
+  // Sorted on when each figure was last CHANGED, not first entered. Sorting on
+  // entry time picked whichever metric was typed last on the original pass and
+  // then never moved again, so a correction made an hour ago could not become
+  // the one reported.
   const lastEntry = stored
     ? Object.values(stored).sort((a, b) =>
-      (b.entered_at ?? "").localeCompare(a.entered_at ?? ""))[0]
+      ((b.updated_at ?? b.entered_at) ?? "")
+        .localeCompare((a.updated_at ?? a.entered_at) ?? ""))[0]
     : undefined;
 
   /** The figure the selected view is asking for. In "Both Days" the estimate
@@ -465,14 +475,21 @@ export default function PrevDayVarianceTable() {
           <span className="text-[10px] text-txt-light/60">
             Variance = {view === "both" ? "Est Actual" : valueLabel} − Plan · positive is ahead of plan
             {view === "both" && " · the right-hand pair is the estimate against what was posted"}
-            {view === "est" && lastEntry && (
-              <> · last entered by {lastEntry.entered_by}
-                {lastEntry.entered_at
-                  ? ` on ${new Date(lastEntry.entered_at).toLocaleString("en-IN")}`
-                  : ""}
-              </>
-            )}
           </span>
+          {/* Outside the sentence above, and no longer only in the "est" view.
+              A hand-entered figure can be corrected after the meeting that
+              discussed it, and the correction is invisible until the panel says
+              when it happened — which is as true of "Both Days", where the
+              estimate is the column being marked, as it is of the estimate on
+              its own. The posted-actuals view has nothing hand-entered in it,
+              so it still shows nothing. */}
+          {view !== "actual" && lastEntry && (
+            <LastChanged
+              at={lastEntry.updated_at ?? lastEntry.entered_at}
+              by={lastEntry.updated_by ?? lastEntry.entered_by}
+              tone="light"
+            />
+          )}
           <span className="text-[9px] text-txt-light/50">
             Total Excavation = OB + Ore ÷ {ORE_T_PER_M3} t/m³, on both sides
           </span>
