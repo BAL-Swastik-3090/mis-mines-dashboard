@@ -21,7 +21,7 @@
  * like 44.97 would carry a typo into a system of record.
  */
 import { useQuery } from "@tanstack/react-query";
-import { Scale } from "lucide-react";
+import { Calculator } from "lucide-react";
 import api from "@/lib/api";
 import { formatIndian } from "@/lib/utils";
 import { useDateFilter } from "@/contexts/useDateFilter";
@@ -92,7 +92,7 @@ export default function AmiraAccountingTable() {
   return (
     <section className="space-y-2">
       <div className="section-title">
-        <Scale size={13} />
+        <Calculator size={13} />
         AMIRA Accounting
         <span className="text-[10px] text-txt-light font-medium normal-case tracking-normal ml-1">
           contained chromium, mine to plant

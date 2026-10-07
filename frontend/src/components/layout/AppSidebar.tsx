@@ -1,5 +1,5 @@
 "use client";
-import { Activity, BarChart3, Boxes, CalendarRange, ChevronLeft, ChevronRight, ClipboardList, CloudSun, DoorOpen, ExternalLink, Gauge, LayoutDashboard, LineChart, Network, Radar, Scale, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
+import { Activity, BarChart3, Boxes, CalendarRange, ChevronLeft, ChevronRight, Calculator, ClipboardList, CloudSun, DoorOpen, ExternalLink, Gauge, LayoutDashboard, LineChart, Network, Radar, Scale, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { canOpen } from "@/contexts/pageAccess";
 import { useSidebar }               from "@/contexts/useSidebar";
@@ -37,6 +37,7 @@ const NAV_ITEMS: NavItem[] = [
   { kind: "page", id: "weather",         label: "Weather Forecast",           icon: CloudSun        },
   { kind: "page", id: "oee",             label: "OEE / LCM",                  icon: Activity        },
   { kind: "page", id: "intelligence",    label: "Intelligence",               icon: Sparkles        },
+  { kind: "page", id: "amira",           label: "AMIRA Accounting",           icon: Calculator      },
   { kind: "page", id: "market",          label: "Market Watch",               icon: LineChart       },
   { kind: "page", id: "fuel-management", label: "Fuel Management",            icon: Gauge           },
   { kind: "page", id: "ev-tracking",     label: "Electric Vehicles Tracking", icon: Zap             },

@@ -71,6 +71,14 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   // "Usage Viewer" would have been an Access Manager under another name.
   // access.users.view still opens it, so no administrator lost a screen.
   "usage": ["usage.view", "access.users.view"],
+  // GATED ON THE MIS DASHBOARD'S OWN PERMISSION, not one of its own.
+  // AMIRA is built from the despatch and plant-receipt figures that the MIS
+  // dashboard already shows; anyone who may read those may read the chromium
+  // balance drawn from them, and inventing dashboard.amira would mean seeding
+  // a row per role in mines_role_page_access before a single person could see
+  // the screen. Promote it to its own page permission when the mine wants the
+  // two audiences separated — the API prefix is already mapped in auth.py.
+  "amira": ["dashboard.mis"],
 };
 
 /**
@@ -94,6 +102,9 @@ const LANDING_RANK: Record<AppPage, number> = {
   "mis": 10,
   "oee": 20,
   "intelligence": 30,
+  // Directly below Intelligence, where the mine asked for it: the dashboards
+  // say what happened, AMIRA says what it cost in metal.
+  "amira": 32,
   // Sits with the dashboards, right after Intelligence: what the fleet did,
   // then what the ore it produced is worth.
   "market": 35,

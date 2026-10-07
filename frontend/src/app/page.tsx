@@ -2,7 +2,6 @@
 import PrevDayVarianceTable from "@/components/tables/PrevDayVarianceTable";
 import QualityE2ETable      from "@/components/tables/QualityE2ETable";
 import PlantOutputTable     from "@/components/tables/PlantOutputTable";
-import AmiraAccountingTable from "@/components/tables/AmiraAccountingTable";
 import StockSection        from "@/components/sections/StockSection";
 import PlantSection        from "@/components/sections/PlantSection";
 import ProductionSection   from "@/components/sections/ProductionSection";
@@ -35,10 +34,6 @@ export default function HomePage() {
 
       <section id="plant-output" className={S}>
         <PlantOutputTable />
-      </section>
-
-      <section id="amira" className={S}>
-        <AmiraAccountingTable />
       </section>
 
       <section id="plant" className={S}>
