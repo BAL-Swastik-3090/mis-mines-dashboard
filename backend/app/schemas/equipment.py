@@ -17,6 +17,16 @@ class ExcavatorMachineRow(BaseModel):
     util_pct:       Optional[float] = None
     mttr:           Optional[float] = None
     mtbf:           Optional[float] = None
+    # WHETHER THE BOX SAID ANYTHING, as opposed to saying zero.
+    #
+    # A machine whose sensor is dead arrives here as 0 running hours and no
+    # breakdown, which the arithmetic then reads as 100% available and 0%
+    # utilised -- a machine that was ready all month and nobody used. That is a
+    # statement about the mine, and it is not true; the truth is that nothing
+    # was measured. These two say which, so the screen can decline to put a
+    # percentage on a machine it has no reading for.
+    sensor_ok:        bool           = True
+    sensor_last_seen: Optional[date] = None
 
 
 class ExcavatorSummaryResponse(BaseModel):

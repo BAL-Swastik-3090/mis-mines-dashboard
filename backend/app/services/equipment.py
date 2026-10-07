@@ -294,9 +294,50 @@ def get_breakdown_details(
 
 # ── Public service functions ───────────────────────────────────
 
+# How long a machine may legitimately sit idle before silence stops meaning
+# "parked" and starts meaning "the sensor is not working". A fortnight is well
+# past any normal stand-down and well short of the months these boxes have
+# actually been dead.
+SENSOR_GRACE_DAYS = 14
+
+_SENSOR_ALIVE_SQL = text("""
+    SELECT vehicle_desc,
+           MAX(CASE WHEN TIME_TO_SEC(engine_hours) > 0
+                    THEN DATE(report_date) END) AS last_run,
+           MAX(CASE WHEN fuel_consumed <> 0 OR final_fuel_level > 0
+                    THEN DATE(report_date) END) AS last_fuel
+      FROM mines_technoton_rest_equipment_utilization
+     WHERE vehicle_desc LIKE '%Z AXIS%'
+     GROUP BY vehicle_desc
+""")
+
+
+def _sensor_health(db: Session) -> dict:
+    """Last day each machine reported running hours, and last day it reported fuel.
+
+    JUDGED ON THE CHANNEL THE COLUMN DEPENDS ON. Running Hours comes from
+    engine_hours, so that is what decides whether this row has a reading --
+    ZAXIS-370-4 still reports its tank (289.8 L, with a 5.4 L fill on
+    7 October) while its engine-hours channel has read zero since 24 September.
+    The box is alive and one input is not, so trusting "the box said something"
+    would have shown 0.00 running hours as though the machine had been measured
+    and found idle.
+
+    The fuel date is kept because it separates a dead box from a dead wire, and
+    those are different repair jobs.
+
+    Not limited to the chosen range, on purpose: "is this sensor working" cannot
+    be answered from one quiet week, but "last reported on 24 September" can be
+    answered from any range at all.
+    """
+    return {r.vehicle_desc: {"last_run": r.last_run, "last_fuel": r.last_fuel}
+            for r in db.execute(_SENSOR_ALIVE_SQL).fetchall()}
+
+
 def get_excavator_summary(db: Session, from_date: date, to_date: date) -> dict:
     sensor_rows = _last_snap_excavator(db, from_date, to_date)
     found = {r.vehicle_desc: _f(r.eng_hr_mtd) for r in sensor_rows}
+    health = _sensor_health(db)
 
     all_entries = [
         (vdesc, *EXCAVATOR_MAP[vdesc], found.get(vdesc, 0.0))
@@ -316,6 +357,8 @@ def get_excavator_summary(db: Session, from_date: date, to_date: date) -> dict:
         bd_count_start  = bd_entry["count_start"]
         bd_count_closed = bd_entry["count_closed"]
         metrics         = _calc_metrics(bd_hr, eng_hr, from_date, to_date)
+        h               = health.get(vdesc) or {}
+        last_real       = h.get("last_run")
         # MTTR = B/D Hours ÷ No. of closed breakdowns (only when SAP has posted end time)
         mttr = round(bd_hr / bd_count_closed, 1) if bd_count_closed > 0 else None
         # MTBF = (Calendar Hours − B/D Hours) ÷ No. of breakdowns started in period
@@ -332,6 +375,15 @@ def get_excavator_summary(db: Session, from_date: date, to_date: date) -> dict:
             "util_pct":       metrics["util_pct"],
             "mttr":           mttr,
             "mtbf":           mtbf,
+            # Running hours inside the window is proof enough. Outside it, the
+            # machine may simply have been parked, so silence only counts as a
+            # fault once it has run past the grace period.
+            # Counted back from the END of the window: the question is whether
+            # this sensor was working recently as of the period being read, and
+            # a box that fell silent mid-period has not been.
+            "sensor_ok":        bool(
+                last_real and last_real >= to_date - timedelta(days=SENSOR_GRACE_DAYS)),
+            "sensor_last_seen": last_real,
         })
 
     machines.sort(key=lambda x: (-x["eng_hr_mtd"], x["display_name"]))
@@ -500,6 +552,15 @@ def get_tipper_summary(db: Session, from_date: date, to_date: date) -> dict:
             "util_pct":       metrics["util_pct"],
             "mttr":           mttr,
             "mtbf":           mtbf,
+            # Running hours inside the window is proof enough. Outside it, the
+            # machine may simply have been parked, so silence only counts as a
+            # fault once it has run past the grace period.
+            # Counted back from the END of the window: the question is whether
+            # this sensor was working recently as of the period being read, and
+            # a box that fell silent mid-period has not been.
+            "sensor_ok":        bool(
+                last_real and last_real >= to_date - timedelta(days=SENSOR_GRACE_DAYS)),
+            "sensor_last_seen": last_real,
         })
 
     machines.sort(key=lambda x: (-x["eng_hr_mtd"], x["vehicle_desc"]))
