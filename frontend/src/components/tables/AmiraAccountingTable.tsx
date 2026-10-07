@@ -135,19 +135,26 @@ export default function AmiraAccountingTable() {
                     )}
                   </th>
                 ))}
+                {/* The workbook's Total column. Only the two loss rows fill it;
+                    see the body for why the others stay empty. */}
+                <th className="px-3 py-2.5 text-right font-condensed font-bold text-[10px]
+                               text-navy uppercase tracking-wide bg-bg-section align-bottom
+                               border-l-2 border-border min-w-[100px]">
+                  Total
+                </th>
               </tr>
             </thead>
 
             <tbody className="divide-y divide-border-light/60">
               {q.isLoading ? (
                 <tr>
-                  <td colSpan={MEASURES.length + 2} className="px-4 py-8 text-center text-txt-muted">
+                  <td colSpan={stages.length + 3} className="px-4 py-8 text-center text-txt-muted">
                     Loading…
                   </td>
                 </tr>
               ) : q.isError ? (
                 <tr>
-                  <td colSpan={MEASURES.length + 2} className="px-4 py-8 text-center text-[#c62828]">
+                  <td colSpan={stages.length + 3} className="px-4 py-8 text-center text-[#c62828]">
                     Could not load AMIRA accounting
                   </td>
                 </tr>
@@ -177,6 +184,23 @@ export default function AmiraAccountingTable() {
                           />
                         </td>
                       ))}
+                      {/* TOTALLED ONLY WHERE THE WORKBOOK TOTALS. Summary!J9 and
+                          J10 sum the two loss rows and nothing else. Ore summed
+                          along the chain would count the same ore five times,
+                          and a row of percentages does not sum to anything — so
+                          those three cells stay blank rather than carrying a
+                          number that looks authoritative and means nothing. */}
+                      <td className="px-3 py-2.5 text-right border-l-2 border-border bg-bg-section/40">
+                        {isLoss
+                          ? <Cell
+                              v={(m.key === "chromium_loss"
+                                ? q.data?.total.chromium_loss
+                                : q.data?.total.contribution_loss) ?? null}
+                              dp={m.dp}
+                              loss
+                            />
+                          : <span className="text-txt-light/40">—</span>}
+                      </td>
                     </tr>
                   );
                 })
@@ -213,9 +237,17 @@ export default function AmiraAccountingTable() {
             <span className="font-semibold text-success/60">NET Cr · </span>
             ORE × (1 − MOIST%) × Cr2O3% × {q.data?.cr2o3_to_cr ?? "0.68421"}
           </p>
+          {/* The three terms, not the 0.75 they reduce to. When NSR moves, the
+              number that changed has to be visible on the screen that used it. */}
           <p className="text-[9px] font-mono text-success/70 leading-tight">
             <span className="font-semibold text-success/60">CONTRIBUTION · </span>
-            Cr LOSS × {q.data?.contribution_rate ?? 0.75} Rs. LACS/MT
+            (Cr LOSS ÷ {q.data?.fecr_cr_content ?? 0.6}) × ₹
+            {(q.data?.contribution_per_mt_fecr ?? 45000).toLocaleString("en-IN")}/MT FeCr ÷ 10⁵
+          </p>
+          <p className="text-[9px] font-mono text-success/70 leading-tight">
+            <span className="font-semibold text-success/60">NSR · </span>
+            ₹{(q.data?.nsr_per_mt_fecr ?? 115000).toLocaleString("en-IN")} − VAR COST ₹
+            {(q.data?.variable_cost_per_mt_fecr ?? 70000).toLocaleString("en-IN")} · fixed for now
           </p>
           <p className="text-[9px] font-mono text-success/70 leading-tight">
             <span className="font-semibold text-success/60">DESPATCH &amp; RECEIPT · </span>SAP
