@@ -25,6 +25,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.services import breakdown as bd
+from app.services.oee import EXCAVATORS as OEE_EXCAVATORS
 from sqlalchemy import text
 
 # Production figures are net of SAP reversal documents — see sap_movement.
@@ -392,27 +393,35 @@ def _equipment_summary(db: Session, from_date: date, to_date: date) -> dict:
     try:
         days = (to_date - from_date).days + 1
         period_hrs = days * 24.0
-        total_excavators = 7
 
-        # Open notifications count from their start until now — the shared
-        # definition in services/breakdown.py. They used to be excluded, which
-        # left a machine still down out of the digest entirely.
-        bd_row = db.execute(text(f"""
-            SELECT ROUND(SUM({bd.DURATION_SECONDS}) / 3600.0, 1) AS total_bd_hrs,
-                   COUNT(*)                                      AS bd_events,
-                   COUNT(CASE WHEN {bd.IS_OPEN} THEN 1 END)      AS bd_open
-            FROM zpm_iw29_notifications
-            WHERE MAINTENANCE_PLANT = '1200'
-              AND MAIN_WORK_CENTER  = 'MINEAUTO'
-              AND NOTIFICATION_TYPE = 'M2'
-              AND MALFUNCTION_START IS NOT NULL
-              AND MALFUNCTION_START BETWEEN :f AND :t
-        """), {"f": from_date, "t": to_date, **bd.params(to_date)}).fetchone()
+        # EXCAVATORS ONLY, AND THE DENOMINATOR COUNTS THE SAME MACHINES.
+        # This used to sum breakdown across every MINEAUTO object — tippers,
+        # dozers, graders, drills, 34 machines in September — and then divide
+        # by a hard-coded 7 excavators. With the hours under-reported that
+        # produced a plausible-looking percentage; with them correct it gives
+        # 11,044 hours against 5,040 and floors the figure at 0%. The roster is
+        # now taken from services/oee.py, so the numerator and the denominator
+        # are always the same machines.
+        sap_eqs = [e["sap_eq"] for e in OEE_EXCAVATORS if e.get("sap_eq")]
+        ph = ", ".join(f":x{i}" for i in range(len(sap_eqs)))
+        where_exc = ("MAINTENANCE_PLANT = '1200' AND MAIN_WORK_CENTER = 'MINEAUTO'"
+                     f" AND NOTIFICATION_TYPE = 'M2' AND EQUIPMENT IN ({ph})")
+        bind_exc = {f"x{i}": e for i, e in enumerate(sap_eqs)}
+        total_excavators = len(sap_eqs)
 
-        total_bd_hrs = float(bd_row.total_bd_hrs or 0)
-        bd_events    = int(bd_row.bd_events or 0)
-        bd_open      = int(bd_row.bd_open or 0)
-        fleet_avail  = round(max(0.0, (1 - total_bd_hrs / (total_excavators * period_hrs)) * 100), 1)
+        # Selected by OVERLAP with the window and merged per machine — see
+        # services/breakdown.py — so a breakdown still running from last month
+        # counts the part falling inside this one, and a machine carrying
+        # several open notifications is down once rather than once per fault.
+        total_bd_hrs = round(bd.total_hours(
+            db, key="EQUIPMENT", from_date=from_date, to_date=to_date,
+            where=where_exc, bind=bind_exc), 1)
+        _counts = bd.counts_by(
+            db, key="EQUIPMENT", from_date=from_date, to_date=to_date,
+            where=where_exc, bind=bind_exc)
+        bd_events    = sum(c["events"] for c in _counts.values())
+        bd_open      = sum(c["open"]   for c in _counts.values())
+        fleet_avail  = round(max(0.0, (1 - total_bd_hrs / (total_excavators * period_hrs)) * 100), 1)             if total_excavators else 0.0
 
         # Enhancement #4: cost context — BD hours → estimated lost ore MT
         lost_ore_mt = round(total_bd_hrs * _FLEET_CAP_MT_PER_HR)

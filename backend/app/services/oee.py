@@ -147,19 +147,12 @@ _SHIFT_SQL = text("""
       AND (FIND_IN_SET(:code, equipment_name) > 0 OR equipment_name = :name)
 """)
 
-# An open notification carries no duration in SAP, so it used to contribute 0 —
-# a machine down since the 3rd and still down on the 28th counted as nothing.
-# services/breakdown.py is the single definition; it counts an open event from
-# its start to now, and needs a :bd_upto parameter.
-_BD_SQL = text(f"""
-    SELECT COALESCE(SUM({bd.DURATION_SECONDS}), 0) / 3600.0 AS bd_hours
-    FROM zpm_iw29_notifications
-    WHERE MAINTENANCE_PLANT = :plant
-      AND NOTIFICATION_TYPE = :ntype
-      AND MAIN_WORK_CENTER  = :wc
-      AND EQUIPMENT         = :eq
-      AND MALFUNCTION_START BETWEEN :fd AND :td
-""")
+# Breakdown hours come from services/breakdown.py, which selects notifications
+# that OVERLAP the window rather than ones that START inside it, and merges a
+# machine's simultaneous notifications so no hour is counted twice. Both
+# mattered here: TATA-470(7), open since 10 September, reported 0.00 hours for
+# 1-7 October, while TATA-370(5) reported exactly its God Hours because five
+# overlapping notifications summed past the window and were then clamped.
 
 # PM hours come from WORK_HOURS. The obvious-looking
 # DATEDIFF(COMPLETION_DATE, BASIC_START_DATE) × 24 returns 0 for every BA03
@@ -249,16 +242,16 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
                 god_hours = max((to_date - first_seen).days + 1, 0) * 24.0
 
         if ex["bd_source"] == "sap":
-            bd_row = db.execute(_BD_SQL, {
-                "plant": PLANT, "ntype": BD_NOTIF_TYPE, "wc": WORK_CENTRE,
-                "eq": ex["sap_eq"], "fd": from_date, "td": to_date,
-                **bd.params(to_date),
-            }).fetchone()
+            raw_bd = bd.total_hours(
+                db, key="EQUIPMENT", from_date=from_date, to_date=to_date,
+                where=("MAINTENANCE_PLANT = :plant AND NOTIFICATION_TYPE = :ntype"
+                       " AND MAIN_WORK_CENTER = :wc AND EQUIPMENT = :eq"),
+                bind={"plant": PLANT, "ntype": BD_NOTIF_TYPE,
+                      "wc": WORK_CENTRE, "eq": ex["sap_eq"]})
             pm_row = db.execute(_PM_SQL, {
                 "otype": PM_ORDER_TYPE, "plant": PLANT, "wc": WORK_CENTRE,
                 "eq": ex["sap_eq"], "fd": from_date, "td": to_date,
             }).fetchone()
-            raw_bd = _num(bd_row.bd_hours) if bd_row else 0.0
             raw_pm = _num(pm_row.pm_hours) if pm_row else 0.0
         else:
             # Hired: no SAP equipment number exists to query, so the shift log
@@ -276,7 +269,11 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
         loss_hrs   = holiday + no_plan + planned_sd
         ideal_time = max(god_hours - loss_hrs, 0.0)
 
-        bd_hrs = min(raw_bd, god_hours)
+        # No min(..., god_hours). That clamp existed because overlapping
+        # notifications could sum past the window; merged intervals are clipped
+        # to the window by construction, so a clamp could now only hide a bug
+        # rather than prevent one.
+        bd_hrs = max(0.0, raw_bd)
         pm_hrs = max(0.0, raw_pm)
 
         operating_hrs = max(ideal_time - bd_hrs - pm_hrs, 0.0)
