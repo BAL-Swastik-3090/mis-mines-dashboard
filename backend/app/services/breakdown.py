@@ -84,7 +84,31 @@ _END = ("CASE WHEN MALFUNCTION_END IS NULL THEN NULL ELSE "
 IS_OPEN = "(MALFUNCTION_START IS NOT NULL AND MALFUNCTION_END IS NULL)"
 
 
-def window(from_date: date, to_date: date) -> tuple[datetime, datetime]:
+def db_now(db: Session) -> datetime:
+    """Now, according to the database that stamped the timestamps.
+
+    NOT datetime.now(). An open breakdown is measured from its MALFUNCTION_START
+    to the present, and those timestamps are SAP's, written in IST by a MySQL
+    server running in IST. The application's own clock is a different machine's,
+    and in the production container it is UTC with no TZ set:
+
+        container python now : 2026-10-07 11:01:20
+        MySQL NOW()          : 2026-10-07 16:31:46
+
+    Five and a half hours. Every open breakdown was cut short by exactly that,
+    so the same window read 160.45 hours on a developer's machine in IST and
+    154.54 in production, and a notification opened within the last five hours
+    vanished entirely — its start was "in the future" and the clipped interval
+    came out empty. TATA-470(2) read 3.26 hours locally and 0.00 in production
+    for that reason.
+
+    One clock, and it is the one the data is on.
+    """
+    return db.execute(text("SELECT NOW()")).scalar()
+
+
+def window(from_date: date, to_date: date,
+           now: datetime | None = None) -> tuple[datetime, datetime]:
     """The reporting window as instants, with the end never in the future.
 
     An open breakdown counted to NOW would keep growing inside a month that has
@@ -92,9 +116,13 @@ def window(from_date: date, to_date: date) -> tuple[datetime, datetime]:
     Clamping to the window means the current period reads "until now" and a
     past one reads "until it ended", which is the honest answer to how long the
     machine was down DURING it.
+
+    `now` should come from db_now(). It falls back to the local clock only so
+    that the function stays usable without a session; every caller here passes
+    the database's.
     """
     start = datetime.combine(from_date, time(0, 0, 0))
-    end = min(datetime.now(), datetime.combine(to_date, time(23, 59, 59)))
+    end = min(now or datetime.now(), datetime.combine(to_date, time(23, 59, 59)))
     return start, end
 
 
@@ -136,7 +164,7 @@ def spans_by(
     `key` is a SQL expression (a column, usually EQUIPMENT or
     DESC_TECH_OBJECT); `where` is the caller's own filter, ANDed on.
     """
-    w_start, w_end = window(from_date, to_date)
+    w_start, w_end = window(from_date, to_date, now=db_now(db))
     sql = text(f"""
         SELECT {key} AS bd_key, {_START} AS bd_s, {_END} AS bd_e
         FROM {TABLE}
@@ -242,7 +270,7 @@ def event_rows(
     for a list — each is a real fault — and wrong for a sum. Callers wanting a
     total must use hours_by or total_hours.
     """
-    w_start, w_end = window(from_date, to_date)
+    w_start, w_end = window(from_date, to_date, now=db_now(db))
     cols = ("".join(f", {e}" for e in extra)) if extra else ""
     sql = text(f"""
         SELECT {_START} AS bd_s, {_END} AS bd_e,
