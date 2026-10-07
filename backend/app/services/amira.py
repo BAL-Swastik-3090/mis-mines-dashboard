@@ -164,8 +164,12 @@ def get_amira_accounting(db: Session, frm: date, to: date) -> dict[str, Any]:
         prev_net, prev_available = net, available
 
     return {
-        "from": frm.isoformat(),
-        "to": to.isoformat(),
+        # NAMED from_date/to_date, NOT from/to. `from` is a Python keyword, so
+        # the short form can never be a field on a Pydantic model and the
+        # response model would drop it — which is how this shipped returning one
+        # pair of names while the schema and the screen read the other.
+        "from_date": frm.isoformat(),
+        "to_date": to.isoformat(),
         "stages": stages,
         "cr2o3_to_cr": round(CR2O3_TO_CR, 5),
         "contribution_rate": CONTRIBUTION_RATE,

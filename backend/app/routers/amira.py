@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.schemas.amira import AmiraResponse
 from app.services.amira import get_amira_accounting
 
 router = APIRouter(prefix="/api/amira", tags=["AMIRA Accounting"])
@@ -25,12 +26,15 @@ router = APIRouter(prefix="/api/amira", tags=["AMIRA Accounting"])
 MAX_SPAN_DAYS = 400
 
 
-@router.get("")
+# DECLARED, so the shape is enforced rather than assumed. Without it the route
+# returned whatever dict the service built and a renamed key reached the screen
+# as undefined, with nothing failing anywhere in between.
+@router.get("", response_model=AmiraResponse)
 def amira_accounting(
     from_date: date = Query(..., description="First despatch date, inclusive"),
     to_date: date = Query(..., description="Last despatch date, inclusive"),
     db: Session = Depends(get_db),
-) -> dict:
+) -> AmiraResponse:
     if to_date < from_date:
         raise HTTPException(422, "to_date is before from_date")
     if (to_date - from_date) > timedelta(days=MAX_SPAN_DAYS):
