@@ -311,20 +311,24 @@ def _shift_hours(db: Session, machines: list[dict], fd: date, td: date,
 
 
 def _sap_breakdown(db: Session, machines: list[dict], fd: date, td: date) -> float:
-    """SAP M2 notification hours, open events included — see services/breakdown.py."""
+    """SAP M2 notification hours for these machines — see services/breakdown.py.
+
+    Merged per machine and then added across them: one excavator with three
+    open notifications is down once, but two excavators down together is two
+    machine-hours lost. Selected by overlap with the window, so a breakdown
+    that began last month and is still running counts the part that falls in
+    this one instead of being dropped entirely.
+    """
+    if not machines:
+        return 0.0
     ph = ", ".join(f":e{i}" for i in range(len(machines)))
-    params: dict = {"fd": fd, "td": td, "plant": PLANT, "wc": WORK_CENTRE,
-                    **bd.params(td)}
-    for i, m in enumerate(machines):
-        params[f"e{i}"] = m["sap_eq"]
-    row = db.execute(text(f"""
-        SELECT COALESCE(SUM({bd.DURATION_SECONDS}), 0) / 3600.0 AS hrs
-        FROM zpm_iw29_notifications
-        WHERE MAINTENANCE_PLANT = :plant AND NOTIFICATION_TYPE = 'M2'
-          AND MAIN_WORK_CENTER = :wc AND EQUIPMENT IN ({ph})
-          AND MALFUNCTION_START BETWEEN :fd AND :td
-    """), params).fetchone()
-    return _n(row.hrs) if row else 0.0
+    bind = {f"e{i}": m["sap_eq"] for i, m in enumerate(machines)}
+    bind |= {"plant": PLANT, "wc": WORK_CENTRE}
+    return bd.total_hours(
+        db, key="EQUIPMENT", from_date=fd, to_date=td,
+        where=("MAINTENANCE_PLANT = :plant AND NOTIFICATION_TYPE = 'M2'"
+               f" AND MAIN_WORK_CENTER = :wc AND EQUIPMENT IN ({ph})"),
+        bind=bind)
 
 
 def _sap_pm(db: Session, machines: list[dict], fd: date, td: date) -> float:

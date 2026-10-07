@@ -357,6 +357,10 @@ export interface TipperMachineRowAPI {
   util_pct:       number | null;
   mttr:           number | null;
   mtbf:           number | null;
+  /** False when the Technoton unit gave no running-hours reading for this
+   *  period. Nine of the twenty-eight tippers are in that state. */
+  sensor_ok:        boolean;
+  sensor_last_seen: string | null;
 }
 
 export interface BreakdownEvent {
@@ -836,6 +840,36 @@ export interface OEEResponse {
   to_date:   string;
   machines:  OEEMachineRow[];
   fleet:     OEEFleet;
+}
+
+// ── AMIRA Accounting ──────────────────────────────────────────
+/** One stage of the mine-to-plant chain. `available` is false for the stages
+ *  not yet sourced; the row is still returned so the table keeps the shape of
+ *  the whole chain rather than hiding the gap. */
+export interface AmiraStage {
+  key:   string;
+  label: string;
+  available: boolean;
+  ore_qty:       number | null;
+  cr2o3:         number | null;
+  moisture:      number | null;
+  net_chromium:  number | null;
+  /** Against the stage immediately before this one; null when that one is
+   *  itself unavailable. */
+  chromium_loss:     number | null;
+  contribution_loss: number | null;
+}
+
+export interface AmiraResponse {
+  from_date: string;
+  to_date:   string;
+  stages:    AmiraStage[];
+  cr2o3_to_cr:       number;
+  contribution_rate: number;
+  pending_stages:    string[];
+  /** Plant tonnage is currently the despatched tonnage, by the mine's
+   *  instruction, until the plant-side gate record is identified. */
+  plant_qty_mirrors_despatch: boolean;
 }
 
 // ── LCM (Lost Cost Matrix) ────────────────────────────────────

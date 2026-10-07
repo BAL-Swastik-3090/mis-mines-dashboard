@@ -204,21 +204,16 @@ _SHIFT_ALL_SQL = text(f"""
     GROUP BY m.machine
 """)
 
-# An open notification carries no duration in SAP, so it used to contribute 0 —
-# a machine down since the 3rd and still down on the 28th counted as nothing.
-# services/breakdown.py is the single definition; it counts an open event from
-# its start to now, and needs a :bd_upto parameter.
-_BD_ALL_SQL = text(f"""
-    SELECT EQUIPMENT AS eq,
-           COALESCE(SUM({bd.DURATION_SECONDS}), 0) / 3600.0 AS bd_hours
-    FROM zpm_iw29_notifications
-    WHERE MAINTENANCE_PLANT = :plant
-      AND NOTIFICATION_TYPE = :ntype
-      AND MAIN_WORK_CENTER  = :wc
-      AND EQUIPMENT IN :eqs
-      AND MALFUNCTION_START BETWEEN :fd AND :td
-    GROUP BY EQUIPMENT
-""").bindparams(bindparam("eqs", expanding=True))
+# Breakdown hours come from services/breakdown.py, which selects notifications
+# that OVERLAP the window rather than ones that START inside it, and merges a
+# machine's simultaneous notifications so no hour is counted twice. Both
+# mattered here: TATA-470(7), open since 10 September, reported 0.00 hours for
+# 1-7 October, while TATA-370(5) reported exactly its God Hours because five
+# overlapping notifications summed past the window and were then clamped.
+#
+# Asked for the whole fleet in ONE call rather than once per machine: hours_by
+# already groups by equipment, so the per-machine loop would have been five
+# round trips to fetch what a single grouped read returns.
 
 # PM hours come from WORK_HOURS. The obvious-looking
 # DATEDIFF(COMPLETION_DATE, BASIC_START_DATE) x 24 returns 0 for every BA03
@@ -271,10 +266,18 @@ def _sap_hours(db: Session, fd: date, td: date) -> tuple[dict, dict]:
     eqs = [ex["sap_eq"] for ex in EXCAVATORS if ex["sap_eq"]]
     if not eqs:
         return {}, {}
-    bd_by = {r["eq"]: _num(r["bd_hours"]) for r in db.execute(_BD_ALL_SQL, {
-        "plant": PLANT, "ntype": BD_NOTIF_TYPE, "wc": WORK_CENTRE,
-        "eqs": eqs, "fd": fd, "td": td, **bd.params(td),
-    }).mappings()}
+
+    # One grouped read for every machine. The equipment numbers are bound by
+    # name rather than interpolated -- breakdown.py ANDs `where` into its own
+    # SQL as text, so anything put there must already be a placeholder.
+    eq_names = {f"eq{i}": e for i, e in enumerate(eqs)}
+    in_list = ", ".join(f":{k}" for k in eq_names)
+    bd_by = bd.hours_by(
+        db, key="EQUIPMENT", from_date=fd, to_date=td,
+        where=("MAINTENANCE_PLANT = :plant AND NOTIFICATION_TYPE = :ntype"
+               f" AND MAIN_WORK_CENTER = :wc AND EQUIPMENT IN ({in_list})"),
+        bind={"plant": PLANT, "ntype": BD_NOTIF_TYPE, "wc": WORK_CENTRE,
+              **eq_names})
     pm_by = {r["eq"]: _num(r["pm_hours"]) for r in db.execute(_PM_ALL_SQL, {
         "otype": PM_ORDER_TYPE, "plant": PLANT, "wc": WORK_CENTRE,
         "eqs": eqs, "fd": fd, "td": td,
@@ -352,8 +355,9 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
                 god_hours = max((to_date - first_seen).days + 1, 0) * 24.0
 
         if ex["bd_source"] == "sap":
-            # Absent from the dict means SAP recorded no event for this machine
-            # in the window, which is zero hours down, not missing data.
+            # Absent from the dict means SAP recorded no event overlapping
+            # this window for this machine, which is zero hours down rather
+            # than missing data.
             raw_bd = bd_by.get(ex["sap_eq"], 0.0)
             raw_pm = pm_by.get(ex["sap_eq"], 0.0)
         else:
@@ -372,7 +376,11 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
         loss_hrs   = holiday + no_plan + planned_sd
         ideal_time = max(god_hours - loss_hrs, 0.0)
 
-        bd_hrs = min(raw_bd, god_hours)
+        # No min(..., god_hours). That clamp existed because overlapping
+        # notifications could sum past the window; merged intervals are clipped
+        # to the window by construction, so a clamp could now only hide a bug
+        # rather than prevent one.
+        bd_hrs = max(0.0, raw_bd)
         pm_hrs = max(0.0, raw_pm)
 
         operating_hrs = max(ideal_time - bd_hrs - pm_hrs, 0.0)

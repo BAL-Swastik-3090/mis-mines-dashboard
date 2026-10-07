@@ -80,6 +80,11 @@ class TipperMachineRow(BaseModel):
     util_pct:       Optional[float] = None
     mttr:           Optional[float] = None
     mtbf:           Optional[float] = None
+    # Declared, or response_model drops them on the way out and the table sees
+    # undefined. Same meaning as on the excavator row: whether the Technoton
+    # unit gave a running-hours reading for this period at all.
+    sensor_ok:        bool           = True
+    sensor_last_seen: Optional[date] = None
 
 
 class BreakdownEvent(BaseModel):

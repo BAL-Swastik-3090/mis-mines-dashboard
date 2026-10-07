@@ -147,82 +147,57 @@ def _get_bd_hours(
     db: Session, from_date: date, to_date: date, sap_names: list[str]
 ) -> dict[str, dict]:
     """SAP breakdown hours + counts for a given list of machine names.
-    Returns {machine_name: {"hours": float, "count": int, "count_start": int}}
-      - count       : events with BREAKDOWN_DURAION IS NOT NULL (used for MTTR/MTBF)
-      - count_start : events with MALFUNCTION_START present (shown in B/D Count column)
+
+    Hours are merged per machine and selected by OVERLAP with the window — see
+    services/breakdown.py. A machine down since last month therefore reports
+    the hours that fall inside this window instead of nothing at all, and one
+    carrying several open notifications is down once rather than once per fault.
+
+    Returns {machine_name: {"hours", "count", "count_start", "count_closed",
+    "count_open"}}
     """
     if not sap_names:
         return {}
     ph = ", ".join(f":n{i}" for i in range(len(sap_names)))
-    sql = text(f"""
-        SELECT DESC_TECH_OBJECT,
-               ROUND(SUM({bd.DURATION_SECONDS}) / 3600.0, 2)                    AS bd_hours,
-               COUNT(*)                                                         AS bd_count,
-               COUNT(*)                                                         AS bd_count_start,
-               COUNT(CASE WHEN MALFUNCTION_END IS NOT NULL THEN 1 END)          AS bd_count_closed,
-               COUNT(CASE WHEN {bd.IS_OPEN} THEN 1 END)                         AS bd_count_open
-        FROM   zpm_iw29_notifications
-        WHERE  MAINTENANCE_PLANT = :plant
-          AND  MAIN_WORK_CENTER  = :wc
-          AND  NOTIFICATION_TYPE = :ntype
-          AND  MALFUNCTION_START IS NOT NULL
-          AND  MALFUNCTION_START BETWEEN :f AND :t
-          AND  DESC_TECH_OBJECT  IN ({ph})
-        GROUP BY DESC_TECH_OBJECT
-    """)
-    params: dict = {
-        "plant": "1200", "wc": "MINEAUTO", "ntype": "M2",
-        "f": from_date, "t": to_date, **bd.params(to_date),
-    }
-    for i, name in enumerate(sap_names):
-        params[f"n{i}"] = name
+    bind: dict = {"plant": "1200", "wc": "MINEAUTO", "ntype": "M2"}
+    bind |= {f"n{i}": n for i, n in enumerate(sap_names)}
+    where = ("MAINTENANCE_PLANT = :plant AND MAIN_WORK_CENTER = :wc"
+             " AND NOTIFICATION_TYPE = :ntype"
+             f" AND DESC_TECH_OBJECT IN ({ph})")
+    return _bd_merge(db, from_date, to_date, where, bind)
+
+
+def _bd_merge(db: Session, from_date: date, to_date: date,
+              where: str, bind: dict) -> dict[str, dict]:
+    """Shared tail of the two summaries: merged hours beside their counts."""
+    hours = bd.hours_by(db, key="DESC_TECH_OBJECT", from_date=from_date,
+                        to_date=to_date, where=where, bind=bind)
+    counts = bd.counts_by(db, key="DESC_TECH_OBJECT", from_date=from_date,
+                          to_date=to_date, where=where, bind=bind)
     return {
-        r.DESC_TECH_OBJECT: {
-            "hours":        _f(r.bd_hours),
-            "count":        int(r.bd_count        or 0),
-            "count_start":  int(r.bd_count_start  or 0),
-            "count_closed": int(r.bd_count_closed or 0),
-            "count_open":   int(r.bd_count_open   or 0),
+        name: {
+            "hours":        round(hours.get(name, 0.0), 2),
+            "count":        c["events"],
+            # count_start was COUNT(*) over rows with a malfunction start, which
+            # the overlap filter already requires, so the two are the same
+            # number and both are kept for the callers that read each.
+            "count_start":  c["events"],
+            "count_closed": c["closed"],
+            "count_open":   c["open"],
         }
-        for r in db.execute(sql, params).fetchall()
+        for name, c in counts.items()
     }
 
 
 def _get_tipper_bd_hours(
     db: Session, from_date: date, to_date: date
 ) -> dict[str, dict]:
-    """SAP breakdown hours + counts for ALL MAN tippers.
-    Returns {machine_name: {"hours": float, "count": int, "count_start": int}}
-    """
-    sql = text(f"""
-        SELECT DESC_TECH_OBJECT,
-               ROUND(SUM({bd.DURATION_SECONDS}) / 3600.0, 2)                    AS bd_hours,
-               COUNT(*)                                                         AS bd_count,
-               COUNT(*)                                                         AS bd_count_start,
-               COUNT(CASE WHEN MALFUNCTION_END IS NOT NULL THEN 1 END)          AS bd_count_closed,
-               COUNT(CASE WHEN {bd.IS_OPEN} THEN 1 END)                         AS bd_count_open
-        FROM   zpm_iw29_notifications
-        WHERE  MAINTENANCE_PLANT = :plant
-          AND  MAIN_WORK_CENTER  = :wc
-          AND  NOTIFICATION_TYPE = :ntype
-          AND  MALFUNCTION_START IS NOT NULL
-          AND  MALFUNCTION_START BETWEEN :f AND :t
-          AND  DESC_TECH_OBJECT  LIKE 'MAN-%'
-        GROUP BY DESC_TECH_OBJECT
-    """)
-    return {
-        r.DESC_TECH_OBJECT: {
-            "hours":        _f(r.bd_hours),
-            "count":        int(r.bd_count        or 0),
-            "count_start":  int(r.bd_count_start  or 0),
-            "count_closed": int(r.bd_count_closed or 0),
-            "count_open":   int(r.bd_count_open   or 0),
-        }
-        for r in db.execute(sql, {
-            "plant": "1200", "wc": "MINEAUTO", "ntype": "M2",
-            "f": from_date, "t": to_date, **bd.params(to_date),
-        }).fetchall()
-    }
+    """SAP breakdown hours + counts for ALL MAN tippers, merged per tipper."""
+    return _bd_merge(
+        db, from_date, to_date,
+        ("MAINTENANCE_PLANT = :plant AND MAIN_WORK_CENTER = :wc"
+         " AND NOTIFICATION_TYPE = :ntype AND DESC_TECH_OBJECT LIKE 'MAN-%'"),
+        {"plant": "1200", "wc": "MINEAUTO", "ntype": "M2"})
 
 
 def get_breakdown_details(
@@ -239,37 +214,18 @@ def get_breakdown_details(
     error rather than quietly degrade into blank notification numbers and
     'Not specified' reasons.
     """
-    sql = text(f"""
-        SELECT
-            NOTIFICATION AS notification_no,
-
-            CASE WHEN MALFUNCTION_START_TIME IS NOT NULL
-                 THEN TIMESTAMP(MALFUNCTION_START, MALFUNCTION_START_TIME)
-                 ELSE MALFUNCTION_START
-            END AS start_at,
-
-            CASE WHEN MALFUNCTION_END IS NULL THEN NULL
-                 WHEN MALFUNCTION_END_TIME IS NOT NULL
-                 THEN TIMESTAMP(MALFUNCTION_END, MALFUNCTION_END_TIME)
-                 ELSE MALFUNCTION_END
-            END AS end_at,
-
-            ROUND(({bd.DURATION_SECONDS}) / 3600.0, 2) AS bd_hrs,
-            {bd.IS_OPEN}                              AS is_open,
-            DESCRIPTION                               AS reason
-        FROM   zpm_iw29_notifications
-        WHERE  MAINTENANCE_PLANT = '1200'
-          AND  MAIN_WORK_CENTER  = 'MINEAUTO'
-          AND  NOTIFICATION_TYPE = 'M2'
-          AND  MALFUNCTION_START IS NOT NULL
-          AND  MALFUNCTION_START BETWEEN :f AND :t
-          AND  DESC_TECH_OBJECT  = :machine
-        ORDER BY MALFUNCTION_START DESC, MALFUNCTION_START_TIME DESC
-    """)
-    rows = db.execute(
-        sql, {"machine": machine_sap_name, "f": from_date, "t": to_date,
-              **bd.params(to_date)}
-    ).fetchall()
+    # One row per notification overlapping the window, each clipped to it —
+    # services/breakdown.py. This is a LIST, so overlapping notifications are
+    # shown separately and their hours can add up to more than the machine's
+    # merged downtime in the summary above. That is right for a list of faults
+    # and wrong for a total, which is why the total is never built from here.
+    rows = bd.event_rows(
+        db, from_date=from_date, to_date=to_date,
+        where=("MAINTENANCE_PLANT = '1200' AND MAIN_WORK_CENTER = 'MINEAUTO'"
+               " AND NOTIFICATION_TYPE = 'M2' AND DESC_TECH_OBJECT = :machine"),
+        bind={"machine": machine_sap_name},
+        extra=("NOTIFICATION AS notification_no", "DESCRIPTION AS reason"),
+    )
 
     def _iso(v):
         if v is None:
@@ -279,14 +235,14 @@ def get_breakdown_details(
     return [
         {
             # SAP pads notification numbers to 12 chars — strip for display
-            "notification_no": str(r.notification_no or "").lstrip("0") or None,
-            "start":  _iso(r.start_at),
-            "end":    _iso(r.end_at),
-            "bd_hrs": float(r.bd_hrs) if r.bd_hrs is not None else None,
-            # Still running: the hours above are counted to now and will be
-            # larger next time this is opened.
-            "is_open": bool(r.is_open),
-            "reason": (str(r.reason or "").strip() or None),
+            "notification_no": str(r["notification_no"] or "").lstrip("0") or None,
+            "start":  _iso(r["start_at"]),
+            "end":    _iso(r["end_at"]),
+            "bd_hrs": r["hours"],
+            # Still running: the hours above are counted to the window's end
+            # and will be larger next time this is opened.
+            "is_open": r["is_open"],
+            "reason": (str(r["reason"] or "").strip() or None),
         }
         for r in rows
     ]
@@ -332,6 +288,30 @@ def _sensor_health(db: Session) -> dict:
     """
     return {r.vehicle_desc: {"last_run": r.last_run, "last_fuel": r.last_fuel}
             for r in db.execute(_SENSOR_ALIVE_SQL).fetchall()}
+
+
+_SENSOR_ALIVE_TIPPER_SQL = text("""
+    SELECT vehicle_desc,
+           MAX(CASE WHEN TIME_TO_SEC(engine_hours) > 0
+                    THEN DATE(report_date) END) AS last_run
+      FROM mines_technoton_man_utilization
+     WHERE vehicle_desc LIKE 'MAN%'
+     GROUP BY vehicle_desc
+""")
+
+
+def _sensor_health_tipper(db: Session) -> dict:
+    """Last day each tipper reported running hours, over its whole history.
+
+    Same question and same answer as the excavator version, against the other
+    feed. It is worth asking here too: of 28 tippers, eight have reported
+    nothing on any channel for months -- MAN12 and MAN41 never once since the
+    feed began -- while three more (MAN49, MAN52, MAN80) drive every day with a
+    dead fuel probe. Without this the first group arrive as 0.00 running hours
+    and are read as trucks nobody dispatched.
+    """
+    return {r.vehicle_desc: r.last_run
+            for r in db.execute(_SENSOR_ALIVE_TIPPER_SQL).fetchall()}
 
 
 def get_excavator_summary(db: Session, from_date: date, to_date: date) -> dict:
@@ -513,6 +493,7 @@ def get_tipper_summary(db: Session, from_date: date, to_date: date) -> dict:
 
     bd_map        = _get_tipper_bd_hours(db, from_date, to_date)
     all_sap_names = set(sensor_by_sap) | set(bd_map)
+    health        = _sensor_health_tipper(db)
 
     days       = (to_date - from_date).days + 1
     period_hrs = days * 24.0
@@ -530,6 +511,8 @@ def get_tipper_summary(db: Session, from_date: date, to_date: date) -> dict:
             vdesc = sensor_by_sap[sap_name]["vehicle_desc"]
         else:
             vdesc = sap_name.replace(" (TIPPER)", "").replace("-", "", 1)
+
+        last_real = health.get(vdesc)
 
         has_data = eng_hr > 0 or bd_hr > 0
         if has_data:
@@ -552,12 +535,8 @@ def get_tipper_summary(db: Session, from_date: date, to_date: date) -> dict:
             "util_pct":       metrics["util_pct"],
             "mttr":           mttr,
             "mtbf":           mtbf,
-            # Running hours inside the window is proof enough. Outside it, the
-            # machine may simply have been parked, so silence only counts as a
-            # fault once it has run past the grace period.
-            # Counted back from the END of the window: the question is whether
-            # this sensor was working recently as of the period being read, and
-            # a box that fell silent mid-period has not been.
+            # Silence counts as a fault only after the grace period, measured
+            # back from the end of the window being read.
             "sensor_ok":        bool(
                 last_real and last_real >= to_date - timedelta(days=SENSOR_GRACE_DAYS)),
             "sensor_last_seen": last_real,
