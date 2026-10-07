@@ -38,6 +38,7 @@ import {
   Button, Card, CardHeader, Chip, Field, inputClass, Tile,
 } from "@/components/minehub/ui";
 import Dialog from "@/components/minehub/Dialog";
+import AddEmployeeDialog from "@/components/workforce/AddEmployeeDialog";
 import ColumnFilter, { optionsFrom, matches } from "@/components/minehub/ColumnFilter";
 import StarterPatterns from "./StarterPatterns";
 import {
@@ -146,6 +147,7 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
 
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [assigning, setAssigning] = useState(false);
+  const [addingPerson, setAddingPerson] = useState(false);
 
   // Cells picked on the grid, as `${operator_id}|${iso}`. Separate from the
   // row checkboxes, which choose people for a pattern: this chooses squares.
@@ -579,6 +581,13 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
                 </Button>
               )}
               {mayManage && (
+                <Button size="sm" variant="secondary"
+                        onClick={() => setAddingPerson(true)}
+                        title="Put a company employee on the roster">
+                  <UserPlus className="w-3.5 h-3.5" /> Add employee
+                </Button>
+              )}
+              {mayManage && (
                 <Button size="sm" variant="primary" disabled={picked.size === 0}
                         onClick={() => setAssigning(true)}>
                   <UserPlus className="w-3.5 h-3.5" />
@@ -893,6 +902,12 @@ export default function RosterBoard({ mayManage, onChanged, onOpenOperator }: {
           thing sat below the fold and the starters could only be reached by
           scrolling inside a modal. The decision is: these people, this pattern,
           from this date. It fits side by side. */}
+      <AddEmployeeDialog
+        open={addingPerson}
+        onClose={() => setAddingPerson(false)}
+        onAdded={(msg) => { setNotice(msg); void load(); onChanged?.(); }}
+      />
+
       <Dialog open={assigning} tone="info" title={`Put ${picked.size} on a pattern`}
         confirmLabel="Roster them" busy={busy} width={980}
         onConfirm={() => void assign()} onCancel={() => setAssigning(false)}>
