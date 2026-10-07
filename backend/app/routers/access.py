@@ -99,7 +99,10 @@ def _require(db, request: Request, code: str) -> None:
 
 # ------------------------------------------------------------------ catalogue
 @router.get("/permissions")
-def list_permissions(pg: Session = Depends(get_minehub_db)) -> list[dict]:
+def list_permissions(request: Request,
+                     db: Session = Depends(get_db),
+                     pg: Session = Depends(get_minehub_db)) -> list[dict]:
+    _require(db, request, "access.users.view")
     rows = pg.execute(text("""
         SELECT permission_id, code, module, name, description, is_sensitive, sort_order
         FROM permission ORDER BY sort_order, code
@@ -111,6 +114,7 @@ def list_permissions(pg: Session = Depends(get_minehub_db)) -> list[dict]:
 @router.get("/roles")
 def list_roles(request: Request, db: Session = Depends(get_db),
                pg: Session = Depends(get_minehub_db)) -> list[dict]:
+    _require(db, request, "access.users.view")
     """The roles this person may work with.
 
     A role carrying the standing everything-grant is not listed for anybody
@@ -277,6 +281,7 @@ def delete_role(role_id: int, request: Request,
 @router.get("/users")
 def list_users(request: Request, db: Session = Depends(get_db),
                pg: Session = Depends(get_minehub_db)) -> list[dict]:
+    _require(db, request, "access.users.view")
     """Who holds what.
 
     Somebody holding a role this caller cannot see is left out of the list
@@ -424,8 +429,9 @@ def revoke_user(emp_id: str, request: Request,
 
 
 @router.get("/employees")
-def search_employees(q: str = Query(""), db: Session = Depends(get_db)) -> list[dict]:
+def search_employees(request: Request, q: str = Query(""), db: Session = Depends(get_db)) -> list[dict]:
     """Employee lookup for the add-user picker."""
+    _require(db, request, "access.users.view")
     term = (q or "").strip()
     if len(term) < 2:
         return []
@@ -441,11 +447,13 @@ def search_employees(q: str = Query(""), db: Session = Depends(get_db)) -> list[
 
 # ---------------------------------------------------------------------- audit
 @router.get("/audit")
-def access_audit(limit: int = Query(100, le=500),
+def access_audit(request: Request,
+                 limit: int = Query(100, le=500),
                  emp_id: str = Query(""),
                  db: Session = Depends(get_db),
                  pg: Session = Depends(get_minehub_db)) -> list[dict]:
     """Every access change, newest first. Optionally for one person."""
+    _require(db, request, "access.users.view")
     where, params = ["1=1"], {"lim": limit}
     if emp_id.strip():
         where.append("(subject_emp_id = :e OR actor_emp_id = :e)")
@@ -478,6 +486,7 @@ def access_audit(limit: int = Query(100, le=500),
 @router.get("/catalogue")
 def catalogue(request: Request, db: Session = Depends(get_db),
               pg: Session = Depends(get_minehub_db)) -> dict:
+    _require(db, request, "access.users.view")
     """Roles and permissions together.
 
     The Roles screen needs both, and every separate request pays the whole

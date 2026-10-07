@@ -266,6 +266,7 @@ PREFIX_PAGE: tuple[tuple[str, str], ...] = (
     # End-to-end quality, read-only over SAP. Mapped for the same reason as
     # the two above: an unmapped path skips the page check entirely.
     ("/api/quality-e2e", "mis"),
+    ("/api/amira", "mis"),
     # Ferrochrome output and its composite analysis, read-only over SAP.
     ("/api/plant-output", "mis"),
     ("/api/fuel-management", "fuel-management"),
@@ -365,6 +366,7 @@ def employee(db: Session, empid: str) -> dict:
         return {"emp_id": empid, "name": empid, "designation": None, "department": None,
                 "email": None, "title": None, "location": None, "plant": None,
                 "roles": access_svc.roles_for(db, empid), "permissions": perms,
+                "access_source": access_svc.access_source(),
                 "allowed_pages": [pg for pg, code in (
                     ("mis", "dashboard.mis"), ("oee", "dashboard.oee"),
                     ("intelligence", "dashboard.intelligence"),
@@ -387,6 +389,10 @@ def employee(db: Session, empid: str) -> dict:
         # rather than a role name to reason about.
         "roles": _roles,
         "permissions": _perms,
+        # Where those two came from. "legacy" means the access database was
+        # unreachable and this is the old, smaller fallback set -- which looks
+        # identical to the real thing unless something says so.
+        "access_source": access_svc.access_source(),
         # The pages this user may open, so the sidebar shows only those. The
         # same rule is enforced on the API, so this is convenience, not security.
         "allowed_pages": [pg for pg, code in (
@@ -605,6 +611,26 @@ def touch(db: Session, sid: str) -> None:
     """
     with _seen_lock:
         _seen[sid] = time.time()
+
+
+def touch_now(db: Session, sid: str) -> bool:
+    """Write this session's activity immediately, and say whether it landed.
+
+    For the heartbeat, which is the only thing keeping a session alive while
+    somebody reads one screen. touch() notes the session for the flusher, which
+    is right for the per-request path — a write on every call is what drained
+    the pool — and wrong here: the heartbeat fires once every two minutes and is
+    the whole reason an idle-but-watching user stays signed in.
+
+    Once per user per two minutes is a fraction of the load that caused the
+    original trouble, and it keeps the short lock timeout and the retry, so it
+    can neither hold a pooled connection nor fail the request it rides on.
+    """
+    with _seen_lock:
+        _seen.pop(sid, None)        # written here; the flusher need not repeat it
+    return _best_effort(db, "heartbeat", lambda: db.execute(text(
+        f"UPDATE {SESS_TBL} SET last_active_at = NOW() "
+        f"WHERE session_id = :sid AND is_active = 1"), {"sid": sid}))
 
 
 def flush_touches(db: Session) -> int:

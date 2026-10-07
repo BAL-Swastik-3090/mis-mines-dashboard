@@ -1593,3 +1593,105 @@ def whoami(request: Request) -> dict:
             "may_manage": MANAGE in perms,
             "may_assess": ASSESS in perms,
             "may_approve": APPROVE in perms}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Shift timings
+# ═══════════════════════════════════════════════════════════════════════════
+@router.get("/shifts")
+def list_shifts(request: Request,
+                pg: Session = Depends(get_minehub_db)) -> list[dict]:
+    """The shift calendar: what hours A, B and C actually run.
+
+    One definition, read by the roster, by the production day a load is
+    attributed to, and by the weighbridge when it pre-selects a shift. There
+    is deliberately nowhere else these hours are written down.
+    """
+    rows = pg.execute(text("""
+        SELECT shift_id, code, name, start_time, end_time, crosses_midnight,
+               planned_hours, valid_from, valid_to
+          FROM shift_calendar
+         WHERE valid_to IS NULL OR valid_to >= CURRENT_DATE
+         ORDER BY CASE WHEN code = 'GENERAL' THEN 1 ELSE 0 END, start_time
+    """)).mappings().all()
+    now = pg.execute(text("SELECT LOCALTIME")).scalar()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["start_time"] = r["start_time"].strftime("%H:%M")
+        d["end_time"] = r["end_time"].strftime("%H:%M")
+        d["planned_hours"] = float(r["planned_hours"]) if r["planned_hours"] is not None else None
+        # Which one the clock is in. Not for the general shift, which overlaps
+        # the others by design and is nobody's production shift.
+        d["running_now"] = bool(
+            r["code"] != "GENERAL" and (
+                (r["start_time"] <= now or now < r["end_time"]) if r["crosses_midnight"]
+                else r["start_time"] <= now < r["end_time"]))
+        out.append(d)
+    return out
+
+
+@router.put("/shifts/{shift_id}")
+def set_shift_times(shift_id: int, request: Request, body: dict = Body(...),
+                    db: Session = Depends(get_db),
+                    pg: Session = Depends(get_minehub_db)) -> dict:
+    """Move a shift's hours.
+
+    CHANGES WHAT IS ALREADY RECORDED, in the sense that every figure derived
+    from "which shift was this" is read through these times. A load weighed at
+    05:30 belongs to C today and to A tomorrow if A is moved to start at five.
+    That is the intended behaviour -- the times describe the mine, not the
+    rows -- but it is why the change is logged with what it was before.
+
+    crosses_midnight is worked out, not asked for: a shift whose end is at or
+    before its start runs through the night, and leaving that to be ticked by
+    hand is leaving it to be ticked wrong.
+    """
+    _require(request, MANAGE, "change shift timings")
+
+    def _hhmm(v, what):
+        t = str(v or "").strip()
+        if not re.fullmatch(r"\d{1,2}:\d{2}", t):
+            raise HTTPException(422, f"{what} should look like 06:00.")
+        h, m = (int(x) for x in t.split(":"))
+        if h > 23 or m > 59:
+            raise HTTPException(422, f"{t} is not a time of day.")
+        return f"{h:02d}:{m:02d}"
+
+    start = _hhmm(body.get("start_time"), "The start time")
+    end = _hhmm(body.get("end_time"), "The end time")
+    if start == end:
+        raise HTTPException(422, "A shift cannot start and end at the same minute.")
+
+    was = pg.execute(text("""
+        SELECT code, name, start_time, end_time FROM shift_calendar
+         WHERE shift_id = :id"""), {"id": shift_id}).mappings().first()
+    if not was:
+        raise HTTPException(404, "No such shift.")
+
+    row = pg.execute(text("""
+        UPDATE shift_calendar
+           SET start_time = CAST(:s AS time),
+               end_time   = CAST(:e AS time),
+               crosses_midnight = CAST(:e AS time) <= CAST(:s AS time),
+               planned_hours = ROUND(EXTRACT(EPOCH FROM (
+                   CASE WHEN CAST(:e AS time) <= CAST(:s AS time)
+                        THEN (CAST(:e AS time) - CAST(:s AS time)) + interval '24 hours'
+                        ELSE  CAST(:e AS time) - CAST(:s AS time) END)) / 3600.0, 2),
+               updated_at = now()
+         WHERE shift_id = :id
+        RETURNING code, start_time, end_time, crosses_midnight, planned_hours
+    """), {"id": shift_id, "s": start, "e": end}).mappings().first()
+
+    _event(pg, request, "SHIFT_TIMES_CHANGED", payload={
+        "shift": was["code"],
+        "from": {"start": was["start_time"].strftime("%H:%M"),
+                 "end": was["end_time"].strftime("%H:%M")},
+        "to": {"start": start, "end": end},
+    })
+    pg.commit()
+    return {"ok": True, "code": row["code"],
+            "start_time": row["start_time"].strftime("%H:%M"),
+            "end_time": row["end_time"].strftime("%H:%M"),
+            "crosses_midnight": row["crosses_midnight"],
+            "planned_hours": float(row["planned_hours"])}

@@ -110,6 +110,86 @@ async def _flush_activity():
             logger.warning("activity flush pass failed", exc_info=True)
 
 
+async def _usage_mirror():
+    """Keep our copy of the sign-in log current.
+
+    The usage screen used to read two tables in balcorpdb that every
+    application in the company writes to, scanning 128,725 rows to find the
+    606 that are ours because nothing there is indexed by app_source. That
+    index is not ours to add. The rows are mirrored into minehub instead,
+    where they are indexed properly and the screen never touches a shared
+    server to draw a chart.
+
+    Every pass is wrapped. A mirror that stops is a screen quietly showing
+    last week, so a failed pass is logged loudly and the next one still runs;
+    the screen reads how old the copy is and says so.
+
+    The work is blocking database I/O on two hosts, so it runs in a worker
+    thread rather than on the event loop.
+    """
+    from app.database import SessionLocal
+    from app.minehub_db import SessionLocal as MineHubSession
+    from app.services import usage_sync
+
+    await asyncio.sleep(20)     # let startup finish first
+    while True:
+        try:
+            def go() -> dict:
+                if MineHubSession is None:
+                    return {"errors": ["minehub is not configured"]}
+                with SessionLocal() as db, MineHubSession() as pg:
+                    return usage_sync.run_once(db, pg)
+            out = await run_in_threadpool(go)
+            if out.get("errors"):
+                logger.warning("usage mirror: %s", "; ".join(out["errors"]))
+            elif out.get("sessions") or out.get("page_views"):
+                logger.debug("usage mirror: %d sessions, %d page views",
+                             out["sessions"], out["page_views"])
+        except asyncio.CancelledError:
+            raise
+        except Exception:                               # noqa: BLE001
+            logger.warning("usage mirror pass failed", exc_info=True)
+        await asyncio.sleep(usage_sync.SYNC_SECONDS)
+
+
+async def _fuel_mirror():
+    """Keep our copy of the SAP fuel rows current.
+
+    The fuel screen read scm_zmm_stock_mb5b directly: 4,130,084 rows of every
+    material at every plant, of which 2,068 are fuel at ours. Its index does
+    not carry matgroup, so a thirty-day window read 635,937 rows to find a few
+    dozen, and the screen took eight and a half seconds.
+
+    The rows are mirrored into minehub instead, where they are indexed for the
+    four questions this screen asks. SAP posts one snapshot a day, so a pass
+    every fifteen minutes is about how soon a new day appears rather than how
+    fresh any figure is.
+    """
+    from app.database import SessionLocal
+    from app.minehub_db import SessionLocal as MineHubSession
+    from app.services import fuel_sync
+
+    await asyncio.sleep(40)     # after the usage mirror, not against it
+    while True:
+        try:
+            def go() -> dict:
+                if MineHubSession is None:
+                    return {"errors": ["minehub is not configured"]}
+                with SessionLocal() as db, MineHubSession() as pg:
+                    return fuel_sync.run_once(db, pg)
+            out = await run_in_threadpool(go)
+            if out.get("errors"):
+                logger.warning("fuel mirror: %s", "; ".join(out["errors"]))
+            elif out.get("stock") or out.get("orders"):
+                logger.debug("fuel mirror: %d stock rows, %d order lines",
+                             out["stock"], out["orders"])
+        except asyncio.CancelledError:
+            raise
+        except Exception:                               # noqa: BLE001
+            logger.warning("fuel mirror pass failed", exc_info=True)
+        await asyncio.sleep(fuel_sync.SYNC_SECONDS)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ── Startup — retry up to 5 times for transient errors (e.g. too many connections) ──
@@ -138,6 +218,12 @@ async def lifespan(app: FastAPI):
     # Start 7AM digest scheduler as a background task
     digest_task = asyncio.create_task(_daily_insights_digest())
     market_task = asyncio.create_task(_market_collector())
+    # Our own copy of the sign-in log, so the usage screen never reads a
+    # table twenty-five other applications are writing to.
+    usage_task = asyncio.create_task(_usage_mirror())
+    # The SAP fuel rows, for the same reason: 2,068 rows we were reading four
+    # million to find.
+    fuel_task = asyncio.create_task(_fuel_mirror())
     # Release pooled connections when the app goes quiet. The MySQL instance is
     # shared and has been refusing connections, so holding idle ones costs
     # somebody else their connection.
@@ -149,6 +235,8 @@ async def lifespan(app: FastAPI):
     activity_task.cancel()
     digest_task.cancel()
     market_task.cancel()
+    usage_task.cancel()
+    fuel_task.cancel()
     reaper_task.cancel()
     # Close every pooled connection rather than leaving the server to time them
     # out eight hours later.
@@ -375,10 +463,11 @@ from app.routers import checklists, operators_analytics
 from app.routers import prev_day_actual
 from app.routers import stock_entry
 from app.routers import quality_e2e
+from app.routers import amira
 from app.routers import plant_output
 from app.routers import alerts as live_alerts
 from app.routers import usage
-from app.routers import production, stock, cob, plant, ob, despatch, equipment, dewatering, insights, live_tracking, fuel_management, ev_tracking, auth, oee, roles, minehub, access, operators, operations, workforce, productivity, comments
+from app.routers import production, stock, cob, plant, ob, despatch, equipment, dewatering, insights, live_tracking, fuel_management, fuel_control, ev_tracking, auth, oee, roles, minehub, access, operators, operations, workforce, productivity, comments
 app.include_router(production.router,      prefix="/api/production",    tags=["Production"])
 app.include_router(stock.router,           prefix="/api/stock",         tags=["Stock"])
 app.include_router(cob.router,             prefix="/api/cob",           tags=["COB Plant"])
@@ -390,6 +479,7 @@ app.include_router(dewatering.router,      prefix="/api/dewatering",    tags=["D
 app.include_router(insights.router,        prefix="/api/insights",      tags=["Insights"])
 app.include_router(live_tracking.router)
 app.include_router(fuel_management.router)
+app.include_router(fuel_control.router)
 app.include_router(ev_tracking.router)
 app.include_router(auth.router)
 app.include_router(oee.router)
@@ -415,6 +505,7 @@ app.include_router(minehub.router)
 app.include_router(prev_day_actual.router)
 app.include_router(stock_entry.router)
 app.include_router(quality_e2e.router)
+app.include_router(amira.router)
 app.include_router(plant_output.router)
 app.include_router(usage.router)
 app.include_router(live_alerts.router)

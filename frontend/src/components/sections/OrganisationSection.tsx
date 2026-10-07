@@ -32,6 +32,7 @@ import {
   StatBar, Tabs, Td, Th, inputClass, type Tone,
 } from "@/components/minehub/ui";
 import Dialog from "@/components/minehub/Dialog";
+import DateField from "@/components/minehub/DateField";
 
 /* ── What the API sends ──────────────────────────────────────────────────── */
 interface ProposedHead {
@@ -757,7 +758,7 @@ function HolderDialog({ post, onClose, onDone, onError }: {
             </select>
           </Field>
           <Field label="Holding from" required>
-            <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className={inputClass} />
+            <DateField value={from} onChange={setFrom} />
           </Field>
         </div>
 

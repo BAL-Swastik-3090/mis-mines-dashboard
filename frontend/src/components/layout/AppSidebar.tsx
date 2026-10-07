@@ -1,5 +1,5 @@
 "use client";
-import { Activity, BarChart3, Boxes, CalendarRange, ChevronLeft, ChevronRight, ClipboardList, CloudSun, DoorOpen, ExternalLink, Gauge, LayoutDashboard, LineChart, Network, Radar, Scale, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
+import { Activity, BarChart3, Boxes, CalendarRange, ChevronLeft, ChevronRight, Calculator, ClipboardList, CloudSun, DoorOpen, ExternalLink, Gauge, LayoutDashboard, LineChart, Network, Radar, Scale, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { canOpen } from "@/contexts/pageAccess";
 import { useSidebar }               from "@/contexts/useSidebar";
@@ -22,7 +22,7 @@ const PRPO_URL =
  *  MainLayout's switch. `page` is persisted to localStorage, so if PR/PO were a
  *  page value, a user whose last click was PR/PO would reload into a blank
  *  screen with no section to render. */
-type NavItem =
+export type NavItem =
   | { kind: "page"; id: AppPage;  label: string; icon: React.ElementType }
   /** `need` is a permission code. A link is still access: the application it
    *  opens has its own login, but putting the shortcut in front of somebody is
@@ -37,6 +37,7 @@ const NAV_ITEMS: NavItem[] = [
   { kind: "page", id: "weather",         label: "Weather Forecast",           icon: CloudSun        },
   { kind: "page", id: "oee",             label: "OEE / LCM",                  icon: Activity        },
   { kind: "page", id: "intelligence",    label: "Intelligence",               icon: Sparkles        },
+  { kind: "page", id: "amira",           label: "AMIRA Accounting",           icon: Calculator      },
   { kind: "page", id: "market",          label: "Market Watch",               icon: LineChart       },
   { kind: "page", id: "fuel-management", label: "Fuel Management",            icon: Gauge           },
   { kind: "page", id: "ev-tracking",     label: "Electric Vehicles Tracking", icon: Zap             },
@@ -106,11 +107,19 @@ const WORKFORCE_ITEM: NavItem =
 const ITEM_BASE =
   "w-full flex items-center gap-3 px-3 py-2.5 transition-colors duration-150 relative group";
 
-export default function AppSidebar() {
-  const { page, setPage }      = useAppPage();
-  const { collapsed, toggle }  = useSidebar();
-  const user                   = useAuth((s) => s.user);
+/** The entries this user may open, in the order the sidebar draws them.
+ *
+ *  Exported because the command palette offers the same list. Two lists would
+ *  be two answers to "what can I open", and the one nobody looked at would be
+ *  the one that went stale -- a palette offering a screen that 403s reads as a
+ *  broken platform rather than a closed door.
+ */
+export function useVisibleNav(): NavItem[] {
+  const user = useAuth((s) => s.user);
+  return buildNav(user);
+}
 
+function buildNav(user: ReturnType<typeof useAuth.getState>["user"]): NavItem[] {
   /* Only the pages this user may open. The same rule is enforced on the API, so
      this hides entries that would 403 anyway rather than being the gate itself
      — but hiding them matters: a tab that opens onto its own error message
@@ -145,6 +154,14 @@ export default function AppSidebar() {
     ...(canOpen(user, "access-control") ? [ACCESS_ITEM] : []),
     ...(canOpen(user, "usage") ? [USAGE_ITEM] : []),
   ];
+  return items;
+}
+
+export default function AppSidebar() {
+  const { page, setPage }      = useAppPage();
+  const { collapsed, toggle }  = useSidebar();
+  const user                   = useAuth((s) => s.user);
+  const items                  = buildNav(user);
 
   return (
     <aside

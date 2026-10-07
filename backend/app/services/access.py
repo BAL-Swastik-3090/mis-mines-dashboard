@@ -154,6 +154,17 @@ def permissions_for(db, emp_id: str) -> set[str]:
         return _legacy(db, emp_id)
 
 
+def access_source() -> str:
+    """Where a permission answer is currently coming from.
+
+    "minehub" is the real map. "legacy" means minehub is unreachable and the
+    cache is cold, so answers are the old MySQL role column -- a SMALLER set
+    that looks exactly as legitimate as the real one, which is why anything
+    showing permissions has to be able to say which it got.
+    """
+    return "minehub" if _cache_ok else "legacy"
+
+
 def roles_for(db, emp_id: str) -> list[dict]:
     try:
         _, roles = _map()

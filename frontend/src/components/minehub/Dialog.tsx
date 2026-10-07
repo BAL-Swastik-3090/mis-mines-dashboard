@@ -29,10 +29,19 @@ export default function Dialog({
   open, tone = "info", title, children,
   confirmLabel = "Confirm", cancelLabel = "Cancel",
   onConfirm, onCancel, busy, secondary, width = 560, bare = false,
+  titleAlign = "left", ariaLabel,
 }: {
   open: boolean;
   tone?: DialogTone;
-  title: string;
+  /** Usually a string. A node when the heading has to carry something the
+   *  reader should see at a glance — a vehicle, coloured by its state —
+   *  in which case pass `ariaLabel` so the dialog is still announced. */
+  title: React.ReactNode;
+  /** Centred for a heading that IS the subject of the dialog rather than a
+   *  description of it. */
+  titleAlign?: "left" | "center";
+  /** Required when `title` is not a string: aria-label takes text only. */
+  ariaLabel?: string;
   children: React.ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
@@ -94,7 +103,8 @@ export default function Dialog({
                     bg-navy/40 motion-safe:animate-[toastIn_.15s_ease-out]"
       // A click on the backdrop means "not now", the same as Cancel.
       onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
-      <div ref={panel} role="dialog" aria-modal="true" aria-label={title}
+      <div ref={panel} role="dialog" aria-modal="true"
+           aria-label={ariaLabel ?? (typeof title === "string" ? title : undefined)}
         // A dialog with a lot in it — the starter patterns, a long list of
         // people — used to grow past the bottom of the screen, and
         // overflow-hidden then CLIPPED it rather than scrolling. The footer
@@ -119,7 +129,8 @@ export default function Dialog({
             </span>
           )}
           <div className="min-w-0 flex-1">
-            <h3 className="font-condensed font-extrabold text-[17px] text-navy leading-tight">{title}</h3>
+            <h3 className={`font-condensed font-extrabold text-[17px] text-navy
+                            leading-tight ${titleAlign === "center" ? "text-center" : ""}`}>{title}</h3>
             <div className="text-[12.5px] text-txt-secondary leading-relaxed mt-1.5">{children}</div>
           </div>
         </div>
