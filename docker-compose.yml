@@ -24,6 +24,8 @@ services:
       dockerfile: Dockerfile
     container_name: mines_frontend
     environment:
+      # Node formats server-rendered dates with this too.
+      - TZ=${TZ:-Asia/Kolkata}
       - PORT=3333
       - NEXT_PUBLIC_API_URL=http://localhost/api
       - NEXT_PUBLIC_WS_URL=ws://localhost/ws
@@ -41,6 +43,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: mines_backend
+    # Stated here as well as in the Dockerfile: this is where someone looks
+    # when a timestamp is wrong, and it makes the value overridable per host.
+    environment:
+      - TZ=${TZ:-Asia/Kolkata}
     env_file:
       - .env
     environment:

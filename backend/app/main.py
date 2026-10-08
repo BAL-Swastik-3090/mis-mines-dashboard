@@ -13,7 +13,26 @@ from app.config import get_settings
 from app.database import test_connection, idle_connection_reaper, engine, pool_status
 
 settings = get_settings()
+
+# ── THE SERVICE'S OWN LOG HAS TO REACH THE CONTAINER LOG ───────────────────
+# There was no logging configuration at all, so the root logger kept its
+# default of WARNING with no handler and every logger.info in this application
+# was discarded. "Database connected", the sync results, the clock check below
+# -- none of it ever appeared in `docker compose logs`, which is where anybody
+# diagnosing a problem at 7am is going to look. Only gunicorn's own output was
+# visible, which is why the service looked quiet rather than silent.
+#
+# Configured on this logger alone rather than through basicConfig, so gunicorn
+# and uvicorn keep their own handlers and nothing is logged twice.
 logger = logging.getLogger("mines_dashboard")
+if not logger.handlers:
+    _h = logging.StreamHandler(sys.stdout)
+    _h.setFormatter(logging.Formatter(
+        "[%(asctime)s %(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S%z"))
+    logger.addHandler(_h)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
 
 
 async def _daily_insights_digest():
@@ -190,42 +209,36 @@ async def _fuel_mirror():
         await asyncio.sleep(fuel_sync.SYNC_SECONDS)
 
 
-def _align_clock_to_database() -> None:
-    """Run this process on the same clock as the data it reports.
+# How far apart the two clocks may be before it is worth saying something.
+# Hosts drift by seconds against NTP; this is looking for whole hours.
+CLOCK_TOLERANCE = timedelta(minutes=5)
 
-    WHY THIS EXISTS. Every figure on this dashboard is a wall-clock figure
-    written by somebody in Odisha: SAP's MALFUNCTION_START, the shift log's
-    Prod_date, a stock entry's Entry_Date. MySQL and PostgreSQL both run at
-    +05:30 and store them naive, so the moment the application compares one of
-    them against its own clock, the two have to agree.
 
-    They did not. The production container has no TZ set, so Python ran in UTC
-    five and a half hours behind the data:
+def _check_clock_against_database() -> None:
+    """Confirm this process agrees with the database about what time it is.
 
-        container python now : 2026-10-07 11:01:20
-        MySQL NOW()          : 2026-10-07 16:31:46
+    THE CLOCK IS SET IN THE IMAGE, not here. backend/Dockerfile sets
+    TZ=Asia/Kolkata with tzdata installed, and docker-compose.yml states it
+    again so it can be overridden per host. That is the ordinary way to give a
+    container a timezone, and it is right from PID 1 -- no window during which
+    the process is on one clock and its data on another.
 
-    Every open breakdown was cut short by exactly that (fixed at source in
-    services/breakdown.py, which now asks the database). But `datetime.now()`
-    and `date.today()` are read in about seventy other places, and fixing each
-    one means threading a session into functions that have no reason to want
-    one. Three of those were wrong in ways nobody had reported yet:
+    This function exists because that setting is one forgotten line away from
+    being absent on a new host, and the failure is silent: nothing errors, the
+    figures are simply wrong by the offset. It happened. The production
+    container ran UTC against databases at +05:30, so every open breakdown was
+    cut short by five and a half hours, date.today() returned yesterday until
+    05:30, and the 07:00 digest fired at 12:30.
 
-      - date.today() returned YESTERDAY between midnight and 05:30 IST, so
-        anyone opening the dashboard on the early shift got a default range
-        ending the day before;
-      - the "07:00 digest" fired at 07:00 UTC, which is 12:30 at the mine;
-      - usage_sync re-read a six-hour overlap instead of thirty minutes.
+    So the agreement is verified against the database on every start and said
+    out loud either way. If they disagree the process clock is corrected rather
+    than left wrong -- a dashboard quietly reporting the wrong day is worse
+    than one that fixes itself and complains -- but that path is a fallback,
+    and the log says plainly that the image is misconfigured.
 
-    SO THE CLOCK IS SET ONCE, HERE, FROM THE DATABASE ITSELF. Not from a TZ
-    variable in the compose file, which is one forgotten line away from being
-    wrong again on a new host, and not from a hard-coded "Asia/Kolkata", which
-    would be a second place to maintain the answer. The offset is measured --
-    NOW() against UTC_TIMESTAMP() -- and the process adopts it. If the database
-    ever moves, this follows it without anybody editing anything.
-
-    Failure here is logged and otherwise ignored: a dashboard that starts on
-    the wrong clock is a great deal better than one that does not start.
+    Correctness-critical code does not rely on any of this: services/breakdown.py
+    takes its "now" from the database directly, because that is the clock the
+    timestamps are on.
     """
     import os
     import time as _time
@@ -235,41 +248,56 @@ def _align_clock_to_database() -> None:
 
     try:
         with SessionLocal() as db:
+            db_now = db.execute(text("SELECT NOW()")).scalar()
+        if db_now is None:
+            logger.warning("Clock: database returned no time; skipping the check")
+            return
+
+        drift = datetime.now() - db_now
+        if abs(drift) <= CLOCK_TOLERANCE:
+            logger.info("Clock agrees with the database (%s, off by %+ds)",
+                        _time.tzname[0], int(drift.total_seconds()))
+            return
+
+        logger.error(
+            "CLOCK MISMATCH: this process says %s, the database says %s "
+            "(%+.1f hours). TZ is %s. The image should set TZ=Asia/Kolkata "
+            "-- see backend/Dockerfile. Correcting this process now.",
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            db_now.strftime("%Y-%m-%d %H:%M:%S"),
+            drift.total_seconds() / 3600.0,
+            os.environ.get("TZ", "(unset)"))
+
+        if not hasattr(_time, "tzset"):
+            logger.error("Clock: cannot correct on this platform (no tzset)")
+            return
+
+        with SessionLocal() as db:
             offset = db.execute(
                 text("SELECT TIMEDIFF(NOW(), UTC_TIMESTAMP())")).scalar()
-        if offset is None:
-            logger.warning("Clock: database gave no offset; leaving the process clock alone")
-            return
-
         minutes = int(offset.total_seconds() // 60)
-        # POSIX TZ runs the other way round: the offset is what you ADD to
-        # local time to get UTC, so +05:30 is written as -5:30. Getting this
-        # backwards is an eleven-hour error, which is why it is spelled out.
+        # POSIX writes the offset as what you ADD to local time to reach UTC,
+        # so +05:30 is "-5:30". The abbreviation must be at least three
+        # characters or glibc ignores the whole string without a word -- "DB"
+        # left the process on UTC and reported nothing at all.
         sign = "-" if minutes >= 0 else "+"
         hh, mm = divmod(abs(minutes), 60)
-        # THE NAME MUST BE THREE CHARACTERS. glibc parses a POSIX TZ string as
-        # <abbreviation><offset> and silently ignores the whole thing if the
-        # abbreviation is shorter than three, so "DB-5:30" left the process on
-        # UTC with no error anywhere -- which is the same class of silent
-        # failure this function exists to end. "DBT" is three.
-
-        before = datetime.now()
         os.environ["TZ"] = f"DBT{sign}{hh}:{mm:02d}"
-        if hasattr(_time, "tzset"):
-            _time.tzset()
-        else:
-            # Windows has no tzset; a developer machine is already on mine time,
-            # so this is a no-op rather than a problem.
-            logger.info("Clock: no tzset on this platform; leaving the process clock alone")
-            return
+        _time.tzset()
 
-        logger.info(
-            "✅ Clock aligned to the database (UTC%+03d:%02d): %s → %s",
-            (1 if minutes >= 0 else -1) * hh, mm,
-            before.strftime("%H:%M:%S"), datetime.now().strftime("%H:%M:%S"))
+        with SessionLocal() as db:
+            db_now = db.execute(text("SELECT NOW()")).scalar()
+        drift = datetime.now() - db_now
+        if abs(drift) <= CLOCK_TOLERANCE:
+            logger.warning("Clock corrected to %s; now agrees with the database",
+                           os.environ["TZ"])
+        else:
+            logger.error("Clock still %+.1f hours out after correction",
+                         drift.total_seconds() / 3600.0)
     except Exception as exc:                                   # noqa: BLE001
-        logger.warning("Clock: could not align to the database (%s); "
-                       "continuing on the process clock", exc)
+        # A dashboard that starts on an unverified clock beats one that does
+        # not start.
+        logger.warning("Clock: could not check against the database (%s)", exc)
 
 
 @asynccontextmanager
@@ -292,7 +320,7 @@ async def lifespan(app: FastAPI):
     # Before any background task reads a clock: the digest scheduler below
     # computes its next 07:00 from datetime.now(), and on a UTC process that
     # is 12:30 at the mine.
-    _align_clock_to_database()
+    _check_clock_against_database()
 
     # Write down who has been active, once a minute, from one place.
     #
