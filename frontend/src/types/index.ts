@@ -802,6 +802,18 @@ export interface OEEMachineRow {
   pm_hours:       number;
   operating_hrs:  number;
   actual_cum:     number;
+  /** What the buckets carried. ore+ob+other always re-add to actual_cum. */
+  ore_cum:   number;
+  ob_cum:    number;
+  other_cum: number;
+  material:     "ORE" | "OB" | "OTHER" | "MIXED" | null;
+  material_pct: number | null;
+  ore_pct:      number | null;
+  ob_pct:       number | null;
+  other_pct:    number | null;
+  /** running_hours / (god − breakdown), capped at 100 — the MIS Equipment
+   *  section's formula with the shift log in place of the GPS feed. */
+  utilisation:  number | null;
   ideal_cum:      number;
   availability:   number;
   performance:    number;
@@ -824,6 +836,18 @@ export interface OEEFleet {
   pm_hours:      number;
   operating_hrs: number;
   actual_cum:    number;
+  /** What the buckets carried. ore+ob+other always re-add to actual_cum. */
+  ore_cum:   number;
+  ob_cum:    number;
+  other_cum: number;
+  material:     "ORE" | "OB" | "OTHER" | "MIXED" | null;
+  material_pct: number | null;
+  ore_pct:      number | null;
+  ob_pct:       number | null;
+  other_pct:    number | null;
+  /** running_hours / (god − breakdown), capped at 100 — the MIS Equipment
+   *  section's formula with the shift log in place of the GPS feed. */
+  utilisation:  number | null;
   ideal_cum:     number;
   availability:  number;
   performance:   number;

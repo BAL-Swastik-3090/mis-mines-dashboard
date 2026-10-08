@@ -125,8 +125,12 @@ function FleetKpis({ fleet, loading }: { fleet: OEEFleet | undefined; loading: b
 // sorted and filtered, and "17 CuM/hr" inside the machine name defeats both.
 const EXPORT_HEADINGS = [
   "Excavator", "God Hrs", "BD Hrs", "PM Hrs", "Deviation Hrs", "Operating Hrs",
-  "Actual CuM", "Ideal CuM", "Availability %", "Performance %", "Quality %", "OEE %",
+  "Actual CuM", "Ideal CuM", "Availability %", "Utilisation %", "Performance %",
+  "Quality %", "OEE %",
   "Ideal Capacity (CuM/hr)", "Ownership", "Breakdown Source", "Deviation % of Shift",
+  // Shares as their own columns, not "ORE 83%" in one cell: a spreadsheet is
+  // sorted and filtered, and a label glued to a number defeats both.
+  "Material", "Ore CuM", "OB CuM", "Other CuM", "Ore %", "OB %", "Other %",
 ];
 
 /** Numbers go out as numbers, rounded the way the screen rounds them.
@@ -139,10 +143,12 @@ function exportRows(machines: OEEMachineRow[], fleet: OEEFleet | undefined): unk
   const rows: unknown[][] = machines.map((m) => [
     m.machine, n1(m.god_hours), n2(m.bd_hours), n2(m.pm_hours), n2(m.deviation_hrs),
     n2(m.operating_hrs), n1(m.actual_cum), n1(m.ideal_cum), n2(m.availability),
-    n2(m.performance), n2(m.quality), n2(m.oee),
+    m.utilisation ?? "", n2(m.performance), n2(m.quality), n2(m.oee),
     n1(m.ideal_cap), m.hired ? "Hired" : "Owned",
     m.bd_source === "sap" ? "SAP" : "Shift log",
     m.deviation_pct ?? "",
+    m.material ?? "", n1(m.ore_cum), n1(m.ob_cum), n1(m.other_cum),
+    m.ore_pct ?? "", m.ob_pct ?? "", m.other_pct ?? "",
   ]);
   // The weighted roll-up exactly as the footer shows it, taken from the server
   // rather than re-summed here: averaging machine percentages would overstate
@@ -151,11 +157,49 @@ function exportRows(machines: OEEMachineRow[], fleet: OEEFleet | undefined): unk
     rows.push([
       "OVERALL", n1(fleet.god_hours), n2(fleet.bd_hours), n2(fleet.pm_hours),
       n2(fleet.deviation_hrs), n2(fleet.operating_hrs), n1(fleet.actual_cum),
-      n1(fleet.ideal_cum), n2(fleet.availability), n2(fleet.performance),
-      n2(fleet.quality), n2(fleet.oee), "", "", "", fleet.deviation_pct ?? "",
+      n1(fleet.ideal_cum), n2(fleet.availability), fleet.utilisation ?? "",
+      n2(fleet.performance), n2(fleet.quality), n2(fleet.oee),
+      "", "", "", fleet.deviation_pct ?? "",
+      fleet.material ?? "", n1(fleet.ore_cum), n1(fleet.ob_cum), n1(fleet.other_cum),
+      fleet.ore_pct ?? "", fleet.ob_pct ?? "", fleet.other_pct ?? "",
     ]);
   }
   return rows;
+}
+
+/** What the machine was moving, as a share of its own CuM.
+ *
+ *  COLOUR CARRIES THE CLASS, NOT THE QUALITY. Ore is not "good" and overburden
+ *  "bad" — stripping waste is the job on some benches — so these are three
+ *  neutral hues that tell the classes apart, never the red/amber/green used by
+ *  the percentage columns, which a reader scans for trouble.
+ *
+ *  MIXED when no class reaches 60%. TATA-490 ran 57% ore against 32% OB; naming
+ *  it an ore machine would hide a third of its work. */
+function MaterialTag({ m }: {
+  m: { material: string | null; material_pct: number | null;
+       ore_pct: number | null; ob_pct: number | null; other_pct: number | null };
+}) {
+  if (!m.material) return <span className="text-txt-light/60">—</span>;
+  const tone: Record<string, string> = {
+    ORE:   "bg-[#e8f0fe] text-[#1a4a8f]",
+    OB:    "bg-[#f3ece3] text-[#7a5a2e]",
+    OTHER: "bg-[#eceff1] text-[#4a5a63]",
+    MIXED: "bg-[#f3e8f5] text-[#6a3a74]",
+  };
+  return (
+    <span
+      className="inline-flex items-center gap-1"
+      title={`Ore ${m.ore_pct ?? 0}% · OB ${m.ob_pct ?? 0}% · Other ${m.other_pct ?? 0}%`}
+    >
+      <span className={`px-1.5 py-px rounded-sm text-[9px] font-bold tracking-wide ${tone[m.material] ?? tone.OTHER}`}>
+        {m.material}
+      </span>
+      {m.material_pct != null && (
+        <span className="text-[10px] text-txt-light font-mono">{m.material_pct}%</span>
+      )}
+    </span>
+  );
 }
 
 // ── Per-machine OEE table ──────────────────────────────────────────────────────
@@ -200,8 +244,8 @@ function OEETable({ machines, fleet, loading, from, to }: {
               {[
                 "Excavator", "God Hrs",
                 "BD Hrs", "PM Hrs", "Deviation Hrs", "Operating Hrs",
-                "Actual CuM", "Ideal CuM",
-                "Availability %", "Performance %", "Quality %", "OEE %",
+                "Actual CuM", "Ore / OB", "Ideal CuM",
+                "Availability %", "Utilisation %", "Performance %", "Quality %", "OEE %",
               ].map((h) => (
                 <th
                   key={h}
@@ -225,7 +269,7 @@ function OEETable({ machines, fleet, loading, from, to }: {
               ))
             ) : machines.length === 0 ? (
               <tr>
-                <td colSpan={12} className="px-4 py-8 text-center text-txt-muted text-sm font-sans">
+                <td colSpan={14} className="px-4 py-8 text-center text-txt-muted text-sm font-sans">
                   No data for selected period
                 </td>
               </tr>
@@ -279,11 +323,26 @@ function OEETable({ machines, fleet, loading, from, to }: {
                   <td className="px-3 py-2.5 text-[#1565c0] font-semibold">{fmt2(m.operating_hrs)}</td>
                   {/* Actual CuM */}
                   <td className="px-3 py-2.5 text-txt-secondary">{fmt1(m.actual_cum)}</td>
+                  {/* WHAT WAS IN THE BUCKET, not just how much. Five of the ten
+                      machines move almost no ore — EV 2 is entirely tailing and
+                      COB feed — so a CuM figure alone says nothing about which
+                      job the machine was doing. The share is of that machine's
+                      own CuM, and the title carries the full three-way split. */}
+                  <td className="px-3 py-2.5 whitespace-nowrap">
+                    <MaterialTag m={m} />
+                  </td>
                   {/* Ideal CuM */}
                   <td className="px-3 py-2.5 text-txt-light">{fmt1(m.ideal_cum)}</td>
                   {/* Availability */}
                   <td className={`px-3 py-2.5 font-bold ${pctColor(m.availability, 85, 70)}`}>
                     {fmt2(m.availability)}
+                  </td>
+                  {/* Utilisation — of the hours it was not broken down, how many
+                      it actually ran. Same formula as the MIS Equipment section,
+                      on shift-log running hours rather than the GPS feed, which
+                      covers only the seven Z-AXIS machines. */}
+                  <td className={`px-3 py-2.5 font-bold ${m.utilisation == null ? "text-txt-light" : pctColor(m.utilisation, 70, 50)}`}>
+                    {m.utilisation == null ? "—" : fmt2(m.utilisation)}
                   </td>
                   {/* Performance */}
                   <td className={`px-3 py-2.5 font-bold ${pctColor(m.performance, 85, 70)}`}>
@@ -318,8 +377,12 @@ function OEETable({ machines, fleet, loading, from, to }: {
                 </td>
                 <td className="px-3 py-3 text-[#1565c0]">{fmt2(fleet.operating_hrs)}</td>
                 <td className="px-3 py-3 text-navy">{fmt1(fleet.actual_cum)}</td>
+                <td className="px-3 py-3"><MaterialTag m={fleet} /></td>
                 <td className="px-3 py-3 text-txt-secondary">{fmt1(fleet.ideal_cum)}</td>
                 <td className={`px-3 py-3 ${pctColor(fleet.availability, 85, 70)}`}>{fmt2(fleet.availability)}</td>
+                <td className={`px-3 py-3 font-bold ${fleet.utilisation == null ? "text-txt-light" : pctColor(fleet.utilisation, 70, 50)}`}>
+                  {fleet.utilisation == null ? "—" : fmt2(fleet.utilisation)}
+                </td>
                 <td className={`px-3 py-3 ${pctColor(fleet.performance, 85, 70)}`}>{fmt2(fleet.performance)}</td>
                 <td className="px-3 py-3 text-txt-secondary">{fmt2(fleet.quality)}</td>
                 <td className="px-3 py-3 text-[#0288d1] font-extrabold">{fmt2(fleet.oee)}</td>

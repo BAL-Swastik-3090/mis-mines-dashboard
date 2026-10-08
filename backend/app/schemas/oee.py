@@ -20,6 +20,18 @@ class OEEMachineRow(BaseModel):
     pm_hours:       float
     operating_hrs:  float
     actual_cum:     float
+    # What the buckets carried. ore+ob+other always re-add to actual_cum.
+    ore_cum:   float = 0.0
+    ob_cum:    float = 0.0
+    other_cum: float = 0.0
+    material:     Optional[str] = None    # ORE | OB | OTHER | MIXED
+    material_pct: Optional[float] = None
+    ore_pct:      Optional[float] = None
+    ob_pct:       Optional[float] = None
+    other_pct:    Optional[float] = None
+    # running_hours / (god - breakdown), capped at 100 — the MIS Equipment
+    # section's formula with the shift log in place of the GPS feed.
+    utilisation:  Optional[float] = None
     ideal_cum:      float
     availability:   float
     performance:    float
@@ -42,6 +54,18 @@ class OEEFleet(BaseModel):
     pm_hours:      float
     operating_hrs: float
     actual_cum:    float
+    # What the buckets carried. ore+ob+other always re-add to actual_cum.
+    ore_cum:   float = 0.0
+    ob_cum:    float = 0.0
+    other_cum: float = 0.0
+    material:     Optional[str] = None    # ORE | OB | OTHER | MIXED
+    material_pct: Optional[float] = None
+    ore_pct:      Optional[float] = None
+    ob_pct:       Optional[float] = None
+    other_pct:    Optional[float] = None
+    # running_hours / (god - breakdown), capped at 100 — the MIS Equipment
+    # section's formula with the shift log in place of the GPS feed.
+    utilisation:  Optional[float] = None
     ideal_cum:     float
     availability:  float
     performance:   float
