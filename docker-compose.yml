@@ -43,13 +43,12 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: mines_backend
-    # Stated here as well as in the Dockerfile: this is where someone looks
-    # when a timestamp is wrong, and it makes the value overridable per host.
-    environment:
-      - TZ=${TZ:-Asia/Kolkata}
     env_file:
       - .env
     environment:
+      # Stated here as well as in the Dockerfile: this is where someone looks
+      # when a timestamp is wrong, and it makes the value overridable per host.
+      - TZ=${TZ:-Asia/Kolkata}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
     expose:
