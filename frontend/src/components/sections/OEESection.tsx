@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { Activity, Layers, Info, Factory } from "lucide-react";
+import { Activity, Layers, Info, Factory, Download } from "lucide-react";
 import FormulaModal from "@/components/sections/FormulaModal";
 import LCMSection from "@/components/sections/LCMSection";
 import LCMCobSection from "@/components/sections/LCMCobSection";
@@ -9,6 +9,7 @@ import { useDateFilter }  from "@/contexts/useDateFilter";
 import { useOEE }         from "@/hooks/useOEE";
 import type { OEEMachineRow, OEEFleet } from "@/types";
 import { formatIndian }   from "@/lib/utils";
+import { toCsv, download } from "@/components/minehub/spreadsheet";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function fmt1(v: number) { return formatIndian(Number(v.toFixed(1))); }
@@ -116,15 +117,79 @@ function FleetKpis({ fleet, loading }: { fleet: OEEFleet | undefined; loading: b
   );
 }
 
+// ── Export ────────────────────────────────────────────────────────────────────
+// The twelve columns on screen, in the same order, then the four things the
+// table prints as small print under a heading — capacity, whether the machine is
+// hired, where its breakdown came from, and deviation as a share of the shift.
+// Columns of their own here rather than two values in one cell: a spreadsheet is
+// sorted and filtered, and "17 CuM/hr" inside the machine name defeats both.
+const EXPORT_HEADINGS = [
+  "Excavator", "God Hrs", "BD Hrs", "PM Hrs", "Deviation Hrs", "Operating Hrs",
+  "Actual CuM", "Ideal CuM", "Availability %", "Performance %", "Quality %", "OEE %",
+  "Ideal Capacity (CuM/hr)", "Ownership", "Breakdown Source", "Deviation % of Shift",
+];
+
+/** Numbers go out as numbers, rounded the way the screen rounds them.
+ *  formatIndian would write "12,092", which Excel reads as text and will not
+ *  sum — and the comma would have to be quoted, so the file is worse twice. */
+const n1 = (v: number) => Number(v.toFixed(1));
+const n2 = (v: number) => Number(v.toFixed(2));
+
+function exportRows(machines: OEEMachineRow[], fleet: OEEFleet | undefined): unknown[][] {
+  const rows: unknown[][] = machines.map((m) => [
+    m.machine, n1(m.god_hours), n2(m.bd_hours), n2(m.pm_hours), n2(m.deviation_hrs),
+    n2(m.operating_hrs), n1(m.actual_cum), n1(m.ideal_cum), n2(m.availability),
+    n2(m.performance), n2(m.quality), n2(m.oee),
+    n1(m.ideal_cap), m.hired ? "Hired" : "Owned",
+    m.bd_source === "sap" ? "SAP" : "Shift log",
+    m.deviation_pct ?? "",
+  ]);
+  // The weighted roll-up exactly as the footer shows it, taken from the server
+  // rather than re-summed here: averaging machine percentages would overstate
+  // fleet Performance and OEE badly.
+  if (fleet && machines.length) {
+    rows.push([
+      "OVERALL", n1(fleet.god_hours), n2(fleet.bd_hours), n2(fleet.pm_hours),
+      n2(fleet.deviation_hrs), n2(fleet.operating_hrs), n1(fleet.actual_cum),
+      n1(fleet.ideal_cum), n2(fleet.availability), n2(fleet.performance),
+      n2(fleet.quality), n2(fleet.oee), "", "", "", fleet.deviation_pct ?? "",
+    ]);
+  }
+  return rows;
+}
+
 // ── Per-machine OEE table ──────────────────────────────────────────────────────
-function OEETable({ machines, fleet, loading }: { machines: OEEMachineRow[]; fleet: OEEFleet | undefined; loading: boolean }) {
+function OEETable({ machines, fleet, loading, from, to }: {
+  machines: OEEMachineRow[]; fleet: OEEFleet | undefined; loading: boolean;
+  from?: string; to?: string;
+}) {
+  const canExport = !loading && machines.length > 0;
   return (
     <div className="bg-white border border-border rounded-lg shadow-sm overflow-hidden">
       {/* Card header */}
-      <div className="px-4 pt-3 pb-2.5 border-b border-border-light">
+      <div className="px-4 pt-3 pb-2.5 border-b border-border-light flex items-center justify-between gap-3">
         <span className="font-condensed font-bold text-[13px] text-navy tracking-widest uppercase">
           OEE Breakdown — Per Excavator
         </span>
+        {/* The period goes in the FILENAME, not a banner row above the data. A
+            title row stops Excel treating row 1 as headings, which breaks sort,
+            filter and freeze-panes. */}
+        <button
+          type="button"
+          onClick={() => download(
+            toCsv(EXPORT_HEADINGS, exportRows(machines, fleet)),
+            `oee-per-excavator-${from ?? ""}-to-${to ?? ""}.csv`)}
+          disabled={!canExport}
+          title={canExport ? "Download this table as a spreadsheet" : "Nothing to export yet"}
+          className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded border
+                     border-border bg-white text-[10px] font-condensed font-bold uppercase
+                     tracking-widest text-navy hover:bg-bg-soft
+                     disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white
+                     focus:outline-none focus:ring-1 focus:ring-navy"
+        >
+          <Download size={12} />
+          Excel
+        </button>
       </div>
 
       {/* Table */}
@@ -346,7 +411,8 @@ export default function OEESection() {
       <FleetKpis fleet={data?.fleet} loading={isLoading} />
 
       {/* Per-machine breakdown table */}
-      <OEETable machines={machines} fleet={data?.fleet} loading={isLoading} />
+      <OEETable machines={machines} fleet={data?.fleet} loading={isLoading}
+                from={data?.from_date} to={data?.to_date} />
 
       {/* ── LCM — Lost Cost Matrix, inline below the OEE reference ────── */}
       <div className="flex items-center gap-2 pt-3">
