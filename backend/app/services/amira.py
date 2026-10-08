@@ -55,6 +55,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.services.quality_e2e import get_quality_e2e
@@ -62,16 +63,114 @@ from app.services.quality_e2e import get_quality_e2e
 # Cr2O3 -> Cr. Stoichiometric: (2 x 52.00) / (2 x 52.00 + 3 x 16.00).
 CR2O3_TO_CR = 104.0 / 152.0
 
-# Rupees-lakh of contribution per MT of contained chromium. The mine's workbook
-# applies a flat 0.75 (Rs 75,000/MT) at every stage, and 590.30 / 787.07 on its
-# April sheet is exactly 0.75000.
+# ── CONTRIBUTION, AS THE WORKBOOK COMPUTES IT ────────────────────────────────
+# Summary!D10 is  =(D9/0.6) * Contribution!$E$3 / 10^5 , and Contribution!E3 is
+# =E1-E2, NSR minus variable cost. So the chain is NOT a rate per MT of
+# chromium; it goes through the ferrochrome that chromium would have become:
 #
-# HARD-CODED ON PURPOSE, FOR NOW. Unlike the IBM rate in services/ibm_rates.py
-# this is a margin and not a published price, so there is no bulletin to read it
-# from. If the mine confirms it moves month to month it needs a source of its
-# own; until then a single named constant beats the same number typed into a
-# spreadsheet each month.
-CONTRIBUTION_RATE = 0.75
+#     chromium lost (MT)
+#       / 0.60                 -> MT of ferrochrome not produced (HC FeCr is
+#                                 60% Cr, so a tonne of metal needs 0.6 t of Cr)
+#       x 45,000 Rs/MT         -> contribution forgone on that metal
+#       / 100,000              -> expressed in Rs. Lacs
+#
+# It happens to reduce to "chromium loss x 0.75", and an earlier version of this
+# file was written that way. That number is right and tells you nothing: the
+# moment NSR moves it is wrong, and nobody reading 0.75 could see which of the
+# three inputs had changed. Kept as the workbook's own three terms.
+#
+# HARD-CODED FOR NOW, AT THE MINE'S INSTRUCTION, and named so the day they move
+# is a one-line change here rather than a hunt for a magic number. NSR is a
+# market price and will eventually want a source of its own, the way the IBM
+# rate got one in services/ibm_rates.py.
+NSR_PER_MT_FECR = 115_000.0           # Contribution!E1
+VARIABLE_COST_PER_MT_FECR = 70_000.0  # Contribution!E2
+CONTRIBUTION_PER_MT_FECR = NSR_PER_MT_FECR - VARIABLE_COST_PER_MT_FECR  # E3 = 45,000
+
+# Chromium content of high-carbon ferrochrome. The 0.6 divisor in the workbook.
+FECR_CR_CONTENT = 0.60
+
+# Rs -> Rs. Lacs, the 10^5 in the formula.
+LAKH = 100_000.0
+
+# ── ROM, STRAIGHT OFF THE WEIGHED LOTS ───────────────────────────────────────
+# PLANT 1200 / STORAGE_LOCATION 'ROM1' in pp_quality_inspection: one inspection
+# lot per day of run-of-mine ore, LOT_QUANTITY as the tonnage and the Cr2O3
+# characteristic as the grade. 602 lots since April 2024.
+#
+# THIS IS NOT WHERE THE WORKBOOK GETS ITS ROM ROW. Summary!D5 is
+# 'APRIL-26 Details'!F113, and F5 is =AC5 — the ROM STACK's FSQ — so the sheet's
+# ROM tonnage is the stack tonnage copied across, and its Cr2O3 is weighted by
+# shift quantity rather than by lot. April 2026 is 13,265.54 @ 43.7693 there
+# against ROM1's 13,976.00 @ 44.0113, a gap of 710 MT. The mine asked for ROM1,
+# so ROM1 is what this reads; the difference is a question about which figure
+# the business wants, not a defect here.
+ROM_PLANT = "1200"
+ROM_STORAGE = "ROM1"
+
+# ONE ROW PER CHARACTERISTIC, so LOT_QUANTITY repeats down the table. A plain
+# SUM reads 626,931 MT against the real 424,398 — every lot counted once per
+# characteristic it carries. The DISTINCT sub-select is the whole reason this
+# query is shaped the way it is; do not flatten it into one GROUP BY.
+_ROM_SQL = text("""
+    SELECT
+        COUNT(*) AS lots,
+        SUM(l.qty) AS ore_qty,
+        SUM(CASE WHEN c.v IS NOT NULL THEN 1 ELSE 0 END) AS lots_cr2o3,
+        SUM(CASE WHEN m.v IS NOT NULL THEN 1 ELSE 0 END) AS lots_moisture,
+        SUM(CASE WHEN c.v IS NOT NULL THEN l.qty * c.v END)
+          / NULLIF(SUM(CASE WHEN c.v IS NOT NULL THEN l.qty END), 0) AS cr2o3,
+        SUM(CASE WHEN m.v IS NOT NULL THEN l.qty * m.v END)
+          / NULLIF(SUM(CASE WHEN m.v IS NOT NULL THEN l.qty END), 0) AS moisture
+    FROM (
+        SELECT DISTINCT LOT_NUMBER, LOT_QUANTITY AS qty
+          FROM pp_quality_inspection
+         WHERE PLANT = :plant AND STORAGE_LOCATION = :sloc
+           AND QLT_START_DATE BETWEEN :frm AND :to
+           AND LOT_QUANTITY IS NOT NULL
+    ) l
+    LEFT JOIN (
+        SELECT LOT_NUMBER, MAX(CAST(NULLIF(RESULT,'') AS DECIMAL(16,6))) AS v
+          FROM pp_quality_inspection
+         WHERE PLANT = :plant AND STORAGE_LOCATION = :sloc
+           AND QLT_START_DATE BETWEEN :frm AND :to
+           AND UPPER(SHORT_TEXT_INS_CHAR) = 'CR2O3'
+         GROUP BY LOT_NUMBER
+    ) c ON c.LOT_NUMBER = l.LOT_NUMBER
+    LEFT JOIN (
+        SELECT LOT_NUMBER, MAX(CAST(NULLIF(RESULT,'') AS DECIMAL(16,6))) AS v
+          FROM pp_quality_inspection
+         WHERE PLANT = :plant AND STORAGE_LOCATION = :sloc
+           AND QLT_START_DATE BETWEEN :frm AND :to
+           AND UPPER(SHORT_TEXT_INS_CHAR) = 'MOISTURE'
+         GROUP BY LOT_NUMBER
+    ) m ON m.LOT_NUMBER = l.LOT_NUMBER
+""")
+
+
+def _rom(db: Session, frm: date, to: date) -> dict[str, float | None]:
+    """ROM tonnage and assay for the period; empty dict when there are no lots.
+
+    A CHARACTERISTIC IS REPORTED ONLY IF EVERY LOT CARRIES IT. Weighting across
+    whichever lots happen to have been tested, and presenting that as the
+    month's figure, is how a grade quietly becomes a sample of itself. Moisture
+    is the live case: ROM1 has it on 2 lots out of 602, both in May 2024, so
+    moisture reads blank — and Net Chromium with it, since the formula needs all
+    three terms. Both fill in on their own the day the lab starts posting
+    moisture against ROM lots; nothing here has to change.
+    """
+    r = db.execute(_ROM_SQL, {"plant": ROM_PLANT, "sloc": ROM_STORAGE,
+                              "frm": frm, "to": to}).fetchone()
+    if not r or not r.lots:
+        return {}
+    full = lambda n: n is not None and int(n) == int(r.lots)  # noqa: E731
+    return {
+        "ore_qty": float(r.ore_qty) if r.ore_qty is not None else None,
+        "cr2o3": float(r.cr2o3) if full(r.lots_cr2o3) and r.cr2o3 is not None else None,
+        "moisture": (float(r.moisture)
+                     if full(r.lots_moisture) and r.moisture is not None else None),
+    }
+
 
 # The chain, in the order ore physically moves through it. Order is load-bearing
 # twice over: the loss at each stage is measured against the one before it, and
@@ -87,7 +186,7 @@ STAGES: tuple[tuple[str, str], ...] = (
 )
 
 # Built in phase 1. Everything else returns available=False.
-BUILT = ("mine_despatch", "plant_receipt")
+BUILT = ("rom", "mine_despatch", "plant_receipt")
 
 
 def _net_chromium(ore_qty: float | None,
@@ -105,6 +204,19 @@ def _net_chromium(ore_qty: float | None,
     return ore_qty * (1.0 - moisture / 100.0) * (cr2o3 / 100.0) * CR2O3_TO_CR
 
 
+def _contribution(cr_loss: float | None) -> float | None:
+    """Rs. Lacs of contribution forgone on `cr_loss` MT of chromium.
+
+    Summary!D10 verbatim: (loss / 0.6) x 45,000 / 10^5. Sign is carried through,
+    so a stage that GAINED chromium shows a negative contribution loss rather
+    than being clamped at zero — the workbook prints that as (55.07) and the
+    Total column depends on it being signed.
+    """
+    if cr_loss is None:
+        return None
+    return (cr_loss / FECR_CR_CONTENT) * CONTRIBUTION_PER_MT_FECR / LAKH
+
+
 def _round(v: float | None, places: int = 2) -> float | None:
     return None if v is None else round(v, places)
 
@@ -117,6 +229,7 @@ def get_amira_accounting(db: Session, frm: date, to: date) -> dict[str, Any]:
     # Both destinations together: AMIRA accounts for what left the mine, not for
     # where it went. The per-plant split is the End-to-End Quality section's job.
     figures: dict[str, dict[str, float | None]] = {
+        "rom": _rom(db, frm, to),
         "mine_despatch": {
             "ore_qty":  tot.get("mines_qty"),
             "cr2o3":    tot.get("mines_cr2o3"),
@@ -158,12 +271,28 @@ def get_amira_accounting(db: Session, frm: date, to: date) -> dict[str, Any]:
             "moisture": _round(moist),
             "net_chromium": _round(net),
             "chromium_loss": _round(loss),
-            "contribution_loss": _round(
-                None if loss is None else loss * CONTRIBUTION_RATE),
+            "contribution_loss": _round(_contribution(loss)),
         })
         prev_net, prev_available = net, available
 
+    # ── THE TOTAL COLUMN ────────────────────────────────────────────────────
+    # Summary!J9 is =SUM(C9:I9) and J10 is =SUM(C10:I10): the losses only. The
+    # other four rows have no total in the workbook and must not grow one here —
+    # summing Ore Quantity along the chain adds the same ore up five times over,
+    # and a row of percentages does not sum to anything.
+    #
+    # A SIGNED SUM, deliberately. April gains 73.43 MT between ROM and ROM Stack
+    # and the workbook's 781.10 is net of it; summing absolute values would read
+    # 927.96 and describe a mine that lost chromium it still has.
+    losses = [x["chromium_loss"] for x in stages if x["chromium_loss"] is not None]
+    contribs = [x["contribution_loss"] for x in stages
+                if x["contribution_loss"] is not None]
+
     return {
+        "total": {
+            "chromium_loss": _round(sum(losses)) if losses else None,
+            "contribution_loss": _round(sum(contribs)) if contribs else None,
+        },
         # NAMED from_date/to_date, NOT from/to. `from` is a Python keyword, so
         # the short form can never be a field on a Pydantic model and the
         # response model would drop it — which is how this shipped returning one
@@ -172,7 +301,12 @@ def get_amira_accounting(db: Session, frm: date, to: date) -> dict[str, Any]:
         "to_date": to.isoformat(),
         "stages": stages,
         "cr2o3_to_cr": round(CR2O3_TO_CR, 5),
-        "contribution_rate": CONTRIBUTION_RATE,
+        # Published so the screen can show what the money is built from, and so
+        # a changed NSR is visible rather than buried.
+        "nsr_per_mt_fecr": NSR_PER_MT_FECR,
+        "variable_cost_per_mt_fecr": VARIABLE_COST_PER_MT_FECR,
+        "contribution_per_mt_fecr": CONTRIBUTION_PER_MT_FECR,
+        "fecr_cr_content": FECR_CR_CONTENT,
         "pending_stages": [lbl for k, lbl in STAGES if k not in BUILT],
         # The plant tonnage is currently the despatched tonnage, by the mine's
         # instruction, until the plant-side gate record is identified. Stated

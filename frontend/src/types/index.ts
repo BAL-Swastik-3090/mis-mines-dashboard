@@ -851,12 +851,24 @@ export interface AmiraStage {
   contribution_loss: number | null;
 }
 
+/** The workbook's Total column: the two loss rows only, signed. The other rows
+ *  have no total in the sheet — ore summed along a chain counts the same ore
+ *  five times, and percentages do not sum. */
+export interface AmiraTotal {
+  chromium_loss:     number | null;
+  contribution_loss: number | null;
+}
+
 export interface AmiraResponse {
   from_date: string;
   to_date:   string;
   stages:    AmiraStage[];
+  total:     AmiraTotal;
   cr2o3_to_cr:       number;
-  contribution_rate: number;
+  nsr_per_mt_fecr:           number;
+  variable_cost_per_mt_fecr: number;
+  contribution_per_mt_fecr:  number;
+  fecr_cr_content:           number;
   pending_stages:    string[];
   /** Plant tonnage is currently the despatched tonnage, by the mine's
    *  instruction, until the plant-side gate record is identified. */
