@@ -190,10 +190,94 @@ async def _fuel_mirror():
         await asyncio.sleep(fuel_sync.SYNC_SECONDS)
 
 
+def _align_clock_to_database() -> None:
+    """Run this process on the same clock as the data it reports.
+
+    WHY THIS EXISTS. Every figure on this dashboard is a wall-clock figure
+    written by somebody in Odisha: SAP's MALFUNCTION_START, the shift log's
+    Prod_date, a stock entry's Entry_Date. MySQL and PostgreSQL both run at
+    +05:30 and store them naive, so the moment the application compares one of
+    them against its own clock, the two have to agree.
+
+    They did not. The production container has no TZ set, so Python ran in UTC
+    five and a half hours behind the data:
+
+        container python now : 2026-10-07 11:01:20
+        MySQL NOW()          : 2026-10-07 16:31:46
+
+    Every open breakdown was cut short by exactly that (fixed at source in
+    services/breakdown.py, which now asks the database). But `datetime.now()`
+    and `date.today()` are read in about seventy other places, and fixing each
+    one means threading a session into functions that have no reason to want
+    one. Three of those were wrong in ways nobody had reported yet:
+
+      - date.today() returned YESTERDAY between midnight and 05:30 IST, so
+        anyone opening the dashboard on the early shift got a default range
+        ending the day before;
+      - the "07:00 digest" fired at 07:00 UTC, which is 12:30 at the mine;
+      - usage_sync re-read a six-hour overlap instead of thirty minutes.
+
+    SO THE CLOCK IS SET ONCE, HERE, FROM THE DATABASE ITSELF. Not from a TZ
+    variable in the compose file, which is one forgotten line away from being
+    wrong again on a new host, and not from a hard-coded "Asia/Kolkata", which
+    would be a second place to maintain the answer. The offset is measured --
+    NOW() against UTC_TIMESTAMP() -- and the process adopts it. If the database
+    ever moves, this follows it without anybody editing anything.
+
+    Failure here is logged and otherwise ignored: a dashboard that starts on
+    the wrong clock is a great deal better than one that does not start.
+    """
+    import os
+    import time as _time
+
+    from sqlalchemy import text
+    from app.database import SessionLocal
+
+    try:
+        with SessionLocal() as db:
+            offset = db.execute(
+                text("SELECT TIMEDIFF(NOW(), UTC_TIMESTAMP())")).scalar()
+        if offset is None:
+            logger.warning("Clock: database gave no offset; leaving the process clock alone")
+            return
+
+        minutes = int(offset.total_seconds() // 60)
+        # POSIX TZ runs the other way round: the offset is what you ADD to
+        # local time to get UTC, so +05:30 is written as -5:30. Getting this
+        # backwards is an eleven-hour error, which is why it is spelled out.
+        sign = "-" if minutes >= 0 else "+"
+        hh, mm = divmod(abs(minutes), 60)
+        # THE NAME MUST BE THREE CHARACTERS. glibc parses a POSIX TZ string as
+        # <abbreviation><offset> and silently ignores the whole thing if the
+        # abbreviation is shorter than three, so "DB-5:30" left the process on
+        # UTC with no error anywhere -- which is the same class of silent
+        # failure this function exists to end. "DBT" is three.
+
+        before = datetime.now()
+        os.environ["TZ"] = f"DBT{sign}{hh}:{mm:02d}"
+        if hasattr(_time, "tzset"):
+            _time.tzset()
+        else:
+            # Windows has no tzset; a developer machine is already on mine time,
+            # so this is a no-op rather than a problem.
+            logger.info("Clock: no tzset on this platform; leaving the process clock alone")
+            return
+
+        logger.info(
+            "✅ Clock aligned to the database (UTC%+03d:%02d): %s → %s",
+            (1 if minutes >= 0 else -1) * hh, mm,
+            before.strftime("%H:%M:%S"), datetime.now().strftime("%H:%M:%S"))
+    except Exception as exc:                                   # noqa: BLE001
+        logger.warning("Clock: could not align to the database (%s); "
+                       "continuing on the process clock", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ── Startup — retry up to 5 times for transient errors (e.g. too many connections) ──
     db_status = {"status": "error"}
+    # (the clock is aligned once the connection below is known to work --
+    #  it needs the database to ask, so it cannot come before the retry loop)
     for attempt in range(1, 6):
         db_status = test_connection()
         if db_status["status"] == "connected":
@@ -204,6 +288,11 @@ async def lifespan(app: FastAPI):
     else:
         logger.critical(f"❌ Database connection failed after 5 attempts — aborting startup")
         sys.exit(1)
+
+    # Before any background task reads a clock: the digest scheduler below
+    # computes its next 07:00 from datetime.now(), and on a UTC process that
+    # is 12:30 at the mine.
+    _align_clock_to_database()
 
     # Write down who has been active, once a minute, from one place.
     #
