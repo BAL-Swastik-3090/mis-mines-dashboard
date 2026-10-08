@@ -306,6 +306,11 @@ export interface ExcavatorMachineRowAPI {
   util_pct:       number | null;
   mttr:           number | null;
   mtbf:           number | null;
+  /** False when the Technoton unit gave no running-hours reading for this
+   *  period. The row then shows "no signal" instead of a measured-looking 0.00
+   *  and a 100% availability nobody measured. */
+  sensor_ok:        boolean;
+  sensor_last_seen: string | null;
 }
 export interface ExcavatorSummaryResponse {
   from_date:       string;
@@ -352,6 +357,10 @@ export interface TipperMachineRowAPI {
   util_pct:       number | null;
   mttr:           number | null;
   mtbf:           number | null;
+  /** False when the Technoton unit gave no running-hours reading for this
+   *  period. Nine of the twenty-eight tippers are in that state. */
+  sensor_ok:        boolean;
+  sensor_last_seen: string | null;
 }
 
 export interface BreakdownEvent {

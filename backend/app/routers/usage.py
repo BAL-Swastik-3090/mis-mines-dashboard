@@ -311,8 +311,12 @@ def usage(request: Request,
                                 if r["login_at"]}),
             "first_seen": min((r["login_at"] for r in rs if r["login_at"]),
                               default=None),
-            "last_seen": max((r["last_active_at"] for r in rs
-                              if r["last_active_at"]), default=None),
+            # last_seen is NOT taken from rs. rs holds only the sessions inside
+            # the chosen range, so it answered "when were they last here during
+            # the range", which on a September range is 30 September for
+            # everybody still using the place. Filled in below from the whole
+            # history instead.
+            "last_seen": None,
             "browser": _biggest(r["browser"] for r in rs),
             "device": _biggest(r["device_type"] for r in rs),
             "timed_out": sum(1 for r in rs if r["end_reason"] == "TIMEOUT"),
@@ -610,6 +614,31 @@ def usage(request: Request,
                            "first_seen": None, "last_seen": None,
                            "browser": None, "device": None, "timed_out": 0,
                            "views": 0, "changes": 0})
+
+    # ── WHEN WAS THIS PERSON LAST HERE ───────────────────────────────────
+    #
+    # Every other column on the row is about the chosen range, and should be:
+    # logins, time, days and screens all answer "during this period". Last seen
+    # does not. It is read as a fact about the person — are they still using
+    # this? — and scoping it to the range made it answer a question nobody
+    # asked, whose answer is the last day of the range for anyone still active.
+    #
+    # On a 1-30 September range that put "7d ago" against Tarun Tarat while the
+    # strip at the top of the same screen showed him here two minutes earlier.
+    # The underlying figure was never wrong: last_active_at advances correctly
+    # through a live session. It was being asked the wrong question.
+    #
+    # So it comes from the whole history, deliberately ignoring :frm and :to.
+    # Somebody provisioned who has never signed in has no row here and keeps
+    # None, which the screen renders as a dash.
+    last_ever = {r["emp_id"]: r["ever"] for r in pg.execute(text("""
+        SELECT emp_id, MAX(last_active_at) AS ever
+          FROM usage_session
+         WHERE app_source = :app AND NOT (emp_id = ANY(:skip))
+         GROUP BY emp_id
+    """), {"app": app_source, "skip": list(skipped)}).mappings()}
+    for r in people:
+        r["last_seen"] = last_ever.get(r["emp_id"])
 
     shown = [e for e in raw if _emp_of(e["recorded_by"]) not in skipped]
     latest = [{

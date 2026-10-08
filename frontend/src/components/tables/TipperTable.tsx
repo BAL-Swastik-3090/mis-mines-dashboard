@@ -3,6 +3,17 @@ import { useState } from "react";
 import { useTipperSummary } from "@/hooks/useEquipment";
 import BreakdownModal from "./BreakdownModal";
 
+/** What to say on hover about a tipper whose box is not reporting. */
+function signalNote(m: { sensor_last_seen?: string | null; vehicle_desc: string }): string {
+  if (!m.sensor_last_seen) {
+    return `${m.vehicle_desc}: the Technoton unit has never reported running hours. `
+         + `A row arrives every day and every reading is zero.`;
+  }
+  const d = new Date(m.sensor_last_seen + "T00:00:00");
+  const when = d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+  return `${m.vehicle_desc}: last reported running hours on ${when}.`;
+}
+
 function AvailBar({ pct }: { pct: number | null }) {
   if (pct == null) return <span className="text-txt-light text-[11px] font-mono">—</span>;
   const barColor =
@@ -97,7 +108,8 @@ export default function TipperTable() {
                       key={m.vehicle_desc}
                       onClick={() => setSelected({ sapName: m.sap_name, displayName: m.vehicle_desc })}
                       className={`border-b border-border-light hover:bg-bg-light transition-colors cursor-pointer ${
-                        m.eng_hr_mtd === 0 && m.bd_hr === 0 ? "opacity-45" : ""
+                        m.sensor_ok === false ? "opacity-60"
+                          : m.eng_hr_mtd === 0 && m.bd_hr === 0 ? "opacity-45" : ""
                       }`}
                       title="Click to view breakdown details"
                     >
@@ -105,7 +117,11 @@ export default function TipperTable() {
                         {m.vehicle_desc}
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-[12px] text-navy">
-                        {m.eng_hr_mtd.toFixed(2)}
+                        {/* A dead box reads 0.00 exactly like a truck that
+                            stayed in the yard. */}
+                        {m.sensor_ok === false
+                          ? <span className="text-warning" title={signalNote(m)}>no signal</span>
+                          : m.eng_hr_mtd.toFixed(2)}
                       </td>
                       <td className={`px-3 py-2 text-right font-mono text-[12px] ${
                         m.bd_hr > 0 ? "text-danger font-semibold" : "text-txt-muted"
@@ -118,10 +134,10 @@ export default function TipperTable() {
                         {m.bd_count_start > 0 ? m.bd_count_start : "—"}
                       </td>
                       <td className="px-3 py-2">
-                        <AvailBar pct={m.avail_pct} />
+                        <AvailBar pct={m.sensor_ok === false ? null : m.avail_pct} />
                       </td>
                       <td className="px-3 py-2 text-right">
-                        <UtilPct pct={m.util_pct} />
+                        <UtilPct pct={m.sensor_ok === false ? null : m.util_pct} />
                       </td>
                     </tr>
                   ))

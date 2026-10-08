@@ -22,6 +22,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.database import get_db
 from app.minehub_db import get_minehub_db
 from app.services import deployer, readiness, roster
 
@@ -2307,3 +2308,188 @@ def accept_allocation(shift_instance_id: int, request: Request, body: dict = Bod
             "message": (f"{len(deployed)} deployed"
                         + (f", {len(refused)} refused because something changed"
                            if refused else "."))}
+
+
+# ── PUTTING A BAL EMPLOYEE ON THE ROSTER ─────────────────────────────────────
+#
+# Everything above hangs off `operator`. That register was built for the people
+# who drive the machines -- 243 of them on contract -- and for a long time it
+# held exactly one company employee. So the mine's own staff, the Mine Foremen
+# and Mining Mates and Asst Managers who actually run the shifts, could not be
+# put on a roster at all: there was nothing to hang a roster day from.
+#
+# They are not missing from the platform. 192 of them sit in `party` with their
+# employment on file. What they lacked was the one row that makes a person
+# placeable, and the only way to create it was to run an import script.
+#
+# These two endpoints are that script made ordinary: search the company's
+# employee master, and put somebody on the roster.
+#
+# THE EMPLOYEE NUMBER IS THE IDENTITY, NOT THE NAME. 242 people already carry
+# their SAP number in party_identity, and that is what is matched on. Matching
+# on spelling was tried and was wrong: 'RANA BIKASH SINGH' on the shift sheet
+# is only 80% like 'RANA VIKASH KUMAR SINGH' in SAP, far below any threshold
+# worth trusting, yet they are one man and he was already on file. A name-led
+# version would have created a second Rana and split his roster across the two.
+
+SAP_STAFF_SQL = """
+    SELECT EMPID, EMPNAME, EMPDEPT, EMPDESG
+      FROM sap_employee_details_new
+     WHERE (:q = '' OR UPPER(EMPNAME) LIKE :like OR EMPID LIKE :like)
+     ORDER BY EMPNAME
+     LIMIT 60
+"""
+
+
+def _employment_of(designation: str | None) -> str:
+    """What the company says somebody is, rather than assuming staff.
+
+    'CLL' is contract labour -- on the books, not permanent. Writing PERMANENT
+    against one of them would put a fact in the registry that payroll
+    contradicts.
+    """
+    d = (designation or "").strip().upper()
+    if d == "CLL":
+        return "CONTRACT"
+    if "TRAINEE" in d:
+        return "TRAINEE"
+    return "PERMANENT"
+
+
+@router.get("/employees/search")
+def search_employees(request: Request,
+                     q: str = Query("", max_length=60),
+                     db: Session = Depends(get_minehub_db),
+                     sap: Session = Depends(get_db)) -> list[dict]:
+    """Company employees, each saying whether the roster can already place them.
+
+    Read from the SAP master rather than from our own registry on purpose: the
+    point is to find somebody who is NOT yet here.
+    """
+    _require(request, MANAGE, "manage the roster")
+    term = (q or "").strip().upper()
+    rows = sap.execute(text(SAP_STAFF_SQL),
+                       {"q": term, "like": f"%{term}%"}).mappings().all()
+    if not rows:
+        return []
+
+    codes = [str(r["EMPID"]).lstrip("0") for r in rows]
+    known = {str(r["external_code"]).lstrip("0"): r for r in db.execute(text("""
+        SELECT i.external_code, i.party_id,
+               (SELECT operator_id FROM operator o
+                 WHERE o.party_id = i.party_id LIMIT 1) AS operator_id
+          FROM party_identity i
+         WHERE i.system = 'SAP' AND i.external_code = ANY(:codes)
+    """), {"codes": codes}).mappings()}
+
+    out = []
+    for r in rows:
+        code = str(r["EMPID"]).lstrip("0")
+        hit = known.get(code)
+        out.append({
+            "emp_id": r["EMPID"], "name": (r["EMPNAME"] or "").strip(),
+            "department": (r["EMPDEPT"] or "").strip() or None,
+            "designation": (r["EMPDESG"] or "").strip() or None,
+            "employment": _employment_of(r["EMPDESG"]),
+            "party_id": hit["party_id"] if hit else None,
+            "operator_id": hit["operator_id"] if hit else None,
+            # The only thing the screen needs to decide what to offer.
+            "state": ("ON_ROSTER" if hit and hit["operator_id"]
+                      else "KNOWN" if hit else "NEW"),
+        })
+    return out
+
+
+@router.post("/employees")
+def add_employees(request: Request, body: dict = Body(...),
+                  db: Session = Depends(get_minehub_db),
+                  sap: Session = Depends(get_db)) -> dict:
+    """Make these company employees placeable on the roster.
+
+    Idempotent, and keyed on the employee number throughout: running it twice
+    adds nobody twice, and somebody already on file is reused rather than
+    duplicated.
+    """
+    _require(request, MANAGE, "manage the roster")
+    emp_ids = [str(e).strip() for e in (body.get("emp_ids") or []) if str(e).strip()]
+    if not emp_ids:
+        raise HTTPException(400, "No employee was selected.")
+    plant_id = body.get("plant_id") or 1
+
+    codes = [e.lstrip("0") for e in emp_ids]
+    rows = {str(r["EMPID"]).lstrip("0"): r for r in sap.execute(text("""
+        SELECT EMPID, EMPNAME, EMPDEPT, EMPDESG FROM sap_employee_details_new
+    """)).mappings() if str(r["EMPID"]).lstrip("0") in codes}
+    missing = [c for c in codes if c not in rows]
+    if missing:
+        raise HTTPException(400,
+            f"No employee in the company master has the number "
+            f"{', '.join(missing)}.")
+
+    added, reused, already = [], [], []
+    actor = _actor(request)
+    for code in codes:
+        r = rows[code]
+        name = (r["EMPNAME"] or "").strip()
+
+        party_id = db.execute(text("""
+            SELECT party_id FROM party_identity
+             WHERE system = 'SAP' AND external_code = :c LIMIT 1
+        """), {"c": code}).scalar()
+
+        if party_id:
+            reused.append(name)
+        else:
+            party_id = db.execute(text("""
+                INSERT INTO party (party_type, legal_name, display_name,
+                                   status, created_by)
+                VALUES ('PERSON', :n, :n, 'ACTIVE', :by)
+                RETURNING party_id
+            """), {"n": name, "by": actor}).scalar()
+            db.execute(text("""
+                INSERT INTO party_identity (party_id, system, external_code,
+                        is_primary, valid_from, created_by)
+                VALUES (:p, 'SAP', :c, TRUE, CURRENT_DATE, :by)
+            """), {"p": party_id, "c": code, "by": actor})
+            db.execute(text("""
+                INSERT INTO party_employment (party_id, employer_party_id,
+                        designation, employment_type, valid_from, created_by)
+                VALUES (:p, 1, :d, :et, CURRENT_DATE, :by)
+            """), {"p": party_id, "d": (r["EMPDESG"] or "").strip() or None,
+                   "et": _employment_of(r["EMPDESG"]), "by": actor})
+            added.append(name)
+
+        # A person with no display name renders as an empty row in every
+        # picker on this screen, so it is filled rather than left to each query
+        # to remember a COALESCE.
+        db.execute(text("""
+            UPDATE party SET display_name = COALESCE(display_name, legal_name)
+             WHERE party_id = :p AND display_name IS NULL
+        """), {"p": party_id})
+
+        op = db.execute(text(
+            "SELECT operator_id FROM operator WHERE party_id = :p LIMIT 1"),
+            {"p": party_id}).scalar()
+        if op:
+            already.append(name)
+            continue
+
+        et = _employment_of(r["EMPDESG"])
+        op = db.execute(text("""
+            INSERT INTO operator (party_id, employer_party_id, employment_type,
+                    plant_id, designation, profile_status, approval_status,
+                    created_by)
+            VALUES (:p, 1, :et, :pl, :d, 'ACTIVE', 'APPROVED', :by)
+            RETURNING operator_id
+        """), {"p": party_id, "et": "OWN" if et == "PERMANENT" else et,
+               "pl": plant_id, "d": (r["EMPDESG"] or "").strip() or None,
+               "by": actor}).scalar()
+        _event(db, request, "ROSTER_PERSON_ADDED", party_id=party_id,
+               payload={"operator_id": op, "emp_id": r["EMPID"], "name": name,
+                        "designation": r["EMPDESG"], "source": "SAP"})
+
+    db.commit()
+    return {"ok": True, "added": added, "reused": reused,
+            "already_on_roster": already,
+            "message": (f"{len(added) + len(reused) - len(already)} "
+                        f"can now be put on the roster.")}
