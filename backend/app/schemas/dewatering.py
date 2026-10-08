@@ -19,6 +19,8 @@ class DewateringDayRow(BaseModel):
 
 
 class DewateringTodayKpi(BaseModel):
+    # The day these figures belong to. Shown on every day card, because it is
+    # often not today — the mine files the dewatering entry a day or two late.
     latest_date:          str
     day_num:              int
     disposal_actual:      Optional[float]
@@ -55,3 +57,6 @@ class DewateringSummaryResponse(BaseModel):
     today:      DewateringTodayKpi
     mtd:        DewateringMtdKpi
     rows:       list[DewateringDayRow]
+    # Days inside the filter with no dewatering entry. KEEP DECLARED — FastAPI's
+    # response_model drops any key the model does not name, silently.
+    missing_dates: list[str] = []

@@ -184,8 +184,21 @@ function StatCard({
 }
 
 // ── Daily KPI Row ─────────────────────────────────────────────
+/** "04 Oct 2026" — the day these five cards belong to.
+ *
+ *  It replaces "Day 5", which said only which day of the month it was and gave
+ *  no hint that the figures might be three days old. The mine files the
+ *  dewatering entry a day or two in arrears, so the date is the single most
+ *  important thing on these cards. */
+function dayLabel(iso: string | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(`${iso}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? iso
+    : d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+}
+
 function DailyKpiRow({ today, loading }: { today: DewateringTodayKpi; loading: boolean }) {
-  const dn = today?.day_num ?? 1;
+  const dayOn = dayLabel(today?.latest_date);
   const delta = today?.stock_delta ?? null;
   const deltaNote = delta != null
     ? `${delta >= 0 ? "+" : ""}${formatIndian(delta, 0)} M³ vs prev`
@@ -195,7 +208,7 @@ function DailyKpiRow({ today, loading }: { today: DewateringTodayKpi; loading: b
     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 xl:gap-4">
       <PairCard
         label="Water Disposal"
-        sub={`Day ${dn}`}
+        sub={dayOn}
         accentClass="accent-bar-teal"
         iconBg="bg-teal-50"
         iconColor="text-info"
@@ -209,7 +222,7 @@ function DailyKpiRow({ today, loading }: { today: DewateringTodayKpi; loading: b
       />
       <PairCard
         label="Pump Run Hours"
-        sub={`Day ${dn}`}
+        sub={dayOn}
         accentClass="accent-bar-blue"
         iconBg="bg-blue-50"
         iconColor="text-accent"
@@ -223,7 +236,7 @@ function DailyKpiRow({ today, loading }: { today: DewateringTodayKpi; loading: b
       />
       <StatCard
         label="Closing Stock"
-        sub={`Day ${dn}`}
+        sub={dayOn}
         accentClass="accent-bar-purple"
         valueColor="text-navy"
         value={today?.closing_stock ?? null}
@@ -234,7 +247,7 @@ function DailyKpiRow({ today, loading }: { today: DewateringTodayKpi; loading: b
       />
       <StatCard
         label="Pump Capacity"
-        sub="Design Rate"
+        sub={dayOn}
         accentClass="accent-bar-gold"
         valueColor="text-navy"
         value={today?.pump_capacity ?? null}
@@ -245,7 +258,7 @@ function DailyKpiRow({ today, loading }: { today: DewateringTodayKpi; loading: b
       />
       <StatCard
         label="Eddy Pump"
-        sub="Daily Mins"
+        sub={dayOn}
         accentClass="accent-bar-orange"
         valueColor="text-navy"
         value={today?.eddy_pump_mins ?? null}
@@ -544,6 +557,7 @@ export default function DewateringSection() {
 
   const today = data?.today;
   const mtd   = data?.mtd;
+  const missingDates = data?.missing_dates ?? [];
   const rows  = data?.rows ?? [];
 
   return (
@@ -563,6 +577,28 @@ export default function DewateringSection() {
           </span>
         </span>
       </div>
+
+      {/* WHICH DAYS NOBODY HAS FILLED IN.
+          The five day cards show the latest ENTERED day, which may be several
+          days back. Without this the screen looks current and silently is not —
+          the figures would simply sit there, correct for a day the reader has
+          no reason to suspect. */}
+      {!isLoading && missingDates.length > 0 && (
+        <div className="px-3 py-2 rounded-md border border-[#ffe082] bg-[#fff8e1]">
+          <p className="text-[11px] text-txt-secondary leading-relaxed">
+            <span className="font-bold text-navy">Dewatering entry not done for </span>
+            <span className="font-bold text-[#b26a00]">
+              {missingDates.map((d) => dayLabel(d)).join(", ")}
+            </span>
+            {today?.latest_date ? (
+              <> — the day cards below show <span className="font-bold text-navy">{dayLabel(today.latest_date)}</span>,
+                the most recent day with figures. MTD totals cover the entered days only.</>
+            ) : (
+              <> — no day in this period has figures yet.</>
+            )}
+          </p>
+        </div>
+      )}
 
       {/* Row 1 — Daily KPIs */}
       {today && (

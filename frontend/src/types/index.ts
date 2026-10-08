@@ -496,6 +496,9 @@ export interface DewateringSummaryResponse {
   today:     DewateringTodayKpi;
   mtd:       DewateringMtdKpi;
   rows:      DewateringDayRow[];
+  /** Days inside the filter with no dewatering entry, so the screen can say
+   *  which ones are missing rather than quietly showing an older day. */
+  missing_dates: string[];
 }
 
 // ── Insights / Reality Check ──────────────────────────────────

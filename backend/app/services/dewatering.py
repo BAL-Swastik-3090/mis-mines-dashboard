@@ -108,8 +108,32 @@ def get_summary(db: Session, from_date: date, to_date: date) -> DewateringSummar
         for dt in _date_spine(from_date, to_date)
     ]
 
-    # ── 2. Today KPIs (latest row that has actual data) ───────
-    latest_row = data_rows[-1] if data_rows else None
+    # ── 2. Day KPIs — the latest day that actually CARRIES figures ─────────
+    #
+    # NOT data_rows[-1], which is only "the last date with any row at all".
+    # KPI 27 (rainfall in mm) is entered on its own, often the morning after, and
+    # it is not one of the nine columns above — so a day holding nothing but a
+    # rain reading used to become "the latest day" and blank all five day cards
+    # plus Net Stock Change. That is exactly what happened on 5 October 2026: a
+    # single row, kpi_id 27, value 0.0000, entered on the 6th at 05:18.
+    #
+    # A day counts as entered when any of the nine dewatering figures is present.
+    # Rainfall alone is not an entry, because none of the cards read it.
+    def _has_data(r: DewateringDayRow) -> bool:
+        return any(v is not None for v in (
+            r.open_stock, r.rain_added, r.seepage, r.pump_plan_hr, r.pump_act_hr,
+            r.disposal_plan, r.disposal_act, r.variance, r.closing_stock,
+        ))
+
+    entered_rows = [r for r in data_rows if _has_data(r)]
+    latest_row = entered_rows[-1] if entered_rows else None
+
+    # The days inside the filter that nobody has filled in. Named rather than
+    # merely absent, so the screen can say which ones are missing instead of
+    # showing a stale date with no explanation.
+    entered_dates = {r.date for r in entered_rows}
+    missing_dates = [str(dt) for dt in _date_spine(from_date, to_date)
+                     if str(dt) not in entered_dates]
 
     # Previous day closing stock (for delta) — look up actual calendar day-1
     if latest_row and latest_row.date:
@@ -120,25 +144,25 @@ def get_summary(db: Session, from_date: date, to_date: date) -> DewateringSummar
         prev_close = None
 
     # Pump capacity & eddy pump — fetch separately (static / daily input)
-    extra_sql = text("""
-        SELECT kpi_id, MAX(calculation_value) AS val
-        FROM mines_dewatering_daily_data
-        WHERE date = (
-            SELECT MAX(date) FROM mines_dewatering_daily_data
-            WHERE date BETWEEN :from_date AND :to_date
-        )
-        AND kpi_id IN (:cap, :eddy)
-        GROUP BY kpi_id
-    """)
-    extra = {
-        r.kpi_id: _f(r.val)
-        for r in db.execute(extra_sql, {
-            "from_date": from_date,
-            "to_date":   to_date,
-            "cap":       KPI_PUMP_CAPACITY,
-            "eddy":      KPI_EDDY_DAY,
-        }).fetchall()
-    }
+    # Anchored on the SAME day the cards show, not on MAX(date). Anchoring on the
+    # latest date present put these two on the rain-only day as well, so Pump
+    # Capacity and Eddy Pump blanked for the same reason the others did.
+    extra: dict = {}
+    if latest_row:
+        extra_sql = text("""
+            SELECT kpi_id, MAX(calculation_value) AS val
+            FROM mines_dewatering_daily_data
+            WHERE date = :on_date AND kpi_id IN (:cap, :eddy)
+            GROUP BY kpi_id
+        """)
+        extra = {
+            r.kpi_id: _f(r.val)
+            for r in db.execute(extra_sql, {
+                "on_date": latest_row.date,
+                "cap":     KPI_PUMP_CAPACITY,
+                "eddy":    KPI_EDDY_DAY,
+            }).fetchall()
+        }
 
     if latest_row:
         d_actual  = latest_row.disposal_act
@@ -204,12 +228,14 @@ def get_summary(db: Session, from_date: date, to_date: date) -> DewateringSummar
     mtd_p_act  = _f(m.mtd_pump_act)  or 0.0
     mtd_rain   = _f(m.mtd_rain)      or 0.0
 
-    d1_open  = data_rows[0].open_stock     if data_rows else None
-    d_last_c = data_rows[-1].closing_stock if data_rows else None
+    # First and last ENTERED day, so a trailing rain-only day cannot null the
+    # closing stock and blank Net Stock Change.
+    d1_open  = entered_rows[0].open_stock     if entered_rows else None
+    d_last_c = entered_rows[-1].closing_stock if entered_rows else None
     net_chg  = round(d_last_c - d1_open, 1) if (d_last_c is not None and d1_open is not None) else None
 
     mtd = DewateringMtdKpi(
-        days=len(data_rows),
+        days=len(entered_rows),
         mtd_disposal_actual=mtd_d_act,
         mtd_disposal_plan=mtd_d_plan,
         mtd_disposal_pct=round(mtd_d_act / mtd_d_plan * 100, 1) if mtd_d_plan else None,
@@ -228,4 +254,5 @@ def get_summary(db: Session, from_date: date, to_date: date) -> DewateringSummar
         today=today,
         mtd=mtd,
         rows=rows,
+        missing_dates=missing_dates,
     )
