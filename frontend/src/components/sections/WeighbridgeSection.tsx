@@ -144,6 +144,23 @@ const clock = (t: string | null) =>
   t ? new Date(t).toLocaleTimeString("en-IN",
         { hour: "2-digit", minute: "2-digit", hour12: false }) : "—";
 
+/** The day, but only when it is not today.
+ *
+ * This list reaches three days back, so on a quiet morning the newest rows are
+ * from a previous shift and a bare "14:53" reads as this afternoon. The date is
+ * shown only when it is needed: on a busy day every row is today and repeating
+ * the date down the column would be noise. */
+const dayIfNotToday = (t: string | null): string | null => {
+  if (!t) return null;
+  const d = new Date(t);
+  if (Number.isNaN(d.getTime())) return null;
+  const now = new Date();
+  const sameDay = d.getFullYear() === now.getFullYear()
+    && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  return sameDay ? null
+    : d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+};
+
 /* ── What has just been weighed ──────────────────────────────────────────
  *
  * Its own small fetch rather than a slice of the trips list: this asks for
@@ -168,7 +185,9 @@ function RecentWeighings() {
 
   return (
     <Card>
-      <CardHeader title="Just weighed" tone="slate" icon={Clock}
+      {/* The sentence is worth reading once and costs vertical space on every
+          open afterwards, so it lives behind the icon. */}
+      <CardHeader title="Just weighed" tone="slate" icon={Clock} subtitleOnIcon
                   subtitle="The last few loads, newest first — the cheapest place to catch your own mistake." />
       {loading ? (
         <div className="py-8 text-center"><Loader2 className="w-4 h-4 animate-spin text-gold mx-auto" /></div>
@@ -179,13 +198,26 @@ function RecentWeighings() {
       ) : (
         <div className="divide-y divide-border-light">
           {rows.map((r) => (
-            <div key={r.trip_id} className="px-4 py-2.5 flex items-center gap-3">
-              <span className="text-[11px] text-txt-light tabular-nums shrink-0 w-[38px]">
-                {clock(r.gross_at)}
+            <div key={r.trip_id} className="px-4 py-2 flex items-center gap-2.5">
+              <span className="shrink-0 w-[44px] leading-tight">
+                <span className="block text-[11px] text-txt-light tabular-nums">
+                  {clock(r.gross_at)}
+                </span>
+                {dayIfNotToday(r.gross_at) && (
+                  <span className="block text-[9.5px] text-txt-light tabular-nums">
+                    {dayIfNotToday(r.gross_at)}
+                  </span>
+                )}
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block text-[12px] font-semibold text-navy truncate">
-                  {r.vehicle ?? r.fleet_code ?? "—"}
+                {/* Nobody at the bridge says "OD 04 Z 5135". They say
+                    TATA PRIMA-5135, so that is what the row shows. The plate is
+                    on hover rather than beside it: the fleet codes here run to
+                    fifteen characters and the two together overflow a card this
+                    narrow, which would truncate the name — the part being read. */}
+                <span className="block text-[12px] font-semibold text-navy truncate"
+                      title={[r.fleet_code, r.vehicle].filter(Boolean).join(" · ")}>
+                  {(r.fleet_code ?? "").trim() || r.vehicle || "—"}
                 </span>
                 <span className="block text-[10.5px] text-txt-light truncate">
                   {[r.material, r.driver].filter(Boolean).join(" · ") || r.trip_no}
