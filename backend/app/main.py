@@ -447,6 +447,10 @@ _PERMISSION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 # A page is reachable with the matching dashboard permission.
 _PAGE_PERMISSION = {
     "mis": "dashboard.mis",
+    # AMIRA used to answer to dashboard.mis, which meant all 38 people who can
+    # read the MIS dashboard could also read the chromium balance. It has its
+    # own permission now (migration 082) so the two audiences can differ.
+    "amira": "dashboard.amira",
     "oee": "dashboard.oee",
     "intelligence": "dashboard.intelligence",
     "fuel-management": "dashboard.fuel",

@@ -241,12 +241,14 @@ def has_role(db: Session, emp_id: str, minimum: str) -> bool:
 # The pages in the sidebar, and the API prefixes that feed each one. Access is
 # enforced on these prefixes rather than by hiding the sidebar entry — hiding a
 # menu item leaves the data reachable to anyone who knows the URL.
-PAGES: tuple[str, ...] = ("mis", "oee", "intelligence", "fuel-management", "ev-tracking")
+PAGES: tuple[str, ...] = ("mis", "oee", "intelligence", "amira",
+          "fuel-management", "ev-tracking")
 
 PAGE_LABELS = {
     "mis": "MIS Dashboard",
     "oee": "OEE / LCM",
     "intelligence": "Intelligence",
+    "amira": "AMIRA Accounting",
     "fuel-management": "Fuel Management",
     "ev-tracking": "Electric Vehicles Tracking",
 }
@@ -266,7 +268,11 @@ PREFIX_PAGE: tuple[tuple[str, str], ...] = (
     # End-to-end quality, read-only over SAP. Mapped for the same reason as
     # the two above: an unmapped path skips the page check entirely.
     ("/api/quality-e2e", "mis"),
-    ("/api/amira", "mis"),
+    # Its own page, not the MIS dashboard's. Reading the chromium balance is
+    # a narrower right than reading production figures, and this is the line
+    # the middleware enforces -- hiding the sidebar entry alone would leave
+    # the data one URL away.
+    ("/api/amira", "amira"),
     # Ferrochrome output and its composite analysis, read-only over SAP.
     ("/api/plant-output", "mis"),
     ("/api/fuel-management", "fuel-management"),
@@ -370,6 +376,7 @@ def employee(db: Session, empid: str) -> dict:
                 "allowed_pages": [pg for pg, code in (
                     ("mis", "dashboard.mis"), ("oee", "dashboard.oee"),
                     ("intelligence", "dashboard.intelligence"),
+                    ("amira", "dashboard.amira"),
                     ("fuel-management", "dashboard.fuel"), ("ev-tracking", "dashboard.ev"),
                 ) if code in perms]}
     s = lambda v: (v or "").strip() or None  # noqa: E731
@@ -398,6 +405,7 @@ def employee(db: Session, empid: str) -> dict:
         "allowed_pages": [pg for pg, code in (
             ("mis", "dashboard.mis"), ("oee", "dashboard.oee"),
             ("intelligence", "dashboard.intelligence"),
+            ("amira", "dashboard.amira"),
             ("fuel-management", "dashboard.fuel"), ("ev-tracking", "dashboard.ev"),
         ) if code in _perms],
     }

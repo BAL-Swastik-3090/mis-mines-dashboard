@@ -71,14 +71,18 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   // "Usage Viewer" would have been an Access Manager under another name.
   // access.users.view still opens it, so no administrator lost a screen.
   "usage": ["usage.view", "access.users.view"],
-  // GATED ON THE MIS DASHBOARD'S OWN PERMISSION, not one of its own.
-  // AMIRA is built from the despatch and plant-receipt figures that the MIS
-  // dashboard already shows; anyone who may read those may read the chromium
-  // balance drawn from them, and inventing dashboard.amira would mean seeding
-  // a row per role in mines_role_page_access before a single person could see
-  // the screen. Promote it to its own page permission when the mine wants the
-  // two audiences separated — the API prefix is already mapped in auth.py.
-  "amira": ["dashboard.mis"],
+  // ITS OWN PERMISSION, as the note here used to say it should be once the
+  // mine wanted the two audiences separated. It now does.
+  //
+  // Riding on dashboard.mis meant all 38 people who may read the MIS dashboard
+  // could also read what the contained chromium is worth from mine to plant.
+  // That is a narrower thing than production figures, and migration 082 gives
+  // it a permission of its own: the superadmins hold it automatically, and it
+  // is granted by name to anyone else the mine decides should have it.
+  //
+  // The sidebar is the convenience; the enforcement is on /api/amira in
+  // auth.py, which now maps to this page rather than to mis.
+  "amira": ["dashboard.amira"],
 };
 
 /**
