@@ -124,9 +124,14 @@ function FleetKpis({ fleet, loading }: { fleet: OEEFleet | undefined; loading: b
 // Columns of their own here rather than two values in one cell: a spreadsheet is
 // sorted and filtered, and "17 CuM/hr" inside the machine name defeats both.
 const EXPORT_HEADINGS = [
-  "Excavator", "God Hrs", "BD Hrs", "PM Hrs", "Deviation Hrs", "Operating Hrs",
-  "Actual CuM", "Ideal CuM", "Availability %", "Performance %", "Quality %", "OEE %",
+  "Excavator", "God Hrs", "BD Hrs", "PM Hrs", "Running Hrs", "Deviation Hrs",
+  "Operating Hrs",
+  "Actual CuM", "Ideal CuM", "Availability %", "Performance %",
+  "Quality %", "OEE %", "Utilisation %",
   "Ideal Capacity (CuM/hr)", "Ownership", "Breakdown Source", "Deviation % of Shift",
+  // Shares as their own columns, not "ORE 83%" in one cell: a spreadsheet is
+  // sorted and filtered, and a label glued to a number defeats both.
+  "Material", "Ore CuM", "OB CuM", "Other CuM", "Ore %", "OB %", "Other %",
 ];
 
 /** Numbers go out as numbers, rounded the way the screen rounds them.
@@ -137,12 +142,15 @@ const n2 = (v: number) => Number(v.toFixed(2));
 
 function exportRows(machines: OEEMachineRow[], fleet: OEEFleet | undefined): unknown[][] {
   const rows: unknown[][] = machines.map((m) => [
-    m.machine, n1(m.god_hours), n2(m.bd_hours), n2(m.pm_hours), n2(m.deviation_hrs),
+    m.machine, n1(m.god_hours), n2(m.bd_hours), n2(m.pm_hours), n2(m.running_hrs),
+    n2(m.deviation_hrs),
     n2(m.operating_hrs), n1(m.actual_cum), n1(m.ideal_cum), n2(m.availability),
-    n2(m.performance), n2(m.quality), n2(m.oee),
+    n2(m.performance), n2(m.quality), n2(m.oee), m.utilisation ?? "",
     n1(m.ideal_cap), m.hired ? "Hired" : "Owned",
     m.bd_source === "sap" ? "SAP" : "Shift log",
     m.deviation_pct ?? "",
+    m.material ?? "", n1(m.ore_cum), n1(m.ob_cum), n1(m.other_cum),
+    m.ore_pct ?? "", m.ob_pct ?? "", m.other_pct ?? "",
   ]);
   // The weighted roll-up exactly as the footer shows it, taken from the server
   // rather than re-summed here: averaging machine percentages would overstate
@@ -150,12 +158,51 @@ function exportRows(machines: OEEMachineRow[], fleet: OEEFleet | undefined): unk
   if (fleet && machines.length) {
     rows.push([
       "OVERALL", n1(fleet.god_hours), n2(fleet.bd_hours), n2(fleet.pm_hours),
-      n2(fleet.deviation_hrs), n2(fleet.operating_hrs), n1(fleet.actual_cum),
-      n1(fleet.ideal_cum), n2(fleet.availability), n2(fleet.performance),
-      n2(fleet.quality), n2(fleet.oee), "", "", "", fleet.deviation_pct ?? "",
+      n2(fleet.running_hrs), n2(fleet.deviation_hrs),
+      n2(fleet.operating_hrs), n1(fleet.actual_cum),
+      n1(fleet.ideal_cum), n2(fleet.availability),
+      n2(fleet.performance), n2(fleet.quality), n2(fleet.oee), fleet.utilisation ?? "",
+      "", "", "", fleet.deviation_pct ?? "",
+      fleet.material ?? "", n1(fleet.ore_cum), n1(fleet.ob_cum), n1(fleet.other_cum),
+      fleet.ore_pct ?? "", fleet.ob_pct ?? "", fleet.other_pct ?? "",
     ]);
   }
   return rows;
+}
+
+/** What the machine was moving, as a share of its own CuM.
+ *
+ *  COLOUR CARRIES THE CLASS, NOT THE QUALITY. Ore is not "good" and overburden
+ *  "bad" — stripping waste is the job on some benches — so these are three
+ *  neutral hues that tell the classes apart, never the red/amber/green used by
+ *  the percentage columns, which a reader scans for trouble.
+ *
+ *  MIXED when no class reaches 60%. TATA-490 ran 57% ore against 32% OB; naming
+ *  it an ore machine would hide a third of its work. */
+function MaterialTag({ m }: {
+  m: { material: string | null; material_pct: number | null;
+       ore_pct: number | null; ob_pct: number | null; other_pct: number | null };
+}) {
+  if (!m.material) return <span className="text-txt-light/60">—</span>;
+  const tone: Record<string, string> = {
+    ORE:   "bg-[#e8f0fe] text-[#1a4a8f]",
+    OB:    "bg-[#f3ece3] text-[#7a5a2e]",
+    OTHER: "bg-[#eceff1] text-[#4a5a63]",
+    MIXED: "bg-[#f3e8f5] text-[#6a3a74]",
+  };
+  return (
+    <span
+      className="inline-flex items-center gap-1"
+      title={`Ore ${m.ore_pct ?? 0}% · OB ${m.ob_pct ?? 0}% · Other ${m.other_pct ?? 0}%`}
+    >
+      <span className={`px-1.5 py-px rounded-sm text-[9px] font-bold tracking-wide ${tone[m.material] ?? tone.OTHER}`}>
+        {m.material}
+      </span>
+      {m.material_pct != null && (
+        <span className="text-[10px] text-txt-light font-mono">{m.material_pct}%</span>
+      )}
+    </span>
+  );
 }
 
 // ── Per-machine OEE table ──────────────────────────────────────────────────────
@@ -199,9 +246,9 @@ function OEETable({ machines, fleet, loading, from, to }: {
             <tr className="bg-bg-section border-b border-border-light">
               {[
                 "Excavator", "God Hrs",
-                "BD Hrs", "PM Hrs", "Deviation Hrs", "Operating Hrs",
-                "Actual CuM", "Ideal CuM",
-                "Availability %", "Performance %", "Quality %", "OEE %",
+                "BD Hrs", "PM Hrs", "Running Hrs", "Deviation Hrs", "Operating Hrs",
+                "Actual CuM", "Ore / OB", "Ideal CuM",
+                "Availability %", "Performance %", "Quality %", "OEE %", "Utilisation %",
               ].map((h) => (
                 <th
                   key={h}
@@ -225,7 +272,7 @@ function OEETable({ machines, fleet, loading, from, to }: {
               ))
             ) : machines.length === 0 ? (
               <tr>
-                <td colSpan={12} className="px-4 py-8 text-center text-txt-muted text-sm font-sans">
+                <td colSpan={15} className="px-4 py-8 text-center text-txt-muted text-sm font-sans">
                   No data for selected period
                 </td>
               </tr>
@@ -268,6 +315,15 @@ function OEETable({ machines, fleet, loading, from, to }: {
                   <td className={`px-3 py-2.5 font-semibold ${m.pm_hours > 0 ? "text-[#c8960c]" : "text-txt-light"}`}>
                     {fmt2(m.pm_hours)}
                   </td>
+                  {/* RUNNING HRS — beside PM, and before Deviation, because the
+                      two are one 8-hour shift split in two: every shift row in
+                      mines_tipper_details has running + deviation = 8.00
+                      exactly. Reading them apart puts the pair back together.
+                      It is also the numerator of Utilisation at the far right,
+                      so the figure behind that percentage is on the row. */}
+                  <td className="px-3 py-2.5 text-[#2e7d32] font-semibold">
+                    {fmt2(m.running_hrs)}
+                  </td>
                   {/* Deviation hrs — reporting only, feeds no formula */}
                   <td className="px-3 py-2.5">
                     <div className="text-navy font-semibold">{fmt2(m.deviation_hrs)}</div>
@@ -279,6 +335,14 @@ function OEETable({ machines, fleet, loading, from, to }: {
                   <td className="px-3 py-2.5 text-[#1565c0] font-semibold">{fmt2(m.operating_hrs)}</td>
                   {/* Actual CuM */}
                   <td className="px-3 py-2.5 text-txt-secondary">{fmt1(m.actual_cum)}</td>
+                  {/* WHAT WAS IN THE BUCKET, not just how much. Five of the ten
+                      machines move almost no ore — EV 2 is entirely tailing and
+                      COB feed — so a CuM figure alone says nothing about which
+                      job the machine was doing. The share is of that machine's
+                      own CuM, and the title carries the full three-way split. */}
+                  <td className="px-3 py-2.5 whitespace-nowrap">
+                    <MaterialTag m={m} />
+                  </td>
                   {/* Ideal CuM */}
                   <td className="px-3 py-2.5 text-txt-light">{fmt1(m.ideal_cum)}</td>
                   {/* Availability */}
@@ -295,6 +359,14 @@ function OEETable({ machines, fleet, loading, from, to }: {
                   <td className={`px-3 py-2.5 font-extrabold ${pctColor(m.oee)}`}>
                     {fmt2(m.oee)}
                   </td>
+                  {/* UTILISATION, last — it is not a term in OEE. Availability,
+                      Performance and Quality multiply out to the column before
+                      it; this one answers a different question, how much of the
+                      machine's usable time it actually ran, and sitting among
+                      the three factors invited it to be read as a fourth. */}
+                  <td className={`px-3 py-2.5 font-bold ${m.utilisation == null ? "text-txt-light" : pctColor(m.utilisation, 70, 50)}`}>
+                    {m.utilisation == null ? "—" : fmt2(m.utilisation)}
+                  </td>
                 </tr>
               ))
             )}
@@ -310,6 +382,7 @@ function OEETable({ machines, fleet, loading, from, to }: {
                 <td className="px-3 py-3 text-navy">{fmt1(fleet.god_hours)}</td>
                 <td className="px-3 py-3 text-[#c62828]">{fmt2(fleet.bd_hours)}</td>
                 <td className="px-3 py-3 text-[#c8960c]">{fmt2(fleet.pm_hours)}</td>
+                <td className="px-3 py-3 text-[#2e7d32]">{fmt2(fleet.running_hrs)}</td>
                 <td className="px-3 py-3">
                   <div className="text-navy">{fmt2(fleet.deviation_hrs)}</div>
                   {fleet.deviation_pct != null && (
@@ -318,11 +391,15 @@ function OEETable({ machines, fleet, loading, from, to }: {
                 </td>
                 <td className="px-3 py-3 text-[#1565c0]">{fmt2(fleet.operating_hrs)}</td>
                 <td className="px-3 py-3 text-navy">{fmt1(fleet.actual_cum)}</td>
+                <td className="px-3 py-3"><MaterialTag m={fleet} /></td>
                 <td className="px-3 py-3 text-txt-secondary">{fmt1(fleet.ideal_cum)}</td>
                 <td className={`px-3 py-3 ${pctColor(fleet.availability, 85, 70)}`}>{fmt2(fleet.availability)}</td>
                 <td className={`px-3 py-3 ${pctColor(fleet.performance, 85, 70)}`}>{fmt2(fleet.performance)}</td>
                 <td className="px-3 py-3 text-txt-secondary">{fmt2(fleet.quality)}</td>
                 <td className="px-3 py-3 text-[#0288d1] font-extrabold">{fmt2(fleet.oee)}</td>
+                <td className={`px-3 py-3 font-bold ${fleet.utilisation == null ? "text-txt-light" : pctColor(fleet.utilisation, 70, 50)}`}>
+                  {fleet.utilisation == null ? "—" : fmt2(fleet.utilisation)}
+                </td>
               </tr>
             </tfoot>
           )}

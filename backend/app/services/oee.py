@@ -197,7 +197,28 @@ _SHIFT_ALL_SQL = text(f"""
             + COALESCE(CAST(NULLIF(t.tailing,'')        AS DECIMAL(14,2)),0)
             + COALESCE(CAST(NULLIF(t.feed_to_cobp,'')   AS DECIMAL(14,2)),0) ) * 6
             + COALESCE(CAST(NULLIF(t.silt_quantity,'')  AS DECIMAL(14,2)),0) * 4
-        ) AS actual_cum
+        ) AS actual_cum,
+        -- THE SAME CuM, SPLIT BY WHAT WAS IN THE BUCKET. Same x6 / x4 factors
+        -- as actual_cum above, so the three always add back to it exactly and
+        -- the share can never total 101%.
+        --
+        -- ORE and OB are the two the mine asked for; OTHER exists because five
+        -- of the ten machines spend most of their time on neither. EV 2 is 100%
+        -- tailing, COB feed and silt, and SANY-2 is 87% — folding that into
+        -- either column would label a tailing machine an ore machine.
+        SUM(
+            ( COALESCE(CAST(NULLIF(t.ore_quantity,'') AS DECIMAL(14,2)),0)
+            + COALESCE(CAST(NULLIF(t.lg_quantity,'')  AS DECIMAL(14,2)),0) ) * 6
+        ) AS ore_cum,
+        SUM(
+            ( COALESCE(CAST(NULLIF(t.ob_quantity,'')  AS DECIMAL(14,2)),0)
+            + COALESCE(CAST(NULLIF(t.boulder,'')      AS DECIMAL(14,2)),0) ) * 6
+        ) AS ob_cum,
+        SUM(
+            ( COALESCE(CAST(NULLIF(t.tailing,'')      AS DECIMAL(14,2)),0)
+            + COALESCE(CAST(NULLIF(t.feed_to_cobp,'') AS DECIMAL(14,2)),0) ) * 6
+            + COALESCE(CAST(NULLIF(t.silt_quantity,'') AS DECIMAL(14,2)),0) * 4
+        ) AS other_cum
     FROM mines_tipper_details t
     JOIN ({_machine_list()}) m ON {_MATCH_ON}
     WHERE t.Prod_date BETWEEN :fd AND :td
@@ -303,6 +324,65 @@ def _first_seen_by_machine(db: Session) -> dict:
     return out
 
 
+# A machine is called an ORE or an OB machine only when most of what it moved
+# was that. Below this it is reported as MIXED rather than rounded to whichever
+# class happens to be ahead — TATA-490 ran 57% ore against 32% OB in July-Oct,
+# and calling that an ore machine hides a third of its work.
+DOMINANT_SHARE = 0.60
+
+MATERIAL_LABELS = (("ORE", "ore_cum"), ("OB", "ob_cum"), ("OTHER", "other_cum"))
+
+
+def _material_split(ore: float, ob: float, other: float) -> dict:
+    """What the buckets carried, as shares of the machine's own CuM."""
+    total = ore + ob + other
+    if total <= 0:
+        return {"material": None, "material_pct": None,
+                "ore_pct": None, "ob_pct": None, "other_pct": None}
+    pct = {k: v / total * 100.0 for k, v in
+           (("ORE", ore), ("OB", ob), ("OTHER", other))}
+    top = max(pct, key=lambda k: pct[k])
+    return {
+        "material": top if pct[top] >= DOMINANT_SHARE * 100 else "MIXED",
+        "material_pct": round(pct[top], 1),
+        "ore_pct": round(pct["ORE"], 1),
+        "ob_pct": round(pct["OB"], 1),
+        "other_pct": round(pct["OTHER"], 1),
+    }
+
+
+def _utilisation(running_hrs: float, god_hours: float, bd_hrs: float) -> float | None:
+    """Of the hours the machine was not broken down, how many did it run?
+
+    THE MIS DASHBOARD'S FORMULA, with the shift log in place of the GPS feed:
+    services/equipment.py divides sensor engine-hours by (calendar - breakdown)
+    and caps at 100. The denominator is deliberately NOT this table's Operating
+    Hrs, which also subtracts PM — matching the Equipment section matters more
+    than matching the column next to it, because the two screens are read
+    against each other and a figure called Utilisation on both must mean one
+    thing.
+
+    WHY NOT THE GPS FEED. EXCAVATOR_MAP in services/equipment.py carries seven
+    Z-AXIS machines; none of the five hired ones has a Technoton sensor, so
+    engine hours do not exist for half this table. running_hours covers all ten.
+
+    Capped at 100 like the original: an open breakdown notification shrinks the
+    denominator while the machine keeps digging, and TATA-470(7) did 1,872 CuM
+    after its notification opened.
+    """
+    # ROUNDED TO THE TABLE'S OWN RESOLUTION BEFORE DECIDING. Breakdown that
+    # covers the whole window lands a floating-point sliver under God Hours —
+    # 191.99999999999997 against 192 — so a bare `> 0` left the denominator at
+    # 2.8e-14 and printed 0.00% for a machine that was down every hour of the
+    # period. Nought reads as "it was available and chose not to run", which is
+    # the opposite of what happened; undefined is the honest answer, and it
+    # agrees with the BD Hrs and God Hrs the reader can see on the same row.
+    available = round(god_hours, 2) - round(bd_hrs, 2)
+    if available <= 0:
+        return None
+    return round(min(100.0, running_hrs / available * 100.0), 2)
+
+
 def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
     """Per-excavator OEE plus a weighted fleet roll-up."""
     days            = (to_date - from_date).days + 1
@@ -372,6 +452,9 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
         deviation  = _num(shift["deviation_hrs"])
         running    = _num(shift["running_hrs"])
         actual_cum = max(0.0, _num(shift["actual_cum"]))
+        ore_cum    = max(0.0, _num(shift["ore_cum"]))
+        ob_cum     = max(0.0, _num(shift["ob_cum"]))
+        other_cum  = max(0.0, _num(shift["other_cum"]))
 
         loss_hrs   = holiday + no_plan + planned_sd
         ideal_time = max(god_hours - loss_hrs, 0.0)
@@ -411,6 +494,11 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
             "pm_hours":       round(pm_hrs, 2),
             "operating_hrs":  round(operating_hrs, 2),
             "actual_cum":     round(actual_cum, 2),
+            "ore_cum":        round(ore_cum, 2),
+            "ob_cum":         round(ob_cum, 2),
+            "other_cum":      round(other_cum, 2),
+            **_material_split(ore_cum, ob_cum, other_cum),
+            "utilisation":    _utilisation(running, god_hours, bd_hrs),
             "ideal_cum":      round(ideal_cum, 2),
             "availability":   round(availability, 2),
             "performance":    round(performance, 2),
@@ -447,12 +535,30 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
         "pm_hours":      round(sum(m["pm_hours"] for m in machines), 2),
         "operating_hrs": round(sum_operating, 2),
         "actual_cum":    round(sum_actual, 2),
+        "ore_cum":       round(sum(m["ore_cum"]   for m in machines), 2),
+        "ob_cum":        round(sum(m["ob_cum"]    for m in machines), 2),
+        "other_cum":     round(sum(m["other_cum"] for m in machines), 2),
+        **_material_split(sum(m["ore_cum"]   for m in machines),
+                          sum(m["ob_cum"]    for m in machines),
+                          sum(m["other_cum"] for m in machines)),
+        # WEIGHTED, NOT AVERAGED. Averaging ten machines' percentages would let
+        # a machine that ran two shifts count as much as one that ran the month
+        # — the same reason Availability and Performance are summed first.
+        "utilisation":   _utilisation(
+            sum(m["running_hrs"] for m in machines),
+            sum(m["god_hours"]   for m in machines),
+            sum(m["bd_hours"]    for m in machines)),
         "ideal_cum":     round(sum_ideal_cum, 2),
         "availability":  round(f_avail, 2),
         "performance":   round(f_perf, 2),
         "quality":       round(f_qual, 2),
         "oee":           round(f_oee, 2),
         "deviation_hrs": round(sum_deviation, 2),
+        # The OVERALL row's own Running Hrs. Summed from the machines rather
+        # than derived as shift_hours - deviation: the two are equal today
+        # because every shift row totals 8.00, and deriving it would turn that
+        # arithmetic coincidence into a dependency.
+        "running_hrs":   round(sum(m["running_hrs"] for m in machines), 2),
         "shift_hours":   round(sum_shift_hrs, 2),
         "deviation_pct": round(sum_deviation / sum_shift_hrs * 100, 1) if sum_shift_hrs > 0 else None,
         "machine_count": len(machines),
