@@ -370,7 +370,14 @@ def _utilisation(running_hrs: float, god_hours: float, bd_hrs: float) -> float |
     denominator while the machine keeps digging, and TATA-470(7) did 1,872 CuM
     after its notification opened.
     """
-    available = god_hours - bd_hrs
+    # ROUNDED TO THE TABLE'S OWN RESOLUTION BEFORE DECIDING. Breakdown that
+    # covers the whole window lands a floating-point sliver under God Hours —
+    # 191.99999999999997 against 192 — so a bare `> 0` left the denominator at
+    # 2.8e-14 and printed 0.00% for a machine that was down every hour of the
+    # period. Nought reads as "it was available and chose not to run", which is
+    # the opposite of what happened; undefined is the honest answer, and it
+    # agrees with the BD Hrs and God Hrs the reader can see on the same row.
+    available = round(god_hours, 2) - round(bd_hrs, 2)
     if available <= 0:
         return None
     return round(min(100.0, running_hrs / available * 100.0), 2)
@@ -547,6 +554,11 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
         "quality":       round(f_qual, 2),
         "oee":           round(f_oee, 2),
         "deviation_hrs": round(sum_deviation, 2),
+        # The OVERALL row's own Running Hrs. Summed from the machines rather
+        # than derived as shift_hours - deviation: the two are equal today
+        # because every shift row totals 8.00, and deriving it would turn that
+        # arithmetic coincidence into a dependency.
+        "running_hrs":   round(sum(m["running_hrs"] for m in machines), 2),
         "shift_hours":   round(sum_shift_hrs, 2),
         "deviation_pct": round(sum_deviation / sum_shift_hrs * 100, 1) if sum_shift_hrs > 0 else None,
         "machine_count": len(machines),

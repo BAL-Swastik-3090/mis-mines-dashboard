@@ -124,9 +124,10 @@ function FleetKpis({ fleet, loading }: { fleet: OEEFleet | undefined; loading: b
 // Columns of their own here rather than two values in one cell: a spreadsheet is
 // sorted and filtered, and "17 CuM/hr" inside the machine name defeats both.
 const EXPORT_HEADINGS = [
-  "Excavator", "God Hrs", "BD Hrs", "PM Hrs", "Deviation Hrs", "Operating Hrs",
-  "Actual CuM", "Ideal CuM", "Availability %", "Utilisation %", "Performance %",
-  "Quality %", "OEE %",
+  "Excavator", "God Hrs", "BD Hrs", "PM Hrs", "Running Hrs", "Deviation Hrs",
+  "Operating Hrs",
+  "Actual CuM", "Ideal CuM", "Availability %", "Performance %",
+  "Quality %", "OEE %", "Utilisation %",
   "Ideal Capacity (CuM/hr)", "Ownership", "Breakdown Source", "Deviation % of Shift",
   // Shares as their own columns, not "ORE 83%" in one cell: a spreadsheet is
   // sorted and filtered, and a label glued to a number defeats both.
@@ -141,9 +142,10 @@ const n2 = (v: number) => Number(v.toFixed(2));
 
 function exportRows(machines: OEEMachineRow[], fleet: OEEFleet | undefined): unknown[][] {
   const rows: unknown[][] = machines.map((m) => [
-    m.machine, n1(m.god_hours), n2(m.bd_hours), n2(m.pm_hours), n2(m.deviation_hrs),
+    m.machine, n1(m.god_hours), n2(m.bd_hours), n2(m.pm_hours), n2(m.running_hrs),
+    n2(m.deviation_hrs),
     n2(m.operating_hrs), n1(m.actual_cum), n1(m.ideal_cum), n2(m.availability),
-    m.utilisation ?? "", n2(m.performance), n2(m.quality), n2(m.oee),
+    n2(m.performance), n2(m.quality), n2(m.oee), m.utilisation ?? "",
     n1(m.ideal_cap), m.hired ? "Hired" : "Owned",
     m.bd_source === "sap" ? "SAP" : "Shift log",
     m.deviation_pct ?? "",
@@ -156,9 +158,10 @@ function exportRows(machines: OEEMachineRow[], fleet: OEEFleet | undefined): unk
   if (fleet && machines.length) {
     rows.push([
       "OVERALL", n1(fleet.god_hours), n2(fleet.bd_hours), n2(fleet.pm_hours),
-      n2(fleet.deviation_hrs), n2(fleet.operating_hrs), n1(fleet.actual_cum),
-      n1(fleet.ideal_cum), n2(fleet.availability), fleet.utilisation ?? "",
-      n2(fleet.performance), n2(fleet.quality), n2(fleet.oee),
+      n2(fleet.running_hrs), n2(fleet.deviation_hrs),
+      n2(fleet.operating_hrs), n1(fleet.actual_cum),
+      n1(fleet.ideal_cum), n2(fleet.availability),
+      n2(fleet.performance), n2(fleet.quality), n2(fleet.oee), fleet.utilisation ?? "",
       "", "", "", fleet.deviation_pct ?? "",
       fleet.material ?? "", n1(fleet.ore_cum), n1(fleet.ob_cum), n1(fleet.other_cum),
       fleet.ore_pct ?? "", fleet.ob_pct ?? "", fleet.other_pct ?? "",
@@ -243,9 +246,9 @@ function OEETable({ machines, fleet, loading, from, to }: {
             <tr className="bg-bg-section border-b border-border-light">
               {[
                 "Excavator", "God Hrs",
-                "BD Hrs", "PM Hrs", "Deviation Hrs", "Operating Hrs",
+                "BD Hrs", "PM Hrs", "Running Hrs", "Deviation Hrs", "Operating Hrs",
                 "Actual CuM", "Ore / OB", "Ideal CuM",
-                "Availability %", "Utilisation %", "Performance %", "Quality %", "OEE %",
+                "Availability %", "Performance %", "Quality %", "OEE %", "Utilisation %",
               ].map((h) => (
                 <th
                   key={h}
@@ -269,7 +272,7 @@ function OEETable({ machines, fleet, loading, from, to }: {
               ))
             ) : machines.length === 0 ? (
               <tr>
-                <td colSpan={14} className="px-4 py-8 text-center text-txt-muted text-sm font-sans">
+                <td colSpan={15} className="px-4 py-8 text-center text-txt-muted text-sm font-sans">
                   No data for selected period
                 </td>
               </tr>
@@ -312,6 +315,15 @@ function OEETable({ machines, fleet, loading, from, to }: {
                   <td className={`px-3 py-2.5 font-semibold ${m.pm_hours > 0 ? "text-[#c8960c]" : "text-txt-light"}`}>
                     {fmt2(m.pm_hours)}
                   </td>
+                  {/* RUNNING HRS — beside PM, and before Deviation, because the
+                      two are one 8-hour shift split in two: every shift row in
+                      mines_tipper_details has running + deviation = 8.00
+                      exactly. Reading them apart puts the pair back together.
+                      It is also the numerator of Utilisation at the far right,
+                      so the figure behind that percentage is on the row. */}
+                  <td className="px-3 py-2.5 text-[#2e7d32] font-semibold">
+                    {fmt2(m.running_hrs)}
+                  </td>
                   {/* Deviation hrs — reporting only, feeds no formula */}
                   <td className="px-3 py-2.5">
                     <div className="text-navy font-semibold">{fmt2(m.deviation_hrs)}</div>
@@ -337,13 +349,6 @@ function OEETable({ machines, fleet, loading, from, to }: {
                   <td className={`px-3 py-2.5 font-bold ${pctColor(m.availability, 85, 70)}`}>
                     {fmt2(m.availability)}
                   </td>
-                  {/* Utilisation — of the hours it was not broken down, how many
-                      it actually ran. Same formula as the MIS Equipment section,
-                      on shift-log running hours rather than the GPS feed, which
-                      covers only the seven Z-AXIS machines. */}
-                  <td className={`px-3 py-2.5 font-bold ${m.utilisation == null ? "text-txt-light" : pctColor(m.utilisation, 70, 50)}`}>
-                    {m.utilisation == null ? "—" : fmt2(m.utilisation)}
-                  </td>
                   {/* Performance */}
                   <td className={`px-3 py-2.5 font-bold ${pctColor(m.performance, 85, 70)}`}>
                     {fmt2(m.performance)}
@@ -353,6 +358,14 @@ function OEETable({ machines, fleet, loading, from, to }: {
                   {/* OEE */}
                   <td className={`px-3 py-2.5 font-extrabold ${pctColor(m.oee)}`}>
                     {fmt2(m.oee)}
+                  </td>
+                  {/* UTILISATION, last — it is not a term in OEE. Availability,
+                      Performance and Quality multiply out to the column before
+                      it; this one answers a different question, how much of the
+                      machine's usable time it actually ran, and sitting among
+                      the three factors invited it to be read as a fourth. */}
+                  <td className={`px-3 py-2.5 font-bold ${m.utilisation == null ? "text-txt-light" : pctColor(m.utilisation, 70, 50)}`}>
+                    {m.utilisation == null ? "—" : fmt2(m.utilisation)}
                   </td>
                 </tr>
               ))
@@ -369,6 +382,7 @@ function OEETable({ machines, fleet, loading, from, to }: {
                 <td className="px-3 py-3 text-navy">{fmt1(fleet.god_hours)}</td>
                 <td className="px-3 py-3 text-[#c62828]">{fmt2(fleet.bd_hours)}</td>
                 <td className="px-3 py-3 text-[#c8960c]">{fmt2(fleet.pm_hours)}</td>
+                <td className="px-3 py-3 text-[#2e7d32]">{fmt2(fleet.running_hrs)}</td>
                 <td className="px-3 py-3">
                   <div className="text-navy">{fmt2(fleet.deviation_hrs)}</div>
                   {fleet.deviation_pct != null && (
@@ -380,12 +394,12 @@ function OEETable({ machines, fleet, loading, from, to }: {
                 <td className="px-3 py-3"><MaterialTag m={fleet} /></td>
                 <td className="px-3 py-3 text-txt-secondary">{fmt1(fleet.ideal_cum)}</td>
                 <td className={`px-3 py-3 ${pctColor(fleet.availability, 85, 70)}`}>{fmt2(fleet.availability)}</td>
-                <td className={`px-3 py-3 font-bold ${fleet.utilisation == null ? "text-txt-light" : pctColor(fleet.utilisation, 70, 50)}`}>
-                  {fleet.utilisation == null ? "—" : fmt2(fleet.utilisation)}
-                </td>
                 <td className={`px-3 py-3 ${pctColor(fleet.performance, 85, 70)}`}>{fmt2(fleet.performance)}</td>
                 <td className="px-3 py-3 text-txt-secondary">{fmt2(fleet.quality)}</td>
                 <td className="px-3 py-3 text-[#0288d1] font-extrabold">{fmt2(fleet.oee)}</td>
+                <td className={`px-3 py-3 font-bold ${fleet.utilisation == null ? "text-txt-light" : pctColor(fleet.utilisation, 70, 50)}`}>
+                  {fleet.utilisation == null ? "—" : fmt2(fleet.utilisation)}
+                </td>
               </tr>
             </tfoot>
           )}

@@ -854,6 +854,7 @@ export interface OEEFleet {
   quality:       number;
   oee:           number;
   deviation_hrs: number;
+  running_hrs:   number;
   shift_hours:   number;
   deviation_pct: number | null;
   machine_count: number;

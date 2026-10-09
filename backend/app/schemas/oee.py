@@ -72,6 +72,7 @@ class OEEFleet(BaseModel):
     quality:       float
     oee:           float
     deviation_hrs: float
+    running_hrs:   float = 0.0
     shift_hours:   float
     deviation_pct: Optional[float] = None
     machine_count: int
