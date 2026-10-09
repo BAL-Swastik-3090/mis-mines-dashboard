@@ -37,6 +37,7 @@ import {
   StatBar, Tabs, Td, Th, inputClass, filterSelectClass, type Tone,
 } from "@/components/minehub/ui";
 import Dialog from "@/components/minehub/Dialog";
+import Combobox from "@/components/minehub/Combobox";
 import TareRegister from "./TareRegister";
 import DateField from "@/components/minehub/DateField";
 
@@ -981,10 +982,16 @@ function CaptureDialog({ vehicle, bridges, categories, sources, destinations,
                 <input value={typed} onChange={(e) => setTyped(e.target.value)}
                        inputMode="numeric" className={inputClass} />
               </Field>
+              {/* A list, not a sentence. This field exists to be read back --
+                  it is kept with the figure and shown to management -- and no
+                  report can count how often the indicator fails across four
+                  spellings of "internet not working". Adding a reason nobody
+                  anticipated is one click and is never refused. */}
               <Field label="Why not from the bridge?" required
-                     hint="A failed indicator, a power cut, weighed elsewhere.">
-                <input value={reason} onChange={(e) => setReason(e.target.value)}
-                       className={inputClass} />
+                     hint="Pick the reason, or add one that is not listed.">
+                <Combobox id="wb-manual-reason" category="WB_MANUAL_REASON"
+                          value={reason} onChange={setReason}
+                          placeholder="Indicator not working, power cut…" />
               </Field>
             </div>
           )}
@@ -1813,11 +1820,14 @@ function ApplyTareDialog({ trip, bridges, onClose, onDone, onError }: {
               <input type="number" value={weight} className={inputClass}
                 onChange={(e) => setWeight(e.target.value)} />
             </Field>
+            {/* The same category as the weigh dialog: a tare typed by hand and
+                a gross typed by hand are stopped by the same things, and two
+                lists would drift apart. */}
             <Field label="Why it is being typed" required
               hint="a weight nobody watched settle has to be explainable later">
-              <input value={reason} className={inputClass}
-                placeholder="e.g. the bridge was down"
-                onChange={(e) => setReason(e.target.value)} />
+              <Combobox id="wb-tare-reason" category="WB_MANUAL_REASON"
+                        value={reason} onChange={setReason}
+                        placeholder="Indicator not working, power cut…" />
             </Field>
           </>
         )}
