@@ -83,6 +83,11 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   // The sidebar is the convenience; the enforcement is on /api/amira in
   // auth.py, which now maps to this page rather than to mis.
   "amira": ["dashboard.amira"],
+  // The executive summary DOES ride on dashboard.mis, and that is right: it
+  // shows nothing the MIS dashboard does not already show, only on one screen.
+  // Unlike AMIRA there is no narrower audience to separate, so a permission of
+  // its own would be a row to seed per role for no gain.
+  "executive-summary": ["dashboard.mis"],
 };
 
 /**
@@ -103,6 +108,9 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
  * the people who have no dashboard are usually there to use one.
  */
 const LANDING_RANK: Record<AppPage, number> = {
+  // Above MIS, where the mine asked for it: the one-screen management view
+  // comes before the operational detail it summarises.
+  "executive-summary": 5,
   "mis": 10,
   "oee": 20,
   "intelligence": 30,

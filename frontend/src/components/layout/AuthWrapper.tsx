@@ -167,7 +167,14 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
 
   const handleLoginSuccess = () => {
     setNotice(null);
-    setPage("mis");
+    // SIGNING IN LANDS ON THE EXECUTIVE SUMMARY, not on whatever page was last
+    // open. The persisted page is right for a reload — it keeps somebody where
+    // they were working — and wrong for a new session, where the mine wants
+    // everyone to start from the same one-screen view.
+    //
+    // Safe for a user who cannot open it: the effect above moves anyone off a
+    // page they lack access to, onto their own highest-ranked page.
+    setPage("executive-summary");
     void refresh();
   };
 

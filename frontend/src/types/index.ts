@@ -118,6 +118,54 @@ export interface StockPositionResponse {
   updated_by: string | null;
 }
 
+// ── Mines Executive Summary ───────────────────────────────────
+/** One grade line. Every figure is nullable and none defaults to zero: a blank
+ *  Cr/Fe means SAP posts no such characteristic on production entry, where a
+ *  zero would claim the ore assayed nought. */
+export interface ExecGradeRow {
+  grade: string;
+  label: string;
+  qty:   number | null;
+  cr2o3: number | null;
+  crfe:  number | null;
+}
+
+/** The sheet's Weighted Average row: SUMPRODUCT / SUM, never a mean. */
+export interface ExecWeightedTotal {
+  qty:   number | null;
+  cr2o3: number | null;
+  crfe:  number | null;
+  cr:    number | null;
+}
+
+export interface ExecPlantRow {
+  plant: string;
+  qty:   number | null;
+  cr:    number | null;
+  cr_covered_pct: number | null;
+}
+
+/** One column of the report — TD or MTD. Despatch is keyed by CUSTOMERNO. */
+export interface ExecPeriodBlock {
+  production:       ExecGradeRow[];
+  production_total: ExecWeightedTotal;
+  despatch:         Record<string, ExecGradeRow[]>;
+  despatch_total:   Record<string, ExecWeightedTotal>;
+  plant:            ExecPlantRow[];
+  plant_total:      ExecWeightedTotal;
+}
+
+export interface ExecutiveSummaryResponse {
+  /** Two as-on dates, a day apart on purpose: stock is counted at the start of
+   *  a day, performance is a completed day. */
+  report_day:  string;
+  stock_as_on: string;
+  mtd_from:    string;
+  stock: StockPositionResponse;
+  td:    ExecPeriodBlock;
+  mtd:   ExecPeriodBlock;
+}
+
 // ── Production API Responses ─────────────────────────────────
 export interface ProductionKpiCard {
   today_actual: number | null;

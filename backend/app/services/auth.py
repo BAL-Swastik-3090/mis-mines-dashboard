@@ -272,7 +272,12 @@ PREFIX_PAGE: tuple[tuple[str, str], ...] = (
     # a narrower right than reading production figures, and this is the line
     # the middleware enforces -- hiding the sidebar entry alone would leave
     # the data one URL away.
+    #
+    # The incoming branch predates migration 082 and still mapped this to
+    # "mis". Taking it would have put the chromium balance back in front of
+    # all 38 MIS holders, which is the thing 082 was written to stop.
     ("/api/amira", "amira"),
+    ("/api/executive-summary", "mis"),
     # Ferrochrome output and its composite analysis, read-only over SAP.
     ("/api/plant-output", "mis"),
     ("/api/fuel-management", "fuel-management"),

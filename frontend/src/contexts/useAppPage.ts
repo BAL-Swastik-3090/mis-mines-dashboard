@@ -16,7 +16,7 @@ import { persist } from "zustand/middleware";
 // "weather" is its own screen rather than a strip on the MIS dashboard: it is
 // consulted before a shift is planned, by people who are not otherwise reading
 // production figures, and a full-height map cannot share a page with anything.
-export type AppPage = "mis" | "weather" | "fuel-management" | "ev-tracking" | "oee" | "intelligence" | "amira" | "access-control" | "minehub" | "manpower" | "operations" | "workforce" | "market" | "organisation" | "weighbridge" | "gate" | "capacity" | "usage";
+export type AppPage = "mis" | "executive-summary" | "weather" | "fuel-management" | "ev-tracking" | "oee" | "intelligence" | "amira" | "access-control" | "minehub" | "manpower" | "operations" | "workforce" | "market" | "organisation" | "weighbridge" | "gate" | "capacity" | "usage";
 
 interface AppPageStore {
   page: AppPage;
@@ -26,7 +26,11 @@ interface AppPageStore {
 export const useAppPage = create<AppPageStore>()(
   persist(
     (set) => ({
-      page: "mis",
+      // The landing screen. A one-page management view of the whole mine comes
+      // before the operational dashboard it summarises, which is what the mine
+      // asked for. Persisted after that, so anyone who navigates away stays
+      // where they left off — only a fresh sign-in resets to this.
+      page: "executive-summary",
       setPage: (page) => set({ page }),
     }),
     { name: "kaliapani-app-page" }

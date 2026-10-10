@@ -1,5 +1,5 @@
 "use client";
-import { Activity, BarChart3, Boxes, CalendarRange, ChevronLeft, ChevronRight, Calculator, ClipboardList, CloudSun, DoorOpen, ExternalLink, Gauge, LayoutDashboard, LineChart, Network, Radar, Scale, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
+import { Activity, BarChart3, Boxes, CalendarRange, ChevronLeft, ChevronRight, Calculator, ClipboardCheck, ClipboardList, CloudSun, DoorOpen, ExternalLink, Gauge, LayoutDashboard, LineChart, Network, Radar, Scale, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { canOpen } from "@/contexts/pageAccess";
 import { useSidebar }               from "@/contexts/useSidebar";
@@ -33,6 +33,7 @@ export type NavItem =
       need?: string };
 
 const NAV_ITEMS: NavItem[] = [
+  { kind: "page", id: "executive-summary", label: "Executive Summary",        icon: ClipboardCheck  },
   { kind: "page", id: "mis",             label: "MIS Dashboard",              icon: LayoutDashboard },
   { kind: "page", id: "weather",         label: "Weather Forecast",           icon: CloudSun        },
   { kind: "page", id: "oee",             label: "OEE / LCM",                  icon: Activity        },
