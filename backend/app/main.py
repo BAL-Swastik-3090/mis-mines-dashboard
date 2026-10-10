@@ -464,6 +464,7 @@ from app.routers import prev_day_actual
 from app.routers import stock_entry
 from app.routers import quality_e2e
 from app.routers import amira
+from app.routers import executive_summary
 from app.routers import plant_output
 from app.routers import alerts as live_alerts
 from app.routers import usage
@@ -506,6 +507,7 @@ app.include_router(prev_day_actual.router)
 app.include_router(stock_entry.router)
 app.include_router(quality_e2e.router)
 app.include_router(amira.router)
+app.include_router(executive_summary.router)
 app.include_router(plant_output.router)
 app.include_router(usage.router)
 app.include_router(live_alerts.router)

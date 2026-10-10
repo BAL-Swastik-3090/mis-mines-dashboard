@@ -267,6 +267,7 @@ PREFIX_PAGE: tuple[tuple[str, str], ...] = (
     # the two above: an unmapped path skips the page check entirely.
     ("/api/quality-e2e", "mis"),
     ("/api/amira", "mis"),
+    ("/api/executive-summary", "mis"),
     # Ferrochrome output and its composite analysis, read-only over SAP.
     ("/api/plant-output", "mis"),
     ("/api/fuel-management", "fuel-management"),

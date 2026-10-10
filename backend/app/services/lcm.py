@@ -163,19 +163,31 @@ LOSS_TYPE_BY_COLUMN = {
     "mines_restriction": "Non Controllable",
 }
 KAM_BY_COLUMN = {
-    "breakdown": "Amarendra Sarangi",     "maintenance": "Amarendra Sarangi",
-    "late_start": "Pramod Kumar",         "tiffin": "Gurpreet Singh",
-    "hsd_shortage": "Bhimsen Barik",      "strike": "Gurpreet Singh",
-    "idle_requ_basic": "Pramod Kumar",    "safety_talk": "Pramod Kumar",
-    "dump_jam": "Pramod Kumar",           "lmv_availability": "Gurpreet Singh",
-    "illumination_problem": "K L Das",    "absence_operator": "Gurpreet Singh",
-    "idle": "Pramod Kumar",               "tipper_shortage": "Amarendra Sarangi",
-    "early_close": "Pramod Kumar",        "hsd_filling": "Bhimsen Barik",
-    "not_operation": "Pramod Kumar",      "rain_slippery": "Pramod Kumar",
-    "trains_truck": "Maheswar Mohanty",   "imfa_blasting": "Pramod Kumar",
-    "face_preparation": "Pramod Kumar",   "job_allocation": "Pramod Kumar",
-    "idle_safety": "Pramod Kumar",        "other": "Pramod Kumar",
-    "mines_restriction": "Pramod Kumar",
+    "breakdown":           "Amarendra Sarangi",
+    "maintenance":         "Amarendra Sarangi",
+    "late_start":          "Rana Vikash Singh",
+    "tiffin":              "Gurpreet Singh",
+    "hsd_shortage":        "Praspero Sahoo",
+    "strike":              "Gurpreet Singh",
+    "idle_requ_basic":     "Rana Vikash Singh",
+    "safety_talk":         "Rana Vikash Singh",
+    "dump_jam":            "Rana Vikash Singh",
+    "lmv_availability":    "Gurpreet Singh",
+    "illumination_problem": "K L Das",
+    "absence_operator":    "Gurpreet Singh",
+    "idle":                "Rana Vikash Singh",
+    "tipper_shortage":     "Amarendra Sarangi",
+    "early_close":         "Rana Vikash Singh",
+    "hsd_filling":         "Praspero Sahoo",
+    "not_operation":       "Rana Vikash Singh",
+    "rain_slippery":       "Rana Vikash Singh",
+    "trains_truck":        "Maheswar Mohanty",
+    "imfa_blasting":       "Rana Vikash Singh",
+    "face_preparation":    "Rana Vikash Singh",
+    "job_allocation":      "Rana Vikash Singh",
+    "idle_safety":         "Rana Vikash Singh",
+    "other":               "Rana Vikash Singh",
+    "mines_restriction":   "Rana Vikash Singh",
 }
 UNCLASSIFIED = "Unclassified"
 
@@ -459,7 +471,7 @@ def _weighted_rate(grade_qty: dict[str, float], quoted: dict) -> dict:
 # but the org structure has three heads, and the three smaller owners sit under
 # them:
 #
-#     Head Engineering       absorbs Bhimsen Barik (H.S.D shortage / filling)
+#     Head Engineering       absorbs Praspero Sahoo (H.S.D shortage / filling)
 #                                and K L Das       (Illumination problem)
 #     Head Human Resource    absorbs Maheswar Mohanty (Trans. truck jam)
 #
@@ -467,8 +479,8 @@ def _weighted_rate(grade_qty: dict[str, float], quoted: dict) -> dict:
 # also what the user actually specified, head by head.
 #
 # 'dump_jam' was not in the list the user first sent — their Head Mines Operation
-# named 13 heads while the code has 14 for Pramod Kumar. It was assigned here to
-# Head Mines Operation because KAM_BY_COLUMN already gives it to Pramod Kumar,
+# named 13 heads while the code has 14 for Rana Vikash Singh. It was assigned here to
+# Head Mines Operation because KAM_BY_COLUMN already gives it to Rana Vikash Singh,
 # who is that head, and the mine CONFIRMED that placement on 2026-09-07. It
 # carries zero loss in every month checked (Jun/Jul/Aug 2026) so nothing moved
 # either way, but the placement is now settled rather than inferred.
@@ -494,13 +506,13 @@ CHIEF_OF_MINES = {"role": "CHIEF", "title": "Chief of Mines", "owner": "BK Padhi
 
 # Display order follows the user's diagram, left to right.
 ROLE_META = [
-    {"role": ROLE_MINES_OP, "title": "Head Mines Operation", "owner": "Pramod Kumar"},
+    {"role": ROLE_MINES_OP, "title": "Head Mines Operation", "owner": "Rana Vikash Singh"},
     {"role": ROLE_ENGG,     "title": "Head Engineering",     "owner": "Amarendra Sarangi"},
     {"role": ROLE_HR,       "title": "Head Human Resource",  "owner": "Gurpreet Singh"},
 ]
 
 ROLE_BY_COLUMN = {
-    # Head Mines Operation — Pramod Kumar
+    # Head Mines Operation — Rana Vikash Singh
     "late_start":           ROLE_MINES_OP,
     "idle_requ_basic":      ROLE_MINES_OP,
     "safety_talk":          ROLE_MINES_OP,

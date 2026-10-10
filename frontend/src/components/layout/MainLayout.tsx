@@ -8,6 +8,7 @@ import ElectricVehiclesSection from "@/components/sections/ElectricVehiclesSecti
 import OEESection              from "@/components/sections/OEESection";
 import IntelligenceSection     from "@/components/sections/IntelligenceSection";
 import AmiraAccountingTable    from "@/components/tables/AmiraAccountingTable";
+import ExecutiveSummarySection from "@/components/sections/ExecutiveSummarySection";
 import MineHubSection          from "@/components/sections/MineHubSection";
 import ManpowerSection         from "@/components/sections/ManpowerSection";
 import OperationsSection       from "@/components/sections/OperationsSection";
@@ -99,6 +100,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           {page === "oee"              && <OEESection />}
           {page === "intelligence"     && <IntelligenceSection />}
           {page === "amira"            && <AmiraAccountingTable />}
+          {page === "executive-summary" && <ExecutiveSummarySection />}
           {page === "fuel-management"  && <FuelManagementSection />}
           {page === "ev-tracking"      && <ElectricVehiclesSection />}
           {page === "access-control"   && <AccessControlSection />}

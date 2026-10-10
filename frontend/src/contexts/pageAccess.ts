@@ -79,6 +79,11 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   // the screen. Promote it to its own page permission when the mine wants the
   // two audiences separated — the API prefix is already mapped in auth.py.
   "amira": ["dashboard.mis"],
+  // Same gate as AMIRA and for the same reason: the summary shows nothing the
+  // MIS dashboard does not already show, it only shows it on one screen. A
+  // dashboard.executive permission would need a row seeded per role in
+  // mines_role_page_access before anyone could open it.
+  "executive-summary": ["dashboard.mis"],
 };
 
 /**
@@ -99,6 +104,9 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
  * the people who have no dashboard are usually there to use one.
  */
 const LANDING_RANK: Record<AppPage, number> = {
+  // Above MIS, where the mine asked for it: the one-screen management view
+  // comes before the operational detail it summarises.
+  "executive-summary": 5,
   "mis": 10,
   "oee": 20,
   "intelligence": 30,
