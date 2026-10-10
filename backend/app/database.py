@@ -42,7 +42,22 @@ POOL_SIZE      = 2      # what is RETAINED at rest — the number that matters h
 # Overflow connections are closed when returned rather than pooled, so headroom
 # costs nothing while idle. Kept generous because one dashboard page load fires
 # ~15 requests at once and a tight ceiling would turn that into 503s.
-MAX_OVERFLOW   = 6      # hard ceiling of 8 concurrent connections per process
+#
+# WHICH IS EXACTLY WHAT HAPPENED. At 6 the ceiling was 8 per worker, 16 across
+# both, and that is fewer than a single page load needs now that the Executive
+# Summary sits at the top of the sidebar: it is the first thing every user
+# opens, it holds a connection for ~2.5 seconds, and the requests behind it
+# queued for the full pool_timeout and then returned 500. Market Watch showing
+# "Internal server error" was this, not a fault of its own.
+#
+# RAISED CAREFULLY, BECAUSE THE SERVER IS NOT OURS ALONE. balcorpdb allows 500
+# connections, has reached 501, and has refused 208. This host holds 246 of
+# them -- 146 of those asleep, 48 idle for over an hour, the oldest for 5.7
+# hours -- but they belong to the other applications sharing the machine, not
+# to this one: the idle reaper below means an idle dashboard holds zero. So
+# this only widens the burst, which is returned and closed immediately, and
+# leaves the resting footprint at two.
+MAX_OVERFLOW   = 12     # hard ceiling of 14 concurrent connections per process
 POOL_TIMEOUT   = 10     # fail fast rather than queue behind a saturated server
 POOL_RECYCLE   = 280    # well under any proxy or wait_timeout; forces turnover
 
