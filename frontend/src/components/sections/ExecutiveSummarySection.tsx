@@ -57,10 +57,21 @@ const tone = (k: string) => GRADE_TONE[k] ?? GRADE_TONE.UNASSAYED;
    and made the page read as chrome with figures squeezed between. The house
    pattern — white card header, pale grey column header — is what the OEE and
    Plant Output tables use, and the figures are what should carry the weight. */
-const TH   = "px-3 py-2.5 text-[10px] font-condensed font-bold tracking-widest "
-  + "uppercase text-txt-secondary";
-const THEAD = "bg-bg-section border-b border-border";
-const TD   = "px-3 py-2";
+/* RULED LIKE A SPREADSHEET, at the mine's instruction. The tables carried
+   horizontal rules only, so the eye had nothing to follow across a row of
+   eleven columns and the Location block in particular read as a drift of
+   figures. Every cell is now boxed, which is what the sheet this page
+   reproduces looks like on the desk it is printed from.
+
+   border-collapse is already set on each table, so adjacent borders merge into
+   one line rather than doubling into a 2px ladder. Rows tighten from py-2 to
+   py-1.5 because a grid adds its own visual weight and the old spacing with
+   lines through it reads loose. */
+const CELL = "border border-border-light";
+const TH   = "px-3 py-2 text-[10px] font-condensed font-bold tracking-widest "
+  + "uppercase text-txt-secondary " + CELL;
+const THEAD = "bg-bg-section";
+const TD   = "px-3 py-1.5 " + CELL;
 /* The MTD half of every table sits on a faint tint. Two periods side by side
    with identical columns is the easiest place on this page to read a figure
    off the wrong one, and a rule alone is too quiet to stop it. */
@@ -107,7 +118,7 @@ function Card({ icon, title, sub, children }: {
         <h3 className="font-condensed font-bold text-[13px] text-navy tracking-widest uppercase">
           {title}
         </h3>
-        {sub && <span className="text-[10px] font-mono text-txt-light ml-auto">{sub}</span>}
+        {sub && <span className="text-[10px] tabular-nums text-txt-light ml-auto">{sub}</span>}
       </div>
       <div className="overflow-x-auto">{children}</div>
     </section>
@@ -131,7 +142,7 @@ function Tile({ label, value, unit, sub, accent, strong }: {
         </span>
         <span className="text-[10px] text-txt-light">{unit}</span>
       </div>
-      {sub && <div className="mt-1 text-[10px] text-txt-light font-mono truncate">{sub}</div>}
+      {sub && <div className="mt-1 text-[10px] text-txt-light tabular-nums truncate">{sub}</div>}
     </div>
   );
 }
@@ -155,7 +166,7 @@ function StockBlock({ d }: { d: ExecutiveSummaryResponse }) {
               {cg.map((g) => <th key={g.key} className={`${TH} text-right`}>{g.label}</th>)}
             </tr>
           </thead>
-          <tbody className="divide-y divide-border-light">
+          <tbody>
             {(s.clearance?.rows ?? []).map((r) => (
               <tr key={r.key}
                   className={r.is_total ? "bg-bg-section/70" : "hover:bg-bg-light"}>
@@ -185,7 +196,7 @@ function StockBlock({ d }: { d: ExecutiveSummaryResponse }) {
               <th className={`${TH} text-right`}>Total</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-border-light">
+          <tbody>
             {(s.location_grid?.rows ?? []).map((r) => (
               <tr key={r.key}
                   className={r.is_total ? "bg-bg-section/70" : "hover:bg-bg-light"}>
@@ -247,7 +258,7 @@ function GradeTable({ icon, title, sub, qtyLabel, td, mtd, tdTotal, mtdTotal }: 
             <th className={`${TH} text-right ${MTD_BG}`}>Cr2O3 %</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-border-light">
+        <tbody>
           {keys.map((k) => {
             const a = at(td, k), b = at(mtd, k), t = tone(k);
             return (
@@ -315,7 +326,7 @@ function PlantBlock({ statusTill, td, mtd, tdTotal, mtdTotal }: {
             <th className={`${TH} text-right ${MTD_BG}`}>Cr %</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-border-light">
+        <tbody>
           {names.map((n) => {
             const a = at(td, n), b = at(mtd, n);
             return (
