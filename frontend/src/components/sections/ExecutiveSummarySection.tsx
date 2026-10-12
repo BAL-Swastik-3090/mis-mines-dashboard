@@ -18,8 +18,11 @@
  * recorded the number — see the footnote for the four that are permanently
  * dashed, each of which fills itself when the data starts arriving.
  *
- * TYPOGRAPHY FOLLOWS THE OEE SECTION, at the mine's instruction: tables are
- * `text-[12px] font-mono` so digits line up down a column, headings are
+ * TYPOGRAPHY FOLLOWS MARKET WATCH'S ROYALTY TABLE, at the mine's instruction:
+ * tables are `text-[12px] tabular-nums` -- the page's own sans face, with the
+ * digits on a fixed advance so they still line up down a column. They were
+ * `font-mono`, which set every cell in IBM Plex Mono and made these tables
+ * read as a different document from the rest of the dashboard. Headings stay
  * `font-condensed tracking-widest uppercase`.
  *
  * TWO AS-ON DATES, A DAY APART ON PURPOSE. The mine's sheet is headed "Stock
@@ -64,14 +67,25 @@ const TD   = "px-3 py-2";
 const MTD_BG = "bg-bg-light";
 
 /* ── numbers ───────────────────────────────────────────────────────────── */
+/** Decimals only where there are decimals.
+ *
+ *  Stock and production are booked in whole tonnes, so a column of 5,559.00,
+ *  3,052.00, 500.00 spends three characters per row saying nothing. The
+ *  fraction is kept the moment one exists — an assay reads 42.97 and a royalty
+ *  4,852.04 — so nothing is rounded away, it is only not printed when it is
+ *  not there.
+ *
+ *  Rounded FIRST and tested after: 2,999.999 must print as 3,000 rather than
+ *  as a whole number that disagrees with its own total. */
 function N({ v, dp = 2, strong }: { v?: number | null; dp?: number; strong?: boolean }) {
   if (v === null || v === undefined)
     return <span className="text-txt-light/40">—</span>;
   if (v === 0)
-    return <span className="text-txt-light/45">{formatIndian(0, dp)}</span>;
+    return <span className="text-txt-light/45">0</span>;
+  const r = Number(v.toFixed(dp));
   return (
     <span className={strong ? "font-bold text-navy" : "text-txt-primary"}>
-      {formatIndian(Number(v.toFixed(dp)), dp)}
+      {formatIndian(r, Number.isInteger(r) ? 0 : dp)}
     </span>
   );
 }
@@ -132,7 +146,7 @@ function StockBlock({ d }: { d: ExecutiveSummaryResponse }) {
           sub={`as on ${niceDate(d.stock_as_on)}`}>
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-px bg-border-light">
         {/* Clearance status */}
-        <table className="w-full text-[12px] font-mono border-collapse bg-white">
+        <table className="w-full text-[12px] tabular-nums border-collapse bg-white">
           <thead>
             <tr className={THEAD}>
               <th className={`${TH} text-left min-w-[150px]`}>Mines Clearance Status</th>
@@ -162,7 +176,7 @@ function StockBlock({ d }: { d: ExecutiveSummaryResponse }) {
         </table>
 
         {/* Location & grade */}
-        <table className="w-full text-[12px] font-mono border-collapse bg-white">
+        <table className="w-full text-[12px] tabular-nums border-collapse bg-white">
           <thead>
             <tr className={THEAD}>
               <th className={`${TH} text-left min-w-[150px]`}>Location &amp; Grade wise Stock</th>
@@ -210,7 +224,7 @@ function GradeTable({ icon, title, sub, qtyLabel, td, mtd, tdTotal, mtdTotal }: 
 
   return (
     <Card icon={icon} title={title} sub={sub}>
-      <table className="w-full text-[12px] font-mono border-collapse">
+      <table className="w-full text-[12px] tabular-nums border-collapse">
         <thead>
           <tr className={THEAD}>
             <th className={`${TH} text-left min-w-[130px]`} rowSpan={2}>Grade</th>
@@ -283,7 +297,7 @@ function PlantBlock({ statusTill, td, mtd, tdTotal, mtdTotal }: {
   return (
     <Card icon={<Factory size={14} />} title="Ferro Chrome Plant Performance"
           sub={statusTill}>
-      <table className="w-full text-[12px] font-mono border-collapse">
+      <table className="w-full text-[12px] tabular-nums border-collapse">
         <thead>
           <tr className={THEAD}>
             <th className={`${TH} text-left min-w-[150px]`} rowSpan={2}>Plant</th>
