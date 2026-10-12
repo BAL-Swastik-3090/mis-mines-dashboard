@@ -68,6 +68,13 @@ const tone = (k: string) => GRADE_TONE[k] ?? GRADE_TONE.UNASSAYED;
    py-1.5 because a grid adds its own visual weight and the old spacing with
    lines through it reads loose. */
 const CELL = "border border-border-light";
+/* THE TWO PERIODS READ AS TWO TABLES, so they are separated like two tables.
+   A single ruled grid running TD straight into MTD meant the eye crossed the
+   boundary without noticing it, which is the one mistake this page must not
+   invite: the columns on either side carry identical names. The gutter takes
+   no border of its own — the ruled cells on each side draw its edges — so it
+   reads as the gap between two sheets rather than as an empty column. */
+const GAP = "w-4 min-w-[16px] p-0 border-0 bg-bg-soft";
 const TH   = "px-3 py-2 text-[10px] font-condensed font-bold tracking-widest "
   + "uppercase text-txt-secondary " + CELL;
 const THEAD = "bg-bg-section";
@@ -99,6 +106,14 @@ function N({ v, dp = 2, strong }: { v?: number | null; dp?: number; strong?: boo
       {formatIndian(r, Number.isInteger(r) ? 0 : dp)}
     </span>
   );
+}
+
+/** "11 Oct" — enough to say which day without repeating the year in a heading
+ *  that already sits under one. */
+function shortDay(iso?: string | null): string {
+  if (!iso) return "";
+  return new Date(iso + "T00:00:00")
+    .toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
 }
 
 function niceDate(iso?: string | null) {
@@ -155,7 +170,17 @@ function StockBlock({ d }: { d: ExecutiveSummaryResponse }) {
   return (
     <Card icon={<Package size={14} />} title="Stock Position"
           sub={`as on ${niceDate(d.stock_as_on)}`}>
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-px bg-border-light">
+      {/* THE SAME GUTTER THE PERIOD TABLES USE. Clearance and Location are two
+          separate statements about the same tonnage — one by what it is cleared
+          for, one by where it sits — and they were divided by a single pixel,
+          so the eye ran from the LG column straight into "Location & grade"
+          as though it were a twelfth column of the first table. Sixteen
+          pixels of page showing through says they are two sheets, and matches
+          the gap between TD and MTD further down the page.
+
+          The 1px rule is gone with it: the gap does that job now, and a line
+          as well would just be the old divider with space around it. */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 bg-bg-soft">
         {/* Clearance status */}
         <table className="w-full text-[12px] tabular-nums border-collapse bg-white">
           <thead>
@@ -220,8 +245,13 @@ function StockBlock({ d }: { d: ExecutiveSummaryResponse }) {
 }
 
 /* ── Blocks 2-4 · a grade table, TD beside MTD ─────────────────────────── */
-function GradeTable({ icon, title, sub, qtyLabel, td, mtd, tdTotal, mtdTotal }: {
+function GradeTable({ icon, title, sub, qtyLabel, tdLabel, mtdLabel,
+                     td, mtd, tdTotal, mtdTotal }: {
   icon: React.ReactNode; title: string; sub: string; qtyLabel: string;
+  /* The heading says WHICH day and WHICH span, not just "Today". The page is
+     read a day or two in arrears — the mine files in arrears — so "Today" on a
+     column holding the 11th, opened on the 12th, is simply wrong. */
+  tdLabel: string; mtdLabel: string;
   td: ExecGradeRow[]; mtd: ExecGradeRow[];
   tdTotal?: ExecWeightedTotal; mtdTotal?: ExecWeightedTotal;
 }) {
@@ -240,13 +270,14 @@ function GradeTable({ icon, title, sub, qtyLabel, td, mtd, tdTotal, mtdTotal }: 
           <tr className={THEAD}>
             <th className={`${TH} text-left min-w-[130px]`} rowSpan={2}>Grade</th>
             <th className={`${TH} text-center border-l border-border text-steel`} colSpan={3}>
-              TD · Today
+              {tdLabel}
             </th>
+            <th className={GAP} rowSpan={2} aria-hidden />
             {/* The MTD half keeps its tint through BOTH header rows and the body.
                 Two periods with identical column names side by side is the
                 easiest place on this page to read a figure off the wrong one. */}
             <th className={`${TH} text-center border-l-2 border-border text-steel ${MTD_BG}`} colSpan={3}>
-              MTD · Month to Date
+              {mtdLabel}
             </th>
           </tr>
           <tr className={THEAD}>
@@ -271,6 +302,7 @@ function GradeTable({ icon, title, sub, qtyLabel, td, mtd, tdTotal, mtdTotal }: 
                 <td className={`${TD} text-right border-l border-border-light`}><N v={a?.qty} strong /></td>
                 <td className={`${TD} text-right`}><N v={a?.crfe} /></td>
                 <td className={`${TD} text-right`}><N v={a?.cr2o3} /></td>
+                <td className={GAP} aria-hidden />
                 <td className={`${TD} text-right border-l border-border ${MTD_BG}`}><N v={b?.qty} strong /></td>
                 <td className={`${TD} text-right ${MTD_BG}`}><N v={b?.crfe} /></td>
                 <td className={`${TD} text-right ${MTD_BG}`}><N v={b?.cr2o3} /></td>
@@ -286,6 +318,7 @@ function GradeTable({ icon, title, sub, qtyLabel, td, mtd, tdTotal, mtdTotal }: 
             <td className={`${TD} text-right border-l border-border-light`}><N v={tdTotal?.qty} strong /></td>
             <td className={`${TD} text-right`}><N v={tdTotal?.crfe} strong /></td>
             <td className={`${TD} text-right`}><N v={tdTotal?.cr2o3} strong /></td>
+            <td className={GAP} aria-hidden />
             <td className={`${TD} text-right border-l border-border`}><N v={mtdTotal?.qty} strong /></td>
             <td className={`${TD} text-right`}><N v={mtdTotal?.crfe} strong /></td>
             <td className={`${TD} text-right`}><N v={mtdTotal?.cr2o3} strong /></td>
@@ -297,8 +330,8 @@ function GradeTable({ icon, title, sub, qtyLabel, td, mtd, tdTotal, mtdTotal }: 
 }
 
 /* ── Block 5 · ferrochrome ─────────────────────────────────────────────── */
-function PlantBlock({ statusTill, td, mtd, tdTotal, mtdTotal }: {
-  statusTill: string;
+function PlantBlock({ statusTill, tdLabel, mtdLabel, td, mtd, tdTotal, mtdTotal }: {
+  statusTill: string; tdLabel: string; mtdLabel: string;
   td: ExecPlantRow[]; mtd: ExecPlantRow[];
   tdTotal?: ExecWeightedTotal; mtdTotal?: ExecWeightedTotal;
 }) {
@@ -313,10 +346,11 @@ function PlantBlock({ statusTill, td, mtd, tdTotal, mtdTotal }: {
           <tr className={THEAD}>
             <th className={`${TH} text-left min-w-[150px]`} rowSpan={2}>Plant</th>
             <th className={`${TH} text-center border-l border-border text-steel`} colSpan={2}>
-              TD · Today
+              {tdLabel}
             </th>
+            <th className={GAP} rowSpan={2} aria-hidden />
             <th className={`${TH} text-center border-l-2 border-border text-steel ${MTD_BG}`} colSpan={2}>
-              MTD · Month to Date
+              {mtdLabel}
             </th>
           </tr>
           <tr className={THEAD}>
@@ -334,6 +368,7 @@ function PlantBlock({ statusTill, td, mtd, tdTotal, mtdTotal }: {
                 <td className={`${TD} font-condensed font-bold text-[11px] text-navy`}>{n}</td>
                 <td className={`${TD} text-right border-l border-border-light`}><N v={a?.qty} strong /></td>
                 <td className={`${TD} text-right`}><N v={a?.cr} /></td>
+                <td className={GAP} aria-hidden />
                 <td className={`${TD} text-right border-l border-border ${MTD_BG}`}><N v={b?.qty} strong /></td>
                 <td className={`${TD} text-right ${MTD_BG}`}>
                   <N v={b?.cr} />
@@ -354,6 +389,7 @@ function PlantBlock({ statusTill, td, mtd, tdTotal, mtdTotal }: {
             </td>
             <td className={`${TD} text-right border-l border-border-light`}><N v={tdTotal?.qty} strong /></td>
             <td className={`${TD} text-right`}><N v={tdTotal?.cr} strong /></td>
+            <td className={GAP} aria-hidden />
             <td className={`${TD} text-right border-l border-border`}><N v={mtdTotal?.qty} strong /></td>
             <td className={`${TD} text-right`}><N v={mtdTotal?.cr} strong /></td>
           </tr>
@@ -386,6 +422,12 @@ export default function ExecutiveSummarySection() {
   /* Every performance card is cut off at the same day, so each header says
      which day rather than repeating the column names printed inside it. */
   const statusTill = d ? `Status till ${niceDate(d.report_day)}` : "";
+  /* Built once here rather than inside each table: the four of them must name
+     the same days, and four copies of this would be four chances to drift. */
+  const tdLabel  = d ? `TD · ${shortDay(d.report_day)}` : "TD";
+  const mtdLabel = d
+    ? `MTD · ${shortDay(d.mtd_from)} – ${shortDay(d.report_day)}`
+    : "MTD";
 
   const pd = d?.stock?.proposed_despatch;
   const pdSub = pd?.has_data
@@ -393,6 +435,28 @@ export default function ExecutiveSummarySection() {
         .map(([k, v]) => `${pd.labels?.[k] ?? k} ${formatIndian(v, 0)}`)
         .join(" · ")
     : "nothing proposed";
+
+  /* THE FOUR HEADLINE FIGURES, DEFINED ONCE.
+   *
+   * They are shown twice — as the tiles across the top and as the table under
+   * them — and the mine asked for both. Two renderings reading two
+   * computations is how a page ends up quoting a different Total Stock in two
+   * places a hand's width apart, with nothing to say which is right. So the
+   * figure is worked out here and both views are given the same array. */
+  const headline = d ? [
+    { key: "stock", label: "Total Stock", unit: "MT",
+      value: d.stock?.total_stock ?? null,
+      sub: "mine · all grades, all statuses", accent: "#1565c0", strong: true },
+    { key: "perm", label: "Permission in Hand", unit: "MT",
+      value: d.stock?.clearance?.rows
+        ?.find((r) => r.key === "PERMISSION_IN_HAND")?.total ?? null,
+      sub: "cleared · ready to lift", accent: "#2e7d32", strong: false },
+    { key: "prop", label: "Proposed Despatch", unit: "MT",
+      value: pd?.total ?? null, sub: pdSub, accent: "#ad1457", strong: false },
+    { key: "dmtd", label: "Despatch MTD", unit: "MT",
+      value: DEST.reduce((n, x) => n + (d.mtd.despatch_total[x.key]?.qty ?? 0), 0),
+      sub: "Balasore + Sukinda", accent: "#0f766e", strong: false },
+  ] : [];
 
   return (
     <div className="space-y-4">
@@ -425,22 +489,76 @@ export default function ExecutiveSummarySection() {
               grade, so inside the clearance grid it had nothing to put under
               four of the columns and sat there as a row of dashes. */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <Tile label="Total Stock" value={d.stock?.total_stock} unit="MT"
-                  sub="mine · all grades, all statuses" accent="#1565c0" strong />
-            <Tile label="Permission in Hand"
-                  value={d.stock?.clearance?.rows?.find((r) => r.key === "PERMISSION_IN_HAND")?.total}
-                  unit="MT" sub="cleared · ready to lift" accent="#2e7d32" />
-            <Tile label="Proposed Despatch" value={pd?.total} unit="MT"
-                  sub={pdSub} accent="#ad1457" />
-            <Tile label="Despatch MTD"
-                  value={DEST.reduce((n, x) => n + (d.mtd.despatch_total[x.key]?.qty ?? 0), 0)}
-                  unit="MT" sub="Balasore + Sukinda" accent="#0f766e" />
+            {headline.map((h) => (
+              <Tile key={h.key} label={h.label} value={h.value} unit={h.unit}
+                    sub={h.sub} accent={h.accent} strong={h.strong} />
+            ))}
           </div>
+
+          {/* ── 'AT A GLANCE' — WITHDRAWN, NOT DELETED ──────────────────
+
+              The mine asked for the four headline figures as a table and,
+              seeing it, judged that it did not earn its place: the tiles
+              above already say the same four things, and a four-row table
+              under them repeated the page's opening instead of adding to
+              it. Removed at their word.
+
+              Kept here rather than deleted because the request was for the
+              figures in table form, and that may come back in a shape that
+              works — inside the Stock Position card, say, rather than as a
+              card of its own. The `headline` array it reads is still built
+              above and still feeds the tiles, so this needs only to be
+              uncommented to render again.
+
+              The two JSX comments that were inside it are flattened to
+              prose below. A JSX comment ends at the first close-comment
+              marker it meets, so nesting them would close this wrapper early
+              and spill the markup back onto the page -- which is exactly what
+              happened on the first attempt, because this very paragraph
+              spelled that marker out literally.
+
+           The same four figures as a table, at the mine's request. A tile is
+              quick to read and awkward to copy into a report; a ruled row is
+              the opposite, and the daily sheet this page reproduces is a table
+              throughout. Both are fed by `headline` above, so they cannot
+              disagree. 
+          <Card icon={<ClipboardList size={14} />} title="At a glance"
+                sub={`stock as on ${niceDate(d.stock_as_on)}`}>
+            <table className="w-full text-[12px] tabular-nums border-collapse">
+              <thead>
+                 ONLY FOUR COLUMNS, so `w-full` on the table had nowhere to
+                    put its slack but the first one, and Measure stretched to
+                    nearly half the page with UoM marooned out in the middle of
+                    it. The three narrow columns now size to their content and
+                    Basis takes the remainder, which is the column that can
+                    actually use it. 
+                <tr className={THEAD}>
+                  <th className={`${TH} text-left whitespace-nowrap`}>Measure</th>
+                  <th className={`${TH} text-center whitespace-nowrap`}>UoM</th>
+                  <th className={`${TH} text-right whitespace-nowrap`}>Quantity</th>
+                  <th className={`${TH} text-left w-full`}>Basis</th>
+                </tr>
+              </thead>
+              <tbody>
+                {headline.map((h) => (
+                  <tr key={h.key} className="hover:bg-bg-light">
+                    <td className={`${TD} font-condensed font-bold text-[11px] whitespace-nowrap`}
+                        style={{ color: h.accent }}>{h.label}</td>
+                    <td className={`${TD} text-center text-[10px] text-txt-light whitespace-nowrap`}>{h.unit}</td>
+                    <td className={`${TD} text-right whitespace-nowrap`}><N v={h.value} strong={h.strong} /></td>
+                    <td className={`${TD} text-[11px] text-txt-light`}>{h.sub}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+          ──────────────────────────────────────────────────────────── */}
 
           <StockBlock d={d} />
 
           <GradeTable icon={<Pickaxe size={14} />} title="Mines Production"
             sub={statusTill} qtyLabel="Production (MT)"
+            tdLabel={tdLabel} mtdLabel={mtdLabel}
             td={d.td.production} mtd={d.mtd.production}
             tdTotal={d.td.production_total} mtdTotal={d.mtd.production_total} />
 
@@ -448,11 +566,13 @@ export default function ExecutiveSummarySection() {
             <GradeTable key={x.key}
               icon={i === 0 ? <Truck size={14} /> : <Send size={14} />}
               title={x.label} sub={statusTill} qtyLabel="Despatch (MT)"
+              tdLabel={tdLabel} mtdLabel={mtdLabel}
               td={d.td.despatch[x.key] ?? []} mtd={d.mtd.despatch[x.key] ?? []}
               tdTotal={d.td.despatch_total[x.key]} mtdTotal={d.mtd.despatch_total[x.key]} />
           ))}
 
-          <PlantBlock statusTill={statusTill} td={d.td.plant} mtd={d.mtd.plant}
+          <PlantBlock statusTill={statusTill} tdLabel={tdLabel} mtdLabel={mtdLabel}
+            td={d.td.plant} mtd={d.mtd.plant}
             tdTotal={d.td.plant_total} mtdTotal={d.mtd.plant_total} />
 
           {/* What a reader must know before quoting anything off this page. */}
