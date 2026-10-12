@@ -80,6 +80,18 @@ const ROLE_TONE: Record<string, Tone> = {
   PRIMARY: "emerald", RELIEF: "sky", STANDBY: "slate", TRAINEE: "amber",
 };
 
+/** A tipper has one driver per shift, and the shift is the thing that tells
+ *  them apart. The chip used to show only the role, so a machine crewed from
+ *  the mine's alert list drew three identical "primary" chips and the one fact
+ *  that distinguishes them — A, B or C — was nowhere on the screen. */
+const SHIFT_TONE: Record<string, Tone> = {
+  A: "gold", B: "sky", C: "navy",
+};
+
+function crewLabel(role: string, shift: string | null): string {
+  return shift ? `${shift} shift` : role.toLowerCase();
+}
+
 /** What the roster says somebody is doing, in the words people use. */
 function doing(state: string | null): string {
   switch (state) {
@@ -418,7 +430,7 @@ export default function MachineCover() {
                         <div className="flex flex-wrap items-center gap-1.5">
                           {m.crew.map((c) => (
                             <span key={c.operator_id}
-                              title={`${c.role.toLowerCase()} · ${doing(c.state)}`
+                              title={`${crewLabel(c.role, c.shift)} · ${doing(c.state)}`
                                      + (c.cleared
                                           ? ` · assessed${c.level ? ` at level ${c.level}` : ""}`
                                           : " · NOT assessed on this machine")}
@@ -437,8 +449,11 @@ export default function MachineCover() {
                                   : c.level ? `L${c.level}`
                                   : "not assessed"}
                               </span>
-                              <Chip tone={ROLE_TONE[c.role] ?? "slate"} dot={false}>
-                                {c.role.toLowerCase()}
+                              <Chip tone={c.shift
+                                             ? (SHIFT_TONE[c.shift] ?? "slate")
+                                             : (ROLE_TONE[c.role] ?? "slate")}
+                                    dot={false}>
+                                {crewLabel(c.role, c.shift)}
                               </Chip>
                               <button type="button" disabled={busy}
                                 title={`Take ${c.person} off ${m.fleet_code}`}
