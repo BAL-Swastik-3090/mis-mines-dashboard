@@ -32,8 +32,9 @@ that currently returns nothing, so the day the data starts arriving it appears
 with no code change:
 
     HG production       the mine is not producing HG; last ROM1 lot 26 Jan 2026
-    Cr/Fe on production SAP's production entry does not post the characteristic;
-                        only DY01 (despatch) carries Cr/Fe and moisture
+    Cr/Fe before 9 Oct  ROM1 posted Cr2O3 alone until the 9 Oct 2026 lot; from
+                        there it carries Cr/Fe Ratio too, so an earlier month
+                        shows a dash and this one does not
     LG Cr2O3            LG is received at LGCR, which is not inspected
     Sukinda plant Cr%   Jabamoyee files no daily composite assay
 
@@ -54,6 +55,7 @@ from app.services.despatch_grade import (
     _Acc, _band_of, _despatch_rows, _quality,
 )
 from app.services.plant_output import _totals as _plant_totals, get_plant_output
+from app.services.sap_movement import PRODUCTION_QTY
 
 # The four rows of every grade table on the sheet, in its order.
 GRADES: tuple[tuple[str, str], ...] = (
@@ -62,29 +64,38 @@ GRADES: tuple[tuple[str, str], ...] = (
 
 # ── Block 2: where each grade's production tonnage comes from ────────────────
 #
+# THE SAME SOURCE AND THE SAME MOVEMENT RULE AS THE MIS DASHBOARD. Ore is
+# pp_production at plant 1200 keyed on MATERIAL_NO; COB is pp_production at
+# plant 1210 keyed on MATERIAL_DESC. Both sign the quantity through
+# PRODUCTION_QTY, the one definition of the reversal rule, so this screen and
+# the Production and COB sections cannot report different tonnages for a day.
+#
 # NOT from the ROM1 inspection lots. Those cover HG and MG only — LG is received
 # at LGCR and never inspected — so a grade table built on inspections would be
-# missing a quarter of the mine's output. pp_production has all of it.
+# missing a quarter of the mine's output.
 #
-# THE MOVEMENT TYPE IS NOT THE SAME FOR EVERY GRADE. Ore is a goods receipt
-# against the production order (101); low grade arrives as a by-product receipt
-# (531). Using 101 everywhere returns zero for LG and looks like the mine
-# stopped producing it.
+# NO STORAGE LOCATION OR PER-GRADE MOVEMENT TYPE. An earlier version pinned HG
+# and MG to ROM1/101 and LG to LGCR/531, which matched today's postings but
+# would silently drop a grade the day SAP posted it anywhere else. The material
+# number is what identifies the grade; where it was put away is not part of the
+# question this table asks.
 #
-# REVERSALS MUST BE NETTED. LGCR carries 4,490 MT of 532 and ROM1 3,435 MT of
-# 102 across 2026; counting receipts alone overstates production by that much.
-# The 261/262 pairs are consumption and cancel exactly, so they are excluded
-# rather than netted.
+# REVERSALS ARE NETTED by PRODUCTION_QTY, and goods issue (261/262) is excluded
+# as consumption rather than netted. See sap_movement for the proof against SAP.
 #
 # Cross-checked: September MG from pp_production is 15,519.0 MT and the ROM1
 # inspected lots for the same month total 15,519.0 MT. The tonnage and the assay
 # are the same ore.
-PROD_SOURCES: dict[str, dict[str, Any]] = {
-    "HG": {"material": "25000002", "sloc": "ROM1", "receipt": "101", "reversal": "102"},
-    "MG": {"material": "25000001", "sloc": "ROM1", "receipt": "101", "reversal": "102"},
-    "LG": {"material": "25000003", "sloc": "LGCR", "receipt": "531", "reversal": "532"},
+PROD_MATERIALS: dict[str, str] = {
+    "HG": "25000002",   # +52% CHROME ORE
+    "MG": "25000001",   # 40-52% CHROME ORE
+    "LG": "25000003",   # LOW GRADE ORE(-40%CR2O3)
 }
 MINE_PLANT = "1200"
+COB_PLANT = "1210"
+COB_MATERIAL = "CONCENTRATE WITH STD MOISTURE"
+ROM_SLOC = "ROM1"       # where HG and MG ore is inspected
+COB_SLOC = "COBC"       # where the concentrate is inspected
 
 # ── ONE SCAN PER TABLE, NOT ONE PER GRADE PER PERIOD ────────────────────────
 # pp_production holds 387,079 rows and is indexed on MATERIAL_DOCUMENT,
@@ -96,31 +107,35 @@ MINE_PLANT = "1200"
 #
 # TD IS A SUBSET OF MTD — the same month, ending on the same day — so both
 # periods come out of ONE pass with a conditional sum, and the grades come out
-# of the same pass grouped by material. Six scans become one.
+# of the same pass grouped by material. Six scans become one. The ore grades and
+# COB share that single pass as well, because they differ only by plant.
 #
 # Adding an index on (PLANT, POSTING_DATE) would help far more than this and is
 # the real fix; it is a change to a shared production database and is not mine
 # to make.
-_PROD_QTY_SQL = text("""
-    SELECT MATERIAL_NO, STORAGE_LOCATION, MOVEMENT_TYPE,
-           COALESCE(SUM(CASE WHEN POSTING_DATE = :rd THEN QUANTITY END), 0) AS td_qty,
-           COALESCE(SUM(QUANTITY), 0)                                       AS mtd_qty
+_PROD_QTY_SQL = text(f"""
+    SELECT PLANT, MATERIAL_NO, MATERIAL_DESC,
+           COALESCE(SUM(CASE WHEN POSTING_DATE = :rd
+                             THEN ({PRODUCTION_QTY}) ELSE 0 END), 0) AS td_qty,
+           COALESCE(SUM({PRODUCTION_QTY}), 0)                        AS mtd_qty
     FROM pp_production
-    WHERE PLANT = :plant
+    WHERE PLANT IN (:plant, :cob_plant)
       AND POSTING_DATE BETWEEN :mf AND :rd
-      AND MOVEMENT_TYPE IN ('101', '102', '531', '532')
-    GROUP BY MATERIAL_NO, STORAGE_LOCATION, MOVEMENT_TYPE
+    GROUP BY PLANT, MATERIAL_NO, MATERIAL_DESC
 """)
 
-# The assay of the ore produced, weighted by the lot's own tonnage, for both
-# periods and every ROM1 material in one pass.
+# The assay of what was produced, weighted by the lot's own tonnage, for both
+# periods and every material at one storage location in a single pass.
 #
-# ONE ROW PER CHARACTERISTIC in this table, so Cr2O3 is selected explicitly and
-# the tonnage comes from a DISTINCT sub-select. Without the first, FeO (14-19)
-# and Cr/Fe Ratio (2.25-3.45) would be averaged in as though they were grades;
-# without the second, every lot would be counted once per characteristic it
-# carries.
-_PROD_ASSAY_SQL = text("""
+# ONE ROW PER CHARACTERISTIC in this table, so each characteristic is selected
+# explicitly and the tonnage comes from a DISTINCT sub-select. Without the
+# first, FeO (14-19) and Cr/Fe Ratio (2.25-3.45) would be averaged in as though
+# they were grades; without the second, every lot would be counted once per
+# characteristic it carries.
+#
+# The characteristic name is cased differently by location — 'CR2O3' at DY01,
+# 'Cr2O3' at ROM1 and COBC — so it is matched upper-cased.
+_ASSAY_SQL = text("""
     SELECT l.material AS material,
            SUM(CASE WHEN l.d = :rd THEN l.qty * c.v END) AS td_num,
            SUM(CASE WHEN l.d = :rd THEN l.qty END)       AS td_den,
@@ -138,29 +153,11 @@ _PROD_ASSAY_SQL = text("""
         SELECT LOT_NUMBER, MAX(CAST(NULLIF(RESULT,'') AS DECIMAL(16,6))) AS v
           FROM pp_quality_inspection
          WHERE PLANT = :plant AND STORAGE_LOCATION = :sloc
-           AND UPPER(SHORT_TEXT_INS_CHAR) = 'CR2O3'
+           AND UPPER(SHORT_TEXT_INS_CHAR) = :char
            AND QLT_START_DATE BETWEEN :mf AND :rd
          GROUP BY LOT_NUMBER
     ) c ON c.LOT_NUMBER = l.LOT_NUMBER
     GROUP BY l.material
-""")
-
-# COB is produced and assayed on the mine's own form, not in SAP, and it is the
-# one grade carrying Cr/Fe — the Ratio column — because the mine enters it.
-_COB_SQL = text("""
-    SELECT
-      COALESCE(SUM(CASE WHEN Prod_date = :rd THEN Qty END), 0)        AS td_qty,
-      SUM(CASE WHEN Prod_date = :rd THEN Qty * Cr2O3 END)             AS td_cr_num,
-      SUM(CASE WHEN Prod_date = :rd AND Cr2O3 IS NOT NULL THEN Qty END) AS td_cr_den,
-      SUM(CASE WHEN Prod_date = :rd THEN Qty * Ratio END)             AS td_fe_num,
-      SUM(CASE WHEN Prod_date = :rd AND Ratio IS NOT NULL THEN Qty END) AS td_fe_den,
-      COALESCE(SUM(Qty), 0)                                           AS mtd_qty,
-      SUM(Qty * Cr2O3)                                                AS mtd_cr_num,
-      SUM(CASE WHEN Cr2O3 IS NOT NULL THEN Qty END)                   AS mtd_cr_den,
-      SUM(Qty * Ratio)                                                AS mtd_fe_num,
-      SUM(CASE WHEN Ratio IS NOT NULL THEN Qty END)                   AS mtd_fe_den
-    FROM mines_cob_production_despatch
-    WHERE Prod_date BETWEEN :mf AND :rd
 """)
 
 
@@ -173,52 +170,85 @@ def _r(v, places: int = 2) -> float | None:
 
 
 # -- Block 2 -----------------------------------------------------------------
+def _assay(db, plant: str, sloc: str, char: str, mf: date, rd: date) -> dict:
+    """{material: (td, mtd)} for one characteristic at one storage location."""
+    out: dict[str, tuple[float | None, float | None]] = {}
+    for r in db.execute(_ASSAY_SQL, {"plant": plant, "sloc": sloc,
+                                     "char": char, "mf": mf, "rd": rd}):
+        out[str(r.material)[-8:]] = (
+            float(r.td_num) / float(r.td_den) if r.td_den else None,
+            float(r.mtd_num) / float(r.mtd_den) if r.mtd_den else None,
+        )
+    return out
+
+
 def _production_both(db: Session, mf: date, rd: date) -> dict[str, list[dict]]:
     """Mines production by grade for TD and MTD, from one pass per table."""
-    qty: dict[tuple[str, str, str], tuple[float, float]] = {}
-    for r in db.execute(_PROD_QTY_SQL, {"plant": MINE_PLANT, "mf": mf, "rd": rd}):
-        key = (str(r.MATERIAL_NO)[-8:], str(r.STORAGE_LOCATION), str(r.MOVEMENT_TYPE))
-        qty[key] = (float(r.td_qty or 0), float(r.mtd_qty or 0))
+    ore: dict[str, tuple[float, float]] = {}
+    cob_qty = (0.0, 0.0)
+    for r in db.execute(_PROD_QTY_SQL, {"plant": MINE_PLANT, "cob_plant": COB_PLANT,
+                                        "mf": mf, "rd": rd}):
+        td, mtd = float(r.td_qty or 0), float(r.mtd_qty or 0)
+        if str(r.PLANT) == COB_PLANT:
+            # COB is identified by description, not material number -- the mine
+            # never asked SAP for a material split, and the plant also posts
+            # tailings against this plant.
+            if str(r.MATERIAL_DESC or "") == COB_MATERIAL:
+                cob_qty = (cob_qty[0] + td, cob_qty[1] + mtd)
+        else:
+            k = str(r.MATERIAL_NO)[-8:]
+            prev = ore.get(k, (0.0, 0.0))
+            ore[k] = (prev[0] + td, prev[1] + mtd)
 
-    assay: dict[str, tuple[float | None, float | None]] = {}
-    for r in db.execute(_PROD_ASSAY_SQL,
-                        {"plant": MINE_PLANT, "sloc": "ROM1", "mf": mf, "rd": rd}):
-        td = float(r.td_num) / float(r.td_den) if r.td_den else None
-        mtd = float(r.mtd_num) / float(r.mtd_den) if r.mtd_den else None
-        assay[str(r.material)[-8:]] = (td, mtd)
+    # BOTH characteristics are asked for at BOTH locations, and each row shows
+    # whatever the lab actually filed for the lots in its window.
+    #
+    # ROM1 DID NOT ALWAYS CARRY CR/FE. The ore inspection posted Cr2O3 alone
+    # until 9 Oct 2026; from that lot on it carries Cr/Fe Ratio, FeO and
+    # Moisture as well. Hard-coding the ore rows to None -- which is what this
+    # service did -- was right on the day it was written and wrong a week later,
+    # and it would have gone on printing a dash over a figure the lab was
+    # filing. Nothing here decides in advance what a location reports.
+    ore_cr = _assay(db, MINE_PLANT, ROM_SLOC, "CR2O3", mf, rd)
+    ore_fe = _assay(db, MINE_PLANT, ROM_SLOC, "CR/FE RATIO", mf, rd)
+    cob_cr = _assay(db, COB_PLANT, COB_SLOC, "CR2O3", mf, rd)
+    cob_fe = _assay(db, COB_PLANT, COB_SLOC, "CR/FE RATIO", mf, rd)
 
-    c = db.execute(_COB_SQL, {"mf": mf, "rd": rd}).fetchone()
+    def one(d: dict) -> tuple[float | None, float | None]:
+        """COBC inspects concentrate and nothing else, so there is one entry.
 
-    def div(n, d):
-        return (float(n) / float(d)) if (n is not None and d) else None
+        If a second material ever appears there the location has stopped being
+        concentrate-only; averaging the two would hide that, so report nothing
+        rather than a figure that is quietly about something else.
+        """
+        return list(d.values())[0] if len(d) == 1 else (None, None)
 
     out: dict[str, list[dict]] = {"td": [], "mtd": []}
     for key, label in GRADES:
         if key == "COB":
-            vals = ({"td": (c.td_qty, div(c.td_cr_num, c.td_cr_den),
-                            div(c.td_fe_num, c.td_fe_den)),
-                     "mtd": (c.mtd_qty, div(c.mtd_cr_num, c.mtd_cr_den),
-                             div(c.mtd_fe_num, c.mtd_fe_den))}
-                    if c else {"td": (0, None, None), "mtd": (0, None, None)})
-            for per in ("td", "mtd"):
-                q, cr, fe = vals[per]
-                out[per].append({"grade": key, "label": label, "qty": _r(q),
-                                 "cr2o3": _r(cr, 3), "crfe": _r(fe, 3)})
+            cr = one(cob_cr)
+            fe = one(cob_fe)
+            for i, per in enumerate(("td", "mtd")):
+                out[per].append({"grade": key, "label": label,
+                                 "qty": _r(cob_qty[i]),
+                                 "cr2o3": _r(cr[i], 3), "crfe": _r(fe[i], 3)})
             continue
 
-        src = PROD_SOURCES[key]
-        rcpt = qty.get((src["material"], src["sloc"], src["receipt"]), (0.0, 0.0))
-        rev = qty.get((src["material"], src["sloc"], src["reversal"]), (0.0, 0.0))
-        a = assay.get(src["material"], (None, None))
+        q = ore.get(PROD_MATERIALS[key], (0.0, 0.0))
+        # LGCR is not an inspection location, so LG has no entry in either of
+        # these -- which is the honest answer, not a zero. Nor is a Cr/Fe
+        # weighted over the lots that carry it the same as one weighted over
+        # every lot: _assay divides by its own denominator, so a month that is
+        # half assayed reports the half that was measured rather than diluting
+        # it with tonnage nobody tested.
+        a = ore_cr.get(PROD_MATERIALS[key], (None, None))
+        f = ore_fe.get(PROD_MATERIALS[key], (None, None))
         for i, per in enumerate(("td", "mtd")):
             out[per].append({
                 "grade": key, "label": label,
-                "qty": _r(rcpt[i] - rev[i]),
-                # LGCR is not an inspection location, so LG has no entry here --
-                # which is the honest answer, not a zero.
+                "qty": _r(q[i]),
                 "cr2o3": _r(a[i], 3),
-                # SAP's production entry posts no Cr/Fe for ore at any grade.
-                "crfe": None,
+                "crfe": _r(f[i], 3),
             })
     return out
 
@@ -256,17 +286,26 @@ def _despatch_both(db: Session, mf: date, rd: date) -> dict[str, dict[str, list[
         if t.customer not in acc["mtd"]:
             continue
         q = by_batch.get((t.po, t.batch))
+        est = False
         if q is None or q["cr"] is None:
+            # TIER 2 -- the grade is the PO's average across its OTHER batches,
+            # not a test of this consignment. Kept, because it is the best
+            # statement available and dropping it would empty tonnage out of the
+            # grade rows on exactly the recent days this screen is read; marked,
+            # because a borrowed figure printed beside measured ones is
+            # indistinguishable from a lab result. Same rule, same tiers and the
+            # same helpers as Grade-wise Despatch.
             q = by_po.get(t.po)
+            est = q is not None and q["cr"] is not None
         if q is None or q["cr"] is None:
-            q = None
+            q, est = None, False
         cr = q["cr"] if q else None
         fe = q["fe"] if q else None
         band = COB_KEY if (po_is_cob.get(t.po, False) and cr is not None) else _band_of(cr)
         wt = float(t.wt or 0)
-        acc["mtd"][t.customer][band].add(wt, cr, fe)
+        acc["mtd"][t.customer][band].add(wt, cr, fe, est)
         if t.dt == rd:
-            acc["td"][t.customer][band].add(wt, cr, fe)
+            acc["td"][t.customer][band].add(wt, cr, fe, est)
 
     out: dict[str, dict[str, list[dict]]] = {}
     for per, bycust in acc.items():
@@ -275,7 +314,14 @@ def _despatch_both(db: Session, mf: date, rd: date) -> dict[str, dict[str, list[
             rows = [{"grade": k, "label": lbl,
                      "qty": _r((bands.get(k) or _Acc()).tonnage),
                      "cr2o3": (bands.get(k) or _Acc()).cr,
-                     "crfe": (bands.get(k) or _Acc()).fe}
+                     "crfe": (bands.get(k) or _Acc()).fe,
+                     # Share of this row's graded tonnage that was borrowed
+                     # rather than tested, and the tonnage itself. BOTH, because
+                     # the share's denominator is the row's ASSAYED tonnage, not
+                     # its total -- so the Weighted Average row cannot recover
+                     # the tonnage from the percentage and must sum it directly.
+                     "estimated_pct": (bands.get(k) or _Acc()).estimated_pct or None,
+                     "estimated_qty": _r((bands.get(k) or _Acc()).est_tonnage) or None}
                     for k, lbl in GRADES]
             # UNASSAYED IS A ROW, NOT A ROUNDING. Tonnage that left with no
             # assay yet has no grade to sit in, and folding it into one would
@@ -283,7 +329,8 @@ def _despatch_both(db: Session, mf: date, rd: date) -> dict[str, dict[str, list[
             u = bands[UNASSAYED_KEY]
             if u.tonnage > 0:
                 rows.append({"grade": "UNASSAYED", "label": "Not yet assayed",
-                             "qty": _r(u.tonnage), "cr2o3": None, "crfe": None})
+                             "qty": _r(u.tonnage), "cr2o3": None, "crfe": None,
+                             "estimated_pct": None, "estimated_qty": None})
             out[per][cust] = rows
     return out
 
@@ -326,7 +373,15 @@ def _weighted(rows: list[dict], qty_key: str = "qty") -> dict:
         num = sum((r.get(qty_key) or 0) * r[field] for r in rows if r.get(field) is not None)
         den = sum((r.get(qty_key) or 0) for r in rows if r.get(field) is not None)
         return round(num / den, 3) if den else None
-    return {"qty": _r(tot), "cr2o3": w("cr2o3"), "crfe": w("crfe"), "cr": w("cr")}
+
+    # Estimated tonnage is SUMMED from the rows and its share taken against the
+    # tonnage that carries a grade -- the same denominator each row used, so the
+    # total agrees with its own lines instead of being a fourth kind of average.
+    est = sum((r.get("estimated_qty") or 0) for r in rows)
+    graded = sum((r.get(qty_key) or 0) for r in rows if r.get("cr2o3") is not None)
+    return {"qty": _r(tot), "cr2o3": w("cr2o3"), "crfe": w("crfe"), "cr": w("cr"),
+            "estimated_qty": _r(est) or None,
+            "estimated_pct": round(est / graded * 100, 1) if (graded and est) else None}
 
 
 def get_executive_summary(db: Session, report_day: date,

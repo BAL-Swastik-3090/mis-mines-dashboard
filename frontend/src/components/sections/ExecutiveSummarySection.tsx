@@ -116,6 +116,29 @@ function shortDay(iso?: string | null): string {
     .toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
 }
 
+/* A borrowed grade is marked where it is READ, not only in a footnote. The
+   figure sits in a column of measured ones and is indistinguishable from them;
+   a reader who takes the number and leaves never sees a note at the bottom.
+   The glyph is ≈ — "approximately" — and carries the share and the tonnage in
+   its tooltip, so hovering answers "how much of this?" without another screen. */
+function Est({ pct, qty }: { pct?: number | null; qty?: number | null }) {
+  if (!pct) return null;
+  const t = qty
+    ? `${pct}% of this row's graded tonnage (${formatIndian(qty, 2)} MT) has no assay of `
+      + `its own yet — the grade shown is its purchase order's average`
+    : `${pct}% of this row's graded tonnage has no assay of its own yet — `
+      + `the grade shown is its purchase order's average`;
+  return (
+    <span
+      title={t}
+      className="ml-1 align-super text-[9px] font-bold text-amber-600 cursor-help select-none"
+      aria-label={t}
+    >
+      ≈
+    </span>
+  );
+}
+
 function niceDate(iso?: string | null) {
   if (!iso) return "—";
   return new Date(iso + "T00:00:00")
@@ -263,6 +286,12 @@ function GradeTable({ icon, title, sub, qtyLabel, tdLabel, mtdLabel,
   for (const r of [...td, ...mtd]) if (!keys.includes(r.grade)) keys.push(r.grade);
   const at = (rows: ExecGradeRow[], k: string) => rows.find((r) => r.grade === k);
 
+  /* The footnote appears only when something on THIS table is estimated. A
+     standing caveat printed under every table on every day is read once and
+     then stops being read, which is the opposite of what it is for. */
+  const estQty = (mtdTotal?.estimated_qty ?? 0) || 0;
+  const estPct = mtdTotal?.estimated_pct ?? null;
+
   return (
     <Card icon={icon} title={title} sub={sub}>
       <table className="w-full text-[12px] tabular-nums border-collapse">
@@ -301,11 +330,15 @@ function GradeTable({ icon, title, sub, qtyLabel, tdLabel, mtdLabel,
                 </td>
                 <td className={`${TD} text-right border-l border-border-light`}><N v={a?.qty} strong /></td>
                 <td className={`${TD} text-right`}><N v={a?.crfe} /></td>
-                <td className={`${TD} text-right`}><N v={a?.cr2o3} /></td>
+                <td className={`${TD} text-right whitespace-nowrap`}>
+                  <N v={a?.cr2o3} /><Est pct={a?.estimated_pct} qty={a?.estimated_qty} />
+                </td>
                 <td className={GAP} aria-hidden />
                 <td className={`${TD} text-right border-l border-border ${MTD_BG}`}><N v={b?.qty} strong /></td>
                 <td className={`${TD} text-right ${MTD_BG}`}><N v={b?.crfe} /></td>
-                <td className={`${TD} text-right ${MTD_BG}`}><N v={b?.cr2o3} /></td>
+                <td className={`${TD} text-right whitespace-nowrap ${MTD_BG}`}>
+                  <N v={b?.cr2o3} /><Est pct={b?.estimated_pct} qty={b?.estimated_qty} />
+                </td>
               </tr>
             );
           })}
@@ -317,14 +350,30 @@ function GradeTable({ icon, title, sub, qtyLabel, tdLabel, mtdLabel,
             </td>
             <td className={`${TD} text-right border-l border-border-light`}><N v={tdTotal?.qty} strong /></td>
             <td className={`${TD} text-right`}><N v={tdTotal?.crfe} strong /></td>
-            <td className={`${TD} text-right`}><N v={tdTotal?.cr2o3} strong /></td>
+            <td className={`${TD} text-right whitespace-nowrap`}>
+              <N v={tdTotal?.cr2o3} strong /><Est pct={tdTotal?.estimated_pct} qty={tdTotal?.estimated_qty} />
+            </td>
             <td className={GAP} aria-hidden />
             <td className={`${TD} text-right border-l border-border`}><N v={mtdTotal?.qty} strong /></td>
             <td className={`${TD} text-right`}><N v={mtdTotal?.crfe} strong /></td>
-            <td className={`${TD} text-right`}><N v={mtdTotal?.cr2o3} strong /></td>
+            <td className={`${TD} text-right whitespace-nowrap`}>
+              <N v={mtdTotal?.cr2o3} strong /><Est pct={mtdTotal?.estimated_pct} qty={mtdTotal?.estimated_qty} />
+            </td>
           </tr>
         </tfoot>
       </table>
+
+      {estPct ? (
+        <p className="px-4 py-2.5 border-t border-border-light bg-amber-50/60
+                      text-[10px] font-mono leading-relaxed text-amber-900">
+          <span className="font-bold align-super text-[9px]">≈</span>{" "}
+          <span className="font-bold">{estPct}%</span> of the month&rsquo;s graded
+          tonnage ({formatIndian(estQty, 2)} MT) is still awaiting its own assay.
+          Those loads carry their purchase order&rsquo;s average in the meantime,
+          so the grade is an estimate, not a lab result — it settles as the lab
+          files. Tonnage is unaffected.
+        </p>
+      ) : null}
     </Card>
   );
 }
