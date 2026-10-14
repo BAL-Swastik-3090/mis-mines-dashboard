@@ -227,19 +227,34 @@ def _fine_band_of(grade: float | None) -> str | None:
 class _Acc:
     """Tonnage-weighted accumulator. Numerator and denominator are summed
     separately and divided once — never an average of per-trip percentages,
-    which would let a 5 MT trip count the same as a 25 MT one."""
+    which would let a 5 MT trip count the same as a 25 MT one.
 
-    __slots__ = ("tonnage", "trips", "cr_num", "cr_den", "fe_num", "fe_den")
+    ESTIMATED TONNAGE IS COUNTED ALONGSIDE, NOT SEPARATELY. A tier-2 tonne is
+    in `tonnage` and in the weighted average like any other, because it did
+    leave the mine and it does carry the best grade anyone can state for it.
+    What `est_tonnage` records is that the grade was borrowed from the rest of
+    its PO rather than measured on it, so the caller can say so instead of
+    letting the figure pass as a lab result.
+    """
+
+    __slots__ = ("tonnage", "trips", "cr_num", "cr_den", "fe_num", "fe_den",
+                 "est_tonnage", "est_trips")
 
     def __init__(self):
         self.tonnage = 0.0
         self.trips = 0
         self.cr_num = self.cr_den = 0.0
         self.fe_num = self.fe_den = 0.0
+        self.est_tonnage = 0.0
+        self.est_trips = 0
 
-    def add(self, wt: float, cr: float | None, fe: float | None):
+    def add(self, wt: float, cr: float | None, fe: float | None,
+            estimated: bool = False):
         self.tonnage += wt
         self.trips += 1
+        if estimated:
+            self.est_tonnage += wt
+            self.est_trips += 1
         if cr is not None:
             self.cr_num += cr * wt
             self.cr_den += wt
@@ -254,6 +269,16 @@ class _Acc:
     @property
     def fe(self):
         return round(self.fe_num / self.fe_den, 3) if self.fe_den else None
+
+    @property
+    def estimated_pct(self):
+        """Share of this row's ASSAYED tonnage whose grade was borrowed.
+
+        The denominator is cr_den, not tonnage: unassayed tonnage has no grade
+        at all and belongs to its own row, so including it here would dilute a
+        warning about the grades that ARE shown with tonnage that shows none.
+        """
+        return round(self.est_tonnage / self.cr_den * 100, 1) if self.cr_den else None
 
 
 # ── Data access ──────────────────────────────────────────────────────────────
@@ -470,10 +495,19 @@ def get_grade_wise_despatch(db: Session, from_date: date, to_date: date) -> dict
         elif tier == 2: tier2 += wt
         else:           tier3 += wt
 
-        bands[band].add(wt, cr, fe)
-        total.add(wt, cr, fe)
+        # TIER 2 IS AN ESTIMATE AND IS MARKED AS ONE. The grade shown for this
+        # trip was weighted across the OTHER batches of its PO; no lab tested
+        # this consignment. It still bands and still averages -- it is the best
+        # statement available and dropping it would empty tonnage out of the
+        # grade rows on exactly the recent days people are watching -- but every
+        # row it touches now carries the share of its grade that was borrowed,
+        # so the figure cannot pass as a measurement.
+        est = (tier == 2)
+
+        bands[band].add(wt, cr, fe, est)
+        total.add(wt, cr, fe, est)
         if not is_cob:
-            ore.add(wt, cr, fe)
+            ore.add(wt, cr, fe, est)
 
         # The distribution chart covers ALL ASSAYED DESPATCH — mine ore and COB
         # concentrate alike. Changed on 2026-09-09 at the mine's instruction:
@@ -482,11 +516,11 @@ def get_grade_wise_despatch(db: Session, from_date: date, to_date: date) -> dict
         # to sit in. Concentrate is banded on its own assay like any other load.
         fb = _fine_band_of(cr)
         if fb:
-            fine[fb].add(wt, cr, fe)
+            fine[fb].add(wt, cr, fe, est)
 
         # Per customer
         c = customers.setdefault(t.customer, {"acc": _Acc(), "bands": {}})
-        c["acc"].add(wt, cr, fe)
+        c["acc"].add(wt, cr, fe, est)
         c["bands"][band] = c["bands"].get(band, 0.0) + wt
 
         # Per day, for the trend
@@ -502,7 +536,7 @@ def get_grade_wise_despatch(db: Session, from_date: date, to_date: date) -> dict
             "material_no": mat.get("material_no"),
             "acc": _Acc(), "cr_min": None, "cr_max": None, "bands": {},
         })
-        s["acc"].add(wt, cr, fe)
+        s["acc"].add(wt, cr, fe, est)
         s["bands"][band] = s["bands"].get(band, 0.0) + wt
         for k, src in (("cr_min", mat.get("cr_min")), ("cr_max", mat.get("cr_max"))):
             if src is None:
@@ -542,6 +576,9 @@ def get_grade_wise_despatch(db: Session, from_date: date, to_date: date) -> dict
         "achievement_pct": achievement(bands[key].tonnage, plan_of(key)),
         "cr2o3": bands[key].cr,
         "cr_fe": bands[key].fe,
+        # How much of this row's grade was borrowed rather than measured.
+        "estimated_tonnage": round(bands[key].est_tonnage, 3),
+        "estimated_pct": bands[key].estimated_pct,
     } for key, label, _lo, _hi in GRADE_BANDS]
 
     band_rows.append({
@@ -553,6 +590,8 @@ def get_grade_wise_despatch(db: Session, from_date: date, to_date: date) -> dict
         "achievement_pct": achievement(bands[COB_KEY].tonnage, plan_of(COB_KEY)),
         "cr2o3": bands[COB_KEY].cr,
         "cr_fe": bands[COB_KEY].fe,
+        "estimated_tonnage": round(bands[COB_KEY].est_tonnage, 3),
+        "estimated_pct": bands[COB_KEY].estimated_pct,
     })
 
     band_rows.append({
@@ -562,7 +601,9 @@ def get_grade_wise_despatch(db: Session, from_date: date, to_date: date) -> dict
         "share_pct": share(bands[UNASSAYED_KEY].tonnage),
         "plan_tonnage": plan_of(UNASSAYED_KEY),
         "achievement_pct": achievement(bands[UNASSAYED_KEY].tonnage, plan_of(UNASSAYED_KEY)),
+        # Nothing here is estimated: this row IS the tonnage with no grade.
         "cr2o3": None, "cr_fe": None,
+        "estimated_tonnage": 0.0, "estimated_pct": None,
     })
 
     # Denominator for the distribution: ALL assayed despatch, ore and concentrate
@@ -587,6 +628,8 @@ def get_grade_wise_despatch(db: Session, from_date: date, to_date: date) -> dict
             "cr2o3":   ore.cr,
             "cr_fe":   ore.fe,
             "ore_tonnage": round(ore.tonnage, 3),
+            "estimated_tonnage": round(total.est_tonnage, 3),
+            "estimated_pct": total.estimated_pct,
             "share_pct": 100.0 if tot_wt else None,
             # Plan total is every category including CrFe/Lump, so it equals
             # SUM(Grand_Total_Qty) and therefore the figure the Despatch section
@@ -617,6 +660,8 @@ def get_grade_wise_despatch(db: Session, from_date: date, to_date: date) -> dict
             "cr_min":        round(v["cr_min"], 3) if v["cr_min"] is not None else None,
             "cr_max":        round(v["cr_max"], 3) if v["cr_max"] is not None else None,
             "bands":         {k: round(w, 3) for k, w in v["bands"].items()},
+            "estimated_tonnage": round(v["acc"].est_tonnage, 3),
+            "estimated_pct":     v["acc"].estimated_pct,
         } for desc, v in sold_as.items()], key=lambda x: -x["tonnage"]),
 
         "customers": sorted([{
@@ -626,6 +671,8 @@ def get_grade_wise_despatch(db: Session, from_date: date, to_date: date) -> dict
             "tonnage": round(v["acc"].tonnage, 3),
             "cr2o3":   v["acc"].cr,
             "bands":   {k: round(w, 3) for k, w in v["bands"].items()},
+            "estimated_tonnage": round(v["acc"].est_tonnage, 3),
+            "estimated_pct":     v["acc"].estimated_pct,
         } for code, v in customers.items()], key=lambda x: -x["tonnage"]),
 
         # A day appears if it had despatch OR carried a plan. A planned day with
@@ -648,6 +695,12 @@ def get_grade_wise_despatch(db: Session, from_date: date, to_date: date) -> dict
             "unassayed_tonnage": round(tier3, 3),
             "cob_tonnage": round(bands[COB_KEY].tonnage, 3),
             "assayed_pct": round((tier1 + tier2) / tot_wt * 100, 1) if tot_wt else None,
+            # MEASURED is tier 1 alone. assayed_pct above counts tier 2, which
+            # carries a grade but not one taken on that consignment, so the two
+            # answer different questions and the screen needs both: how much
+            # has a grade at all, and how much of it was actually tested.
+            "measured_pct": round(tier1 / tot_wt * 100, 1) if tot_wt else None,
+            "estimated_pct": round(tier2 / tot_wt * 100, 1) if tot_wt else None,
             "po_count": len(pos),
         },
 

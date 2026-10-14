@@ -128,6 +128,13 @@ export interface ExecGradeRow {
   qty:   number | null;
   cr2o3: number | null;
   crfe:  number | null;
+  /** Despatch rows only. When a consignment has no assay of its own, the PO's
+   *  average stands in: this is the share of the row's GRADED tonnage that came
+   *  that way, and estimated_qty the tonnage itself. null means every tonne
+   *  shown was tested. The share's denominator is graded tonnage, not total, so
+   *  the two cannot be derived from one another. */
+  estimated_pct?: number | null;
+  estimated_qty?: number | null;
 }
 
 /** The sheet's Weighted Average row: SUMPRODUCT / SUM, never a mean. */
@@ -136,6 +143,8 @@ export interface ExecWeightedTotal {
   cr2o3: number | null;
   crfe:  number | null;
   cr:    number | null;
+  estimated_pct?: number | null;
+  estimated_qty?: number | null;
 }
 
 export interface ExecPlantRow {

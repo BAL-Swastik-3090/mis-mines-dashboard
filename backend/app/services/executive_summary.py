@@ -286,17 +286,26 @@ def _despatch_both(db: Session, mf: date, rd: date) -> dict[str, dict[str, list[
         if t.customer not in acc["mtd"]:
             continue
         q = by_batch.get((t.po, t.batch))
+        est = False
         if q is None or q["cr"] is None:
+            # TIER 2 -- the grade is the PO's average across its OTHER batches,
+            # not a test of this consignment. Kept, because it is the best
+            # statement available and dropping it would empty tonnage out of the
+            # grade rows on exactly the recent days this screen is read; marked,
+            # because a borrowed figure printed beside measured ones is
+            # indistinguishable from a lab result. Same rule, same tiers and the
+            # same helpers as Grade-wise Despatch.
             q = by_po.get(t.po)
+            est = q is not None and q["cr"] is not None
         if q is None or q["cr"] is None:
-            q = None
+            q, est = None, False
         cr = q["cr"] if q else None
         fe = q["fe"] if q else None
         band = COB_KEY if (po_is_cob.get(t.po, False) and cr is not None) else _band_of(cr)
         wt = float(t.wt or 0)
-        acc["mtd"][t.customer][band].add(wt, cr, fe)
+        acc["mtd"][t.customer][band].add(wt, cr, fe, est)
         if t.dt == rd:
-            acc["td"][t.customer][band].add(wt, cr, fe)
+            acc["td"][t.customer][band].add(wt, cr, fe, est)
 
     out: dict[str, dict[str, list[dict]]] = {}
     for per, bycust in acc.items():
@@ -305,7 +314,14 @@ def _despatch_both(db: Session, mf: date, rd: date) -> dict[str, dict[str, list[
             rows = [{"grade": k, "label": lbl,
                      "qty": _r((bands.get(k) or _Acc()).tonnage),
                      "cr2o3": (bands.get(k) or _Acc()).cr,
-                     "crfe": (bands.get(k) or _Acc()).fe}
+                     "crfe": (bands.get(k) or _Acc()).fe,
+                     # Share of this row's graded tonnage that was borrowed
+                     # rather than tested, and the tonnage itself. BOTH, because
+                     # the share's denominator is the row's ASSAYED tonnage, not
+                     # its total -- so the Weighted Average row cannot recover
+                     # the tonnage from the percentage and must sum it directly.
+                     "estimated_pct": (bands.get(k) or _Acc()).estimated_pct or None,
+                     "estimated_qty": _r((bands.get(k) or _Acc()).est_tonnage) or None}
                     for k, lbl in GRADES]
             # UNASSAYED IS A ROW, NOT A ROUNDING. Tonnage that left with no
             # assay yet has no grade to sit in, and folding it into one would
@@ -313,7 +329,8 @@ def _despatch_both(db: Session, mf: date, rd: date) -> dict[str, dict[str, list[
             u = bands[UNASSAYED_KEY]
             if u.tonnage > 0:
                 rows.append({"grade": "UNASSAYED", "label": "Not yet assayed",
-                             "qty": _r(u.tonnage), "cr2o3": None, "crfe": None})
+                             "qty": _r(u.tonnage), "cr2o3": None, "crfe": None,
+                             "estimated_pct": None, "estimated_qty": None})
             out[per][cust] = rows
     return out
 
@@ -356,7 +373,15 @@ def _weighted(rows: list[dict], qty_key: str = "qty") -> dict:
         num = sum((r.get(qty_key) or 0) * r[field] for r in rows if r.get(field) is not None)
         den = sum((r.get(qty_key) or 0) for r in rows if r.get(field) is not None)
         return round(num / den, 3) if den else None
-    return {"qty": _r(tot), "cr2o3": w("cr2o3"), "crfe": w("crfe"), "cr": w("cr")}
+
+    # Estimated tonnage is SUMMED from the rows and its share taken against the
+    # tonnage that carries a grade -- the same denominator each row used, so the
+    # total agrees with its own lines instead of being a fourth kind of average.
+    est = sum((r.get("estimated_qty") or 0) for r in rows)
+    graded = sum((r.get(qty_key) or 0) for r in rows if r.get("cr2o3") is not None)
+    return {"qty": _r(tot), "cr2o3": w("cr2o3"), "crfe": w("crfe"), "cr": w("cr"),
+            "estimated_qty": _r(est) or None,
+            "estimated_pct": round(est / graded * 100, 1) if (graded and est) else None}
 
 
 def get_executive_summary(db: Session, report_day: date,
