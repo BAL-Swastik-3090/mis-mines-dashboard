@@ -18,6 +18,7 @@
  * empty state says that plainly rather than implying nothing was ever loaded.
  */
 import { useEffect, useState } from "react";
+import { useEvCoverage } from "@/hooks/useEvTracking";
 import { ChevronDown, ChevronRight, FileSpreadsheet, Loader2 } from "lucide-react";
 import api from "@/lib/api";
 
@@ -25,6 +26,7 @@ interface Batch {
   batch_id: number;
   source_file: string;
   serial_no: string;
+  display_name: string | null;
   equipment_type: string;
   uploaded_by: string | null;
   uploaded_at: string;
@@ -62,8 +64,142 @@ const num = (v: number | null) => (v === null || v === undefined ? "—" : Strin
 const TH = "border border-border-light px-2.5 py-1.5 text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary";
 const TD = "border border-border-light px-2.5 py-1.5";
 
+interface CoverageVehicle {
+  serial_no: string;
+  display_name: string | null;
+  fleet_code: string | null;
+  equipment_type: string;
+  model: string | null;
+  first_day: string | null;
+  last_day: string | null;
+  days_held: number;
+  days_missing: number;
+  missing_months: string[];
+  idle_days: number;
+  idle_pct: number | null;
+  suspect_days: number;
+  energy_kwh: number;
+  work_hours: number;
+}
+interface Coverage {
+  vehicles: CoverageVehicle[];
+  never_filled_columns: string[];
+  never_filled_note: string;
+}
+
+const monthName = (ym: string) => {
+  const [y, m] = ym.split("-");
+  return new Date(Number(y), Number(m) - 1, 1)
+    .toLocaleDateString("en-IN", { month: "short", year: "numeric" });
+};
+const n0 = (v: number) => Math.round(v).toLocaleString("en-IN");
+
+/** What the record covers, and — the part no list of uploads can show — what
+ *  it does not. A month nobody downloaded from the portal is invisible on a
+ *  page built from the rows that exist, and reads as a month the machine did
+ *  nothing. */
+function CoveragePanel() {
+  /* Cached: coverage describes months nobody has uploaded, which does not
+     change between two visits to this tab. A failure leaves cov undefined and
+     the log below still stands on its own. */
+  const { data: cov } = useEvCoverage() as { data: Coverage | undefined };
+
+  if (!cov) return null;
+  const totalMissing = cov.vehicles.reduce((n, v) => n + v.days_missing, 0);
+
+  return (
+    <div className="mb-3 rounded-lg border border-border bg-white">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border-light px-4 py-2.5">
+        <h3 className="font-condensed text-[13px] font-bold uppercase tracking-widest text-navy">
+          What the record covers
+        </h3>
+        {totalMissing > 0 ? (
+          <span className="rounded bg-amber-50 px-2 py-0.5 text-[10.5px] text-amber-800 ring-1 ring-amber-200">
+            {n0(totalMissing)} day{totalMissing === 1 ? "" : "s"} never uploaded
+          </span>
+        ) : (
+          <span className="text-[10.5px] text-txt-light">no gaps</span>
+        )}
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-[11.5px] tabular-nums">
+          <thead className="bg-bg-section">
+            <tr>
+              <th className={`${TH} text-left`}>Machine</th>
+              <th className={`${TH} text-left whitespace-nowrap`}>Covering</th>
+              <th className={`${TH} text-right whitespace-nowrap`}>Days held</th>
+              <th className={`${TH} text-right whitespace-nowrap`}>Never uploaded</th>
+              <th className={`${TH} text-right whitespace-nowrap`}>Idle days</th>
+              <th className={`${TH} text-right whitespace-nowrap`}>Energy kWh</th>
+              <th className={`${TH} text-left w-full`}>Months to fetch</th>
+            </tr>
+          </thead>
+          <tbody>
+            {cov.vehicles.map((v) => (
+              <tr key={v.serial_no} className="hover:bg-bg-light">
+                <td className={`${TD} whitespace-nowrap`}>
+                  <span className="font-semibold text-navy">{v.display_name ?? v.serial_no}</span>
+                  {v.display_name ? (
+                    <span className="ml-1.5 font-mono text-[9.5px] text-txt-light">{v.serial_no}</span>
+                  ) : null}
+                  <span className="ml-1.5 text-txt-light">{v.equipment_type}</span>
+                </td>
+                <td className={`${TD} whitespace-nowrap text-txt-light`}>
+                  {v.first_day ? `${day(v.first_day)} – ${day(v.last_day!)}` : "—"}
+                </td>
+                <td className={`${TD} text-right`}>{n0(v.days_held)}</td>
+                <td className={`${TD} text-right ${v.days_missing ? "font-semibold text-amber-800" : "text-txt-light"}`}>
+                  {v.days_missing || "—"}
+                </td>
+                {/* An idle day is a measurement — the machine was there and did
+                    nothing. Shown next to the gaps precisely so the two are not
+                    read as the same thing. */}
+                <td className={`${TD} text-right text-txt-light`}>
+                  {n0(v.idle_days)}{v.idle_pct !== null ? ` · ${v.idle_pct}%` : ""}
+                </td>
+                <td className={`${TD} text-right`}>{n0(v.energy_kwh)}</td>
+                <td className={TD}>
+                  {v.missing_months.length ? (
+                    <span className="flex flex-wrap gap-1">
+                      {v.missing_months.map((m) => (
+                        <span key={m} className="rounded bg-amber-50 px-1.5 py-0.5 text-[10.5px] text-amber-800 ring-1 ring-amber-200">
+                          {monthName(m)}
+                        </span>
+                      ))}
+                    </span>
+                  ) : (
+                    <span className="text-txt-light">—</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {cov.never_filled_columns.length ? (
+        <p className="border-t border-border-light px-4 py-2 text-[10.5px] leading-relaxed text-txt-light">
+          <strong className="text-txt-secondary">The energy split is not available.</strong>{" "}
+          {cov.never_filled_note} Anything built on operating-versus-idling energy
+          would read zero and look like a machine that never works.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+type SortKey = "uploaded_at" | "display_name" | "rows_new" | "rows_changed" | "date_from";
+
 export default function EvUploadLog() {
   const [batches, setBatches] = useState<Batch[] | null>(null);
+  /* Eighteen uploads of the same two machines is already hard to read, and
+     this list only grows. A machine filter and a sort are the two things
+     somebody actually does with it: "what did we load for the loader" and
+     "what changed most recently". */
+  const [machine, setMachine] = useState<string>("ALL");
+  const [sortKey, setSortKey] = useState<SortKey>("uploaded_at");
+  const [sortAsc, setSortAsc] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<number | null>(null);
   const [changes, setChanges] = useState<Record<number, Change[]>>({});
@@ -93,6 +229,32 @@ export default function EvUploadLog() {
     }
   };
 
+  const nameOf = (b: Batch) => b.display_name ?? b.serial_no;
+  const machines = Array.from(
+    new Map((batches ?? []).map((b) => [b.serial_no, nameOf(b)])).entries(),
+  ).sort((a, b) => a[1].localeCompare(b[1]));
+
+  const shown = (batches ?? [])
+    .filter((b) => machine === "ALL" || b.serial_no === machine)
+    .slice()
+    .sort((a, b) => {
+      const dir = sortAsc ? 1 : -1;
+      if (sortKey === "display_name") return nameOf(a).localeCompare(nameOf(b)) * dir;
+      if (sortKey === "rows_new") return (a.rows_new - b.rows_new) * dir;
+      if (sortKey === "rows_changed") return (a.rows_changed - b.rows_changed) * dir;
+      if (sortKey === "date_from") return a.date_from.localeCompare(b.date_from) * dir;
+      return a.uploaded_at.localeCompare(b.uploaded_at) * dir;
+    });
+
+  /* Clicking the column you are already sorted by reverses it, which is what
+     every table in the world does and what the reader will try first. */
+  const sortBy = (k: SortKey) => {
+    if (k === sortKey) setSortAsc((v) => !v);
+    else { setSortKey(k); setSortAsc(k === "display_name"); }
+  };
+  const Arrow = ({ k }: { k: SortKey }) =>
+    k === sortKey ? <span className="ml-0.5 text-gold">{sortAsc ? "\u25B2" : "\u25BC"}</span> : null;
+
   if (error) return <div className="py-10 text-center text-[12px] text-danger">{error}</div>;
   if (!batches) {
     return (
@@ -103,6 +265,8 @@ export default function EvUploadLog() {
   }
   if (!batches.length) {
     return (
+      <>
+        <CoveragePanel />
       <div className="rounded-lg border border-border bg-white px-5 py-8 text-center">
         <FileSpreadsheet className="mx-auto mb-2 h-5 w-5 text-txt-light" />
         <p className="text-[12.5px] font-semibold text-navy">No uploads recorded yet</p>
@@ -112,36 +276,57 @@ export default function EvUploadLog() {
           gone. Everything uploaded from now on appears here with what it changed.
         </p>
       </div>
+      </>
     );
   }
 
   return (
+    <>
+    <CoveragePanel />
     <div className="rounded-lg border border-border bg-white">
       <div className="flex items-center justify-between border-b border-border-light px-4 py-2.5">
         <h3 className="font-condensed text-[13px] font-bold uppercase tracking-widest text-navy">
           Upload log
         </h3>
-        <span className="text-[10px] text-txt-light">
-          {batches.length} upload{batches.length === 1 ? "" : "s"} · newest first
-        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={machine}
+            onChange={(e) => setMachine(e.target.value)}
+            className="rounded border border-border bg-white px-2 py-1 text-[11px] text-txt-secondary"
+          >
+            <option value="ALL">All machines</option>
+            {machines.map(([serial, name]) => (
+              <option key={serial} value={serial}>{name}</option>
+            ))}
+          </select>
+          <span className="text-[10.5px] text-txt-light">
+            {shown.length} of {batches.length} upload{batches.length === 1 ? "" : "s"}
+          </span>
+        </div>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full border-collapse text-[11.5px] tabular-nums">
           <thead className="bg-bg-section">
             <tr>
               <th className={`${TH} w-6`} aria-hidden />
-              <th className={`${TH} text-left`}>When</th>
-              <th className={`${TH} text-left`}>Machine</th>
+              <th className={`${TH} text-left cursor-pointer select-none whitespace-nowrap`}
+                  onClick={() => sortBy("uploaded_at")}>When<Arrow k="uploaded_at" /></th>
+              <th className={`${TH} text-left cursor-pointer select-none whitespace-nowrap`}
+                  onClick={() => sortBy("display_name")}>Machine<Arrow k="display_name" /></th>
+              <th className={`${TH} text-left whitespace-nowrap`}>Serial</th>
               <th className={`${TH} text-left w-full`}>File</th>
-              <th className={`${TH} text-left whitespace-nowrap`}>Covering</th>
-              <th className={`${TH} text-right whitespace-nowrap`}>New</th>
-              <th className={`${TH} text-right whitespace-nowrap`}>Changed</th>
+              <th className={`${TH} text-left cursor-pointer select-none whitespace-nowrap`}
+                  onClick={() => sortBy("date_from")}>Covering<Arrow k="date_from" /></th>
+              <th className={`${TH} text-right cursor-pointer select-none whitespace-nowrap`}
+                  onClick={() => sortBy("rows_new")}>New<Arrow k="rows_new" /></th>
+              <th className={`${TH} text-right cursor-pointer select-none whitespace-nowrap`}
+                  onClick={() => sortBy("rows_changed")}>Changed<Arrow k="rows_changed" /></th>
               <th className={`${TH} text-right whitespace-nowrap`}>Unchanged</th>
               <th className={`${TH} text-left whitespace-nowrap`}>By</th>
             </tr>
           </thead>
           <tbody>
-            {batches.map((b) => (
+            {shown.map((b) => (
               <>
                 <tr key={b.batch_id} className="cursor-pointer hover:bg-bg-light"
                     onClick={() => void toggle(b.batch_id)}>
@@ -149,7 +334,12 @@ export default function EvUploadLog() {
                     {open === b.batch_id ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                   </td>
                   <td className={`${TD} whitespace-nowrap`}>{stamp(b.uploaded_at)}</td>
-                  <td className={`${TD} whitespace-nowrap font-semibold text-navy`}>{b.serial_no}</td>
+                  <td className={`${TD} whitespace-nowrap font-semibold text-navy`}>
+                    {b.display_name ?? b.serial_no}
+                  </td>
+                  <td className={`${TD} whitespace-nowrap font-mono text-[10px] text-txt-light`}>
+                    {b.serial_no}
+                  </td>
                   <td className={`${TD} text-txt-light`}>{b.source_file}</td>
                   <td className={`${TD} whitespace-nowrap text-txt-light`}>
                     {day(b.date_from)} – {day(b.date_to)}
@@ -162,7 +352,7 @@ export default function EvUploadLog() {
                 {open === b.batch_id ? (
                   <tr key={`${b.batch_id}-d`}>
                     <td className={TD} />
-                    <td className={TD} colSpan={8}>
+                    <td className={TD} colSpan={9}>
                       {!changes[b.batch_id] ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin text-gold" />
                       ) : !changes[b.batch_id].length ? (
@@ -227,5 +417,6 @@ export default function EvUploadLog() {
         </table>
       </div>
     </div>
+    </>
   );
 }

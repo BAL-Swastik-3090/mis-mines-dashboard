@@ -3,10 +3,16 @@ import SearchSelect from "@/components/minehub/SearchSelect";
 import React, { useState, useEffect } from "react";
 import dynamic from "next/dynamic";
 import { Activity, AlertTriangle, BarChart3, BatteryCharging, Gauge, History, Info, RefreshCw, Route, TrendingDown, TrendingUp, Zap } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useDateFilter } from "@/contexts/useDateFilter";
+import { periodLabel } from "@/lib/periodLabel";
 import { useEvOverview, useEvVehicleHistory } from "@/hooks/useEvTracking";
 import EvUploadButton from "@/components/sections/EvUploadButton";
 import EvUploadLog from "@/components/sections/EvUploadLog";
+import EvFreshnessButton from "@/components/sections/EvFreshnessButton";
+import EvFleetSummary from "@/components/sections/EvFleetSummary";
+import EvWorkAnalysisAll from "@/components/sections/EvWorkAnalysisAll";
+import EvAnalysisAllVehicles from "@/components/sections/EvAnalysisAllVehicles";
 
 const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
 
@@ -37,6 +43,9 @@ const formatDateLabelShort = (dateStr: string | undefined | null) => {
 
 export default function ElectricVehiclesSection() {
   const [activeTab, setActiveTab] = useState<"info" | "analysis" | "uploads">("info");
+  /* Defaults to all: somebody opening Work Analysis wants the fleet, and a
+     single machine chosen for them is a choice they did not make. */
+  const [analysisScope, setAnalysisScope] = useState<"all" | "one">("all");
   const [selectedEvId, setSelectedEvId] = useState<number | null>(null);
 
   // Get global date range filters from global store
@@ -44,6 +53,20 @@ export default function ElectricVehiclesSection() {
 
   // Fetch Overview Data (polls every 60s when range includes today)
   const { data: overview, isLoading: overviewLoading, error: overviewError, refetch } = useEvOverview(apiFrom, apiTo);
+
+  /* AN UPLOAD INVALIDATES EVERYTHING ON THIS PAGE, not just the overview.
+     Now that the analytics table, the freshness badge, the coverage panel and
+     the all-machines charts are cached, refetching only the overview would
+     leave a page showing new totals beside an old "last reading" and an old
+     overdue count — figures that disagree with each other are worse than
+     figures that are slow. Both key roots, because the EV endpoints are split
+     across two prefixes. */
+  const qc = useQueryClient();
+  const refreshAll = () => {
+    void refetch();
+    void qc.invalidateQueries({ queryKey: ["ev"] });
+    void qc.invalidateQueries({ queryKey: ["ev-tracking"] });
+  };
 
   // Set default selected vehicle when overview loads
   useEffect(() => {
@@ -55,8 +78,13 @@ export default function ElectricVehiclesSection() {
   const selectedVehicle = overview?.vehicles.find(v => v.ev_equipment_id === selectedEvId) || overview?.vehicles[0];
 
   // Fetch Vehicle History Data (once, no polling)
+  /* Only the Equipment Info drill-down reads this, so only Equipment Info
+     asks for it. It was fetched on every tab — a ~2.4 s request paid while
+     looking at Work Analysis or the Upload Log, for a chart neither of them
+     draws. Passing null disables the query; the cache keeps the answer, so
+     coming back to this tab does not re-ask. */
   const { data: historyData, isLoading: historyLoading } = useEvVehicleHistory(
-    selectedVehicle?.ev_equipment_id || null,
+    activeTab === "info" ? selectedVehicle?.ev_equipment_id ?? null : null,
     apiFrom,
     apiTo
   );
@@ -322,7 +350,7 @@ export default function ElectricVehiclesSection() {
           <AlertTriangle size={16} className="text-[#c62828] shrink-0" />
           <span className="text-[12px] text-[#c62828]">Failed to load EV telematics data. Please check connection.</span>
           <button
-            onClick={() => refetch()}
+            onClick={refreshAll}
             className="ml-auto text-[11px] text-[#c62828] hover:text-navy underline"
           >
             Retry
@@ -334,8 +362,17 @@ export default function ElectricVehiclesSection() {
 
   return (
     <div className="min-h-screen bg-[#f5f7fb] space-y-4">
-      {/* ── Page header ──────────────────────────────────── */}
-      <div className="flex items-center justify-between py-3 px-1 border-b border-border">
+      {/* ── Page header ────────────────────────────────────
+          STUCK TO THE TOP, like the MIS dashboard's own section bar. These
+          tabs and the upload are what somebody reaches for after reading a
+          chart, and four machines' charts and calendars is a long scroll —
+          having to come all the way back up to switch view is the kind of
+          friction that stops people using a tab at all.
+
+          top-[71px] clears the application header, which is what every other
+          sticky bar in this codebase sits under; z-[15] matches it too. */}
+      <div className="sticky top-[71px] z-[15] -mx-1 flex flex-wrap items-center justify-between gap-3
+                      border-b border-border bg-[#f5f7fb]/95 px-1 py-3 backdrop-blur-sm">
         <div>
           <div className="flex items-center gap-2">
             <Zap size={18} className="text-gold" />
@@ -363,29 +400,41 @@ export default function ElectricVehiclesSection() {
         <div className="flex flex-wrap items-center gap-2">
           <div className="inline-flex rounded-lg border border-border bg-white p-0.5 shadow-sm">
             {([
-              { key: "info",     icon: Info,      label: "Equipment Info" },
-              { key: "analysis", icon: BarChart3, label: "Work Analysis" },
-              { key: "uploads",  icon: History,   label: "Upload Log" },
+              { key: "info",     icon: Info,      label: "Equipment Info", iconOnly: false },
+              { key: "analysis", icon: BarChart3, label: "Work Analysis",  iconOnly: false },
+              /* The log is a place you go occasionally, not a view you work
+                 in. Reduced to its icon so the two daily views carry the eye,
+                 with the name on hover and for a screen reader — an unlabelled
+                 control is only acceptable when it still announces itself. */
+              { key: "uploads",  icon: History,   label: "Upload Log",     iconOnly: true },
             ] as const).map((t) => (
               <button
                 key={t.key}
                 onClick={() => setActiveTab(t.key)}
                 aria-current={activeTab === t.key ? "page" : undefined}
-                className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[11px] font-condensed font-bold uppercase tracking-widest transition ${
+                aria-label={t.label}
+                title={t.label}
+                className={`flex items-center gap-1.5 rounded-md py-1.5 text-[11px] font-condensed font-bold uppercase tracking-widest transition ${
+                  t.iconOnly ? "px-2.5" : "px-3"
+                } ${
                   activeTab === t.key
                     ? "bg-gold text-white shadow-sm"
                     : "text-txt-secondary hover:bg-bg-section hover:text-navy"
                 }`}
               >
-                <t.icon size={12} />
-                {t.label}
+                <t.icon size={t.iconOnly ? 14 : 12} />
+                {t.iconOnly ? null : t.label}
               </button>
             ))}
           </div>
 
           <span className="hidden h-6 w-px bg-border sm:block" aria-hidden />
 
-          <EvUploadButton onUploaded={() => refetch()} />
+          {/* Says whether yesterday is in before anybody reads a figure off
+              this page. Sits beside the upload because the answer to "it is
+              overdue" is almost always "then upload it". */}
+          <EvFreshnessButton />
+          <EvUploadButton onUploaded={refreshAll} />
         </div>
       </div>
 
@@ -394,7 +443,7 @@ export default function ElectricVehiclesSection() {
         <KpiCard
           label="Total Electric Fleet"
           value={`${overview.total_vehicles}`}
-          sub={`${overview.active_vehicles} active in selected period`}
+          sub={`${overview.active_vehicles} active · ${periodLabel(apiFrom, apiTo)}`}
           icon={Zap}
           accentColor="#c8960c"
         />
@@ -422,7 +471,37 @@ export default function ElectricVehiclesSection() {
       </div>
 
       {/* TAB CONTENT: 1. Equipment Info */}
+      {/* The side-by-side totals, after the per-machine detail: the charts
+          above answer how each machine did, this answers who did most. */}
+      {activeTab === "analysis" && overview?.vehicles?.length ? (
+        <div className="mt-3">
+          {/* A row is the machine, so clicking one opens that machine
+              in the drill-down below rather than merely highlighting. */}
+          <EvWorkAnalysisAll
+            vehicles={overview.vehicles}
+            from={apiFrom}
+            to={apiTo}
+            onDrillDown={(id) => { setSelectedEvId(id); setAnalysisScope("one"); }}
+          />
+        </div>
+      ) : null}
+
+      {/* Keyed on the tab so React remounts this region when it changes — that
+          is what lets the fade run on every switch rather than only the first.
+          The header above it is deliberately outside: the tabs and the upload
+          button should not flicker when the body beneath them changes. */}
+      <div key={activeTab} className="ev-tab-enter space-y-4">
+
       {activeTab === "uploads" && <EvUploadLog />}
+
+      </div>
+
+      {/* The single-glance table the mine asked for: every machine, TD and
+          MTD and lifetime, before any drill-down. */}
+      {activeTab === "info" && (
+        <EvFleetSummary from={apiFrom} to={apiTo}
+                        onWorkAnalysis={() => setActiveTab("analysis")} />
+      )}
 
       {activeTab === "info" && selectedVehicle && (
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
@@ -432,7 +511,11 @@ export default function ElectricVehiclesSection() {
             <div className="bg-white border border-border rounded-lg shadow-sm p-4 xl:p-5 flex flex-col min-w-0">
               <div className="flex items-center justify-between border-b border-border-light pb-2.5 mb-4">
                 <h3 className="text-[12px] uppercase font-bold tracking-wider text-txt-secondary font-condensed">
-                  Vehicle Usage Analytics — {selectedVehicle.serial_no} ({selectedVehicle.equipment_type})
+                  {/* The name the mine uses leads; the serial stays because it
+                      is what ties the machine to its export file. */}
+                  Vehicle Usage Analytics — {selectedVehicle.display_name ?? selectedVehicle.serial_no}
+                  {selectedVehicle.display_name ? ` · ${selectedVehicle.serial_no}` : ""}
+                  {" "}({selectedVehicle.equipment_type})
                 </h3>
                 <span className="text-[9px] bg-gold/10 border border-gold/30 px-2 py-0.5 rounded text-gold font-bold font-condensed tracking-wider">
                   {selectedVehicle.make} {selectedVehicle.model}
@@ -583,48 +666,63 @@ export default function ElectricVehiclesSection() {
               <p className="text-[10px] text-txt-muted font-condensed">Select a vehicle to drill down</p>
             </div>
 
+            {/* TWO LINES A MACHINE, NOT SIX.
+                Name, serial and type each had a line of their own, then a
+                three-column strip for two numbers and the model — six lines to
+                carry seven short facts, so a fleet of four filled the column
+                and a fleet of eight would need scrolling to see the last one.
+                Nothing is dropped here; the facts that belong together simply
+                sit on the same line — then given back enough padding to
+                breathe, because two lines crammed into 47 px read as a
+                spreadsheet row rather than a thing you click. */}
             <div className="space-y-2 overflow-y-auto flex-1 max-h-[460px] scrollbar-thin">
               {overview.vehicles.map(v => {
                 const isActive = v.ev_equipment_id === selectedEvId;
+                const running = v.work_hours > 0;
                 return (
                   <button
                     key={v.ev_equipment_id}
                     onClick={() => setSelectedEvId(v.ev_equipment_id)}
-                    className={`w-full text-left p-3 rounded border transition-all duration-150 flex flex-col justify-between ${
+                    title={`${v.display_name ?? ""} ${v.serial_no} · ${v.equipment_type}${v.model ? ` · ${v.model}` : ""}`}
+                    className={`w-full rounded border px-3 py-2.5 text-left transition-colors duration-150 ${
                       isActive
                         ? "bg-bg-light border-gold shadow-sm"
                         : "bg-white border-border hover:bg-bg-soft"
                     }`}
                   >
-                    <div className="flex items-start justify-between w-full">
-                      <div className="flex flex-col">
-                        <span className={`text-[11.5px] font-bold font-mono ${isActive ? "text-gold font-extrabold" : "text-txt-primary"}`}>
+                    {/* Line 1 — who it is, and whether it moved. */}
+                    <div className="flex items-baseline gap-1.5">
+                      <span className={`shrink-0 font-mono text-[11.5px] font-bold ${
+                        isActive ? "text-gold font-extrabold" : "text-txt-primary"}`}>
+                        {v.display_name ?? v.serial_no}
+                      </span>
+                      {v.display_name ? (
+                        <span className="min-w-0 truncate font-mono text-[9px] text-txt-light">
                           {v.serial_no}
                         </span>
-                        <span className="text-[9px] text-txt-light font-condensed uppercase tracking-wider font-bold mt-0.5">
-                          {v.equipment_type}
-                        </span>
-                      </div>
-                      <span className={`text-[8.5px] font-black uppercase px-2 py-0.5 rounded font-condensed tracking-wider ${
-                        v.work_hours > 0 ? "bg-success-bg text-success border border-success/20" : "bg-warning-bg text-warning border border-warning/20"
-                      }`}>
-                        {v.work_hours > 0 ? "Running" : "Idle"}
-                      </span>
+                      ) : null}
+                      {/* A dot carries "running" as well as a word does and
+                          costs no width; the word stays as its title. */}
+                      <span
+                        title={running ? "Running in this period" : "Idle in this period"}
+                        className={`ml-auto h-1.5 w-1.5 shrink-0 rounded-full ${
+                          running ? "bg-success" : "bg-warning"}`}
+                      />
                     </div>
 
-                    <div className="grid grid-cols-3 gap-2 mt-3 text-[10px] font-medium text-txt-muted border-t border-border-light pt-2 font-condensed">
-                      <div className="flex flex-col">
-                        <span className="text-[8px] text-txt-light uppercase tracking-wider font-bold">Work Hrs</span>
-                        <span className="font-mono text-txt-primary font-bold">{v.work_hours} H</span>
-                      </div>
-                      <div className="flex flex-col border-l border-border-light pl-2">
-                        <span className="text-[8px] text-txt-light uppercase tracking-wider font-bold">Energy</span>
-                        <span className="font-mono text-txt-primary font-bold">{v.total_energy_kwh} kWh</span>
-                      </div>
-                      <div className="flex flex-col border-l border-border-light pl-2">
-                        <span className="text-[8px] text-txt-light uppercase tracking-wider font-bold">Model</span>
-                        <span className="text-txt-primary truncate font-bold">{v.model}</span>
-                      </div>
+                    {/* Line 2 — what it is, and what it did. */}
+                    <div className="mt-1.5 flex items-baseline gap-1.5 font-condensed text-[9.5px]">
+                      <span className="shrink-0 font-bold uppercase tracking-wider text-txt-light">
+                        {v.equipment_type}
+                      </span>
+                      {v.model ? (
+                        <span className="min-w-0 truncate text-txt-muted">· {v.model}</span>
+                      ) : null}
+                      <span className="ml-auto shrink-0 font-mono tabular-nums text-[10px] font-bold text-txt-primary">
+                        {v.work_hours} H
+                        <span className="mx-1 font-normal text-border-dark">·</span>
+                        {v.total_energy_kwh} kWh
+                      </span>
                     </div>
                   </button>
                 );
@@ -635,7 +733,43 @@ export default function ElectricVehiclesSection() {
       )}
 
       {/* TAB CONTENT: 2. Work Analysis */}
-      {activeTab === "analysis" && selectedVehicle && (
+      {/* ALL MACHINES OR ONE. The question "how did EV EX-2 do" and the
+          question "how did they do against each other" are both asked of this
+          tab, and before this it could only answer the first. */}
+      {activeTab === "analysis" && overview?.vehicles?.length ? (
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-white px-4 py-2.5">
+          <span className="text-[11px] font-condensed font-bold uppercase tracking-widest text-txt-secondary">
+            Show
+          </span>
+          {([
+            { key: "all", label: `All machines (${overview.vehicles.length})` },
+            { key: "one", label: "One machine" },
+          ] as const).map((o) => (
+            <label key={o.key}
+                   className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[11px] font-condensed font-bold uppercase tracking-widest transition ${
+                     analysisScope === o.key
+                       ? "border-gold-dark bg-gold text-white"
+                       : "border-border bg-white text-txt-secondary hover:bg-bg-section"
+                   }`}>
+              <input type="radio" name="ev-analysis-scope" className="sr-only"
+                     checked={analysisScope === o.key}
+                     onChange={() => setAnalysisScope(o.key)} />
+              {o.label}
+            </label>
+          ))}
+          {analysisScope === "all" ? (
+            <span className="ml-auto text-[10.5px] text-txt-light">
+              Same chart per machine, on one shared scale
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+
+      {activeTab === "analysis" && analysisScope === "all" && overview?.vehicles?.length ? (
+        <EvAnalysisAllVehicles vehicles={overview.vehicles} from={apiFrom} to={apiTo} />
+      ) : null}
+
+      {activeTab === "analysis" && analysisScope === "one" && selectedVehicle && (
         <div className="space-y-3">
           {/* Chart Section */}
           <div className="bg-white border border-border rounded-lg shadow-sm p-4 xl:p-5 flex flex-col min-w-0">
@@ -644,7 +778,7 @@ export default function ElectricVehiclesSection() {
                 <h3 className="text-[12px] uppercase font-bold tracking-wider text-txt-secondary font-condensed">
                   Work Hours vs Energy Consumption History
                 </h3>
-                <p className="text-[10px] text-txt-muted font-condensed">Showing data for vehicle {selectedVehicle.serial_no} ({selectedVehicle.equipment_type})</p>
+                <p className="text-[10px] text-txt-muted font-condensed">Showing data for {selectedVehicle.display_name ?? selectedVehicle.serial_no}{selectedVehicle.display_name ? ` · ${selectedVehicle.serial_no}` : ""} ({selectedVehicle.equipment_type})</p>
               </div>
 
               {/* Vehicle selector inside Work Analysis tab */}
@@ -656,7 +790,8 @@ export default function ElectricVehiclesSection() {
                   searchPlaceholder="Type a serial number…"
                   className="bg-white text-[11.5px] px-2.5 py-1.5 font-condensed font-bold shadow-sm"
                   options={overview.vehicles.map((v) => ({
-                    value: String(v.ev_equipment_id), label: v.serial_no,
+                    value: String(v.ev_equipment_id),
+                    label: v.display_name ? `${v.display_name} · ${v.serial_no}` : v.serial_no,
                     hint: v.equipment_type,
                   }))} />
               </div>

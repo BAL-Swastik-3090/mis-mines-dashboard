@@ -548,3 +548,18 @@ html, body {
   from { opacity: 0; }
   to   { opacity: 1; }
 }
+
+
+/* ── A tab that changes should settle, not snap ──────────────────────────
+   Used by the EV page when scrolling moves between Equipment Info and Work
+   Analysis. Six pixels and 240ms: enough for the eye to register that the
+   page changed on purpose, short enough that nobody waits for it.
+   Honoured only where motion is welcome. */
+@keyframes ev-tab-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+.ev-tab-enter { animation: ev-tab-enter .24s ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+  .ev-tab-enter { animation: none; }
+}

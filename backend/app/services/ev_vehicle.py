@@ -205,11 +205,15 @@ def parse_workbook(content: bytes, filename: str, serial_override: str | None = 
 
 # ── writing ──────────────────────────────────────────────────────────
 def get_vehicle(db: Session, serial_no: str) -> dict | None:
-    row = db.execute(
-        text(f"""SELECT ev_vehicle_id, serial_no, equipment_type, model, status
-                 FROM {SCHEMA}.ev_vehicle_master WHERE serial_no = :s"""),
-        {"s": serial_no},
-    ).fetchone()
+    """One machine by serial, carrying the name the mine uses for it."""
+    row = db.execute(text(f"""
+        SELECT m.ev_vehicle_id, m.serial_no, m.equipment_type, m.product_group,
+               m.make, m.model, m.rated_battery_kwh, m.status,
+               {_ASSET_NAME} AS display_name, a.fleet_code
+          FROM {SCHEMA}.ev_vehicle_master m
+          {_ASSET_JOIN}
+         WHERE upper(trim(m.serial_no)) = upper(trim(:s))
+    """), {"s": serial_no}).first()
     return dict(row._mapping) if row else None
 
 
@@ -269,15 +273,27 @@ def diff_rows(db: Session, serial_no: str, rows: list[dict]) -> dict:
         ).fetchall()
     }
 
-    new_days: list[str] = []
+    new_days: list[dict] = []
     identical: list[str] = []
     changed: list[dict] = []
+
+    def _is_idle(r: dict) -> bool:
+        """Nothing ran and nothing was drawn. A real reading, not a blank."""
+        return not (r.get("work_hours") or 0) and not (r.get("total_energy_kwh") or 0)
 
     for row in rows:
         day = row["report_date"]
         old = existing.get(day)
         if old is None:
-            new_days.append(day.isoformat())
+            # The figures come with it: "2 new" says nothing about whether the
+            # machine worked those days, and a month of zeros looks exactly
+            # like a month of work until somebody opens the file.
+            new_days.append({
+                "report_date": day.isoformat(),
+                "work_hours": row.get("work_hours"),
+                "total_energy_kwh": row.get("total_energy_kwh"),
+                "idle": _is_idle(row),
+            })
             continue
         fields = {
             f: {"from": None if old[f] is None else float(old[f]),
@@ -296,17 +312,33 @@ def diff_rows(db: Session, serial_no: str, rows: list[dict]) -> dict:
             identical.append(day.isoformat())
 
     changed.sort(key=lambda c: c["report_date"])
+    new_days.sort(key=lambda d: d["report_date"])
+    # Carried on the diff as well: a dry run never reaches upsert_tracking, so
+    # without this the machine is named only after it has been written.
+    display_name = vehicle.get("display_name")
+    # How much of each group is a day the machine did nothing. Counted here so
+    # the screen can say "2 new, both idle" rather than leaving the reader to
+    # infer activity from a row count.
+    new_idle = sum(1 for d in new_days if d["idle"])
+    identical_idle = sum(
+        1 for d in identical
+        if _is_idle({k: existing[dt.date.fromisoformat(d)][k] for k in METRIC_FIELDS})
+    )
     return {
+        "display_name": display_name,
         "rows_new": len(new_days),
         "rows_changed": len(changed),
         "rows_identical": len(identical),
-        "new_dates": new_days,
+        "rows_new_idle": new_idle,
+        "rows_identical_idle": identical_idle,
+        "new_dates": [d["report_date"] for d in new_days],
+        "new_days": new_days,
         "identical_dates": identical,
         "changed": changed,
         # The span this file would ADD, which is the sentence somebody wants
         # when they upload July-to-December over a table that stops on 8 July.
-        "new_from": min(new_days) if new_days else None,
-        "new_to": max(new_days) if new_days else None,
+        "new_from": new_days[0]["report_date"] if new_days else None,
+        "new_to": new_days[-1]["report_date"] if new_days else None,
     }
 
 
@@ -362,6 +394,7 @@ def upsert_tracking(db: Session, serial_no: str, rows: list[dict], source_file: 
     return {
         "serial_no": serial_no,
         "equipment_type": vehicle["equipment_type"],
+        "display_name": vehicle.get("display_name"),
         "rows_received": len(rows),
         "rows_inserted": len(rows) - len(existing),
         "rows_updated": len(existing),
@@ -409,6 +442,321 @@ def _record_batch(db: Session, vehicle: dict, source_file: str, rows: list[dict]
     return batch_id
 
 
+# Columns LiuGong exports but has never once populated. Checked over every
+# stored row: 1,245 of them, not one carries a figure in any of these four.
+# Kept as a list rather than dropped from the schema -- a later firmware may
+# start filling them, and the loader would pick them up without a migration.
+# THE NAME THE MINE USES, from the equipment master.
+#
+# Nobody at the mine says CLG922FECSE735955; they say EV EX-2. The asset
+# registry already holds all four of these machines and carries the serial in
+# `chassis_no`, so the link is an exact match and needs no mapping table.
+#
+# MATCHED ON THE SERIAL, NOT THE MODEL. Two of the four are 922 FE, and the
+# registry pairs CLG922FEHSE735953 with EV EX-1 and CLG922FECSE735955 with
+# EV EX-2 — one letter apart in the middle of the serial. Matching on model
+# would have had a coin's chance of swapping them, and a swapped machine is
+# worse than an unnamed one.
+#
+# LEFT JOIN: a machine that reaches the telemetry before somebody registers it
+# still appears, under its serial. Falling out of the list because the registry
+# has not caught up is the wrong failure.
+_ASSET_JOIN = """
+    LEFT JOIN minehub.asset a
+           ON upper(trim(a.chassis_no)) = upper(trim(m.serial_no))
+"""
+_ASSET_NAME = "coalesce(a.nickname, a.fleet_code)"
+
+_NEVER_FILLED = (
+    "operating_energy_kwh", "idling_energy_kwh",
+    "avg_operating_kwh_per_h", "avg_idling_kwh_per_h",
+)
+
+
+# The mine expects the previous day's export to be loaded by this time. Before
+# it, yesterday being absent is simply early; after it, somebody has not done
+# the job. Kept here so the rule is stated once rather than implied by a
+# comparison buried in a query.
+REPORT_DUE_HOUR = 9
+REPORT_DUE_MINUTE = 30
+
+
+def get_fleet_analytics(db: Session, as_of: dt.date | None = None,
+                       period_from: dt.date | None = None) -> dict:
+    """The whole fleet at a glance: TD, MTD and lifetime, per machine.
+
+    ONE REPORT DAY FOR EVERY MACHINE, not each machine's own last day. Reading
+    the grader's best day against the loader's would compare July with October
+    and call it a fleet. The common day is the latest the fleet holds, so a
+    machine that stopped reporting shows empty columns — which is the honest
+    answer and the one that makes the gap visible rather than hiding it inside
+    an average.
+
+    LIFETIME IS CARRIED BECAUSE THE PERIODS ARE NOT COMPARABLE. Three of these
+    four machines last reported in July; their October columns are blank and
+    will stay blank. Total hours and total energy are still true, and are what
+    the LiuGong portal shows on its own overview, so the row says something
+    useful even when the period says nothing.
+
+    Suspect readings are excluded throughout, as everywhere else: the two
+    impossible rows on EV EX-2 would otherwise carry 43,218 kWh into every
+    lifetime figure on the page.
+    """
+    if as_of is None:
+        as_of = db.execute(text(
+            f"SELECT max(report_date) FROM {SCHEMA}.ev_vehicle_tracking")).scalar()
+    if as_of is None:
+        return {"as_of": None, "mtd_from": None, "machines": [], "fleet": {}}
+    # THE PAGE'S OWN RANGE WINS. This table sits under a date picker, and a
+    # table that ignores the picker above it is read as broken — rightly: the
+    # KPI strip moved to April and this stayed in October. When no range is
+    # given it falls back to month-to-date, which is what it means on its own.
+    mtd_from = period_from or as_of.replace(day=1)
+    if mtd_from > as_of:
+        mtd_from = as_of
+
+    rows = db.execute(text(f"""
+        SELECT m.serial_no, m.equipment_type, m.model,
+               {_ASSET_NAME} AS display_name, a.fleet_code,
+
+               -- the day itself
+               sum(t.work_hours)       FILTER (WHERE t.report_date = :d AND NOT t.is_suspect) AS td_hours,
+               sum(t.total_energy_kwh) FILTER (WHERE t.report_date = :d AND NOT t.is_suspect) AS td_energy,
+
+               -- month to date, through that same day
+               sum(t.work_hours)       FILTER (WHERE t.report_date BETWEEN :mf AND :d AND NOT t.is_suspect) AS mtd_hours,
+               sum(t.total_energy_kwh) FILTER (WHERE t.report_date BETWEEN :mf AND :d AND NOT t.is_suspect) AS mtd_energy,
+               count(*)                FILTER (WHERE t.report_date BETWEEN :mf AND :d) AS mtd_days,
+               count(*)                FILTER (WHERE t.report_date BETWEEN :mf AND :d
+                                                 AND coalesce(t.work_hours,0) > 0)     AS mtd_active_days,
+
+               -- everything ever
+               sum(t.work_hours)       FILTER (WHERE NOT t.is_suspect) AS life_hours,
+               sum(t.total_energy_kwh) FILTER (WHERE NOT t.is_suspect) AS life_energy,
+               count(*)                                                AS life_days,
+               count(*) FILTER (WHERE coalesce(t.work_hours,0) > 0)    AS life_active_days,
+               count(*) FILTER (WHERE t.is_suspect)                    AS suspect_days,
+               min(t.report_date) AS first_day,
+               max(t.report_date) AS last_day
+          FROM {SCHEMA}.ev_vehicle_master m
+          LEFT JOIN {SCHEMA}.ev_vehicle_tracking t USING (ev_vehicle_id)
+          {_ASSET_JOIN}
+         WHERE m.status = 'A'
+         GROUP BY m.serial_no, m.equipment_type, m.model, a.nickname, a.fleet_code
+         ORDER BY {_ASSET_NAME} NULLS LAST, m.serial_no
+    """), {"d": as_of, "mf": mtd_from}).fetchall()
+
+    def rate(energy, hours):
+        """kWh per working hour. Divided by WORK hours, not calendar hours, and
+        only where the machine actually ran — a rate over a month of standing
+        still is a division by nothing dressed as efficiency."""
+        e, h = float(energy or 0), float(hours or 0)
+        return round(e / h, 2) if h > 0 else None
+
+    machines, f = [], {"td_hours": 0.0, "td_energy": 0.0, "mtd_hours": 0.0,
+                       "mtd_energy": 0.0, "life_hours": 0.0, "life_energy": 0.0}
+    for r in rows:
+        d = dict(r._mapping)
+        for k in ("td_hours", "td_energy", "mtd_hours", "mtd_energy",
+                  "life_hours", "life_energy"):
+            d[k] = round(float(d[k] or 0), 2)
+            f[k] += d[k]
+        d["td_rate"] = rate(d["td_energy"], d["td_hours"])
+        d["mtd_rate"] = rate(d["mtd_energy"], d["mtd_hours"])
+        d["life_rate"] = rate(d["life_energy"], d["life_hours"])
+        d["mtd_idle_days"] = (d["mtd_days"] or 0) - (d["mtd_active_days"] or 0)
+        d["days_behind"] = (as_of - d["last_day"]).days if d["last_day"] else None
+        d["reported_on_day"] = d["last_day"] is not None and d["last_day"] >= as_of
+        machines.append(_shape(d))
+
+    for k in list(f):
+        f[k] = round(f[k], 2)
+    f["td_rate"] = rate(f["td_energy"], f["td_hours"])
+    f["mtd_rate"] = rate(f["mtd_energy"], f["mtd_hours"])
+    f["life_rate"] = rate(f["life_energy"], f["life_hours"])
+    f["machines"] = len(machines)
+    f["reporting_on_day"] = sum(1 for m in machines if m["reported_on_day"])
+
+    return {
+        "as_of": as_of.isoformat(),
+        "mtd_from": mtd_from.isoformat(),
+        "machines": machines,
+        "fleet": f,
+    }
+
+
+def get_freshness(db: Session, now: dt.datetime | None = None) -> dict:
+    """Which machines are behind, judged against the 09:30 deadline.
+
+    THE DEADLINE IS WHAT MAKES THIS ANSWERABLE. "Is the data current" has no
+    answer on its own: at 07:00 yesterday's export is not late, it is simply
+    not in yet, and a screen shouting OVERDUE at that hour trains people to
+    ignore it. After 09:30 the same silence means something different.
+
+    So each machine lands in one of three states:
+
+      OK        yesterday (or later) is loaded — nothing to do
+      DUE       yesterday is missing and it is not yet 09:30 — expected, not late
+      OVERDUE   yesterday is missing and 09:30 has passed
+
+    `days_behind` counts from yesterday, not from today: today's export does
+    not exist yet at any hour, so measuring against today would report every
+    machine one day behind forever.
+
+    now is taken from the database, not the process: this is a deadline the
+    mine keeps in IST and the answer must not depend on where the app runs.
+    """
+    # now() RIDES ALONG WITH THE ROWS instead of costing a trip of its own.
+    # It still comes from the database — the deadline is one the mine keeps in
+    # IST and the answer must not depend on where the app runs — but asking for
+    # the clock separately meant two crossings of the tunnel to answer one
+    # question. A caller that supplied its own `now` (the tests do) skips it.
+    rows = db.execute(text(f"""
+        SELECT m.serial_no, m.equipment_type, m.model, m.status,
+               {_ASSET_NAME} AS display_name, a.fleet_code,
+               max(t.report_date) AS last_day,
+               now() AS db_now
+          FROM {SCHEMA}.ev_vehicle_master m
+          LEFT JOIN {SCHEMA}.ev_vehicle_tracking t USING (ev_vehicle_id)
+          {_ASSET_JOIN}
+         WHERE m.status = 'A'
+         GROUP BY m.serial_no, m.equipment_type, m.model, m.status,
+                  a.nickname, a.fleet_code
+         ORDER BY {_ASSET_NAME} NULLS LAST, m.serial_no
+    """)).fetchall()
+
+    if now is None:
+        # Every row carries the same clock; with no machines at all there is
+        # nothing to be late, so the process clock is a safe last resort.
+        now = rows[0]._mapping["db_now"] if rows else dt.datetime.now()
+    today = now.date()
+    yesterday = today - dt.timedelta(days=1)
+    past_due = (now.hour, now.minute) >= (REPORT_DUE_HOUR, REPORT_DUE_MINUTE)
+
+    machines, overdue, due = [], 0, 0
+    for r in rows:
+        d = dict(r._mapping)
+        d.pop("db_now", None)
+        last = d["last_day"]
+        behind = (yesterday - last).days if last else None
+        if last is not None and last >= yesterday:
+            state = "OK"
+        elif past_due:
+            state = "OVERDUE"; overdue += 1
+        else:
+            state = "DUE"; due += 1
+        d["days_behind"] = max(behind, 0) if behind is not None else None
+        d["state"] = state
+        machines.append(_shape(d))
+
+    return {
+        "checked_at": now.isoformat(),
+        "expected_through": yesterday.isoformat(),
+        "due_by": f"{REPORT_DUE_HOUR:02d}:{REPORT_DUE_MINUTE:02d}",
+        "past_due_time": past_due,
+        "machines": machines,
+        "overdue": overdue,
+        "due": due,
+        "ok": sum(1 for m in machines if m["state"] == "OK"),
+        # The worst case, which is what a single badge has room to say.
+        "worst_days_behind": max(
+            (m["days_behind"] or 0 for m in machines if m["state"] != "OK"), default=0),
+    }
+
+
+def get_coverage(db: Session) -> dict:
+    """What the telemetry record actually covers, and where it does not.
+
+    THE UPLOADS TELL YOU WHAT ARRIVED; THIS TELLS YOU WHAT DID NOT. A fleet
+    page built only on the rows that exist cannot show the months nobody ever
+    downloaded from the portal, and those are the months a reader would
+    otherwise take as "the machine did nothing".
+
+    The distinction that matters here, and it is not cosmetic:
+
+      MISSING   no row for that day at all -- nobody uploaded it. The loader
+                is absent for the whole of September 2025, December 2025 and
+                September 2026: 91 days, three clean months.
+      IDLE      a row exists and says the machine did nothing. That is a
+                measurement, and over half this record is made of them.
+
+    Reported per machine, because a gap on one machine is a missing download
+    and a gap on all four at once is a month nobody collected.
+    """
+    rows = db.execute(text(f"""
+        WITH per AS (
+            SELECT m.ev_vehicle_id, m.serial_no, m.equipment_type, m.model,
+                   {_ASSET_NAME} AS display_name, a.fleet_code,
+                   min(t.report_date) AS first_day,
+                   max(t.report_date) AS last_day,
+                   count(*)           AS days_held,
+                   count(*) FILTER (WHERE coalesce(t.work_hours,0) = 0
+                                      AND coalesce(t.total_energy_kwh,0) = 0) AS idle_days,
+                   count(*) FILTER (WHERE t.is_suspect)                       AS suspect_days,
+                   coalesce(sum(t.total_energy_kwh) FILTER (WHERE NOT t.is_suspect), 0) AS energy_kwh,
+                   coalesce(sum(t.work_hours)       FILTER (WHERE NOT t.is_suspect), 0) AS work_hours
+              FROM {SCHEMA}.ev_vehicle_master m
+              LEFT JOIN {SCHEMA}.ev_vehicle_tracking t USING (ev_vehicle_id)
+              {_ASSET_JOIN}
+             GROUP BY m.ev_vehicle_id, m.serial_no, m.equipment_type, m.model,
+                      a.nickname, a.fleet_code
+        )
+        SELECT *, (last_day - first_day + 1) AS span_days
+          FROM per ORDER BY serial_no
+    """)).fetchall()
+
+    # EVERY MACHINE'S GAPS IN ONE QUERY, NOT ONE QUERY PER MACHINE.
+    # This ran a generate_series per machine that had a gap — three more
+    # crossings of the tunnel at ~112 ms each, to answer the same question
+    # three times. Generating each machine's own span in a lateral join asks
+    # it once. Machines with no gap are skipped by the HAVING, as before.
+    gaps: dict[int, list[str]] = {}
+    for g in db.execute(text(f"""
+        WITH span AS (
+            SELECT m.ev_vehicle_id,
+                   min(t.report_date) AS lo,
+                   max(t.report_date) AS hi
+              FROM {SCHEMA}.ev_vehicle_master m
+              JOIN {SCHEMA}.ev_vehicle_tracking t USING (ev_vehicle_id)
+             GROUP BY m.ev_vehicle_id
+        )
+        SELECT s.ev_vehicle_id, to_char(d.d, 'YYYY-MM') AS mon
+          FROM span s
+          CROSS JOIN LATERAL generate_series(s.lo, s.hi, '1 day') AS d(d)
+          LEFT JOIN {SCHEMA}.ev_vehicle_tracking t
+                 ON t.report_date = CAST(d.d AS date)
+                AND t.ev_vehicle_id = s.ev_vehicle_id
+         GROUP BY s.ev_vehicle_id, mon
+        HAVING count(*) FILTER (WHERE t.report_date IS NULL) > 0
+         ORDER BY s.ev_vehicle_id, mon
+    """)).fetchall():
+        gaps.setdefault(g[0], []).append(g[1])
+
+    out = []
+    for r in rows:
+        d = dict(r._mapping)
+        span = d.pop("span_days", None) or 0
+        d["days_missing"] = max(span - (d["days_held"] or 0), 0)
+        # Which months, so somebody can go and fetch exactly those exports
+        # rather than being told a number and left to find them.
+        d["missing_months"] = gaps.get(d["ev_vehicle_id"], []) if d["days_missing"] else []
+        d["idle_pct"] = (round(d["idle_days"] * 100.0 / d["days_held"], 1)
+                         if d["days_held"] else None)
+        out.append(_shape(d))
+
+    return {
+        "vehicles": out,
+        # Said once for the fleet rather than four times: it is a property of
+        # the export, not of any machine.
+        "never_filled_columns": list(_NEVER_FILLED),
+        "never_filled_note": (
+            "LiuGong exports these columns but has never populated them in any "
+            "row loaded here, so the energy split between operating and idling "
+            "is not available — only the total."
+        ),
+    }
+
+
 def get_upload_log(db: Session, limit: int = 50) -> list[dict]:
     """Every recorded upload, newest first.
 
@@ -423,11 +771,13 @@ def get_upload_log(db: Session, limit: int = 50) -> list[dict]:
     """
     rows = db.execute(text(f"""
         SELECT b.batch_id, b.source_file, m.serial_no, m.equipment_type,
+               {_ASSET_NAME} AS display_name,
                b.uploaded_by, b.uploaded_at, b.rows_received,
                b.rows_new, b.rows_changed, b.rows_identical,
                b.date_from, b.date_to
           FROM {SCHEMA}.ev_upload_batch b
           JOIN {SCHEMA}.ev_vehicle_master m USING (ev_vehicle_id)
+          {_ASSET_JOIN}
          ORDER BY b.uploaded_at DESC
          LIMIT :l
     """), {"l": limit}).fetchall()

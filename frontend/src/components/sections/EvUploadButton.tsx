@@ -32,6 +32,12 @@ interface FileReport {
   rows_new?: number;
   rows_changed?: number;
   rows_identical?: number;
+  /* How much of each group is a day the machine did nothing. "2 new" says
+     nothing about whether it worked those days, and a month of zeros looks
+     exactly like a month of work until somebody opens the file. */
+  rows_new_idle?: number;
+  rows_identical_idle?: number;
+  display_name?: string | null;
   new_from?: string | null;
   new_to?: string | null;
   changed?: {
@@ -95,6 +101,15 @@ export default function EvUploadButton({ onUploaded }: { onUploaded?: () => void
   /* What saving would actually write — new plus changed, never the identical
      days, so the button promises the number the report just showed. */
   const toWrite = totals.nw + totals.ch;
+
+  /* A write that actually happened: at least one file reported written. */
+  const saved = Boolean(
+    result && result.results.length > 0 && result.results.some((r) => r.written),
+  );
+  const savedNames = (result?.results ?? [])
+    .filter((r) => r.written)
+    .map((r) => r.display_name ?? r.serial_no)
+    .join(", ");
 
   const reset = () => { setFiles([]); setResult(null); setError(null); setDryRun(true); };
   const close = () => { setOpen(false); reset(); };
@@ -203,6 +218,42 @@ export default function EvUploadButton({ onUploaded }: { onUploaded?: () => void
                 </div>
               ) : null}
 
+              {/* IT SAVED — SAY SO. The dialog used to look identical after a
+                  write and after a check: the same report, the same buttons,
+                  and a quiet "NOT SAVED" chip that had simply gone. Somebody
+                  who looked away for a second had no way to tell whether the
+                  upload had happened, and the safe move from there is to press
+                  it again. */}
+              {saved ? (
+                <div className="mb-2 rounded-lg border border-green-200 bg-green-50 px-4 py-3">
+                  <div className="flex items-center gap-2 text-[13px] font-semibold text-green-800">
+                    <CheckCircle2 size={16} />
+                    Saved — {result!.rows_written} row
+                    {result!.rows_written === 1 ? "" : "s"} written to the fleet record
+                  </div>
+                  <p className="mt-1 text-[11px] text-green-900/70">
+                    {savedNames}. The fleet figures behind this page have been
+                    refreshed, and the upload is recorded in the Upload Log with
+                    what it changed.
+                  </p>
+                  <div className="mt-2.5 flex flex-wrap gap-2">
+                    <button
+                      onClick={reset}
+                      className="flex items-center gap-1.5 rounded border border-green-300 bg-white px-3 py-1.5 text-[11px] font-condensed font-bold uppercase tracking-widest text-green-800 hover:bg-green-100"
+                    >
+                      <Upload size={12} />
+                      Load another file
+                    </button>
+                    <button
+                      onClick={close}
+                      className="rounded border border-border px-3 py-1.5 text-[11px] font-condensed font-bold uppercase tracking-widest text-txt-secondary hover:bg-bg-section"
+                    >
+                      Done
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
               {result ? (
                 <div className="space-y-2">
                   {/* ACROSS EVERY FILE IN THE BATCH. Several workbooks at once
@@ -248,7 +299,14 @@ export default function EvUploadButton({ onUploaded }: { onUploaded?: () => void
                     <div key={r.file} className="rounded border border-border-light px-3 py-2 text-[11px]">
                       <div className="flex items-center gap-1.5 font-semibold text-navy">
                         <CheckCircle2 size={12} className="text-green-600" />
-                        {r.serial_no}
+                        {/* The mine says EV EX-2, not CLG922FECSE735955. The
+                            serial stays beside it — it is what links the file
+                            to the machine and what a reader checks against the
+                            file name. */}
+                        {r.display_name ?? r.serial_no}
+                        {r.display_name ? (
+                          <span className="font-normal text-txt-light">{r.serial_no}</span>
+                        ) : null}
                         {r.equipment_type ? <span className="font-normal text-txt-light">· {r.equipment_type}</span> : null}
                         {!r.written ? <span className="ml-auto rounded bg-gold-light/30 px-1.5 py-0.5 text-gold-dark">NOT SAVED</span> : null}
                       </div>
@@ -266,6 +324,7 @@ export default function EvUploadButton({ onUploaded }: { onUploaded?: () => void
                             <span className="rounded bg-green-50 px-1.5 py-0.5 text-green-700 ring-1 ring-green-200">
                               {r.rows_new} new
                               {r.new_from ? ` · ${day(r.new_from)} to ${day(r.new_to!)}` : ""}
+                              {r.rows_new_idle ? ` · ${r.rows_new_idle} idle` : ""}
                             </span>
                           ) : null}
                           {r.rows_changed ? (
@@ -274,8 +333,10 @@ export default function EvUploadButton({ onUploaded }: { onUploaded?: () => void
                             </span>
                           ) : null}
                           {r.rows_identical ? (
-                            <span className="rounded bg-bg-section px-1.5 py-0.5 text-txt-light ring-1 ring-border-light">
+                            <span className="rounded bg-bg-section px-1.5 py-0.5 text-txt-light ring-1 ring-border-light"
+                                  title="Already stored with exactly these figures — re-uploading them changes nothing">
                               {r.rows_identical} already there, unchanged
+                              {r.rows_identical_idle ? ` · ${r.rows_identical_idle} idle` : ""}
                             </span>
                           ) : null}
                           {!r.rows_new && !r.rows_changed && r.rows_identical ? (
@@ -289,6 +350,14 @@ export default function EvUploadButton({ onUploaded }: { onUploaded?: () => void
                           against, and a day that matches has nothing to say;
                           a day whose total energy is about to go from 412 to
                           0 is the one somebody must see before saving. */}
+                      {(r.rows_new_idle || r.rows_identical_idle) ? (
+                        <p className="mt-1 text-[10px] leading-relaxed text-txt-light">
+                          An <strong>idle</strong> day is a reading of zero hours and
+                          zero kWh — the machine was there and did nothing. It is a
+                          measurement, not a missing day.
+                        </p>
+                      ) : null}
+
                       {r.changed && r.changed.length ? (
                         <details className="mt-1.5">
                           <summary className="cursor-pointer text-amber-800">
@@ -352,7 +421,7 @@ export default function EvUploadButton({ onUploaded }: { onUploaded?: () => void
               ) : null}
             </div>
 
-            <div className="flex justify-end gap-2 border-t border-border-light px-5 py-3">
+            <div className={`flex justify-end gap-2 border-t border-border-light px-5 py-3 ${saved ? "hidden" : ""}`}>
               <button onClick={close} className="rounded border border-border px-3 py-1.5 text-[11px] font-condensed font-bold tracking-widest text-txt-secondary hover:bg-bg-section">
                 CLOSE
               </button>

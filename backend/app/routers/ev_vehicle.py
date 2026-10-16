@@ -36,6 +36,26 @@ def _window(date_from: dt.date | None, date_to: dt.date | None) -> tuple[dt.date
     return start, end
 
 
+@router.get("/analytics")
+def analytics(from_date: dt.date | None = Query(None, description="Start of the period; defaults to month-to-date"),
+              to_date: dt.date | None = Query(None, description="Report day; defaults to the latest the fleet holds"),
+              db: Session = Depends(get_minehub_db)) -> dict:
+    """Every machine's day, period and lifetime figures on one call."""
+    return ev_vehicle.get_fleet_analytics(db, to_date, from_date)
+
+
+@router.get("/freshness")
+def freshness(db: Session = Depends(get_minehub_db)) -> dict:
+    """Which machines have not had yesterday's export loaded by 09:30."""
+    return ev_vehicle.get_freshness(db)
+
+
+@router.get("/coverage")
+def coverage(db: Session = Depends(get_minehub_db)) -> dict:
+    """What the record covers and what it is missing, per machine."""
+    return ev_vehicle.get_coverage(db)
+
+
 @router.get("/uploads/log")
 def uploads_log(limit: int = Query(50, ge=1, le=200),
                 db: Session = Depends(get_minehub_db)) -> list[dict]:

@@ -24,7 +24,7 @@ import asyncio
 import logging
 import time
 
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, event, exc as exc_mod, text
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from sqlalchemy.pool import QueuePool
 from sqlalchemy.exc import SQLAlchemyError
@@ -59,12 +59,40 @@ POOL_SIZE      = 2      # what is RETAINED at rest — the number that matters h
 # leaves the resting footprint at two.
 MAX_OVERFLOW   = 12     # hard ceiling of 14 concurrent connections per process
 POOL_TIMEOUT   = 10     # fail fast rather than queue behind a saturated server
-POOL_RECYCLE   = 280    # well under any proxy or wait_timeout; forces turnover
+# RAISED FROM 280 s, AND ONLY BECAUSE VALIDATION NO LONGER DEPENDS ON AGE.
+# 280 s was a blunt instrument for the same job the idle ping now does
+# properly: retire anything that might have been dropped by a proxy or the
+# server. Blind age-based turnover is a poor proxy for "is this socket alive"
+# — it discarded healthy connections constantly and still could not catch one
+# that died at 30 s. _ping_if_stale validates any connection idle more than
+# 20 s and raises DisconnectionError if it has gone, so a dead socket is
+# caught when it matters rather than guessed at.
+#
+# Leaving recycle at 280 would also have cancelled the raised idle window
+# above: a connection reached for after five minutes was older than 280 s and
+# so was thrown away and reopened regardless — the 1,169 ms reconnect the
+# window was widened to avoid. 25 minutes, still far under MySQL's 8-hour
+# wait_timeout, lets the two settings mean the same thing.
+POOL_RECYCLE   = 1500
 
 # Dispose the pool after this long with no checkout, closing every idle
-# connection. 3 minutes is longer than a user clicking between sections and far
-# shorter than the 8-hour server timeout.
-IDLE_DISPOSE_SECONDS = 180
+# connection.
+#
+# RAISED FROM 180 s, BECAUSE REOPENING IS NOT CHEAP HERE. Measured from this
+# host: a warm checkout answers `SELECT 1` in 455 ms, the first one after a
+# dispose takes 1,625 ms. Reconnecting to balcorpdb costs ~1,169 ms and to
+# minehub ~851 ms, and a page load hits both, so every visit that landed
+# outside the window paid well over a second before any query ran. Three
+# minutes sounded like "longer than a user clicking between sections", but
+# reading a report, taking a call or sitting in a meeting all exceed it, and
+# those are exactly the moments somebody comes back and opens a page.
+#
+# What it costs to hold: pool_size is 2, so this keeps two connections per
+# worker — four across both — against a server that allows 500 and in which
+# the other applications on this host already hold 48 idle for over an hour.
+# The resting footprint still falls to zero, just after a quarter of an hour
+# instead of three minutes.
+IDLE_DISPOSE_SECONDS = 900
 IDLE_CHECK_SECONDS   = 60
 
 engine = create_engine(
@@ -73,7 +101,8 @@ engine = create_engine(
     pool_size=POOL_SIZE,
     max_overflow=MAX_OVERFLOW,
     pool_timeout=POOL_TIMEOUT,
-    pool_pre_ping=True,        # revalidate on checkout; makes disposal safe
+    # Pre-ping is done by hand below, not by the pool. See _ping_if_stale.
+    pool_pre_ping=False,
     pool_recycle=POOL_RECYCLE,
     # LIFO hands back the most recently used connection, so surplus connections
     # from a burst stay untouched and are retired by pool_recycle instead of
@@ -89,10 +118,61 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 _last_checkout = time.monotonic()
 
 
+# How long a connection may sit unused before it is worth validating. Under
+# active use nothing comes close to this, so the ping disappears from the hot
+# path; anything that has been sitting is still checked before it is handed to
+# a request.
+PING_AFTER_IDLE = 20.0
+
+
+@event.listens_for(engine, "checkin")
+def _stamp_checkin(dbapi_conn, conn_record):
+    conn_record.info["returned_at"] = time.monotonic()
+
+
 @event.listens_for(engine, "checkout")
-def _mark_activity(dbapi_conn, conn_record, conn_proxy):
+def _ping_if_stale(dbapi_conn, conn_record, conn_proxy):
+    """pool_pre_ping, but only for connections old enough to have gone stale.
+
+    WHY NOT JUST pool_pre_ping=True. Because it validates on EVERY checkout,
+    and validation is a round trip: `SELECT 1` against balcorpdb measured
+    223 ms from this host. One request does one checkout, so every API call on
+    every page was paying a quarter of a second to ask a question it had asked
+    seconds earlier and whose answer had not changed. Measured on the EV
+    overview, that ping plus the Postgres one was ~460 ms of a ~950 ms
+    response.
+
+    What pre-ping is actually for is the connection that has been sitting while
+    a firewall or the server quietly dropped it. That is a function of how long
+    it has been idle, which is exactly what this checks. A connection reused
+    within PING_AFTER_IDLE is handed over untouched; an older one is validated
+    exactly as before, and a failure raises DisconnectionError so the pool
+    discards it and transparently opens a new one — the same recovery
+    pool_pre_ping provided, at the same moment it would have provided it.
+
+    pool_recycle (280 s) and the idle reaper (180 s) still bound the age of
+    anything in the pool, so this narrows the unvalidated window, it does not
+    open an unbounded one.
+    """
     global _last_checkout
     _last_checkout = time.monotonic()
+
+    returned = conn_record.info.get("returned_at")
+    if returned is not None and _last_checkout - returned < PING_AFTER_IDLE:
+        return                                   # recently in use; trust it
+
+    try:
+        cur = dbapi_conn.cursor()
+        try:
+            cur.execute("SELECT 1")
+            cur.fetchall()
+        finally:
+            cur.close()
+    except Exception as exc:                                # noqa: BLE001
+        # Tells the pool this connection is dead. It drops it and retries the
+        # checkout once with a fresh one, which is what pre-ping did.
+        raise exc_mod.DisconnectionError(
+            "stale pooled connection discarded") from exc
 
 
 class Base(DeclarativeBase):
