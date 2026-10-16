@@ -16,6 +16,7 @@ telematics portal. Two things about that file drive the whole design:
 from __future__ import annotations
 
 import datetime as dt
+import json
 import io
 import re
 from typing import Any
@@ -212,8 +213,112 @@ def get_vehicle(db: Session, serial_no: str) -> dict | None:
     return dict(row._mapping) if row else None
 
 
-def upsert_tracking(db: Session, serial_no: str, rows: list[dict], source_file: str) -> dict:
-    """Write one machine's days. Re-uploading the same month overwrites it."""
+def _same(old: Any, new: Any) -> bool:
+    """Is this the same reading?
+
+    The stored value is numeric(…) and comes back as Decimal; the parsed one is
+    a float off a spreadsheet. 8.4 and Decimal('8.400') are the same reading and
+    must not be reported as a change, or re-uploading an unchanged month would
+    light up every row. Compared at the precision the column stores (3dp), with
+    None equal only to None — a blank is not a zero.
+    """
+    if old is None or new is None:
+        return old is None and new is None
+    try:
+        return round(float(old), 3) == round(float(new), 3)
+    except (TypeError, ValueError):
+        return str(old) == str(new)
+
+
+def diff_rows(db: Session, serial_no: str, rows: list[dict]) -> dict:
+    """What this file would do to the table, day by day. Writes nothing.
+
+    WHY THIS EXISTS. A dry run used to report only what it had read — rows,
+    date range, columns matched — which is the same report whether the table is
+    empty or already holds every one of those days. The question somebody
+    uploading six months of telemetry over a table that stops on 8 July is
+    actually asking is "which days are new, which get overwritten, and does
+    anything I already have disagree with this file". That cannot be answered
+    from the workbook alone; it needs the rows that are already there.
+
+    Three outcomes per day, and they are different things:
+      NEW       no row for that day — the file is adding history
+      CHANGED   a row exists and at least one metric differs — the file is
+                restating a figure somebody may already have reported
+      IDENTICAL a row exists and every metric matches — re-uploading the same
+                export, which is safe and worth saying so plainly
+
+    Only CHANGED carries field-level before/after, because that is the only
+    case where something a reader may have quoted is about to move.
+    """
+    vehicle = get_vehicle(db, serial_no)
+    if vehicle is None:
+        raise EvParseError(
+            f"Serial {serial_no} is not registered. Add it to {SCHEMA}.ev_vehicle_master first."
+        )
+
+    dates = [r["report_date"] for r in rows]
+    columns = ", ".join(METRIC_FIELDS)
+    existing = {
+        r._mapping["report_date"]: dict(r._mapping)
+        for r in db.execute(
+            text(f"""SELECT report_date, {columns}, source_file, ingested_at
+                       FROM {SCHEMA}.ev_vehicle_tracking
+                      WHERE ev_vehicle_id = :v AND report_date = ANY(:dates)"""),
+            {"v": vehicle["ev_vehicle_id"], "dates": dates},
+        ).fetchall()
+    }
+
+    new_days: list[str] = []
+    identical: list[str] = []
+    changed: list[dict] = []
+
+    for row in rows:
+        day = row["report_date"]
+        old = existing.get(day)
+        if old is None:
+            new_days.append(day.isoformat())
+            continue
+        fields = {
+            f: {"from": None if old[f] is None else float(old[f]),
+                "to": None if row.get(f) is None else float(row[f])}
+            for f in METRIC_FIELDS if not _same(old[f], row.get(f))
+        }
+        if fields:
+            changed.append({
+                "report_date": day.isoformat(),
+                "fields": fields,
+                "previous_source_file": old.get("source_file"),
+                "previously_ingested_at": (old["ingested_at"].isoformat()
+                                           if old.get("ingested_at") else None),
+            })
+        else:
+            identical.append(day.isoformat())
+
+    changed.sort(key=lambda c: c["report_date"])
+    return {
+        "rows_new": len(new_days),
+        "rows_changed": len(changed),
+        "rows_identical": len(identical),
+        "new_dates": new_days,
+        "identical_dates": identical,
+        "changed": changed,
+        # The span this file would ADD, which is the sentence somebody wants
+        # when they upload July-to-December over a table that stops on 8 July.
+        "new_from": min(new_days) if new_days else None,
+        "new_to": max(new_days) if new_days else None,
+    }
+
+
+def upsert_tracking(db: Session, serial_no: str, rows: list[dict], source_file: str,
+                    impact: dict | None = None, actor: str | None = None) -> dict:
+    """Write one machine's days. Re-uploading the same month overwrites it.
+
+    `impact` is the diff_rows() result taken BEFORE this call. It is recorded
+    as the audit trail, because once the UPDATE has run the old values are
+    gone and "what did this day say yesterday" has no answer. Passing it is
+    how the log stays honest; omitting it writes the rows and logs nothing.
+    """
     vehicle = get_vehicle(db, serial_no)
     if vehicle is None:
         raise EvParseError(
@@ -247,6 +352,11 @@ def upsert_tracking(db: Session, serial_no: str, rows: list[dict], source_file: 
         for row in rows
     ]
     db.execute(statement, payload)
+
+    batch_id = None
+    if impact is not None:
+        batch_id = _record_batch(db, vehicle, source_file, rows, impact, actor)
+
     db.commit()
 
     return {
@@ -255,7 +365,84 @@ def upsert_tracking(db: Session, serial_no: str, rows: list[dict], source_file: 
         "rows_received": len(rows),
         "rows_inserted": len(rows) - len(existing),
         "rows_updated": len(existing),
+        "batch_id": batch_id,
     }
+
+
+def _record_batch(db: Session, vehicle: dict, source_file: str, rows: list[dict],
+                  impact: dict, actor: str | None) -> int:
+    """One batch row, and one row per day the upload touched.
+
+    In the same transaction as the write it describes: a log that can commit
+    while the write rolls back is worse than no log, because it is believed.
+
+    Identical days are deliberately NOT recorded. They are the bulk of a
+    re-upload — 8 of 31 on the July file — and a log where most entries say
+    "nothing happened" buries the ones that did.
+    """
+    batch_id = db.execute(text(f"""
+        INSERT INTO {SCHEMA}.ev_upload_batch
+               (ev_vehicle_id, source_file, uploaded_by, rows_received,
+                rows_new, rows_changed, rows_identical, date_from, date_to)
+        VALUES (:v, :f, :by, :n, :new, :chg, :same, :dfrom, :dto)
+        RETURNING batch_id
+    """), {
+        "v": vehicle["ev_vehicle_id"], "f": source_file, "by": actor,
+        "n": len(rows), "new": impact["rows_new"], "chg": impact["rows_changed"],
+        "same": impact["rows_identical"],
+        "dfrom": min(r["report_date"] for r in rows),
+        "dto": max(r["report_date"] for r in rows),
+    }).scalar()
+
+    entries = [{"b": batch_id, "d": d, "t": "NEW", "f": None}
+               for d in impact["new_dates"]]
+    entries += [{"b": batch_id, "d": c["report_date"], "t": "CHANGED",
+                 "f": json.dumps(c["fields"])}
+                for c in impact["changed"]]
+    if entries:
+        db.execute(text(f"""
+            INSERT INTO {SCHEMA}.ev_upload_change
+                   (batch_id, report_date, change_type, fields)
+            VALUES (:b, CAST(:d AS date), :t, CAST(:f AS jsonb))
+            ON CONFLICT (batch_id, report_date) DO NOTHING
+        """), entries)
+    return batch_id
+
+
+def get_upload_log(db: Session, limit: int = 50) -> list[dict]:
+    """Every recorded upload, newest first.
+
+    NOT the same thing as get_upload_history, which groups the tracking table
+    by source_file and therefore describes the CURRENT state: a day re-loaded
+    from a second file moves to that file and the first one shrinks. This is
+    the log of what was actually done, and nothing can rewrite it.
+
+    It begins at migration 086. Uploads before that were not recorded, and
+    their before-values are genuinely gone, so they are absent rather than
+    guessed at.
+    """
+    rows = db.execute(text(f"""
+        SELECT b.batch_id, b.source_file, m.serial_no, m.equipment_type,
+               b.uploaded_by, b.uploaded_at, b.rows_received,
+               b.rows_new, b.rows_changed, b.rows_identical,
+               b.date_from, b.date_to
+          FROM {SCHEMA}.ev_upload_batch b
+          JOIN {SCHEMA}.ev_vehicle_master m USING (ev_vehicle_id)
+         ORDER BY b.uploaded_at DESC
+         LIMIT :l
+    """), {"l": limit}).fetchall()
+    return [_shape(dict(r._mapping)) for r in rows]
+
+
+def get_upload_changes(db: Session, batch_id: int) -> list[dict]:
+    """What one upload did, day by day."""
+    rows = db.execute(text(f"""
+        SELECT report_date, change_type, fields
+          FROM {SCHEMA}.ev_upload_change
+         WHERE batch_id = :b
+         ORDER BY report_date
+    """), {"b": batch_id}).fetchall()
+    return [_shape(dict(r._mapping)) for r in rows]
 
 
 # ── reading ──────────────────────────────────────────────────────────

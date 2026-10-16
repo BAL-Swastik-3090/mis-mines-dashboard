@@ -2,13 +2,11 @@
 import SearchSelect from "@/components/minehub/SearchSelect";
 import React, { useState, useEffect } from "react";
 import dynamic from "next/dynamic";
-import {
-  Zap, BatteryCharging, Gauge, Route, Info, BarChart3, AlertTriangle, TrendingUp, TrendingDown,
-  RefreshCw, Activity
-} from "lucide-react";
+import { Activity, AlertTriangle, BarChart3, BatteryCharging, Gauge, History, Info, RefreshCw, Route, TrendingDown, TrendingUp, Zap } from "lucide-react";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import { useEvOverview, useEvVehicleHistory } from "@/hooks/useEvTracking";
 import EvUploadButton from "@/components/sections/EvUploadButton";
+import EvUploadLog from "@/components/sections/EvUploadLog";
 
 const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
 
@@ -38,7 +36,7 @@ const formatDateLabelShort = (dateStr: string | undefined | null) => {
 };
 
 export default function ElectricVehiclesSection() {
-  const [activeTab, setActiveTab] = useState<"info" | "analysis">("info");
+  const [activeTab, setActiveTab] = useState<"info" | "analysis" | "uploads">("info");
   const [selectedEvId, setSelectedEvId] = useState<number | null>(null);
 
   // Get global date range filters from global store
@@ -352,31 +350,42 @@ export default function ElectricVehiclesSection() {
           </p>
         </div>
 
-        {/* Tab switch buttons - Light Theme compliant styling */}
-        <div className="flex gap-2">
+        {/* ── VIEWS, THEN THE ACTION ───────────────────────────────────────
+            These were four buttons in a row, styled identically, with Upload
+            Export first. Three of them change what this page is showing and
+            one of them changes the database, and nothing on screen said which
+            was which — the destructive one simply came first.
+
+            So the three views are now one segmented control, in the order the
+            mine reads them: the machine, then its work, then who loaded the
+            figures. The upload sits apart, after a divider, carrying its own
+            icon; it is the only control here that writes anything. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex rounded-lg border border-border bg-white p-0.5 shadow-sm">
+            {([
+              { key: "info",     icon: Info,      label: "Equipment Info" },
+              { key: "analysis", icon: BarChart3, label: "Work Analysis" },
+              { key: "uploads",  icon: History,   label: "Upload Log" },
+            ] as const).map((t) => (
+              <button
+                key={t.key}
+                onClick={() => setActiveTab(t.key)}
+                aria-current={activeTab === t.key ? "page" : undefined}
+                className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[11px] font-condensed font-bold uppercase tracking-widest transition ${
+                  activeTab === t.key
+                    ? "bg-gold text-white shadow-sm"
+                    : "text-txt-secondary hover:bg-bg-section hover:text-navy"
+                }`}
+              >
+                <t.icon size={12} />
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          <span className="hidden h-6 w-px bg-border sm:block" aria-hidden />
+
           <EvUploadButton onUploaded={() => refetch()} />
-          <button
-            onClick={() => setActiveTab("info")}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded transition text-[11px] font-condensed font-bold tracking-widest border shadow-sm ${
-              activeTab === "info"
-                ? "bg-gold text-white border-gold-dark"
-                : "bg-white hover:bg-bg-section text-txt-secondary hover:text-navy border-border"
-            }`}
-          >
-            <Info size={12} />
-            EQUIPMENT INFO
-          </button>
-          <button
-            onClick={() => setActiveTab("analysis")}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded transition text-[11px] font-condensed font-bold tracking-widest border shadow-sm ${
-              activeTab === "analysis"
-                ? "bg-gold text-white border-gold-dark"
-                : "bg-white hover:bg-bg-section text-txt-secondary hover:text-navy border-border"
-            }`}
-          >
-            <BarChart3 size={12} />
-            WORK ANALYSIS
-          </button>
         </div>
       </div>
 
@@ -413,6 +422,8 @@ export default function ElectricVehiclesSection() {
       </div>
 
       {/* TAB CONTENT: 1. Equipment Info */}
+      {activeTab === "uploads" && <EvUploadLog />}
+
       {activeTab === "info" && selectedVehicle && (
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
           {/* Main comparative chart and details */}

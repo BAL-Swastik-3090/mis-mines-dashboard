@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import datetime as dt
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query,
+                     Request, UploadFile)
 from sqlalchemy.orm import Session
 
 from app.minehub_db import get_minehub_db
@@ -20,6 +21,12 @@ router = APIRouter(prefix="/api/ev", tags=["Electric Vehicles"])
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024      # these exports run ~25 KB; 10 MB is generous
 
 
+def _actor(request: Request) -> str:
+    """Who pressed the button. Recorded against the upload so a disputed
+    figure has a name next to it, not just a file name."""
+    return getattr(request.state, "emp_id", None) or "unknown"
+
+
 def _window(date_from: dt.date | None, date_to: dt.date | None) -> tuple[dt.date, dt.date]:
     """Default to the last 30 days when the caller gives no window."""
     end = date_to or dt.date.today()
@@ -29,8 +36,28 @@ def _window(date_from: dt.date | None, date_to: dt.date | None) -> tuple[dt.date
     return start, end
 
 
+@router.get("/uploads/log")
+def uploads_log(limit: int = Query(50, ge=1, le=200),
+                db: Session = Depends(get_minehub_db)) -> list[dict]:
+    """What has actually been uploaded, newest first.
+
+    Distinct from /uploads, which groups the tracking table by source_file and
+    so describes the current state rather than the history: a day re-loaded
+    from a second file moves to that file and the first one shrinks.
+    """
+    return ev_vehicle.get_upload_log(db, limit)
+
+
+@router.get("/uploads/log/{batch_id}/changes")
+def uploads_log_changes(batch_id: int,
+                        db: Session = Depends(get_minehub_db)) -> list[dict]:
+    """Day by day, what that upload did."""
+    return ev_vehicle.get_upload_changes(db, batch_id)
+
+
 @router.post("/upload")
 async def upload(
+    request: Request,
     files: list[UploadFile] = File(..., description="LiuGong .xlsx exports"),
     serial_no: str | None = Form(None, description="Override the serial read from the file name"),
     dry_run: bool = Form(False, description="Parse and report, write nothing"),
@@ -54,11 +81,28 @@ async def upload(
             parsed = ev_vehicle.parse_workbook(content, upload_file.filename or "", serial_no)
             report = parsed["report"]
 
+            # WHAT IT WOULD DO, ON BOTH PATHS.
+            #
+            # A dry run that reports only what it read — rows, range, columns —
+            # reads the same whether the table is empty or already holds every
+            # one of those days. The question being asked by somebody uploading
+            # July-to-December over a table that stops on 8 July is which days
+            # are new, which get overwritten, and whether anything already held
+            # disagrees with the file. That needs the stored rows, so it is
+            # computed here and returned either way.
+            #
+            # On the real path it is computed BEFORE the write, because
+            # afterwards the old values are gone and the question is
+            # unanswerable.
+            impact = ev_vehicle.diff_rows(db, parsed["serial_no"], parsed["rows"])
+            report.update(impact)
+
             if dry_run:
                 report["written"] = False
             else:
                 written = ev_vehicle.upsert_tracking(
-                    db, parsed["serial_no"], parsed["rows"], upload_file.filename or ""
+                    db, parsed["serial_no"], parsed["rows"], upload_file.filename or "",
+                    impact=impact, actor=_actor(request),
                 )
                 report.update(written)
                 report["written"] = True

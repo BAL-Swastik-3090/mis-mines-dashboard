@@ -25,7 +25,37 @@ interface FileReport {
   equipment_type?: string;
   rows_inserted?: number;
   rows_updated?: number;
+  /* What the file would do to the table, computed against the stored rows
+     before anything is written. Present on the dry run and the real upload
+     alike — on the real one it is taken BEFORE the write, because afterwards
+     the old values are gone and the question cannot be answered. */
+  rows_new?: number;
+  rows_changed?: number;
+  rows_identical?: number;
+  new_from?: string | null;
+  new_to?: string | null;
+  changed?: {
+    report_date: string;
+    fields: Record<string, { from: number | null; to: number | null }>;
+    previous_source_file?: string | null;
+  }[];
 }
+
+/** "total_energy_kwh" reads as a column name; the dialog is read by the person
+ *  holding the spreadsheet, who calls it Total Energy. */
+const FIELD_LABEL: Record<string, string> = {
+  operating_hours: "Operating hrs", idling_hours: "Idling hrs",
+  work_hours: "Work hrs", operating_energy_kwh: "Operating kWh",
+  idling_energy_kwh: "Idling kWh", total_energy_kwh: "Total kWh",
+  avg_operating_kwh_per_h: "Avg operating kWh/h",
+  avg_idling_kwh_per_h: "Avg idling kWh/h",
+  avg_energy_kwh_per_h: "Avg kWh/h",
+  avg_energy_recycle_kwh_per_h: "Avg recycle kWh/h",
+};
+const num = (v: number | null) => (v === null || v === undefined ? "—" : String(v));
+const day = (iso: string) =>
+  new Date(iso + "T00:00:00").toLocaleDateString("en-IN",
+    { day: "2-digit", month: "short", year: "numeric" });
 
 interface UploadResponse {
   files_accepted: number;
@@ -44,19 +74,44 @@ export default function EvUploadButton({ onUploaded }: { onUploaded?: () => void
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  /* A check that came back with something to do. `written === false` on every
+     result is what distinguishes "I have looked at this" from "I have saved
+     it", and errors alone must not offer a Save. */
+  const checked = Boolean(
+    result && result.results.length > 0 && result.results.every((r) => !r.written),
+  );
+  /* Rolled up across every file in the batch. `anyImpact` guards the strip:
+     an older server, or a reply that is nothing but errors, carries no impact
+     figures at all and must not render a row of confident zeros. */
+  const totals = (result?.results ?? []).reduce(
+    (a, r) => ({
+      nw: a.nw + (r.rows_new ?? 0),
+      ch: a.ch + (r.rows_changed ?? 0),
+      sm: a.sm + (r.rows_identical ?? 0),
+      anyImpact: a.anyImpact || r.rows_new !== undefined,
+    }),
+    { nw: 0, ch: 0, sm: 0, anyImpact: false },
+  );
+  /* What saving would actually write — new plus changed, never the identical
+     days, so the button promises the number the report just showed. */
+  const toWrite = totals.nw + totals.ch;
+
   const reset = () => { setFiles([]); setResult(null); setError(null); setDryRun(true); };
   const close = () => { setOpen(false); reset(); };
 
-  const send = async () => {
+  /* `check` is passed rather than read from state so "Save it" can send the
+     real upload directly off the back of a check, without first flipping a
+     checkbox the reader has to find and understand. */
+  const send = async (check: boolean) => {
     if (!files.length) return;
     setBusy(true); setError(null); setResult(null);
     try {
       const form = new FormData();
       files.forEach((f) => form.append("files", f));
-      form.append("dry_run", String(dryRun));
+      form.append("dry_run", String(check));
       const res = await api.post<UploadResponse>("/ev/upload", form);
       setResult(res.data);
-      if (!dryRun && res.data.rows_written > 0) onUploaded?.();
+      if (!check && res.data.rows_written > 0) onUploaded?.();
     } catch (err: unknown) {
       const e = err as { response?: { data?: { detail?: unknown } }; message?: string };
       const detail = e.response?.data?.detail;
@@ -76,12 +131,15 @@ export default function EvUploadButton({ onUploaded }: { onUploaded?: () => void
 
   return (
     <>
+      {/* The only control on this header that writes anything, so it is the
+          only one styled as an action rather than as a view to switch to. */}
       <button
         onClick={() => setOpen(true)}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded transition text-[11px] font-condensed font-bold tracking-widest border shadow-sm bg-white hover:bg-bg-section text-txt-secondary hover:text-navy border-border"
+        title="Load a LiuGong .xlsx export — checked before anything is saved"
+        className="flex items-center gap-1.5 rounded-lg border border-navy bg-navy px-3 py-1.5 text-[11px] font-condensed font-bold uppercase tracking-widest text-white shadow-sm transition hover:bg-navy-2"
       >
         <Upload size={12} />
-        UPLOAD EXPORT
+        Upload Export
       </button>
 
       {!open ? null : (
@@ -147,10 +205,43 @@ export default function EvUploadButton({ onUploaded }: { onUploaded?: () => void
 
               {result ? (
                 <div className="space-y-2">
-                  <div className="flex flex-wrap gap-x-4 gap-y-1 rounded border border-border-light bg-bg-section px-3 py-2 text-[12px]">
-                    <span className="font-semibold text-navy">{result.files_accepted} accepted</span>
-                    {result.files_rejected > 0 ? <span className="text-red-600">{result.files_rejected} rejected</span> : null}
-                    <span className="text-txt-secondary">{result.rows_written} rows written</span>
+                  {/* ACROSS EVERY FILE IN THE BATCH. Several workbooks at once
+                      is the normal case — a month per machine — and reading
+                      four per-file reports and adding them up by hand is the
+                      kind of arithmetic that gets done wrong at 7am. */}
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded border border-border-light bg-bg-section px-3 py-2 text-[12px]">
+                    <span className="font-semibold text-navy">
+                      {result.files_accepted} file{result.files_accepted === 1 ? "" : "s"} read
+                    </span>
+                    {result.files_rejected > 0 ? (
+                      <span className="text-red-600">{result.files_rejected} rejected</span>
+                    ) : null}
+                    {totals.anyImpact ? (
+                      <>
+                        <span className="h-3 w-px bg-border" aria-hidden />
+                        {totals.nw > 0 ? (
+                          <span className="rounded bg-green-50 px-1.5 py-0.5 text-green-700 ring-1 ring-green-200">
+                            {totals.nw} new
+                          </span>
+                        ) : null}
+                        {totals.ch > 0 ? (
+                          <span className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-800 ring-1 ring-amber-200">
+                            {totals.ch} would change
+                          </span>
+                        ) : null}
+                        {totals.sm > 0 ? (
+                          <span className="rounded bg-white px-1.5 py-0.5 text-txt-light ring-1 ring-border-light">
+                            {totals.sm} unchanged
+                          </span>
+                        ) : null}
+                        {totals.nw + totals.ch === 0 ? (
+                          <span className="text-txt-light">nothing to write — all of this is already loaded</span>
+                        ) : null}
+                      </>
+                    ) : null}
+                    <span className="ml-auto text-txt-secondary">
+                      {result.rows_written} row{result.rows_written === 1 ? "" : "s"} written
+                    </span>
                   </div>
 
                   {result.results.map((r) => (
@@ -162,10 +253,78 @@ export default function EvUploadButton({ onUploaded }: { onUploaded?: () => void
                         {!r.written ? <span className="ml-auto rounded bg-gold-light/30 px-1.5 py-0.5 text-gold-dark">NOT SAVED</span> : null}
                       </div>
                       <div className="mt-1 text-txt-secondary">
-                        {r.rows_parsed} rows · {r.date_from} to {r.date_to} · {r.columns_matched.length} columns matched
+                        {r.rows_parsed} rows · {day(r.date_from)} to {day(r.date_to)} · {r.columns_matched.length} columns matched
                         {r.has_energy_recycle_column ? " · incl. energy-recycle" : ""}
-                        {r.written ? ` · ${r.rows_inserted} new, ${r.rows_updated} updated` : ""}
                       </div>
+
+                      {/* WHAT IT DOES TO THE TABLE, which is the question.
+                          "31 rows, 1-31 July" reads the same whether the table
+                          is empty or already holds every one of those days. */}
+                      {r.rows_new !== undefined ? (
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                          {r.rows_new > 0 ? (
+                            <span className="rounded bg-green-50 px-1.5 py-0.5 text-green-700 ring-1 ring-green-200">
+                              {r.rows_new} new
+                              {r.new_from ? ` · ${day(r.new_from)} to ${day(r.new_to!)}` : ""}
+                            </span>
+                          ) : null}
+                          {r.rows_changed ? (
+                            <span className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-800 ring-1 ring-amber-200">
+                              {r.rows_changed} would change
+                            </span>
+                          ) : null}
+                          {r.rows_identical ? (
+                            <span className="rounded bg-bg-section px-1.5 py-0.5 text-txt-light ring-1 ring-border-light">
+                              {r.rows_identical} already there, unchanged
+                            </span>
+                          ) : null}
+                          {!r.rows_new && !r.rows_changed && r.rows_identical ? (
+                            <span className="text-txt-light">nothing to do — this file is already loaded</span>
+                          ) : null}
+                        </div>
+                      ) : null}
+
+                      {/* ONLY THE CHANGED DAYS ARE LISTED, with the figure that
+                          moves. A day being added has nothing to compare
+                          against, and a day that matches has nothing to say;
+                          a day whose total energy is about to go from 412 to
+                          0 is the one somebody must see before saving. */}
+                      {r.changed && r.changed.length ? (
+                        <details className="mt-1.5">
+                          <summary className="cursor-pointer text-amber-800">
+                            Show the {r.changed.length} day{r.changed.length === 1 ? "" : "s"} that would change
+                          </summary>
+                          <div className="mt-1 max-h-48 overflow-y-auto rounded border border-border-light">
+                            <table className="w-full border-collapse text-[10.5px] tabular-nums">
+                              <thead className="bg-bg-section">
+                                <tr>
+                                  <th className="border border-border-light px-2 py-1 text-left">Date</th>
+                                  <th className="border border-border-light px-2 py-1 text-left">Figure</th>
+                                  <th className="border border-border-light px-2 py-1 text-right">Now</th>
+                                  <th className="border border-border-light px-2 py-1 text-right">After</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {r.changed.map((c) =>
+                                  Object.entries(c.fields).map(([f, v], i) => (
+                                    <tr key={`${c.report_date}-${f}`}>
+                                      {i === 0 ? (
+                                        <td className="border border-border-light px-2 py-1 align-top font-semibold text-navy"
+                                            rowSpan={Object.keys(c.fields).length}>
+                                          {day(c.report_date)}
+                                        </td>
+                                      ) : null}
+                                      <td className="border border-border-light px-2 py-1">{FIELD_LABEL[f] ?? f}</td>
+                                      <td className="border border-border-light px-2 py-1 text-right text-txt-light">{num(v.from)}</td>
+                                      <td className="border border-border-light px-2 py-1 text-right font-semibold text-navy">{num(v.to)}</td>
+                                    </tr>
+                                  )),
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </details>
+                      ) : null}
                       {r.all_zero ? (
                         <div className="mt-1 flex gap-1.5 text-amber-700">
                           <AlertTriangle size={12} className="mt-0.5 shrink-0" />
@@ -198,13 +357,35 @@ export default function EvUploadButton({ onUploaded }: { onUploaded?: () => void
                 CLOSE
               </button>
               <button
-                onClick={send}
+                onClick={() => void send(dryRun)}
                 disabled={busy || files.length === 0}
-                className="flex items-center gap-1.5 rounded border border-gold-dark bg-gold px-3 py-1.5 text-[11px] font-condensed font-bold tracking-widest text-white disabled:cursor-not-allowed disabled:opacity-40"
+                className={`flex items-center gap-1.5 rounded border px-3 py-1.5 text-[11px] font-condensed font-bold tracking-widest disabled:cursor-not-allowed disabled:opacity-40 ${
+                  checked
+                    ? "border-border bg-white text-txt-secondary hover:bg-bg-section"
+                    : "border-gold-dark bg-gold text-white"
+                }`}
               >
                 {busy ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
                 {busy ? "WORKING" : dryRun ? "CHECK FILE" : "UPLOAD"}
               </button>
+
+              {/* THE STEP AFTER CHECKING IS SAVING, so offer it.
+                  The checkbox stays — it is how somebody chooses to check in
+                  the first place — but having read the report, the reader
+                  should not have to work out that the way to act on it is to
+                  untick a box and press the same button again. Appears only
+                  once a check has actually come back clean, and names the
+                  number it is about to write. */}
+              {checked ? (
+                <button
+                  onClick={() => { setDryRun(false); void send(false); }}
+                  disabled={busy}
+                  className="flex items-center gap-1.5 rounded border border-gold-dark bg-gold px-3 py-1.5 text-[11px] font-condensed font-bold tracking-widest text-white disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {busy ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+                  {toWrite > 0 ? `SAVE ${toWrite} ROW${toWrite === 1 ? "" : "S"}` : "SAVE ANYWAY"}
+                </button>
+              ) : null}
             </div>
           </div>
         </div>
