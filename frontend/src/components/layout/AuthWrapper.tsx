@@ -9,6 +9,11 @@ import { useAuth } from "@/contexts/useAuth";
 import { canOpen, landingPage } from "@/contexts/pageAccess";
 import api, { AUTH_EXPIRED_EVENT } from "@/lib/api";
 
+/* How recently somebody must have interacted for this tab to report them
+   present, and the minimum gap between reports. One write per user per two
+   minutes is a fraction of the load that caused the original lock trouble. */
+const BEAT_EVERY_MS = 2 * 60 * 1000;
+
 export default function AuthWrapper({ children }: { children: React.ReactNode }) {
   const [notice, setNotice] = useState<string | null>(null);
   const { setPage } = useAppPage();
@@ -38,41 +43,74 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
     return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired);
   }, []);
 
-  // Keep a session alive while someone is actually using the dashboard.
+  // Keep a session alive for as long as this application says it is alive.
   //
-  // The session row lives in the shared intranet table, and something outside
-  // this application sweeps it: sessions were being closed with end_reason
-  // TIMEOUT about fourteen minutes after their last recorded activity, well
-  // inside this app's own thirty-minute window. So what matters is that
-  // last_active_at keeps moving while someone is working, and the old approach
-  // could not guarantee that — it beat on the event itself, at most every five
-  // minutes, which leaves a gap whenever a burst of typing is followed by a
-  // pause spent reading the form.
+  // THE BUG. Something outside this app sweeps the shared session table and
+  // closes a session about ten to twelve minutes after its last RECORDED
+  // activity -- measured on this user's own rows, every TIMEOUT closure landed
+  // 10-13 minutes after last_active_at, never at our own thirty. So the row
+  // has to keep moving, or somebody else ends the session for us.
   //
-  // Now interaction only raises a flag, and a timer decides. Someone filling in
-  // a long sheet is seen every two minutes; a machine left unattended raises
-  // nothing, so the tab still expires on schedule, which is the point of the
-  // timeout.
-  const active = useRef(false);
+  // The old beat had two gates, and between them they let the row go stale
+  // while somebody was plainly still working:
+  //
+  //   1. it only fired if there had been an INTERACTION in the last two
+  //      minutes -- so reading a report, studying a chart, or watching a
+  //      screen during a call recorded nothing, and the sweeper took it;
+  //   2. it stopped entirely when the tab was hidden -- so alt-tabbing to
+  //      Excel for twelve minutes was enough, and coming back meant the login
+  //      page.
+  //
+  // The visibility gate is gone, and the tick is finer. What this reports is
+  // simply "a person was here recently"; how long that is worth is decided by
+  // the server, which keeps the row fresh for the full thirty minutes on the
+  // browser's behalf (services/auth.py, _real_seen). That split is what fixes
+  // the hidden-tab case: a frozen background page cannot be relied on to send
+  // anything, so nothing important depends on it any more.
+  //
+  // An unattended machine in a control room is still signed out on schedule,
+  // measured from the last time a person touched it -- which is what "idle"
+  // means, and what the tab being visible never did.
+  const lastSeenAt = useRef(Date.now());
+  const lastBeatAt = useRef(0);
   useEffect(() => {
     if (!user) return;
 
-    const mark = () => { active.current = true; };
+    const mark = () => { lastSeenAt.current = Date.now(); };
     const events: (keyof WindowEventMap)[] = [
       "click", "keydown", "scroll", "pointerdown", "input",
     ];
     events.forEach((e) => window.addEventListener(e, mark, { passive: true }));
 
     const beat = () => {
-      if (!active.current || document.visibilityState === "hidden") return;
-      active.current = false;
-      void api.post("/auth/heartbeat").catch(() => {});
+      const now = Date.now();
+      // Only while somebody is ACTUALLY here. Deliberately not "within the
+      // thirty-minute window": the server extends a session thirty minutes
+      // from the last beat it receives, so a browser that kept beating for
+      // thirty minutes after the last click would buy an hour, which is twice
+      // the policy. The browser reports presence; the server decides how long
+      // presence is worth. Each side owns one half and neither doubles it.
+      if (now - lastSeenAt.current > BEAT_EVERY_MS) return;
+      if (now - lastBeatAt.current < BEAT_EVERY_MS) return;     // too soon
+      lastBeatAt.current = now;
+      void api.post("/auth/heartbeat").catch(() => {
+        // Let the next tick try again rather than booking the full interval
+        // off: a beat that never landed is exactly the one worth repeating.
+        lastBeatAt.current = 0;
+      });
     };
-    const timer = setInterval(beat, 2 * 60 * 1000);
+
+    // Ticked every thirty seconds rather than every two minutes, because a
+    // background tab has its timers throttled -- a two-minute interval can be
+    // stretched past the sweeper's fuse by the very case this is here to fix.
+    beat();
+    const timer = setInterval(beat, 30_000);
 
     // Coming back to the tab counts as being here, and is the moment a stale
     // session is about to be noticed.
-    const onVisible = () => { if (document.visibilityState === "visible") { mark(); beat(); } };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") { mark(); beat(); }
+    };
     document.addEventListener("visibilitychange", onVisible);
 
     return () => {

@@ -476,6 +476,27 @@ _session_cache: dict[str, tuple[dict, float]] = {}
 _seen: dict[str, float] = {}
 _seen_lock = threading.Lock()
 
+# When each session last showed GENUINE activity — a request or a heartbeat
+# that actually arrived from that browser. Distinct from _seen, which is only
+# "noted since the last flush", and from last_active_at, which is what we
+# write.
+#
+# WHY THIS HAS TO EXIST. The policy is IDLE_MINUTES on real activity, but
+# something outside this application sweeps the shared session table and
+# closes rows about ten to twelve minutes after last_active_at. That means the
+# row must keep moving for the whole thirty minutes or somebody else ends the
+# session for us — and the browser cannot be relied on to do it. A hidden tab
+# has its timers throttled, and a frozen background page stops running them
+# altogether, so the heartbeat that was supposed to cover "working in Excel
+# with the dashboard behind it" is exactly the one the browser declines to
+# send. Measured here: a hidden tab sent nothing for three minutes.
+#
+# So the server keeps the row fresh on the browser's behalf, for as long as
+# its own rule says the session is alive, and stops the moment that rule says
+# it is not. The policy is unchanged; it is simply enforced somewhere that
+# cannot be put to sleep.
+_real_seen: dict[str, float] = {}
+
 # How often the flusher runs, and how long it may wait for the lock while it
 # does. It can be patient because no request is waiting on it — the opposite of
 # the inline write, which had a user watching.
@@ -551,6 +572,9 @@ def forget_session(sid: str) -> None:
     _touch_next.pop(sid, None)
     with _seen_lock:
         _seen.pop(sid, None)
+        # Otherwise the keep-alive below would hold a signed-out session open
+        # for the rest of the window.
+        _real_seen.pop(sid, None)
 
 
 def get_session(db: Session, sid: str | None) -> dict | None:
@@ -624,6 +648,7 @@ def touch(db: Session, sid: str) -> None:
     """
     with _seen_lock:
         _seen[sid] = time.time()
+        _real_seen[sid] = time.monotonic()
 
 
 def touch_now(db: Session, sid: str) -> bool:
@@ -641,6 +666,7 @@ def touch_now(db: Session, sid: str) -> bool:
     """
     with _seen_lock:
         _seen.pop(sid, None)        # written here; the flusher need not repeat it
+        _real_seen[sid] = time.monotonic()
     return _best_effort(db, "heartbeat", lambda: db.execute(text(
         f"UPDATE {SESS_TBL} SET last_active_at = NOW() "
         f"WHERE session_id = :sid AND is_active = 1"), {"sid": sid}))
@@ -661,11 +687,33 @@ def flush_touches(db: Session) -> int:
     too. Activity is never dropped because a write was unlucky; that is the
     whole bug this exists to fix.
     """
+    # KEEPING A LIVE SESSION LIVE, not just recording the ones that moved.
+    #
+    # This used to write only the sessions noted since the last pass, which is
+    # the same as saying "only the ones whose browser made a request". A user
+    # reading one screen, or working in another window with the dashboard
+    # behind it, makes no requests — and after ten to twelve minutes the
+    # external sweeper closed them for it. They were signed out while working,
+    # which is the whole complaint.
+    #
+    # Every session whose last GENUINE activity is still inside the
+    # application's own window is written on every pass, so the row never
+    # looks stale to the sweeper. A session whose real activity has aged past
+    # IDLE_MINUTES is dropped here and written no more: the row then goes
+    # stale on schedule and the session ends, exactly as the policy says. An
+    # unattended machine is still signed out; it is now measured from the last
+    # time a person touched it rather than from the last time their browser
+    # happened to poll.
+    cutoff = IDLE_MINUTES * 60
+    now = time.monotonic()
     with _seen_lock:
-        if not _seen:
-            return 0
-        sids = list(_seen)
+        for sid, seen_at in list(_real_seen.items()):
+            if now - seen_at >= cutoff:
+                _real_seen.pop(sid, None)
+        sids = sorted(set(_seen) | set(_real_seen))
         _seen.clear()
+        if not sids:
+            return 0
 
     restore = False
     try:
