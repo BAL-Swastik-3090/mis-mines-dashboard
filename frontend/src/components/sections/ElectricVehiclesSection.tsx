@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import { useEvOverview, useEvVehicleHistory } from "@/hooks/useEvTracking";
+import EvUploadButton from "@/components/sections/EvUploadButton";
 
 const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
 
@@ -353,6 +354,7 @@ export default function ElectricVehiclesSection() {
 
         {/* Tab switch buttons - Light Theme compliant styling */}
         <div className="flex gap-2">
+          <EvUploadButton onUploaded={() => refetch()} />
           <button
             onClick={() => setActiveTab("info")}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded transition text-[11px] font-condensed font-bold tracking-widest border shadow-sm ${
