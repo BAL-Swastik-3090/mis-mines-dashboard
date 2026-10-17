@@ -98,11 +98,8 @@ def _require(db, request: Request, code: str) -> None:
 
 
 # ------------------------------------------------------------------ catalogue
-@router.get("/permissions")
-def list_permissions(request: Request,
-                     db: Session = Depends(get_db),
-                     pg: Session = Depends(get_minehub_db)) -> list[dict]:
-    _require(db, request, "access.users.view")
+def _all_permissions(pg) -> list[dict]:
+    """Every permission in the catalogue. See the note on _roles_visible_to."""
     rows = pg.execute(text("""
         SELECT permission_id, code, module, name, description, is_sensitive, sort_order
         FROM permission ORDER BY sort_order, code
@@ -110,11 +107,16 @@ def list_permissions(request: Request,
     return [dict(r) for r in rows]
 
 
-# ---------------------------------------------------------------------- roles
-@router.get("/roles")
-def list_roles(request: Request, db: Session = Depends(get_db),
-               pg: Session = Depends(get_minehub_db)) -> list[dict]:
+@router.get("/permissions")
+def list_permissions(request: Request,
+                     db: Session = Depends(get_db),
+                     pg: Session = Depends(get_minehub_db)) -> list[dict]:
     _require(db, request, "access.users.view")
+    return _all_permissions(pg)
+
+
+# ---------------------------------------------------------------------- roles
+def _roles_visible_to(db, pg, actor: str) -> list[dict]:
     """The roles this person may work with.
 
     A role carrying the standing everything-grant is not listed for anybody
@@ -122,8 +124,18 @@ def list_roles(request: Request, db: Session = Depends(get_db),
     below refuse that — but offering a row that always refuses is a worse
     answer than not offering it, and the mine asked that the role not be
     visible at all.
+
+    A PLAIN FUNCTION, NOT THE ENDPOINT. /catalogue needs the same rows and
+    used to get them by calling the endpoint directly, which is how this
+    screen broke twice: an endpoint's parameters are a dependency-injection
+    contract, and calling one by hand binds whatever is passed, positionally,
+    with no check. A Postgres session landed in the `request` slot and the
+    Roles tab answered 500 for everybody. The note telling the next person to
+    "keep these in step" did not survive the next change, so the shared work
+    now lives somewhere that takes exactly what it needs and nothing
+    injectable.
     """
-    everything = access_svc.is_superadmin(db, _actor(request))
+    everything = access_svc.is_superadmin(db, actor)
     rows = pg.execute(text("""
         SELECT r.role_id, r.code, r.name, r.description, r.is_system, r.status,
                r.grants_everything,
@@ -138,6 +150,13 @@ def list_roles(request: Request, db: Session = Depends(get_db),
         ORDER BY r.is_system DESC, r.name
     """), {"all": everything}).mappings().all()
     return [dict(r) for r in rows]
+
+
+@router.get("/roles")
+def list_roles(request: Request, db: Session = Depends(get_db),
+               pg: Session = Depends(get_minehub_db)) -> list[dict]:
+    _require(db, request, "access.users.view")
+    return _roles_visible_to(db, pg, _actor(request))
 
 
 @router.post("/roles")
@@ -493,12 +512,16 @@ def catalogue(request: Request, db: Session = Depends(get_db),
     middleware round trip again — session check included. One call is measurably
     faster than two against databases this far away.
 
-    It calls list_roles directly, so it has to carry what list_roles needs.
-    That is exactly how this broke once: list_roles gained a request and a db
-    when the superadmin role was hidden from other people, and this caller
-    kept passing one argument — so the Postgres session arrived where the
-    request should have been and the Roles tab answered 500. FastAPI does not
-    check internal calls. Keep these three in step.
+    It used to get them by calling the two endpoints directly, and that broke
+    this screen twice in the same way — most recently when /permissions gained
+    a request and a db for its own permission check and this caller kept
+    passing one argument, so the Postgres session arrived where the request
+    should have been and the Roles tab answered 500 for everybody. FastAPI
+    does not check internal calls; it binds what it is given.
+
+    Both now read from plain functions that take no injectable parameters, so
+    there is no slot for a dependency to land in by accident and the three
+    callers cannot drift apart again.
     """
-    return {"roles": list_roles(request, db, pg),
-            "permissions": list_permissions(pg)}
+    return {"roles": _roles_visible_to(db, pg, _actor(request)),
+            "permissions": _all_permissions(pg)}
