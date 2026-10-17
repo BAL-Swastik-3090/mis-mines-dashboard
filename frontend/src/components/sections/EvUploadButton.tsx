@@ -6,7 +6,8 @@
  * before saving first — it parses and reports without writing, which is the
  * only way to see that a file is all zeros before it is in the table.
  */
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Upload, X, CheckCircle2, AlertTriangle, FileSpreadsheet, Loader2 } from "lucide-react";
 import api from "@/lib/api";
 
@@ -73,6 +74,12 @@ interface UploadResponse {
 
 export default function EvUploadButton({ onUploaded }: { onUploaded?: () => void }) {
   const [open, setOpen] = useState(false);
+  /* document.body does not exist during the server render, so the portal is
+     only mounted once the client has taken over. Without this the first render
+     on the server and the first on the client disagree and React discards the
+     tree it was given. */
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
   const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [dryRun, setDryRun] = useState(true);
@@ -157,8 +164,21 @@ export default function EvUploadButton({ onUploaded }: { onUploaded?: () => void
         Upload Export
       </button>
 
-      {!open ? null : (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:p-8">
+      {/* PORTALLED TO THE BODY, and it has to be.
+          This button lives inside the page's sticky header, which carries
+          backdrop-blur. A backdrop-filter makes its element the containing
+          block for every position:fixed descendant — the same rule transform
+          and filter follow — so `fixed inset-0` stopped meaning "the viewport"
+          and started meaning "that header bar". The dialog was laid out inside
+          a strip a few rows tall and the page painted straight over its body:
+          you could read the title and nothing else.
+
+          Rendering it from document.body puts it back outside that containing
+          block, so it covers the viewport as written. Moving it out of the
+          header in the markup would work too, but the button and its dialog
+          belong together; this keeps them together and fixes the geometry. */}
+      {!open || !mounted ? null : createPortal((
+        <div className="fixed inset-0 z-[10000] flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:p-8">
           <div className="w-full max-w-2xl rounded-md border border-border bg-white shadow-xl">
 
             <div className="flex items-start justify-between border-b border-border-light px-5 py-3">
@@ -458,7 +478,7 @@ export default function EvUploadButton({ onUploaded }: { onUploaded?: () => void
             </div>
           </div>
         </div>
-      )}
+      ), document.body)}
     </>
   );
 }

@@ -13,7 +13,7 @@
  * glance and no vertical space; a fleet that is behind should say how far and
  * open to name the machines.
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, Clock, X } from "lucide-react";
 import { useEvFreshness } from "@/hooks/useEvTracking";
 
@@ -43,6 +43,28 @@ const day = (iso: string | null) =>
 
 export default function EvFreshnessButton() {
   const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+
+  /* CLOSED BY A DOCUMENT LISTENER, NOT BY A FULL-SCREEN CATCHER DIV.
+     The catcher was `fixed inset-0`, which reads as "the whole viewport" and
+     is not: this button sits inside the page's sticky header, and that header
+     carries backdrop-blur, which makes it the containing block for every
+     fixed descendant. The catcher covered the header bar and nothing else, so
+     clicking out on the page below did not close the popover. A listener on
+     the document does not care about layout. */
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: PointerEvent) => {
+      if (!box.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("pointerdown", away);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("pointerdown", away);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [open]);
   /* Cached and refetched on its own five-minute schedule by the hook, which
      also means a tab switch no longer re-asks: the badge was re-fetching from
      scratch every time this button remounted. */
@@ -73,7 +95,7 @@ export default function EvFreshnessButton() {
        — this is a four-row status list, read in two seconds and dismissed.
        So it hangs off the button like a menu, dims nothing, and the page stays
        readable behind it. */
-    <div className="relative">
+    <div className="relative" ref={box}>
       <button
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
@@ -91,10 +113,6 @@ export default function EvFreshnessButton() {
 
       {!open ? null : (
         <>
-          {/* Catches the click that closes it. Transparent on purpose — the
-              page behind is still being read. */}
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-
           <div className="absolute right-0 top-full z-50 mt-2 w-[min(94vw,480px)]
                           overflow-hidden rounded-lg border border-border bg-white
                           shadow-lg ring-1 ring-black/5">
