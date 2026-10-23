@@ -14,8 +14,10 @@ FROM python:3.12-slim
 # tzdata is required: without it glibc cannot resolve a named zone and silently
 # falls back to UTC.
 ENV TZ=Asia/Kolkata
+# tesseract-ocr reads the IBM issues that are published as scans; without it
+# those months are skipped and the royalty screen silently keeps older rates.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends tzdata \
+    && apt-get install -y --no-install-recommends tzdata tesseract-ocr \
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
     && echo $TZ > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*

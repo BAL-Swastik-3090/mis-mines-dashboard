@@ -28,4 +28,10 @@ pymssql==2.4.1
 # Market prices: IBM publishes Average Sale Price as PDF tables, and the
 # news collectors read RSS.
 pdfplumber==0.11.10
+# Some IBM issues are published as scans -- two of the eight currently on the
+# page -- and those months were silently skipped. pypdfium2 renders the pages
+# (a self-contained wheel, no system libraries) and pytesseract drives the
+# tesseract-ocr binary installed in the image.
+pypdfium2==4.30.0
+pytesseract==0.3.13
 feedparser==6.0.14
