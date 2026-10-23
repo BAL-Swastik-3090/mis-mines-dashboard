@@ -30,8 +30,9 @@ pymssql==2.4.1
 pdfplumber==0.11.10
 # Some IBM issues are published as scans -- two of the eight currently on the
 # page -- and those months were silently skipped. pypdfium2 renders the pages
-# (a self-contained wheel, no system libraries) and pytesseract drives the
+# (a self-contained wheel, no system libraries -- pdfplumber already pulls it,
+# and the version here is the one it resolves to) and pytesseract drives the
 # tesseract-ocr binary installed in the image.
-pypdfium2==4.30.0
+pypdfium2==5.14.0
 pytesseract==0.3.13
 feedparser==6.0.14
