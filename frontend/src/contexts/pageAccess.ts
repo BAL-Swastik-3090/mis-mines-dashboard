@@ -110,6 +110,7 @@ const LANDING_RANK: Record<AppPage, number> = {
   "market": 35,
   "fuel-management": 40,
   "ev-tracking": 50,
+  "cost-plan": 55,
   // Before the registers: a machine, a person and a material all have to be
   // held against a department, so the department is the thing to see first.
   "organisation": 55,

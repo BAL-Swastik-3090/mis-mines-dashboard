@@ -468,6 +468,7 @@ from app.routers import plant_output
 from app.routers import alerts as live_alerts
 from app.routers import usage
 from app.routers import ev_vehicle
+from app.routers import cost_plan
 from app.routers import production, stock, cob, plant, ob, despatch, equipment, dewatering, insights, live_tracking, fuel_management, fuel_control, ev_tracking, auth, oee, roles, minehub, access, operators, operations, workforce, productivity, comments
 app.include_router(production.router,      prefix="/api/production",    tags=["Production"])
 app.include_router(stock.router,           prefix="/api/stock",         tags=["Stock"])
@@ -512,3 +513,4 @@ app.include_router(usage.router)
 app.include_router(live_alerts.router)
 app.include_router(access.router)
 app.include_router(ev_vehicle.router)      # self-prefixed: /api/ev
+app.include_router(cost_plan.router)       # self-prefixed: /api/cost-plan
