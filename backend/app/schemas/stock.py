@@ -14,6 +14,9 @@ class StockStatusRow(BaseModel):
     """One Section B row — a clearance status."""
     label: str
     qty:   float = 0.0
+    # KEEP DECLARED. response_model drops any key this class does not name —
+    # no error, the field simply never reaches the screen.
+    is_child: bool = False
 
 
 class StockLocations(BaseModel):
@@ -31,13 +34,23 @@ class ColumnHead(BaseModel):
 
 
 class StockClearanceRow(BaseModel):
-    """Mines Clearance Status: one status, read across the grades."""
+    """Mines Clearance Status: one status, read across the grades.
+
+    EVERY KEY THE SERVICE PRODUCES MUST BE NAMED HERE. FastAPI's response_model
+    drops undeclared keys silently — sl_no and is_child were both added to the
+    service and not to this class, so the serial column rendered empty and the
+    sub-rows lost their indentation, with nothing logged anywhere.
+    """
     label:    str
     key:      str
+    #: "1", "2", "3", "3(a)" — a sub-row carries its PARENT's number.
+    sl_no:    str = ""
     uom:      str = "MT"
     by_grade: dict[str, float] = {}
     total:    float = 0.0
     is_total: bool = False      # the Total Stock row, summed from the others
+    #: Rows 3(a)/3(b): a breakdown of the row above, already counted inside it.
+    is_child: bool = False
 
 
 class StockLocationRow(BaseModel):

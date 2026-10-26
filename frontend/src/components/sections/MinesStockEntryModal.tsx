@@ -56,13 +56,43 @@ const LOCATION_GRADES = [
   GRADES[2],  // COB / COB Mix Grade
 ] as const;
 
-/** The four positions at the mine, in the order the IMOS form lists them. */
+/** The four positions at the mine, in the order the IMOS form lists them.
+ *  These four, and only these four, sum to Total Stock. */
 const MINE_BUCKETS = [
   { key: "MINE_PERMISSION_IN_HAND", label: "Permission in Hand" },
   { key: "MINE_AWAITING_PERMISSION", label: "Awaiting Permission" },
   { key: "MINE_AWAITING_VERIFICATION", label: "Awaiting Verification" },
   { key: "MINE_AWAITING_STACKING", label: "Awaiting Stacking" },
 ] as const;
+
+const AWAITING_PERMISSION = "MINE_AWAITING_PERMISSION";
+
+/** Rows 8A and 8B: WHY the permission is still awaited. A breakdown of the row
+ *  above, never a fifth position — the mine's rule is that the two add up to
+ *  Awaiting Permission, so Awaiting Permission is no longer typed at all. */
+const AWAITING_PARTS = [
+  { key: "MINE_AWAIT_ANALYSIS_REPORT", label: "— Awaiting Analysis Report" },
+  { key: "MINE_AWAIT_ROYALTY_PAYMENT", label: "— Awaiting Royalty Payment" },
+] as const;
+
+type BucketRow = { key: string; label: string; lgOnly?: boolean };
+
+/** What the user types into. Awaiting Permission is absent on purpose: it is
+ *  derived, so the two figures and their parent can never disagree. */
+const ENTRY_ROWS: BucketRow[] = MINE_BUCKETS.flatMap((b): BucketRow[] =>
+  b.key === AWAITING_PERMISSION
+    ? AWAITING_PARTS.map((p) => ({ key: p.key, label: p.label }))
+    : [{ key: b.key, label: b.label }]);
+
+/** What the table draws: the parent in its place, derived, with its two
+ *  reasons indented underneath. */
+const MINE_ROWS: (BucketRow & { derived: boolean; child: boolean })[] =
+  MINE_BUCKETS.flatMap((b): (BucketRow & { derived: boolean; child: boolean })[] =>
+    b.key === AWAITING_PERMISSION
+      ? [{ key: b.key, label: b.label, derived: true, child: false },
+         ...AWAITING_PARTS.map((p) => ({
+           key: p.key, label: p.label, derived: false, child: true }))]
+      : [{ key: b.key, label: b.label, derived: false, child: false }]);
 
 /** Where a proposed despatch can go. Qty is SKD + BLS and is never entered. */
 const DESPATCH_TO = [
@@ -171,6 +201,9 @@ export default function MinesStockEntryModal({
   // figures one day back. Any past date can still be picked.
   const [day, setDay] = useState(todayISO);
   const [cells, setCells] = useState<Cells>({});
+  /** Tonnage carried into Awaiting Royalty Payment because the day was filed
+   *  before the two reasons existed. 0 on every normal day. */
+  const [legacySplit, setLegacySplit] = useState(0);
   /** The day's proposed despatch, keyed by destination. Qty is never held —
    *  it is SKD + BLS, worked out where it is shown. */
   const [proposed, setProposed] = useState<Record<string, string>>({});
@@ -208,6 +241,29 @@ export default function MinesStockEntryModal({
     if (!open || !existing.data) return;
     const next: Cells = {};
     for (const [k, v] of Object.entries(existing.data.cells)) next[k] = String(v);
+
+    // ── A DAY FILED BEFORE THE SPLIT EXISTED ────────────────────────────────
+    // It has an Awaiting Permission figure and neither of its two reasons.
+    // Awaiting Permission is now derived, so leaving the reasons blank would
+    // redraw that tonnage as nought and write the zero on the next save — the
+    // user would have destroyed the figure by opening the day and pressing
+    // Save. Nobody can know the split retrospectively, so the whole of it is
+    // carried into Awaiting Royalty Payment, where the mine's own sheet of 26
+    // October puts all of it, and the banner says so and asks them to correct
+    // it. The total is preserved either way, which is the part that must not
+    // be lost to a guess.
+    let carried = 0;
+    for (const g of GRADES) {
+      const parent = num(next[cellKey(g.key, AWAITING_PERMISSION)]);
+      const hasSplit = AWAITING_PARTS.some(
+        (p) => next[cellKey(g.key, p.key)] !== undefined);
+      if (parent > 0 && !hasSplit) {
+        next[cellKey(g.key, "MINE_AWAIT_ROYALTY_PAYMENT")] = String(parent);
+        next[cellKey(g.key, "MINE_AWAIT_ANALYSIS_REPORT")] = "0";
+        carried += parent;
+      }
+    }
+    setLegacySplit(carried);
     setCells(next);
     const pd: Record<string, string> = {};
     for (const [k, v] of Object.entries(existing.data.proposed_despatch ?? {})) {
@@ -260,8 +316,10 @@ export default function MinesStockEntryModal({
 
   const pasteMine = useCallback((r: number, c: number, grid: string[][]) =>
     pasteInto(grid, r, c,
-      (rr, cc) => ({ grade: GRADES[cc].key, bucket: MINE_BUCKETS[rr].key }),
-      MINE_BUCKETS.length, GRADES.length),
+      // ENTRY_ROWS, not MINE_BUCKETS: a pasted block lands on the rows that
+      // have inputs, and Awaiting Permission no longer does.
+      (rr, cc) => ({ grade: GRADES[cc].key, bucket: ENTRY_ROWS[rr].key }),
+      ENTRY_ROWS.length, GRADES.length),
     [pasteInto]);
 
   const pastePlant = useCallback((r: number, c: number, grid: string[][]) =>
@@ -276,16 +334,28 @@ export default function MinesStockEntryModal({
 
   // ── everything derived ───────────────────────────────────────────────────
   const d = useMemo(() => {
+    // Awaiting Permission is never typed — it is its two reasons added up.
+    // Everything that needs its value goes through here, so the figure the
+    // totals use is the same one drawn on its row.
+    const mineVal = (grade: string, bucket: string): number =>
+      bucket === AWAITING_PERMISSION
+        ? AWAITING_PARTS.reduce((s, p) => s + num(get(grade, p.key)), 0)
+        : num(get(grade, bucket));
+
     const mineByGrade: Record<string, number> = {};
     for (const g of GRADES) {
       mineByGrade[g.key] = MINE_BUCKETS.reduce(
-        (s, b) => s + num(get(g.key, b.key)), 0);
+        (s, b) => s + mineVal(g.key, b.key), 0);
     }
     const statusTotal: Record<string, number> = {};
-    for (const b of MINE_BUCKETS) {
-      statusTotal[b.key] = GRADES.reduce((s, g) => s + num(get(g.key, b.key)), 0);
+    for (const b of [...MINE_BUCKETS, ...AWAITING_PARTS]) {
+      statusTotal[b.key] = GRADES.reduce(
+        (s, g) => s + mineVal(g.key, b.key), 0);
     }
-    const totalStock = Object.values(statusTotal).reduce((s, v) => s + v, 0);
+    // Over the FOUR buckets only. statusTotal also carries rows 8A and 8B, and
+    // those already sit inside Awaiting Permission — summing its values would
+    // add the whole of row 8 to Total Stock a second time.
+    const totalStock = MINE_BUCKETS.reduce((s, b) => s + statusTotal[b.key], 0);
 
     const plantTotal: Record<string, number> = {};
     for (const b of PLANT_BUCKETS) {
@@ -298,7 +368,13 @@ export default function MinesStockEntryModal({
         (s, b) => s + (b.lgOnly && g.key !== "LG" ? 0 : num(get(g.key, b.key))), 0);
     }
     const grand = totalStock + Object.values(plantTotal).reduce((s, v) => s + v, 0);
-    return { mineByGrade, statusTotal, totalStock, plantTotal, rowTotal, grand };
+    // Awaiting Permission per grade — the derived cells on its row.
+    const permByGrade: Record<string, number> = {};
+    for (const g of GRADES) {
+      permByGrade[g.key] = mineVal(g.key, AWAITING_PERMISSION);
+    }
+    return { mineByGrade, statusTotal, totalStock, plantTotal, rowTotal, grand,
+             permByGrade, mineVal };
     // `cells` is what actually changes; get() closes over it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cells]);
@@ -312,8 +388,18 @@ export default function MinesStockEntryModal({
     try {
       const payload: { grade: string; bucket: string; qty: number }[] = [];
       for (const g of GRADES) {
-        for (const b of [...MINE_BUCKETS, ...PLANT_BUCKETS]) {
-          const lgOnly = "lgOnly" in b && b.lgOnly;
+        // Awaiting Permission is sent as the sum of its two reasons — the same
+        // figure the screen showed — so the stored parent and children always
+        // agree. The API checks this again per grade and refuses the day if
+        // they do not.
+        payload.push({
+          grade: g.key, bucket: AWAITING_PERMISSION,
+          qty: AWAITING_PARTS.reduce(
+            (s, p) => s + num(cells[cellKey(g.key, p.key)]), 0),
+        });
+        const everyTypedRow: BucketRow[] = [...ENTRY_ROWS, ...PLANT_BUCKETS];
+        for (const b of everyTypedRow) {
+          const lgOnly = Boolean(b.lgOnly);
           if (lgOnly && g.key !== "LG") continue;   // the database refuses it too
           // Read `cells` directly rather than through get(), which closes over
           // it. Everything this callback sends must come from a value named in
@@ -500,6 +586,16 @@ export default function MinesStockEntryModal({
             <div className="text-[11px] font-extrabold tracking-[.14em] text-navy uppercase mb-1.5">
               Stock at the Mine — by clearance status
             </div>
+            {legacySplit > 0 && (
+              <div className="mb-2 px-2.5 py-1.5 rounded border border-[#ffe082] bg-[#fff8e1]
+                              text-[11px] leading-snug text-txt-primary">
+                <span className="font-bold">This day was filed before the split existed. </span>
+                Its {legacySplit.toLocaleString("en-IN")} MT of Awaiting Permission has been
+                placed under <span className="font-semibold">Awaiting Royalty Payment</span> so
+                the total is not lost. Move whatever is actually awaiting an analysis report to
+                the row above before saving.
+              </div>
+            )}
             <table className="w-full border-collapse">
               <thead>
                 <tr className="bg-bg-section">
@@ -511,24 +607,43 @@ export default function MinesStockEntryModal({
                 </tr>
               </thead>
               <tbody>
-                {MINE_BUCKETS.map((b, ri) => (
-                  <tr key={b.key} className="border-b border-border-light/70">
-                    <td className="py-1.5 text-[12px] font-semibold text-txt-primary">{b.label}</td>
-                    {GRADES.map((g, ci) => (
-                      <td key={g.key} className="py-1.5 pl-2 w-[110px]">
-                        <Cell
-                          value={get(g.key, b.key)}
-                          invalid={bad(get(g.key, b.key))}
-                          onChange={(v) => set(g.key, b.key, v)}
-                          onPasteGrid={(grid) => pasteMine(ri, ci, grid)}
-                        />
+                {MINE_ROWS.map((b) => {
+                  // Index into the TYPED rows, which is what a pasted grid
+                  // lands on — Awaiting Permission has no inputs to paste into.
+                  const ri = ENTRY_ROWS.findIndex((e) => e.key === b.key);
+                  return (
+                    <tr key={b.key} className="border-b border-border-light/70">
+                      <td className={`py-1.5 text-[12px] ${b.child
+                        ? "pl-4 font-normal text-txt-secondary"
+                        : "font-semibold text-txt-primary"}`}>
+                        {b.label}
                       </td>
-                    ))}
-                    <td className="py-1.5 pl-3 text-right w-[90px]">
-                      <Derived v={d.statusTotal[b.key]} />
-                    </td>
-                  </tr>
-                ))}
+                      {GRADES.map((g, ci) => (
+                        <td key={g.key} className="py-1.5 pl-2 w-[110px]">
+                          {b.derived ? (
+                            // Not an input. The mine's rule is that this row IS
+                            // its two reasons added up, so letting it be typed
+                            // would create a figure that could contradict them.
+                            <div className="text-right pr-2"
+                                 title="Awaiting Analysis Report + Awaiting Royalty Payment">
+                              <Derived v={d.permByGrade[g.key]} />
+                            </div>
+                          ) : (
+                            <Cell
+                              value={get(g.key, b.key)}
+                              invalid={bad(get(g.key, b.key))}
+                              onChange={(v) => set(g.key, b.key, v)}
+                              onPasteGrid={(grid) => pasteMine(ri, ci, grid)}
+                            />
+                          )}
+                        </td>
+                      ))}
+                      <td className="py-1.5 pl-3 text-right w-[90px]">
+                        <Derived v={d.statusTotal[b.key]} />
+                      </td>
+                    </tr>
+                  );
+                })}
                 <tr className="bg-bg-soft">
                   <td className="py-2 text-[12px] font-extrabold text-navy">Total Stock</td>
                   {GRADES.map((g) => (
