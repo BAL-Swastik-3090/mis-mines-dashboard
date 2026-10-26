@@ -30,6 +30,13 @@ class GradeRow(BaseModel):
     # cannot be derived from the other.
     estimated_pct: Optional[float] = None
     estimated_qty: Optional[float] = None
+    # WHERE THE TONNAGE CAME FROM: 'sap' | 'manual' | 'mixed'. A DIFFERENT idea
+    # from estimated_qty above, which is about a borrowed ASSAY rather than a
+    # hand-entered TONNAGE. A row can carry both and they must never be added.
+    source:     str = "sap"
+    manual_qty: Optional[float] = None
+    #: Days of the window the manual figure is standing in for.
+    est_days:   Optional[int] = None
 
 
 class WeightedTotal(BaseModel):
@@ -40,6 +47,9 @@ class WeightedTotal(BaseModel):
     cr:    Optional[float] = None
     estimated_pct: Optional[float] = None
     estimated_qty: Optional[float] = None
+    #: Summed from the rows beneath, so the total says the same thing they do.
+    source:     str = "sap"
+    manual_qty: Optional[float] = None
 
 
 class PlantRow(BaseModel):
@@ -51,6 +61,23 @@ class PlantRow(BaseModel):
     cr_covered_pct: Optional[float] = None
 
 
+class ExcavationRow(BaseModel):
+    """Overburden or De-Silting, plan against actual, in CuM.
+
+    `plan` and `pct` are None on De-Silting because no plan table exists for it
+    — see _excavation() in services/executive_summary.py. `no_plan` says that
+    is by nature rather than a figure that has not arrived yet, so the screen
+    can explain the blank instead of leaving the reader to guess.
+    """
+    key:     str                       # 'ob' | 'desilt'
+    label:   str
+    unit:    str = "CuM"
+    plan:    Optional[float] = None
+    actual:  Optional[float] = None
+    pct:     Optional[float] = None
+    no_plan: bool = False
+
+
 class PeriodBlock(BaseModel):
     """One column of the report — TD or MTD — across all three performance
     blocks. Despatch is keyed by CUSTOMERNO (BAL, JABAMOYEE)."""
@@ -60,6 +87,8 @@ class PeriodBlock(BaseModel):
     despatch_total:   dict[str, WeightedTotal]
     plant:            list[PlantRow]
     plant_total:      WeightedTotal
+    # KEEP DECLARED — response_model drops any key this class does not name.
+    excavation:       list[ExcavationRow] = []
 
 
 class ExecutiveSummaryResponse(BaseModel):
