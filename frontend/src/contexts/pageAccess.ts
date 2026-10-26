@@ -79,6 +79,14 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   // the screen. Promote it to its own page permission when the mine wants the
   // two audiences separated — the API prefix is already mapped in auth.py.
   "amira": ["dashboard.mis"],
+  // Gated on the MIS dashboard's own permission, for the same reason AMIRA is.
+  // The cost plan is the planned side of the figures that dashboard already
+  // shows, and inventing dashboard.cost-plan would mean seeding a row per role
+  // in mines_role_page_access before a single person could see the screen —
+  // which is precisely how this page spent its first hour invisible to
+  // everybody. Promote it to its own permission when the plan needs an audience
+  // separate from the dashboard's.
+  "cost-plan": ["dashboard.mis"],
 };
 
 /**
