@@ -226,11 +226,14 @@ _SHIFT_ALL_SQL = text(f"""
 """)
 
 # Breakdown hours come from services/breakdown.py, which selects notifications
-# that OVERLAP the window rather than ones that START inside it, and merges a
-# machine's simultaneous notifications so no hour is counted twice. Both
-# mattered here: TATA-470(7), open since 10 September, reported 0.00 hours for
-# 1-7 October, while TATA-370(5) reported exactly its God Hours because five
-# overlapping notifications summed past the window and were then clamped.
+# that START inside the window and merges a machine's simultaneous
+# notifications so no hour is counted twice. The merge matters here: TATA-370(5)
+# reported exactly its God Hours because five overlapping notifications summed
+# past the window and were then clamped.
+#
+# The start-date selection is the mine's instruction of 26 October 2026 and it
+# cuts the other way — a machine still down from last month reports 0.00 for
+# this one. That trade is argued in full at the top of breakdown.py.
 #
 # Asked for the whole fleet in ONE call rather than once per machine: hours_by
 # already groups by equipment, so the per-machine loop would have been five
@@ -351,6 +354,16 @@ def _material_split(ore: float, ob: float, other: float) -> dict:
     }
 
 
+# ── Which excavators the mine counts as new ──────────────────────────────────
+# Named by the mine on 26 October 2026, not derived. Being hired is NOT the
+# test — TATA-350(1), SANY-2 and TATA-210 are hired and belong with the old
+# machines — and nothing in SAP or the shift log records a commissioning date,
+# so there is no field to read this from. When another machine arrives, add it
+# here; that is the only change needed, the two tables follow.
+OLD, NEW = "old", "new"
+NEW_EXCAVATORS: frozenset[str] = frozenset({"TATA-490", "TATA-350(2)"})
+
+
 def _utilisation(running_hrs: float, god_hours: float, bd_hrs: float) -> float | None:
     """Of the hours the machine was not broken down, how many did it run?
 
@@ -435,7 +448,7 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
                 god_hours = max((to_date - first_seen).days + 1, 0) * 24.0
 
         if ex["bd_source"] == "sap":
-            # Absent from the dict means SAP recorded no event overlapping
+            # Absent from the dict means SAP recorded no breakdown RAISED in
             # this window for this machine, which is zero hours down rather
             # than missing data.
             raw_bd = bd_by.get(ex["sap_eq"], 0.0)
@@ -480,6 +493,7 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
         machines.append({
             "machine":        ex["name"],
             "ideal_cap":      ex["ideal_cap"],
+            "generation":     NEW if ex["name"] in NEW_EXCAVATORS else OLD,
             # So the table can say where this row's BD/PM came from instead of
             # one footer claiming SAP for every machine.
             "bd_source":      ex["bd_source"],
@@ -511,7 +525,27 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
             "deviation_pct":  round(deviation_pct, 1) if deviation_pct is not None else None,
         })
 
-    # ── Fleet roll-up: weight by hours and volume, never average percentages ──
+    return {
+        "machines":  machines,
+        "fleet":     _roll_up(machines, absent),
+        # The mine reports the new excavators as their own table. Split here
+        # rather than in the frontend so each table's OVERALL row is weighted by
+        # the same code that weights the whole fleet — a roll-up re-derived in
+        # TypeScript would drift from this one the first time either changed.
+        "fleet_old": _roll_up([m for m in machines if m["generation"] == OLD],
+                              [a for a in absent if a not in NEW_EXCAVATORS]),
+        "fleet_new": _roll_up([m for m in machines if m["generation"] == NEW],
+                              [a for a in absent if a in NEW_EXCAVATORS]),
+    }
+
+
+def _roll_up(machines: list[dict], absent: list[str]) -> dict:
+    """Weight by hours and volume, never average percentages.
+
+    Called once for the whole fleet and once per generation. An empty group
+    returns zeros rather than None so the caller can render a footer without a
+    special case; machine_count says whether the group had any machines at all.
+    """
     sum_ideal_time = sum(m["ideal_time"]    for m in machines)
     sum_operating  = sum(m["operating_hrs"] for m in machines)
     sum_actual     = sum(m["actual_cum"]    for m in machines)
@@ -567,4 +601,4 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
         "absent_machines": absent,
     }
 
-    return {"machines": machines, "fleet": fleet}
+    return fleet

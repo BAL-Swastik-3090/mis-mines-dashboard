@@ -20,9 +20,9 @@ import { X, Calculator } from "lucide-react";
 type Row = { label: string; formula: string; note?: string };
 
 const OEE_ROWS: Row[] = [
-  { label: "Availability",   formula: "Operating Hrs ÷ Ideal Time × 100",
+  { label: "Availability",   formula: "Available Hrs ÷ Ideal Time × 100",
     note: "Divided by Ideal Time, not God Hours — planned loss is excluded before the ratio is taken" },
-  { label: "Performance",    formula: "Actual CuM ÷ (Ideal Capacity × Operating Hrs) × 100",
+  { label: "Performance",    formula: "Actual CuM ÷ (Ideal Capacity × Available Hrs) × 100",
     note: "Capped at 100%" },
   { label: "Quality",        formula: "100% (fixed)",
     note: "No quality losses are tracked at the excavation stage" },
@@ -33,12 +33,12 @@ const OEE_ROWS: Row[] = [
 const OEE_SUPPORT: Row[] = [
   { label: "God Hrs",        formula: "Days in period × 24" },
   { label: "Ideal Time",     formula: "God Hrs − (Weekly Off + No Plan + Planned Shutdown)" },
-  { label: "Operating Hrs",  formula: "Ideal Time − (Breakdown + PM)" },
+  { label: "Available Hrs",  formula: "Ideal Time − (Breakdown + PM)" },
   { label: "Actual CuM",     formula: "(ore + lg + ob + boulder + tailing + feed_to_cobp) × 6  +  silt × 4",
     note: "Trip counts converted to volume" },
-  { label: "Fleet figures",  formula: "Σ Operating ÷ Σ Ideal Time   ·   Σ Actual ÷ Σ Ideal CuM",
+  { label: "Fleet figures",  formula: "Σ Available ÷ Σ Ideal Time   ·   Σ Actual ÷ Σ Ideal CuM",
     note: "Weighted across machines, never an average of the per-machine percentages" },
-  { label: "Deviation Hrs",  formula: "Shift Hours − Operating Hrs",
+  { label: "Deviation Hrs",  formula: "Shift Hours − Available Hrs",
     note: "Reporting only — feeds no other formula" },
 ];
 
