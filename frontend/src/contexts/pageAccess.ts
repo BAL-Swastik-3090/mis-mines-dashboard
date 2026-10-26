@@ -37,7 +37,15 @@ import type { AppPage } from "./useAppPage";
  * in the database, and still guarding nothing; and whoever was missed would
  * simply lose the forecast for no reason.
  */
-const OPEN_PAGES: ReadonlySet<AppPage> = new Set<AppPage>(["weather"]);
+const OPEN_PAGES: ReadonlySet<AppPage> = new Set<AppPage>([
+  "weather",
+  // Data Health says how current each feed is. Open for the same reason the
+  // banners are: it exists to tell somebody the figure they are about to act
+  // on is three days old, and a warning withheld from the person acting on
+  // the figure is not a warning. It discloses table names and dates, nothing
+  // operational.
+  "data-health",
+]);
 
 /** What each platform screen needs. The dashboards are not here — they come
  *  from the server as allowed_pages.
@@ -140,6 +148,9 @@ const LANDING_RANK: Record<AppPage, number> = {
   // Last, beside the screen it shares a permission with. Nobody should ever
   // land here: it reports on work rather than being any.
   "usage": 92,
+  // Dead last. It is open to everyone, and ranking it any higher would land a
+  // person with no dashboard on a table of table names.
+  "data-health": 94,
 };
 
 const LANDING_ORDER = (Object.keys(LANDING_RANK) as AppPage[])

@@ -72,11 +72,18 @@ export interface StockLocations {
 /** One row of the Mines Clearance Status table: a status, read across grades. */
 export interface StockClearanceRow {
   key:      string;
+  /** "1", "2", "3", "3(a)" — a sub-row takes its PARENT's number with a letter
+   *  rather than one of its own, so the numbering carries the structure. */
+  sl_no:    string;
   label:    string;
   uom:      string;
   by_grade: Record<string, number>;
   total:    number;
   is_total: boolean;
+  /** Rows 8A and 8B — a breakdown of the row above, not a position of their
+   *  own. Indented, and never added to anything: their tonnage is already
+   *  counted inside Awaiting Permission. */
+  is_child?: boolean;
 }
 
 /** One row of the Location wise & Grade wise table: a grade, read across locations. */
@@ -122,6 +129,11 @@ export interface StockPositionResponse {
 /** One grade line. Every figure is nullable and none defaults to zero: a blank
  *  Cr/Fe means SAP posts no such characteristic on production entry, where a
  *  zero would claim the ore assayed nought. */
+/** Where a tonnage came from. 'manual' is the mine's own figure standing in
+ *  for a day SAP has not posted; 'mixed' is a total containing both. Distinct
+ *  from estimated_qty, which is about a borrowed ASSAY, not a tonnage. */
+export type ExecSource = "sap" | "manual" | "mixed";
+
 export interface ExecGradeRow {
   grade: string;
   label: string;
@@ -135,6 +147,13 @@ export interface ExecGradeRow {
    *  the two cannot be derived from one another. */
   estimated_pct?: number | null;
   estimated_qty?: number | null;
+  /** Where the TONNAGE came from — a different question from the assay above. */
+  source?: ExecSource;
+  /** Of `qty`, how much is the mine's hand-entered figure standing in for days
+   *  SAP has not posted. null when every tonne came from SAP. */
+  manual_qty?: number | null;
+  /** How many days of the window that manual figure covers. */
+  est_days?: number | null;
 }
 
 /** The sheet's Weighted Average row: SUMPRODUCT / SUM, never a mean. */
@@ -145,6 +164,8 @@ export interface ExecWeightedTotal {
   cr:    number | null;
   estimated_pct?: number | null;
   estimated_qty?: number | null;
+  source?: ExecSource;
+  manual_qty?: number | null;
 }
 
 export interface ExecPlantRow {
@@ -155,6 +176,20 @@ export interface ExecPlantRow {
 }
 
 /** One column of the report — TD or MTD. Despatch is keyed by CUSTOMERNO. */
+/** Overburden or De-Silting, plan against actual, in CuM.
+ *  `plan` and `pct` are null on De-Silting because no plan table exists for it
+ *  anywhere — `no_plan` marks that as permanent rather than not-yet-arrived,
+ *  so the screen can explain the blank instead of printing a bare dash. */
+export interface ExecExcavationRow {
+  key:     "ob" | "desilt";
+  label:   string;
+  unit:    string;
+  plan:    number | null;
+  actual:  number | null;
+  pct:     number | null;
+  no_plan: boolean;
+}
+
 export interface ExecPeriodBlock {
   production:       ExecGradeRow[];
   production_total: ExecWeightedTotal;
@@ -162,6 +197,7 @@ export interface ExecPeriodBlock {
   despatch_total:   Record<string, ExecWeightedTotal>;
   plant:            ExecPlantRow[];
   plant_total:      ExecWeightedTotal;
+  excavation:       ExecExcavationRow[];
 }
 
 export interface ExecutiveSummaryResponse {
@@ -847,6 +883,10 @@ export interface EvVehicleHistoryResponse {
 export interface OEEMachineRow {
   machine:        string;
   ideal_cap:      number;
+  /** Which table this row belongs to. The mine names the new machines —
+   *  NEW_EXCAVATORS in backend/app/services/oee.py — nothing derives it, and
+   *  being hired is not the test. */
+  generation:     "old" | "new";
   bd_source:      "sap" | "imos";   // where this row's BD/PM came from
   hired:          boolean;          // contractor machine, not a Balasore asset
   god_hours:      number;
@@ -925,6 +965,11 @@ export interface OEEResponse {
   to_date:   string;
   machines:  OEEMachineRow[];
   fleet:     OEEFleet;
+  /** The same weighted roll-up restricted to each generation. Use these for
+   *  the two tables' OVERALL rows instead of re-summing here: averaging or
+   *  re-deriving percentages in the browser overstates them. */
+  fleet_old: OEEFleet;
+  fleet_new: OEEFleet;
 }
 
 // ── AMIRA Accounting ──────────────────────────────────────────
@@ -1641,4 +1686,112 @@ export interface WhyWhyRegisterResponse {
   families:     string[];
   with_why:     number;
   without_why:  number;
+}
+
+/* ── Data health ────────────────────────────────────────────────────────────
+   How current the data behind each screen is. Shapes mirror
+   backend/app/services/data_health.py. */
+
+export type DataHealthStatus = "ok" | "warn" | "stale" | "unknown";
+
+export interface DataHealthFeed {
+  key: string;
+  label: string;
+  /** AppPage ids this feed serves. One feed can serve several screens. */
+  sections: string[];
+  source: "mysql" | "minehub";
+  table: string;
+  /** "daily" is filled in arrears; "plan" is filled forward and is judged on
+   *  how far ahead it still reaches, not on how recent it is. */
+  kind: "daily" | "plan";
+  /** Who to chase when it stops: SAP is an interface, "entry" is a person at
+   *  the mine with a form, telematics and platform are syncs. */
+  origin: "sap" | "entry" | "telematics" | "platform";
+  origin_label: string;
+  /** The date this feed should hold. Most screens report the day that has
+   *  ended; a stock snapshot and the self-writing feeds are about today; a
+   *  plan is judged on how far ahead it reaches. */
+  expects: "yesterday" | "today" | "ahead";
+  note: string;
+  status: DataHealthStatus;
+  last_date: string | null;
+  expected_date: string | null;
+  /** Negative for a plan feed that still reaches into the future. */
+  days_behind: number | null;
+  /** The sentence to show. Built server-side so every placement words it the
+   *  same way. */
+  message: string;
+}
+
+export interface DataHealthSection {
+  status: DataHealthStatus;
+  /** Feed keys, worst first. */
+  feeds: string[];
+  stale_count: number;
+}
+
+export interface DataHealthResponse {
+  as_of: string;
+  /** The day a daily feed is expected to hold: yesterday. */
+  expected_date: string;
+  feeds: DataHealthFeed[];
+  sections: Record<string, DataHealthSection>;
+  /** Sections deliberately not watched, and why. Absence of monitoring is not
+   *  a clean bill of health, so the reason is carried rather than implied. */
+  unmonitored: Record<string, string>;
+  summary: { total: number; ok: number; warn: number; stale: number; unknown: number };
+  cached?: boolean;
+}
+
+// ── Tipper OEE — old (MAN) and new (PRIMA) ─────────────────────
+/** Availability and Utilisation mean the same as on the excavator table; Yield
+ *  replaces Performance because a tipper is measured in trips. Nothing is
+ *  capped — a Utilisation over 100% means the breakdown hours behind it are
+ *  wrong, and the excavator table's cap would hide that. */
+export interface TipperOEERow {
+  machine:       string;
+  generation:    "old" | "new";
+  god_hours:     number;
+  engine_hrs:    number;
+  bd_hours:      number;
+  available_hrs: number;
+  ideal_trip:    number;
+  actual_trip:   number;
+  /** null, never 0, where the denominator makes the question empty. */
+  availability:  number | null;
+  utilisation:   number | null;
+  yield_pct:     number | null;
+  oee:           number | null;
+  /** The two tables do not share sources — the PRIMA tippers have no Technoton
+   *  unit and no SAP equipment record, so both figures come from the shift log. */
+  engine_source: "telematics" | "shift_log";
+  bd_source:     "sap" | "shift_log";
+  /** Days in the window this truck appears in the shift log at all. */
+  days_logged:   number;
+}
+
+export interface TipperOEEFleet {
+  generation:    "old" | "new";
+  god_hours:     number;
+  engine_hrs:    number;
+  bd_hours:      number;
+  available_hrs: number;
+  ideal_trip:    number;
+  actual_trip:   number;
+  availability:  number | null;
+  utilisation:   number | null;
+  yield_pct:     number | null;
+  oee:           number | null;
+  machine_count: number;
+  /** Roster trucks the shift log never mentions in this window. */
+  unlogged:      string[];
+}
+
+export interface TipperOEEResponse {
+  from_date:    string;
+  to_date:      string;
+  old_machines: TipperOEERow[];
+  new_machines: TipperOEERow[];
+  old_fleet:    TipperOEEFleet;
+  new_fleet:    TipperOEEFleet;
 }

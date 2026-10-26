@@ -25,6 +25,7 @@ import { useAppPage }          from "@/contexts/useAppPage";
 import { useSidebar }          from "@/contexts/useSidebar";
 import { useAuth }             from "@/contexts/useAuth";
 import { canOpen, openablePages } from "@/contexts/pageAccess";
+import DataHealthSection from "@/components/sections/DataHealthSection";
 
 export default function MainLayout({ children }: { children: React.ReactNode }) {
   const { page }      = useAppPage();
@@ -115,6 +116,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           {page === "weather"          && <WeatherForecastPage />}
           {page === "capacity"         && <CapacitySection />}
           {page === "usage"            && <UsageSection />}
+          {page === "data-health"      && <DataHealthSection />}
             </>
           )}
         </div>
