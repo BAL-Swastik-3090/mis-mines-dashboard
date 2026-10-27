@@ -46,6 +46,24 @@ export default function GlWiseTable({ period }: { period: string }) {
   const inc = data.totals.included;
   const exc = data.totals.excluded;
 
+  // Every GL at nil means there are no postings for this month, not that
+  // 121 GLs each happened to cost nothing. A page of dashes looks broken;
+  // say which it is.
+  if (inc.total === 0 && exc.total === 0) {
+    return (
+      <div className="bg-white border border-[#d0d9e8] rounded shadow-sm p-8 text-center accent-bar-teal">
+        <p className="text-[13px] text-txt-secondary">
+          Nothing has posted to the ledger for this month.
+        </p>
+        <p className="mt-1 text-[12px] text-txt-muted max-w-[560px] mx-auto">
+          This sheet lists what the ledger holds, GL by GL. It fills as SAP postings
+          arrive. The Summary tab can still answer, because month-end costs accrue
+          from the uploaded plan - but a plan has no GL lines to show here.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="bg-white border border-[#d0d9e8] rounded shadow-sm accent-bar-teal">
       <div className="px-4 pt-4 pb-3 flex items-end justify-between gap-3 flex-wrap">
@@ -55,6 +73,9 @@ export default function GlWiseTable({ period }: { period: string }) {
           </div>
           <div className="text-[11px] text-txt-muted mt-0.5">
             {inc.rows} GLs in the cost sheet · {exc.rows} outside it
+            <span className="text-txt-light">
+              {" "}— excluded GLs are listed so nothing material can be dropped unnoticed
+            </span>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -77,7 +98,7 @@ export default function GlWiseTable({ period }: { period: string }) {
       </div>
 
       <div className="overflow-x-auto max-h-[560px] overflow-y-auto">
-        <table className="w-full text-[12px] min-w-[940px]">
+        <table className="w-full text-[12px] min-w-[1040px]">
           <thead className="sticky top-0 z-10">
             <tr className="border-y border-[#d0d9e8] bg-bg-soft text-txt-muted">
               <Th className="text-left pl-4">Account Number</Th>
@@ -85,7 +106,7 @@ export default function GlWiseTable({ period }: { period: string }) {
               <Th className="text-left">Group</Th>
               <Th className="text-right">Total As per Accounts</Th>
               <Th className="text-right">Accounts - Mines</Th>
-              <Th className="text-right">Accounts - COB</Th>
+              <Th className="text-right whitespace-nowrap pr-6">Accounts - COB</Th>
               <Th className="text-left pr-4">Remarks</Th>
             </tr>
           </thead>
@@ -104,14 +125,14 @@ export default function GlWiseTable({ period }: { period: string }) {
               <td className="py-2 pl-4" colSpan={3}>In the cost sheet</td>
               <Td>{formatIndian(inc.total)}</Td>
               <Td>{formatIndian(inc.mines)}</Td>
-              <Td>{formatIndian(inc.cob)}</Td>
+              <td className="py-2 pr-6 text-right tabular-nums">{formatIndian(inc.cob)}</td>
               <td />
             </tr>
             <tr className="border-t border-[#eef2f8] bg-bg-soft text-txt-muted">
               <td className="py-2 pl-4" colSpan={3}>Outside the cost sheet</td>
               <Td>{formatIndian(exc.total)}</Td>
               <Td>{formatIndian(exc.mines)}</Td>
-              <Td>{formatIndian(exc.cob)}</Td>
+              <td className="py-2 pr-6 text-right tabular-nums">{formatIndian(exc.cob)}</td>
               <td />
             </tr>
           </tfoot>
@@ -137,7 +158,7 @@ function Row({ r }: { r: GlWiseRow }) {
       <td className="py-1.5 pr-3">{r.costing_group || "—"}</td>
       <Td mono>{dash(r.total)}</Td>
       <Td mono>{dash(r.mines)}</Td>
-      <Td mono>{dash(r.cob)}</Td>
+      <td className="py-1.5 pr-6 text-right tabular-nums font-mono">{dash(r.cob)}</td>
       <td className="py-1.5 pr-4 text-[11px] text-txt-muted max-w-[300px]">{r.remark}</td>
     </tr>
   );
