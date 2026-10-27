@@ -43,7 +43,7 @@ those are different statements.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, NamedTuple
 
 from sqlalchemy import text
@@ -488,6 +488,100 @@ def _weighted(rows: list[dict], qty_key: str = "qty") -> dict:
 
 #: Where a figure on this page came from. The chip the screen prints.
 SRC_SAP, SRC_MANUAL, SRC_MIXED = "sap", "manual", "mixed"
+
+
+#: How far back to look for a figure that has just changed hands. Long enough
+#: that a Monday morning still carries Friday's arrival, short enough that the
+#: bell does not become a list nobody reads.
+SAP_ARRIVAL_DAYS = 3
+
+#: What the mine enters, and the SAP material it is eventually replaced by.
+_ARRIVAL_MATERIALS = (
+    ("ORE", "Ore", "MT"),
+    ("OB", "Overburden", "CuM"),
+    ("COB", "COB concentrate", "MT"),
+)
+
+
+def sap_arrivals(db: Session, today: date,
+                 days: int = SAP_ARRIVAL_DAYS) -> list[dict]:
+    """Days whose figure has just stopped being the mine's and started being SAP's.
+
+    The Executive Summary shows the mine's hand-entered figure until SAP posts,
+    then shows SAP's instead — silently, because the table carries no
+    provenance any more. Silent is right on the page and wrong everywhere
+    else: the number somebody quoted in the morning meeting changes under them
+    with nothing to say it did. This is what tells them.
+
+    NOTHING IS STORED TO WORK THIS OUT. The estimate stays in
+    mines_prev_day_actual after SAP posts, so "what it was" and "what it is"
+    are both still on disk and the transition is simply the two being present
+    for the same day. No new table, no flag to set, nothing to go stale, and
+    it reads the same whoever asks and whenever.
+
+    Only days inside the window are reported, so an arrival ages off the bell
+    by itself rather than needing to be cleared.
+    """
+    frm = today - timedelta(days=days)
+
+    est: dict[tuple[date, str], float] = {}
+    for r in db.execute(text("""
+            SELECT `Date` AS d, Material AS m, Est_Actual AS q
+            FROM mines_prev_day_actual
+            WHERE `Date` BETWEEN :f AND :t
+              AND Material IN ('ORE', 'OB', 'COB')
+        """), {"f": frm, "t": today}):
+        est[(r.d, str(r.m))] = float(r.q or 0)
+    if not est:
+        return []
+
+    # What SAP now holds for those same days. One scan, both plants, grouped by
+    # day — the ore grades are summed back together because the mine entered
+    # one ore figure and the comparison has to be like for like.
+    sap: dict[tuple[date, str], float] = {}
+    for r in db.execute(text(f"""
+            SELECT POSTING_DATE AS d,
+                   SUM(CASE WHEN PLANT = :mine AND MATERIAL_NO IN
+                            (:hg, :mg, :lg) THEN ({PRODUCTION_QTY}) ELSE 0 END) AS ore,
+                   SUM(CASE WHEN PLANT = :mine AND MATERIAL_NO = :ob
+                            THEN ({PRODUCTION_QTY}) ELSE 0 END) AS ob,
+                   SUM(CASE WHEN PLANT = :cob_plant AND MATERIAL_DESC = :cob
+                            THEN ({PRODUCTION_QTY}) ELSE 0 END) AS cob
+            FROM pp_production
+            WHERE PLANT IN (:mine, :cob_plant)
+              AND POSTING_DATE BETWEEN :f AND :t
+            GROUP BY POSTING_DATE
+        """), {"mine": MINE_PLANT, "cob_plant": COB_PLANT,
+               "hg": f"0000000000{PROD_MATERIALS['HG']}",
+               "mg": f"0000000000{PROD_MATERIALS['MG']}",
+               "lg": f"0000000000{PROD_MATERIALS['LG']}",
+               "ob": f"0000000000{_OB_NO}", "cob": COB_MATERIAL,
+               "f": frm, "t": today}):
+        for key, val in (("ORE", r.ore), ("OB", r.ob), ("COB", r.cob)):
+            # PRESENCE of a posting, not a non-zero value — the same test the
+            # page uses to decide the estimate should stand down.
+            if val is not None:
+                sap[(r.d, key)] = float(val or 0)
+
+    out = []
+    for (day, mat), was in sorted(est.items()):
+        now = sap.get((day, mat))
+        if now is None:
+            continue                      # SAP still silent — nothing changed
+        # SAP agreeing with the entry to the kilo is not news. The screen shows
+        # the same number it showed yesterday, so there is nothing to tell
+        # anyone, and saying "70 -> 70" three times a day is how a bell gets
+        # ignored. It happens often: the mine's COB and OB figures come off the
+        # same shift sheet SAP is later posted from.
+        if abs(now - was) < 0.005:
+            continue
+        label, unit = next((l, u) for m, l, u in _ARRIVAL_MATERIALS if m == mat)
+        out.append({
+            "day": day, "material": mat, "label": label, "unit": unit,
+            "was": round(was, 2), "now": round(now, 2),
+            "delta": round(now - was, 2),
+        })
+    return out
 
 
 def _grade_plan(db: Session, mf: date, rd: date) -> dict[str, dict[str, float]]:

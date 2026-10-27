@@ -37,7 +37,7 @@ import { formatIndian } from "@/lib/utils";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import type {
   ExecutiveSummaryResponse, ExecGradeRow, ExecWeightedTotal, ExecPlantRow,
-  ExecExcavationRow, ExecSource,
+  ExecExcavationRow,
 } from "@/types";
 
 /* ── one hue per grade, used in every table on the page ─────────────────── */
@@ -300,9 +300,9 @@ function GradeTable({ icon, title, sub, qtyLabel, td, mtd, tdTotal, mtdTotal,
                   </td>
                 )}
                 <td className={`${TD} text-right whitespace-nowrap ${showPlan ? "" : "border-l border-border-light"}`}>
-                  <N v={a?.qty} strong /><Src s={a?.source} qty={a?.manual_qty} />
+                  <N v={a?.qty} strong />
                 </td>
-                {showPlan && <td className={`${TD} text-right`}><Ach v={a?.ach_pct} manual={a?.manual_qty} /></td>}
+                {showPlan && <td className={`${TD} text-right`}><Ach v={a?.ach_pct} /></td>}
                 <td className={`${TD} text-right`}><N v={a?.crfe} /></td>
                 <td className={`${TD} text-right whitespace-nowrap`}>
                   <N v={a?.cr2o3} /><Est pct={a?.estimated_pct} qty={a?.estimated_qty} />
@@ -313,9 +313,9 @@ function GradeTable({ icon, title, sub, qtyLabel, td, mtd, tdTotal, mtdTotal,
                   </td>
                 )}
                 <td className={`${TD} text-right whitespace-nowrap ${MTD_BG} ${showPlan ? "" : "border-l border-border"}`}>
-                  <N v={b?.qty} strong /><Src s={b?.source} qty={b?.manual_qty} />
+                  <N v={b?.qty} strong />
                 </td>
-                {showPlan && <td className={`${TD} text-right ${MTD_BG}`}><Ach v={b?.ach_pct} manual={b?.manual_qty} /></td>}
+                {showPlan && <td className={`${TD} text-right ${MTD_BG}`}><Ach v={b?.ach_pct} /></td>}
                 <td className={`${TD} text-right ${MTD_BG}`}><N v={b?.crfe} /></td>
                 <td className={`${TD} text-right whitespace-nowrap ${MTD_BG}`}>
                   <N v={b?.cr2o3} /><Est pct={b?.estimated_pct} qty={b?.estimated_qty} />
@@ -335,9 +335,9 @@ function GradeTable({ icon, title, sub, qtyLabel, td, mtd, tdTotal, mtdTotal,
               </td>
             )}
             <td className={`${TD} text-right whitespace-nowrap ${showPlan ? "" : "border-l border-border-light"}`}>
-              <N v={tdTotal?.qty} strong /><Src s={tdTotal?.source} qty={tdTotal?.manual_qty} />
+              <N v={tdTotal?.qty} strong />
             </td>
-            {showPlan && <td className={`${TD} text-right`}><Ach v={tdTotal?.ach_pct} strong manual={tdTotal?.manual_qty} /></td>}
+            {showPlan && <td className={`${TD} text-right`}><Ach v={tdTotal?.ach_pct} strong /></td>}
             <td className={`${TD} text-right`}><N v={tdTotal?.crfe} strong /></td>
             <td className={`${TD} text-right whitespace-nowrap`}>
               <N v={tdTotal?.cr2o3} strong /><Est pct={tdTotal?.estimated_pct} qty={tdTotal?.estimated_qty} />
@@ -348,9 +348,9 @@ function GradeTable({ icon, title, sub, qtyLabel, td, mtd, tdTotal, mtdTotal,
               </td>
             )}
             <td className={`${TD} text-right whitespace-nowrap ${showPlan ? "" : "border-l border-border"}`}>
-              <N v={mtdTotal?.qty} strong /><Src s={mtdTotal?.source} qty={mtdTotal?.manual_qty} />
+              <N v={mtdTotal?.qty} strong />
             </td>
-            {showPlan && <td className={`${TD} text-right`}><Ach v={mtdTotal?.ach_pct} strong manual={mtdTotal?.manual_qty} /></td>}
+            {showPlan && <td className={`${TD} text-right`}><Ach v={mtdTotal?.ach_pct} strong /></td>}
             <td className={`${TD} text-right`}><N v={mtdTotal?.crfe} strong /></td>
             <td className={`${TD} text-right whitespace-nowrap`}>
               <N v={mtdTotal?.cr2o3} strong /><Est pct={mtdTotal?.estimated_pct} qty={mtdTotal?.estimated_qty} />
@@ -374,60 +374,16 @@ function GradeTable({ icon, title, sub, qtyLabel, td, mtd, tdTotal, mtdTotal,
   );
 }
 
-/* Where a tonnage came from, printed beside it.
- *
- * SAP IS NOT CHIPPED. Marking every ordinary row would make the page noisier
- * without telling anyone anything — SAP is what this report is normally made
- * of, and a label on all 40 rows is read once and then ignored. Only the
- * exception is marked, which is the whole point of marking it.
- *
- * The chip is recomputed from the data on every request, so when SAP finally
- * posts the day, the manual figure drops out and the chip disappears by
- * itself. Nobody has to remember to clear anything. */
-function Src({ s, qty }: { s?: ExecSource; qty?: number | null }) {
-  if (!s || s === "sap") return null;
-  const manual = s === "manual";
-  return (
-    <span
-      title={manual
-        ? "The mine's own figure — SAP has not posted this day yet. It is "
-          + "replaced automatically the moment SAP does."
-        : `Includes ${qty ? formatIndian(qty, 2) : "some"} MT the mine entered `
-          + "by hand for days SAP has not posted yet."}
-      className={`ml-1 align-middle px-1 py-px rounded-sm text-[8px] font-bold
-                  tracking-wide uppercase ${manual
-        ? "bg-[#fff3e0] text-[#e65100] border border-[#ffcc80]"
-        : "bg-[#eef2ff] text-[#3949ab] border border-[#c5cae9]"}`}>
-      {manual ? "Manual" : "SAP + Manual"}
-    </span>
-  );
-}
-
 /* Achievement against plan. Thresholds match the OB table and the OEE
  * screens, so one percentage means one thing across the dashboard. A plan of
  * nothing gives no percentage — a dash, never 0%, which would read as a miss
  * rather than as "nothing was planned". */
-function Ach({ v, strong = false, manual = 0 }: {
-  v?: number | null; strong?: boolean; manual?: number | null;
-}) {
+function Ach({ v, strong = false }: { v?: number | null; strong?: boolean }) {
   if (v == null) return <span className="text-txt-light">—</span>;
   const cls = v >= 90 ? "text-[#2e7d32]" : v >= 70 ? "text-[#c8960c]" : "text-[#c62828]";
-  /* A percentage resting on a hand-entered tonnage must say so, or 40.0%
-     reads as firm as any other. Marked with a dotted rule rather than a
-     colour or a second chip: colour here already means achievement, and a
-     chip beside the one on the tonnage would be two labels for one fact.
-     It clears itself when SAP posts, because `manual` does. */
-  const body = <span className={`${cls} ${strong ? "font-extrabold" : "font-bold"}`}>
+  return <span className={`${cls} ${strong ? "font-extrabold" : "font-bold"}`}>
     {v.toFixed(1)}%
   </span>;
-  if (!manual) return body;
-  return (
-    <span className="border-b border-dotted border-[#e65100]/60"
-          title={`Against ${formatIndian(manual, 2)} MT the mine entered by hand `
-               + "for days SAP has not posted. This percentage moves when SAP does."}>
-      {body}
-    </span>
-  );
 }
 
 /* ── Block 4b · overburden and de-silting ──────────────────────────────────
@@ -463,7 +419,7 @@ function ExcavationBlock({ statusTill, td, mtd }: {
         <N v={r?.plan} />
       </td>
       <td className={`${TD} text-right whitespace-nowrap ${tint}`}>
-        <N v={r?.actual} strong /><Src s={r?.source} qty={r?.manual_qty} />
+        <N v={r?.actual} strong />
       </td>
       <td className={`${TD} text-right whitespace-nowrap ${tint}`}>
         {r?.no_plan
@@ -590,11 +546,11 @@ function PlantBlock({ statusTill, td, mtd, tdTotal, mtdTotal }: {
               Total
             </td>
             <td className={`${TD} text-right border-l border-border-light whitespace-nowrap`}>
-              <N v={tdTotal?.qty} strong /><Src s={tdTotal?.source} qty={tdTotal?.manual_qty} />
+              <N v={tdTotal?.qty} strong />
             </td>
             <td className={`${TD} text-right`}><N v={tdTotal?.cr} strong /></td>
             <td className={`${TD} text-right border-l border-border whitespace-nowrap`}>
-              <N v={mtdTotal?.qty} strong /><Src s={mtdTotal?.source} qty={mtdTotal?.manual_qty} />
+              <N v={mtdTotal?.qty} strong />
             </td>
             <td className={`${TD} text-right`}><N v={mtdTotal?.cr} strong /></td>
           </tr>
