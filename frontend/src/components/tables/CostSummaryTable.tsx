@@ -13,9 +13,9 @@ const BUCKET_PILL: Record<CostBucket, { label: string; cls: string }> = {
 };
 
 export default function CostSummaryTable({
-  period, section,
-}: { period: string; section: CostSection }) {
-  const { data, isLoading } = useCostSummary(period, section);
+  period, section, asOf,
+}: { period: string; section: CostSection; asOf?: string }) {
+  const { data, isLoading } = useCostSummary(period, section, asOf);
   const [open, setOpen] = useState<string | null>(null);
   const detail = useCostGlDetail(period, section, open);
 

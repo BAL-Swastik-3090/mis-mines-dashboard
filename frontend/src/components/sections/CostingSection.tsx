@@ -9,7 +9,7 @@ import CostSummaryTable from "@/components/tables/CostSummaryTable";
 import GlWiseTable from "@/components/tables/GlWiseTable";
 import CostSheet from "@/components/tables/CostSheet";
 import {
-  currentPeriod, periodLabel, usePeriods, useCostCoverage,
+  periodLabel, usePeriods, useCostCoverage, useCostingPeriod,
 } from "@/hooks/useCosting";
 import { formatIndian } from "@/lib/utils";
 import type { CostSection } from "@/types";
@@ -27,7 +27,11 @@ type Phase = "summary" | "detail";
 
 export default function CostingSection() {
   const { data: meta } = usePeriods();
-  const [period, setPeriod] = useState<string>("");
+  // The month comes from the header calendar, not from a picker of its own.
+  // The screen had both, and they disagreed: the header read October while
+  // the sheet quietly answered for December because December was the only
+  // month the extract held.
+  const { period: active, asOf } = useCostingPeriod();
   const [section, setSection] = useState<CostSection>("MINES");
   const [phase, setPhase] = useState<Phase>("summary");
   // The plan is an input to this sheet, not a report of its own, so it is
@@ -36,9 +40,11 @@ export default function CostingSection() {
   const [importing, setImporting] = useState(false);
   const qc = useQueryClient();
 
-  // Settle on the newest period the backend actually has, once it is known.
+  // What the backend actually holds. The prototype runs on one extracted
+  // month, so asking for any other is normal and must be said out loud
+  // rather than answered with someone else's numbers.
   const periods = meta?.periods ?? [];
-  const active = period || periods[0] || currentPeriod();
+  const hasData = periods.length === 0 || periods.includes(active);
   const { data: cov } = useCostCoverage(active, section);
 
   return (
@@ -55,6 +61,7 @@ export default function CostingSection() {
             </h2>
             <p className="text-[12px] text-txt-muted">
               Cost incurred to date and cost per tonne — {periodLabel(active)}
+              {asOf ? <span className="text-txt-light"> · as at {asOf.split("-").reverse().join("/")}</span> : null}
             </p>
           </div>
         </div>
@@ -107,17 +114,6 @@ export default function CostingSection() {
             <Upload size={13} /> Import Plan
           </button>
 
-          <select
-            id="costing-period"
-            value={active}
-            onChange={(e) => setPeriod(e.target.value)}
-            className="border border-[#d0d9e8] rounded px-3 py-1.5 text-[12px] font-mono
-                       text-txt-secondary bg-white focus:outline-none focus:border-accent"
-          >
-            {(periods.length ? periods : [active]).map((p) => (
-              <option key={p} value={p}>{periodLabel(p)}</option>
-            ))}
-          </select>
         </div>
       </div>
 
@@ -133,20 +129,33 @@ export default function CostingSection() {
         </p>
       </div>
 
+      {!hasData && (
+        <div className="bg-white border border-[#d0d9e8] rounded shadow-sm p-8 text-center">
+          <p className="text-[13px] text-txt-secondary">
+            No ledger for <strong>{periodLabel(active)}</strong>.
+          </p>
+          <p className="mt-1 text-[12px] text-txt-muted">
+            The prototype extract holds{" "}
+            {periods.map(periodLabel).join(", ")}. Change the date range in the
+            header, or load the month from SAP.
+          </p>
+        </div>
+      )}
+
       {/* ── Phase 2: the GL wise summary sheet ─────────────────── */}
-      {phase === "detail" && <GlWiseTable period={active} />}
+      {hasData && phase === "detail" && <GlWiseTable period={active} />}
 
       {/* ── Phase 1: the cost sheet, both sections side by side ─── */}
-      {phase === "summary" && <CostSheet period={active} />}
+      {hasData && phase === "summary" && <CostSheet period={active} asOf={asOf} />}
 
       {/* Everything below is analysis the workbook does not carry: it reads
           one section at a time, so it follows the Mines/COB switch. */}
-      {phase === "summary" && <CostingKpiStrip period={active} section={section} />}
-      {phase === "summary" && <CostCurveChart period={active} section={section} />}
-      {phase === "summary" && <CostSummaryTable period={active} section={section} />}
+      {hasData && phase === "summary" && <CostingKpiStrip period={active} section={section} />}
+      {hasData && phase === "summary" && <CostCurveChart period={active} section={section} />}
+      {hasData && phase === "summary" && <CostSummaryTable period={active} section={section} asOf={asOf} />}
 
       {/* ── Data coverage ──────────────────────────────────────── */}
-      {phase === "summary" && cov && (
+      {hasData && phase === "summary" && cov && (
         <div className="bg-white border border-[#d0d9e8] rounded shadow-sm p-4 accent-bar-teal">
           <div className="font-condensed text-[12px] font-bold tracking-[.14em] uppercase text-steel mb-3">
             What this figure is built from

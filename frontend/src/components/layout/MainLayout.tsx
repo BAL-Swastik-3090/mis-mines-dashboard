@@ -102,7 +102,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           {page === "amira"            && <AmiraAccountingTable />}
           {page === "fuel-management"  && <FuelManagementSection />}
           {page === "ev-tracking"      && <ElectricVehiclesSection />}
-        {page === "product-costing"  && <CostingSection />}
+          {page === "product-costing"  && <CostingSection />}
           {page === "access-control"   && <AccessControlSection />}
           {page === "minehub"          && <MineHubSection />}
           {page === "manpower"         && <ManpowerSection />}

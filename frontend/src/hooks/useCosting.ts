@@ -2,11 +2,14 @@
 /**
  * TanStack Query hooks for the product-costing endpoints.
  *
- * Costing is period-based (a whole month), not range-based like the other
- * sections, so period is passed in explicitly rather than read from the
- * global date filter — that filter is only rendered on the MIS page.
+ * Costing is period-based (a whole month) while the header filter is a
+ * range, so the two are reconciled in one place: the month is the month the
+ * range ENDS in, and that end date is also the as-of day the month-end
+ * accrual is pro-rated to. Two date controls on one screen is how a sheet
+ * ends up reading December while the header says October.
  */
 import { useQuery } from "@tanstack/react-query";
+import { useDateFilter } from "@/contexts/useDateFilter";
 import api from "@/lib/api";
 import type {
   CostSection,
@@ -21,6 +24,18 @@ const STALE = 5 * 60 * 1000;
 /** "2026-10" for the current month. */
 export function currentPeriod(): string {
   return new Date().toISOString().slice(0, 7);
+}
+
+/**
+ * The month and day the cost sheet should answer for, taken from the header.
+ *
+ * A range that ends on 27 Oct asks for October's sheet as at the 27th. A
+ * range spanning months answers for the one it ends in - a cost sheet is a
+ * monthly document and cannot straddle two.
+ */
+export function useCostingPeriod(): { period: string; asOf: string } {
+  const apiTo = useDateFilter((s) => s.apiTo);
+  return { period: apiTo.slice(0, 7), asOf: apiTo };
 }
 
 /** Months the backend actually holds data for. */
@@ -40,11 +55,13 @@ export function periodLabel(period: string): string {
   });
 }
 
-export function useCostSummary(period: string, section: CostSection) {
+export function useCostSummary(period: string, section: CostSection, asOf?: string) {
   return useQuery<CostSummaryResponse>({
-    queryKey: ["costing", "summary", period, section],
+    queryKey: ["costing", "summary", period, section, asOf ?? null],
     queryFn: async () =>
-      (await api.get("/costing/summary", { params: { period, section } })).data,
+      (await api.get("/costing/summary", {
+        params: { period, section, as_of: asOf || undefined },
+      })).data,
     staleTime: STALE,
     enabled: Boolean(period),
   });

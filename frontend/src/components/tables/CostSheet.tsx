@@ -24,9 +24,9 @@ const BEFORE = "Mining Cost Before Depreciation";
 const AFTER = "Mining Cost After Depreciation";
 const TOTAL_CONC = "Total Cost of Concentrate";
 
-export default function CostSheet({ period }: { period: string }) {
-  const mines = useCostSummary(period, "MINES");
-  const cob = useCostSummary(period, "COB");
+export default function CostSheet({ period, asOf }: { period: string; asOf?: string }) {
+  const mines = useCostSummary(period, "MINES", asOf);
+  const cob = useCostSummary(period, "COB", asOf);
 
   if (mines.isLoading || cob.isLoading) {
     return <div className="bg-white border border-[#d0d9e8] rounded h-[520px] animate-pulse" />;
