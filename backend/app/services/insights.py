@@ -457,7 +457,7 @@ def _cob_quality_mtd(db: Session, from_date: date, to_date: date) -> dict:
                 ROUND(AVG(CASE WHEN SHORT_TEXT = 'CONCENTRATE WITH STD MOISTURE'
                                THEN RESULT END), 2) AS output_cr2o3
             FROM pp_quality_inspection
-            WHERE SHORT_TEXT_INS_CHAR = 'Cr2O3'
+            WHERE UPPER(SHORT_TEXT_INS_CHAR) = 'CR2O3'
               AND SHORT_TEXT IN ('LOW GRADE ORE(-40%CR2O3)', 'CONCENTRATE WITH STD MOISTURE')
               AND POSTING_DATE BETWEEN :f AND :t
         """), {"f": from_date, "t": to_date}).fetchone()

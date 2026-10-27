@@ -374,20 +374,24 @@ def _quality(db: Session, pos: list[str]) -> tuple[dict, dict, dict, dict, dict]
             PLANT        AS plant,
             MATERIAL_NO  AS material_no,
             MATERIAL_DESC AS material_desc,
-            SUM(CASE WHEN SHORT_TEXT_INS_CHAR = :cr
+            -- UPPER on both sides: SAP files this name as 'Cr2O3' and
+            -- 'CR2O3', and DY01 -- the despatch location every row here comes
+            -- from -- uses both. 5,545 of its 55,016 Cr2O3 rows carry the
+            -- upper-cased spelling, worth up to 0.88 points of grade.
+            SUM(CASE WHEN UPPER(SHORT_TEXT_INS_CHAR) = UPPER(:cr)
                      THEN RESULT * ACTUAL_LOT_QUANTITY END)                    AS cr_num,
-            SUM(CASE WHEN SHORT_TEXT_INS_CHAR = :cr AND RESULT IS NOT NULL
+            SUM(CASE WHEN UPPER(SHORT_TEXT_INS_CHAR) = UPPER(:cr) AND RESULT IS NOT NULL
                      THEN ACTUAL_LOT_QUANTITY END)                             AS cr_den,
-            SUM(CASE WHEN SHORT_TEXT_INS_CHAR = :fe
+            SUM(CASE WHEN UPPER(SHORT_TEXT_INS_CHAR) = UPPER(:fe)
                      THEN RESULT * ACTUAL_LOT_QUANTITY END)                    AS fe_num,
-            SUM(CASE WHEN SHORT_TEXT_INS_CHAR = :fe AND RESULT IS NOT NULL
+            SUM(CASE WHEN UPPER(SHORT_TEXT_INS_CHAR) = UPPER(:fe) AND RESULT IS NOT NULL
                      THEN ACTUAL_LOT_QUANTITY END)                             AS fe_den,
-            MIN(CASE WHEN SHORT_TEXT_INS_CHAR = :cr THEN RESULT END)           AS cr_min,
-            MAX(CASE WHEN SHORT_TEXT_INS_CHAR = :cr THEN RESULT END)           AS cr_max,
+            MIN(CASE WHEN UPPER(SHORT_TEXT_INS_CHAR) = UPPER(:cr) THEN RESULT END) AS cr_min,
+            MAX(CASE WHEN UPPER(SHORT_TEXT_INS_CHAR) = UPPER(:cr) THEN RESULT END) AS cr_max,
             COUNT(DISTINCT LOT_NUMBER)                                         AS lots
         FROM pp_quality_inspection
         WHERE PLANT IN ({plant_ph})
-          AND SHORT_TEXT_INS_CHAR IN (:cr, :fe)
+          AND UPPER(SHORT_TEXT_INS_CHAR) IN (UPPER(:cr), UPPER(:fe))
           AND PO_NO IN ({ph})
         GROUP BY PO_NO, BATCH, PLANT, MATERIAL_NO, MATERIAL_DESC
     """)

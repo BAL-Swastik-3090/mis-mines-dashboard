@@ -83,7 +83,7 @@ def _get_quality(db: Session, from_date: date, to_date: date) -> dict:
             ROUND(AVG(CASE WHEN MATERIAL_NO = :mat_lg   THEN RESULT END), 3) AS input_cr2o3,
             ROUND(AVG(CASE WHEN MATERIAL_NO = :mat_conc THEN RESULT END), 3) AS output_cr2o3
         FROM pp_quality_inspection
-        WHERE SHORT_TEXT_INS_CHAR = 'Cr2O3'
+        WHERE UPPER(SHORT_TEXT_INS_CHAR) = 'CR2O3'
           AND PLANT       = :plant
           AND MATERIAL_NO IN (:mat_lg, :mat_conc)
           AND QLT_START_DATE BETWEEN :from_date AND :to_date

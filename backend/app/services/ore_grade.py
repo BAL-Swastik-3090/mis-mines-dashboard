@@ -81,7 +81,7 @@ def get_ore_grade_weighted(db: Session, from_date: date, to_date: date) -> dict:
         FROM   pp_quality_inspection
         WHERE  PLANT               = :plant
           AND  STORAGE_LOCATION    = :loc
-          AND  SHORT_TEXT_INS_CHAR = :ch
+          AND  UPPER(SHORT_TEXT_INS_CHAR) = UPPER(:ch)
           AND  MATERIAL_NO IN (:m_hg, :m_mg, :m_lg)
           -- A zero-quantity lot carries no weight; excluding it also stops a
           -- day made up only of such lots from producing a 0/0 division.

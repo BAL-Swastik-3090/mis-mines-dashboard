@@ -189,7 +189,7 @@ def _actual_grades(db: Session, fd: date, td: date) -> dict:
             COUNT(*)                          AS lots
         FROM pp_quality_inspection
         WHERE PLANT               = :plant
-          AND SHORT_TEXT_INS_CHAR = 'Cr2O3'
+          AND UPPER(SHORT_TEXT_INS_CHAR) = 'CR2O3'
           AND MATERIAL_NO        IN (:mat_feed, :mat_conc)
           AND QLT_START_DATE BETWEEN :fd AND :td
         GROUP BY MATERIAL_NO
