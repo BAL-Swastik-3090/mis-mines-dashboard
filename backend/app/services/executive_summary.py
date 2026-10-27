@@ -200,6 +200,7 @@ class _Qty(NamedTuple):
     cob:      tuple[float, float]
     ore_days: set[date]    # days SAP has posted ORE for, whatever the value
     cob_days: set[date]    # days SAP has posted CONCENTRATE for
+    ob_days:  set[date]    # days SAP has posted OVERBURDEN for
 
 
 def _prod_qty(db: Session, mf: date, rd: date) -> _Qty:
@@ -215,6 +216,7 @@ def _prod_qty(db: Session, mf: date, rd: date) -> _Qty:
     cob_qty = (0.0, 0.0)
     ore_days: set[date] = set()
     cob_days: set[date] = set()
+    ob_days: set[date] = set()
     for r in db.execute(_PROD_QTY_SQL, {"plant": MINE_PLANT, "cob_plant": COB_PLANT,
                                         "mf": mf, "rd": rd}):
         td, mtd = float(r.td_qty or 0), float(r.mtd_qty or 0)
@@ -236,7 +238,9 @@ def _prod_qty(db: Session, mf: date, rd: date) -> _Qty:
             # estimate overwrite a real zero.
             if k in PROD_MATERIALS.values():
                 ore_days.add(day)
-    return _Qty(ore, cob_qty, ore_days, cob_days)
+            elif k == _OB_NO:
+                ob_days.add(day)
+    return _Qty(ore, cob_qty, ore_days, cob_days, ob_days)
 
 
 def _production_both(db: Session, mf: date, rd: date,
@@ -268,6 +272,13 @@ def _production_both(db: Session, mf: date, rd: date,
         """
         return list(d.values())[0] if len(d) == 1 else (None, None)
 
+    # The ore estimate, spread by the day's plan. Computed once, before the
+    # loop, because the fallback needs the month's SAP mix across all grades.
+    sap_mix = {g: ore.get(PROD_MATERIALS[g], (0.0, 0.0))[1]
+               for g in ("HG", "MG", "LG")}
+    split, est_days, split_basis = _ore_split(db, mf, rd, q.ore_days, sap_mix)
+    gplan = _grade_plan(db, mf, rd)
+
     out: dict[str, list[dict]] = {"td": [], "mtd": []}
     for key, label in GRADES:
         if key == "COB":
@@ -277,8 +288,11 @@ def _production_both(db: Session, mf: date, rd: date,
             # in on this row itself. The ore grades cannot — see below.
             c_td, c_mtd, _ = _estimates(db, mf, rd, q.cob_days, "COB")
             for i, (per, est) in enumerate(zip(("td", "mtd"), (c_td, c_mtd))):
+                pl = gplan[per].get(key, 0.0)
                 out[per].append({"grade": key, "label": label,
+                                 "plan": _r(pl) or None,
                                  "qty": _r(cob_qty[i] + est),
+                                 "ach_pct": prod_svc._pct(cob_qty[i] + est, pl),
                                  "cr2o3": _r(cr[i], 3), "crfe": _r(fe[i], 3),
                                  "source": _source(cob_qty[i], est),
                                  "manual_qty": _r(est) or None})
@@ -293,34 +307,34 @@ def _production_both(db: Session, mf: date, rd: date,
         # it with tonnage nobody tested.
         a = ore_cr.get(PROD_MATERIALS[key], (None, None))
         f = ore_fe.get(PROD_MATERIALS[key], (None, None))
+        # The mine's own ore figure for days SAP has not posted, spread across
+        # the grades by that day's plan -- see _ore_split. Added INTO the grade
+        # row rather than shown beside it, which is what the mine asked for:
+        # the row is the day's production, however it is known.
+        est_g = split.get(key, (0.0, 0.0))
         for i, per in enumerate(("td", "mtd")):
+            pl = gplan[per].get(key, 0.0)
             out[per].append({
                 "grade": key, "label": label,
-                "qty": _r(qg[i]),
+                "plan": _r(pl) or None,
+                "qty": _r(qg[i] + est_g[i]),
+                "ach_pct": prod_svc._pct(qg[i] + est_g[i], pl),
+                # NO ASSAY ON THE ESTIMATED PART. The Cr2O3 and Cr/Fe shown are
+                # weighted over the lots the lab actually filed, so they
+                # describe the SAP tonnage and nothing else; the estimate adds
+                # tonnes, never grade.
                 "cr2o3": _r(a[i], 3),
                 "crfe": _r(f[i], 3),
-                "source": SRC_SAP,
+                "source": _source(qg[i], est_g[i]),
+                "manual_qty": _r(est_g[i]) or None,
+                "est_days": est_days if est_g[i] else None,
             })
 
-    # ── THE ORE ESTIMATE GETS ITS OWN ROW, AND HAS TO ──────────────────────
-    # mines_prev_day_actual stores ONE ore figure per day. It has no HG/MG/LG
-    # split and no assay, so it cannot be added into the grade rows above —
-    # there is no honest way to decide how much of 1,660 MT was medium grade.
-    #
-    # A row of its own keeps the table footing: the grades plus this row equal
-    # the Weighted Avg total, so the headline production figure is complete for
-    # the morning meeting while every grade column stays purely SAP. The row
-    # disappears the day SAP posts, because _estimates skips covered days.
-    o_td, o_mtd, days = _estimates(db, mf, rd, q.ore_days, "ORE")
-    for per, est in (("td", o_td), ("mtd", o_mtd)):
-        if not est:
-            continue
-        out[per].append({
-            "grade": "EST", "label": "Ore — est. actual",
-            "qty": _r(est), "cr2o3": None, "crfe": None,
-            "source": SRC_MANUAL, "manual_qty": _r(est),
-            "est_days": days if per == "mtd" else 1,
-        })
+    # The ore estimate no longer gets a row of its own: the mine asked for the
+    # grade rows themselves to fill, so _ore_split spreads it across them
+    # above. Where a day has no basis to split by -- no plan grades and no SAP
+    # mix -- its tonnage is simply not shown, which is reported rather than
+    # guessed at; split_basis says which basis was used.
     return out
 
 
@@ -458,7 +472,14 @@ def _weighted(rows: list[dict], qty_key: str = "qty") -> dict:
     # means "SAP has not posted this day, so the mine's own figure is standing
     # in". A row can carry both, and they must never be added together.
     manual = sum((r.get("manual_qty") or 0) for r in rows)
+
+    # Plan SUMMED from the rows and achievement taken once on the totals, not
+    # averaged across them: a grade planned at 100 MT and missed counts for its
+    # tonnage, not equally with one planned at 20,000.
+    plan = sum((r.get("plan") or 0) for r in rows)
     return {"qty": _r(tot), "cr2o3": w("cr2o3"), "crfe": w("crfe"), "cr": w("cr"),
+            "plan": _r(plan) or None,
+            "ach_pct": prod_svc._pct(tot, plan),
             "manual_qty": _r(manual) or None,
             "source": _source(tot - manual, manual),
             "estimated_qty": _r(est) or None,
@@ -467,6 +488,114 @@ def _weighted(rows: list[dict], qty_key: str = "qty") -> dict:
 
 #: Where a figure on this page came from. The chip the screen prints.
 SRC_SAP, SRC_MANUAL, SRC_MIXED = "sap", "manual", "mixed"
+
+
+def _grade_plan(db: Session, mf: date, rd: date) -> dict[str, dict[str, float]]:
+    """The planned tonnage per grade, TD and MTD.
+
+    TWO TABLES, because the mine plans them separately: HG/MG/LG come from
+    mines_daily_excavation_plan (per shift x location x face, so SUMmed, and
+    its grade columns add back to its own ORE_QTY exactly), and COB from
+    mines_cobp_plan's Concentrate_qty. These are the same two sources the MIS
+    plan-vs-actual charts use, so the two screens plan against one target.
+
+    Both periods out of one pass each, by the conditional-sum trick used
+    throughout this service. Neither table is large.
+    """
+    out = {"td": {}, "mtd": {}}
+
+    r = db.execute(text("""
+        SELECT COALESCE(SUM(CASE WHEN Prod_date = :rd THEN HG_QTY END), 0) hg_td,
+               COALESCE(SUM(CASE WHEN Prod_date = :rd THEN MG_QTY END), 0) mg_td,
+               COALESCE(SUM(CASE WHEN Prod_date = :rd THEN LG_QTY END), 0) lg_td,
+               COALESCE(SUM(HG_QTY), 0) hg, COALESCE(SUM(MG_QTY), 0) mg,
+               COALESCE(SUM(LG_QTY), 0) lg
+        FROM mines_daily_excavation_plan
+        WHERE Prod_date BETWEEN :mf AND :rd
+    """), {"mf": mf, "rd": rd}).fetchone()
+    for g, td, mtd in (("HG", r.hg_td, r.hg), ("MG", r.mg_td, r.mg),
+                       ("LG", r.lg_td, r.lg)):
+        out["td"][g] = _f(td) or 0.0
+        out["mtd"][g] = _f(mtd) or 0.0
+
+    c = db.execute(text("""
+        SELECT COALESCE(SUM(CASE WHEN Plan_date = :rd
+                                 THEN Concentrate_qty END), 0) AS td,
+               COALESCE(SUM(Concentrate_qty), 0)               AS mtd
+        FROM mines_cobp_plan
+        WHERE Plan_date BETWEEN :mf AND :rd
+    """), {"mf": mf, "rd": rd}).fetchone()
+    out["td"]["COB"] = _f(c.td) or 0.0
+    out["mtd"]["COB"] = _f(c.mtd) or 0.0
+    return out
+
+
+def _ore_split(db: Session, mf: date, rd: date, covered: set[date],
+               fallback_mix: dict[str, float]
+               ) -> tuple[dict[str, tuple[float, float]], int, str]:
+    """The ore estimate, spread across HG / MG / LG so the grade rows can fill.
+
+    THE ESTIMATE HAS NO GRADE SPLIT OF ITS OWN. mines_prev_day_actual stores
+    one ORE figure per day, full stop. The mine wants the grade rows filled
+    rather than a separate line, so the split has to come from somewhere, and
+    there is exactly one dated, per-day statement of which grades were being
+    worked: THAT DAY'S OWN EXCAVATION PLAN, which carries HG_QTY, MG_QTY and
+    LG_QTY. The plan's ore total is ignored -- only its ratio is used, applied
+    to the figure the mine actually entered.
+
+    It is a derived split and the rows say so. The plan ran 65.7% MG / 34.3% LG
+    over October while SAP posted 81.5% / 18.5%, so the shape is right and the
+    proportions are approximate; this is a figure for a morning meeting that
+    SAP replaces within a day or two, not a measurement.
+
+    FALLS BACK to the month's SAP actual mix where a day's plan carries no
+    grade quantities, and reports which basis it used so the screen can say.
+    Returns ({grade: (td, mtd)}, days_filled, basis).
+    """
+    est = db.execute(text("""
+        SELECT `Date` AS d, Est_Actual AS q FROM mines_prev_day_actual
+        WHERE Material = 'ORE' AND `Date` BETWEEN :mf AND :rd
+    """), {"mf": mf, "rd": rd}).fetchall()
+    pending = [(r.d, float(r.q or 0)) for r in est
+               if r.d not in covered and float(r.q or 0)]
+    if not pending:
+        return {}, 0, ""
+
+    plan: dict[date, dict[str, float]] = {}
+    for r in db.execute(text("""
+            SELECT Prod_date AS d,
+                   COALESCE(SUM(HG_QTY), 0) AS hg,
+                   COALESCE(SUM(MG_QTY), 0) AS mg,
+                   COALESCE(SUM(LG_QTY), 0) AS lg
+            FROM mines_daily_excavation_plan
+            WHERE Prod_date BETWEEN :mf AND :rd
+            GROUP BY Prod_date
+        """), {"mf": mf, "rd": rd}):
+        plan[r.d] = {"HG": float(r.hg or 0), "MG": float(r.mg or 0),
+                     "LG": float(r.lg or 0)}
+
+    out: dict[str, tuple[float, float]] = {}
+    basis = ""
+    for day, qty in pending:
+        shares = plan.get(day, {})
+        if sum(shares.values()) <= 0:
+            # No grade split planned for that day. The month's SAP mix is the
+            # only other dated basis; where even that is empty the day is left
+            # unallocated and the caller reports it rather than guessing.
+            shares = fallback_mix
+            basis = basis or "sap-mix"
+        else:
+            basis = basis or "plan"
+        total = sum(shares.values())
+        if total <= 0:
+            continue
+        for g, part in shares.items():
+            if not part:
+                continue
+            add = qty * part / total
+            td, mtd = out.get(g, (0.0, 0.0))
+            out[g] = (td + (add if day == rd else 0.0), mtd + add)
+    return out, len(pending), basis
 
 
 def _estimates(db: Session, mf: date, rd: date,
@@ -521,7 +650,8 @@ def _source(sap_qty: float, est_qty: float) -> str:
 
 
 def _excavation(db: Session, mf: date, rd: date,
-                ob_actual: tuple[float, float]) -> dict[str, list[dict]]:
+                ob_actual: tuple[float, float],
+                ob_days: set[date]) -> dict[str, list[dict]]:
     """Overburden and De-Silting, plan against actual, TD and MTD.
 
     THE SAME FIGURES THE MIS DASHBOARD REPORTS, and a test asserts that against
@@ -542,6 +672,13 @@ def _excavation(db: Session, mf: date, rd: date,
     with the row rather than sitting in a column heading somewhere.
     """
     ob_td, ob_mtd = ob_actual
+
+    # The mine's own OB figure for days SAP has not posted, on the same rule
+    # as production above. Overburden is one material with no grade split, so
+    # it needs no apportioning -- the entered figure goes straight onto the row.
+    e_td, e_mtd, ob_est_days = _estimates(db, mf, rd, ob_days, "OB")
+    ob_td += e_td
+    ob_mtd += e_mtd
 
     # Both periods out of one pass each, the same conditional-sum trick the
     # production query above uses. These two tables are small — the plan is one
@@ -565,21 +702,25 @@ def _excavation(db: Session, mf: date, rd: date,
         WHERE Variant = '4' AND Prod_date BETWEEN :mf AND :rd
     """), {"mf": mf, "rd": rd}).fetchone()
 
-    def rows(ob_act: float, ob_plan: float, silt_act: float | None) -> list[dict]:
+    def rows(ob_act: float, ob_plan: float, silt_act: float | None,
+             manual: float = 0.0) -> list[dict]:
         return [
             {"key": "ob", "label": "Overburden", "unit": "CuM",
              "plan": _r(ob_plan), "actual": _r(ob_act),
-             "pct": prod_svc._pct(ob_act, ob_plan)},
+             "pct": prod_svc._pct(ob_act, ob_plan),
+             "source": _source(ob_act - manual, manual),
+             "manual_qty": _r(manual) or None},
             # get_desilt_actual reports nothing rather than nought when there
             # was none; matched here so the two screens read alike.
             {"key": "desilt", "label": "De-Silting", "unit": "CuM",
              "plan": None, "actual": _r(silt_act) if silt_act else None,
-             "pct": None, "no_plan": True},
+             "pct": None, "no_plan": True,
+             "source": SRC_SAP, "manual_qty": None},
         ]
 
     return {
-        "td":  rows(ob_td,  _f(plan.td_plan)  or 0.0, _f(silt.td_silt)),
-        "mtd": rows(ob_mtd, _f(plan.mtd_plan) or 0.0, _f(silt.mtd_silt)),
+        "td":  rows(ob_td,  _f(plan.td_plan)  or 0.0, _f(silt.td_silt),  e_td),
+        "mtd": rows(ob_mtd, _f(plan.mtd_plan) or 0.0, _f(silt.mtd_silt), e_mtd),
     }
 
 
@@ -597,7 +738,8 @@ def get_executive_summary(db: Session, report_day: date,
     qty = _prod_qty(db, mtd_from, report_day)
     prod = _production_both(db, mtd_from, report_day, qty)
     # Overburden comes out of the scan `qty` already did — see _excavation.
-    exca = _excavation(db, mtd_from, report_day, qty[0].get(_OB_NO, (0.0, 0.0)))
+    exca = _excavation(db, mtd_from, report_day,
+                       qty.ore.get(_OB_NO, (0.0, 0.0)), qty.ob_days)
     desp = _despatch_both(db, mtd_from, report_day)
     plant = _plant_both(db, mtd_from, report_day)
 
