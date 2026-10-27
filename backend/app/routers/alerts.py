@@ -36,13 +36,17 @@ walks over and looks.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+import zlib
+
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.database import get_db
 from app.minehub_db import get_minehub_db
+from app.services.executive_summary import sap_arrivals
 
 router = APIRouter(prefix="/api/alerts", tags=["Alerts"])
 
@@ -197,9 +201,57 @@ def _record(pg: Session, current: list[dict], families: set[str]) -> None:
     pg.commit()
 
 
+def _sap_arrived(db: Session, held: set[str]) -> list[dict]:
+    """Figures that have just changed hands from the mine's entry to SAP's.
+
+    NOT AN EPISODE, so it is not recorded in platform_alert. An episode is a
+    fault that opens and later clears; this is a thing that happened once and
+    is over. Modelling it as a fault would mean inventing a moment for it to
+    "recover" and would put an OK row in the history beside real outages.
+
+    It is computed fresh and ages off by itself after SAP_ARRIVAL_DAYS, which
+    is also why it needs no row, no flag and no cron. The cost of that choice:
+    "Clear all" cannot dismiss one, because clearing acks an alert_id and
+    these have no row to ack. They go when they age out. Worth knowing before
+    anyone reports it as a bug.
+
+    Shown to whoever can open the MIS dashboard — the figure that changed is
+    on their screen, and nobody else's.
+    """
+    if "dashboard.mis" not in held:
+        return []
+    out = []
+    for a in sap_arrivals(db, date.today()):
+        up = a["delta"] > 0
+        key = f"sap-arrived-{a['day']:%Y%m%d}-{a['material'].lower()}"
+        out.append({
+            # NEGATIVE AND DERIVED FROM THE KEY. These keep no row, so there
+            # is no alert_id to carry; a negative one cannot collide with a
+            # platform_alert id, and crc32 keeps it stable across processes
+            # where hash() would not, so the list does not re-key on every
+            # poll and flicker. /alerts/clear cannot ack them — see below.
+            "id": -(zlib.crc32(key.encode()) & 0x7FFFFFFF),
+            "key": key,
+            "severity": "OK",
+            "kind": "Production",
+            "title": f"SAP has posted {a['label'].lower()} for {a['day']:%d %b}",
+            "detail": (
+                f"{a['label']} changed from {a['was']:,.2f} to {a['now']:,.2f} "
+                f"{a['unit']} ({'+' if up else ''}{a['delta']:,.2f}). "
+                "The figure shown was the one entered at the mine; it is now "
+                "SAP's."),
+            "since": None,
+            "minutes": None,
+            "page": "executive-summary",
+            "resolved": False,
+        })
+    return out
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 @router.get("/live")
-def live(request: Request, pg: Session = Depends(get_minehub_db)) -> dict:
+def live(request: Request, pg: Session = Depends(get_minehub_db),
+         db: Session = Depends(get_db)) -> dict:
     """What needs attention, what has just recovered, and how many.
 
     One call, cheap enough to poll, so the bell can show a number without a
@@ -260,6 +312,10 @@ def live(request: Request, pg: Session = Depends(get_minehub_db)) -> dict:
             "page": "weighbridge",
             "resolved": resolved,
         })
+
+    # Computed families that keep no episode row — appended here rather than
+    # read back from platform_alert, which holds only the ones that do.
+    out += _sap_arrived(db, held)
 
     out.sort(key=lambda a: (a["severity"] == "OK",
                             a["severity"] != "DOWN",
