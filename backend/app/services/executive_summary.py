@@ -44,11 +44,12 @@ those are different statements.
 from __future__ import annotations
 
 from datetime import date
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.services import production as prod_svc
 from app.services import stock as stock_svc
 from app.services.despatch_grade import (
     COB_KEY, GRADE_BANDS, MINES_CUSTOMERS, UNASSAYED_KEY,
@@ -86,6 +87,10 @@ GRADES: tuple[tuple[str, str], ...] = (
 # Cross-checked: September MG from pp_production is 15,519.0 MT and the ROM1
 # inspected lots for the same month total 15,519.0 MT. The tonnage and the assay
 # are the same ore.
+#: Overburden, keyed the way _prod_qty stores it — the last 8 characters of
+#: SAP's padded MATERIAL_NO, which is how that function trims every material.
+_OB_NO = "16000009"
+
 PROD_MATERIALS: dict[str, str] = {
     "HG": "25000002",   # +52% CHROME ORE
     "MG": "25000001",   # 40-52% CHROME ORE
@@ -113,15 +118,22 @@ COB_SLOC = "COBC"       # where the concentrate is inspected
 # Adding an index on (PLANT, POSTING_DATE) would help far more than this and is
 # the real fix; it is a change to a shared production database and is not mine
 # to make.
+#
+# POSTING_DATE IS IN THE GROUPING, not just the CASE. It costs nothing — the
+# scan is the same one, and a month of days across a handful of materials is
+# a few dozen rows — and it is the only way to know WHICH DAYS SAP has posted
+# at all. That set is what decides where the mine's hand-entered estimate is
+# allowed to stand in; without it the service could only see a monthly total
+# and could not tell a day SAP has not reached from a day the mine did not work.
 _PROD_QTY_SQL = text(f"""
-    SELECT PLANT, MATERIAL_NO, MATERIAL_DESC,
+    SELECT PLANT, MATERIAL_NO, MATERIAL_DESC, POSTING_DATE,
            COALESCE(SUM(CASE WHEN POSTING_DATE = :rd
                              THEN ({PRODUCTION_QTY}) ELSE 0 END), 0) AS td_qty,
            COALESCE(SUM({PRODUCTION_QTY}), 0)                        AS mtd_qty
     FROM pp_production
     WHERE PLANT IN (:plant, :cob_plant)
       AND POSTING_DATE BETWEEN :mf AND :rd
-    GROUP BY PLANT, MATERIAL_NO, MATERIAL_DESC
+    GROUP BY PLANT, MATERIAL_NO, MATERIAL_DESC, POSTING_DATE
 """)
 
 # The assay of what was produced, weighted by the lot's own tonnage, for both
@@ -182,23 +194,56 @@ def _assay(db, plant: str, sloc: str, char: str, mf: date, rd: date) -> dict:
     return out
 
 
-def _production_both(db: Session, mf: date, rd: date) -> dict[str, list[dict]]:
-    """Mines production by grade for TD and MTD, from one pass per table."""
+class _Qty(NamedTuple):
+    """One pass of pp_production, read four ways."""
+    ore:      dict[str, tuple[float, float]]   # material -> (td, mtd)
+    cob:      tuple[float, float]
+    ore_days: set[date]    # days SAP has posted ORE for, whatever the value
+    cob_days: set[date]    # days SAP has posted CONCENTRATE for
+
+
+def _prod_qty(db: Session, mf: date, rd: date) -> _Qty:
+    """The one pp_production scan, as (by material at the mine, COB concentrate).
+
+    Lifted out of _production_both so the overburden figure can be read from
+    the SAME pass instead of a second one. OB is already in this result — the
+    query groups every material at plant 1200 — and fetching it again through
+    production.get_mtd_totals cost 9.3 seconds, 45% of the page, for rows that
+    were sitting here unused.
+    """
     ore: dict[str, tuple[float, float]] = {}
     cob_qty = (0.0, 0.0)
+    ore_days: set[date] = set()
+    cob_days: set[date] = set()
     for r in db.execute(_PROD_QTY_SQL, {"plant": MINE_PLANT, "cob_plant": COB_PLANT,
                                         "mf": mf, "rd": rd}):
         td, mtd = float(r.td_qty or 0), float(r.mtd_qty or 0)
+        day = r.POSTING_DATE
         if str(r.PLANT) == COB_PLANT:
             # COB is identified by description, not material number -- the mine
             # never asked SAP for a material split, and the plant also posts
             # tailings against this plant.
             if str(r.MATERIAL_DESC or "") == COB_MATERIAL:
                 cob_qty = (cob_qty[0] + td, cob_qty[1] + mtd)
+                cob_days.add(day)
         else:
             k = str(r.MATERIAL_NO)[-8:]
             prev = ore.get(k, (0.0, 0.0))
             ore[k] = (prev[0] + td, prev[1] + mtd)
+            # PRESENCE, NOT A NON-ZERO VALUE. A day SAP has posted and that
+            # nets to nought -- a shift reversed, or genuinely no work -- is a
+            # day SAP has answered for. Testing the value instead would let the
+            # estimate overwrite a real zero.
+            if k in PROD_MATERIALS.values():
+                ore_days.add(day)
+    return _Qty(ore, cob_qty, ore_days, cob_days)
+
+
+def _production_both(db: Session, mf: date, rd: date,
+                     qty: tuple | None = None) -> dict[str, list[dict]]:
+    """Mines production by grade for TD and MTD, from one pass per table."""
+    q = qty if qty is not None else _prod_qty(db, mf, rd)
+    ore, cob_qty = q.ore, q.cob
 
     # BOTH characteristics are asked for at BOTH locations, and each row shows
     # whatever the lab actually filed for the lots in its window.
@@ -228,13 +273,18 @@ def _production_both(db: Session, mf: date, rd: date) -> dict[str, list[dict]]:
         if key == "COB":
             cr = one(cob_cr)
             fe = one(cob_fe)
-            for i, per in enumerate(("td", "mtd")):
+            # COB is one material, not a grade split, so the estimate can stand
+            # in on this row itself. The ore grades cannot — see below.
+            c_td, c_mtd, _ = _estimates(db, mf, rd, q.cob_days, "COB")
+            for i, (per, est) in enumerate(zip(("td", "mtd"), (c_td, c_mtd))):
                 out[per].append({"grade": key, "label": label,
-                                 "qty": _r(cob_qty[i]),
-                                 "cr2o3": _r(cr[i], 3), "crfe": _r(fe[i], 3)})
+                                 "qty": _r(cob_qty[i] + est),
+                                 "cr2o3": _r(cr[i], 3), "crfe": _r(fe[i], 3),
+                                 "source": _source(cob_qty[i], est),
+                                 "manual_qty": _r(est) or None})
             continue
 
-        q = ore.get(PROD_MATERIALS[key], (0.0, 0.0))
+        qg = ore.get(PROD_MATERIALS[key], (0.0, 0.0))
         # LGCR is not an inspection location, so LG has no entry in either of
         # these -- which is the honest answer, not a zero. Nor is a Cr/Fe
         # weighted over the lots that carry it the same as one weighted over
@@ -246,10 +296,31 @@ def _production_both(db: Session, mf: date, rd: date) -> dict[str, list[dict]]:
         for i, per in enumerate(("td", "mtd")):
             out[per].append({
                 "grade": key, "label": label,
-                "qty": _r(q[i]),
+                "qty": _r(qg[i]),
                 "cr2o3": _r(a[i], 3),
                 "crfe": _r(f[i], 3),
+                "source": SRC_SAP,
             })
+
+    # ── THE ORE ESTIMATE GETS ITS OWN ROW, AND HAS TO ──────────────────────
+    # mines_prev_day_actual stores ONE ore figure per day. It has no HG/MG/LG
+    # split and no assay, so it cannot be added into the grade rows above —
+    # there is no honest way to decide how much of 1,660 MT was medium grade.
+    #
+    # A row of its own keeps the table footing: the grades plus this row equal
+    # the Weighted Avg total, so the headline production figure is complete for
+    # the morning meeting while every grade column stays purely SAP. The row
+    # disappears the day SAP posts, because _estimates skips covered days.
+    o_td, o_mtd, days = _estimates(db, mf, rd, q.ore_days, "ORE")
+    for per, est in (("td", o_td), ("mtd", o_mtd)):
+        if not est:
+            continue
+        out[per].append({
+            "grade": "EST", "label": "Ore — est. actual",
+            "qty": _r(est), "cr2o3": None, "crfe": None,
+            "source": SRC_MANUAL, "manual_qty": _r(est),
+            "est_days": days if per == "mtd" else 1,
+        })
     return out
 
 
@@ -379,9 +450,137 @@ def _weighted(rows: list[dict], qty_key: str = "qty") -> dict:
     # total agrees with its own lines instead of being a fourth kind of average.
     est = sum((r.get("estimated_qty") or 0) for r in rows)
     graded = sum((r.get(qty_key) or 0) for r in rows if r.get("cr2o3") is not None)
+
+    # MANUAL TONNAGE IS A SEPARATE IDEA FROM A BORROWED ASSAY, and keeping them
+    # in one key would have been the cheap mistake here. `estimated_qty` means
+    # "this grade came from the purchase order's average because the lab has
+    # not filed yet" and drives the amber footnote about assays; `manual_qty`
+    # means "SAP has not posted this day, so the mine's own figure is standing
+    # in". A row can carry both, and they must never be added together.
+    manual = sum((r.get("manual_qty") or 0) for r in rows)
     return {"qty": _r(tot), "cr2o3": w("cr2o3"), "crfe": w("crfe"), "cr": w("cr"),
+            "manual_qty": _r(manual) or None,
+            "source": _source(tot - manual, manual),
             "estimated_qty": _r(est) or None,
             "estimated_pct": round(est / graded * 100, 1) if (graded and est) else None}
+
+
+#: Where a figure on this page came from. The chip the screen prints.
+SRC_SAP, SRC_MANUAL, SRC_MIXED = "sap", "manual", "mixed"
+
+
+def _estimates(db: Session, mf: date, rd: date,
+               covered: set[date], material: str) -> tuple[float, float, int]:
+    """The mine's own figure for the days SAP has not posted yet.
+
+    WHY THIS EXISTS. SAP's goods movements land a day or more after the fact —
+    routers/prev_day_actual.py records the morning of 24 September, when the
+    23rd still read zero ore against a plan of 207 MT. The mine already types
+    yesterday's real figure into the MIS variance form before that meeting, so
+    the number exists; it was simply never shown on this page, which meant the
+    management review opened on a production row of 0.00 for the day everyone
+    had just finished discussing.
+
+    ONLY WHERE SAP IS SILENT. `covered` is the set of days SAP has posted, so a
+    day it has answered for is never second-guessed by a hand-typed figure —
+    the estimate stands in, it does not compete. Over 23 September to 25
+    October the two differ by 26% on average and by as much as 65% on a single
+    day, which is exactly why the estimate must give way the moment SAP speaks
+    rather than being blended with it.
+
+    Returns (td, mtd, days_filled).
+    """
+    rows = db.execute(text("""
+        SELECT `Date` AS d, Est_Actual AS q
+        FROM mines_prev_day_actual
+        WHERE Material = :m AND `Date` BETWEEN :mf AND :rd
+    """), {"m": material, "mf": mf, "rd": rd}).fetchall()
+
+    td = mtd = 0.0
+    filled = 0
+    for r in rows:
+        if r.d in covered:
+            continue                      # SAP has spoken for this day
+        q = float(r.q or 0)
+        mtd += q
+        filled += 1
+        if r.d == rd:
+            td = q
+    return td, mtd, filled
+
+
+def _source(sap_qty: float, est_qty: float) -> str:
+    """Which label a figure earns. Recomputed every request, so it follows the
+    data: the moment SAP posts a day, that day stops being counted as manual
+    and the chip changes with no intervention."""
+    if est_qty and sap_qty:
+        return SRC_MIXED
+    if est_qty:
+        return SRC_MANUAL
+    return SRC_SAP
+
+
+def _excavation(db: Session, mf: date, rd: date,
+                ob_actual: tuple[float, float]) -> dict[str, list[dict]]:
+    """Overburden and De-Silting, plan against actual, TD and MTD.
+
+    THE SAME FIGURES THE MIS DASHBOARD REPORTS, and a test asserts that against
+    production.get_mtd_totals and get_desilt_actual on every change. It does not
+    CALL those functions: each re-scans pp_production, and doing it twice more
+    added 9.3 seconds to a 20.7-second page for a number this service had
+    already fetched. `ob_actual` is (td, mtd) lifted out of the single scan in
+    _prod_qty, where overburden sits beside the ore grades at plant 1200.
+
+    DE-SILTING HAS NO PLAN, AND THAT IS NOT AN OMISSION HERE. There is no plan
+    table for it anywhere in the database — services/production.py returns
+    `"silt_plan": None` with that same note, and the MIS KPI card passes
+    today_plan=None and mtd_plan=None. Its actual is reported and its plan
+    column stays empty, which is what MIS shows. Inventing a target, or reusing
+    the OB plan, would be worse than a blank.
+
+    OB is CuM, not MT. The ore tables above it are tonnes, so the unit travels
+    with the row rather than sitting in a column heading somewhere.
+    """
+    ob_td, ob_mtd = ob_actual
+
+    # Both periods out of one pass each, the same conditional-sum trick the
+    # production query above uses. These two tables are small — the plan is one
+    # row per shift x location x face, de-silting one row per day — so this is
+    # two cheap reads, not the full scans pp_production forces.
+    plan = db.execute(text("""
+        SELECT COALESCE(SUM(CASE WHEN Prod_date = :rd
+                   THEN CAST(NULLIF(OB_QTY_Cum,'') AS DECIMAL(16,3)) END), 0) AS td_plan,
+               COALESCE(SUM(CAST(NULLIF(OB_QTY_Cum,'') AS DECIMAL(16,3))), 0) AS mtd_plan
+        FROM mines_daily_excavation_plan
+        WHERE Prod_date BETWEEN :mf AND :rd
+    """), {"mf": mf, "rd": rd}).fetchone()
+
+    # Variant '4' is de-silting, and Qty is VARCHAR here — the same filter and
+    # cast services/production.py uses, so the two screens cannot disagree.
+    silt = db.execute(text("""
+        SELECT SUM(CASE WHEN Prod_date = :rd
+                   THEN CAST(Qty AS DECIMAL(13,3)) END)  AS td_silt,
+               SUM(CAST(Qty AS DECIMAL(13,3)))           AS mtd_silt
+        FROM mines_day_wise_excavation
+        WHERE Variant = '4' AND Prod_date BETWEEN :mf AND :rd
+    """), {"mf": mf, "rd": rd}).fetchone()
+
+    def rows(ob_act: float, ob_plan: float, silt_act: float | None) -> list[dict]:
+        return [
+            {"key": "ob", "label": "Overburden", "unit": "CuM",
+             "plan": _r(ob_plan), "actual": _r(ob_act),
+             "pct": prod_svc._pct(ob_act, ob_plan)},
+            # get_desilt_actual reports nothing rather than nought when there
+            # was none; matched here so the two screens read alike.
+            {"key": "desilt", "label": "De-Silting", "unit": "CuM",
+             "plan": None, "actual": _r(silt_act) if silt_act else None,
+             "pct": None, "no_plan": True},
+        ]
+
+    return {
+        "td":  rows(ob_td,  _f(plan.td_plan)  or 0.0, _f(silt.td_silt)),
+        "mtd": rows(ob_mtd, _f(plan.mtd_plan) or 0.0, _f(silt.mtd_silt)),
+    }
 
 
 def get_executive_summary(db: Session, report_day: date,
@@ -395,7 +594,10 @@ def get_executive_summary(db: Session, report_day: date,
     that was not a subset of its own month.
     """
     mtd_from = report_day.replace(day=1)
-    prod = _production_both(db, mtd_from, report_day)
+    qty = _prod_qty(db, mtd_from, report_day)
+    prod = _production_both(db, mtd_from, report_day, qty)
+    # Overburden comes out of the scan `qty` already did — see _excavation.
+    exca = _excavation(db, mtd_from, report_day, qty[0].get(_OB_NO, (0.0, 0.0)))
     desp = _despatch_both(db, mtd_from, report_day)
     plant = _plant_both(db, mtd_from, report_day)
 
@@ -408,6 +610,8 @@ def get_executive_summary(db: Session, report_day: date,
                                for c in MINES_CUSTOMERS},
             "plant": plant[per],
             "plant_total": _weighted(plant[per]),
+            # OB and De-Silting, the same figures the MIS dashboard reports.
+            "excavation": exca[per],
         }
 
     return {

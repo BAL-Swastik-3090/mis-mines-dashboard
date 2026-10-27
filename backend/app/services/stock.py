@@ -55,6 +55,26 @@ MINE_BUCKETS = [
 ]
 STATUS_ROWS = [label for _b, label in MINE_BUCKETS]
 
+# ── Rows 8A and 8B: WHY the permission is still awaited ──────────────────────
+# A breakdown of Awaiting Permission, NOT two more positions. They are kept out
+# of MINE_BUCKETS on purpose: the four buckets above sum to Total Stock, and
+# adding a child that already sits inside its parent would count the same
+# tonnage twice — Total Stock would overstate by the whole of row 8.
+#
+# The mine's rule is that the two add up to their parent, which the entry API
+# enforces per grade. They are reported as their own rows anyway rather than
+# derived, because which of the two is holding the ore up is the point: an
+# analysis report is the lab's to produce, a royalty payment is the office's.
+AWAITING_PERMISSION_BUCKET = "MINE_AWAITING_PERMISSION"
+# No "--" prefix on the labels: the screen indents them and numbers them 3(a)
+# and 3(b), which says "inside the row above" in the two ways a reader already
+# understands. Punctuation standing in for layout survives only until someone
+# sorts the table or exports it.
+AWAITING_PERMISSION_PARTS = [
+    ("MINE_AWAIT_ANALYSIS_REPORT", "Awaiting Analysis Report"),
+    ("MINE_AWAIT_ROYALTY_PAYMENT", "Awaiting Royalty Payment"),
+]
+
 # Grades in display order, with the label shown under Mines.
 GRADE_COLUMNS = [
     ("HG",  "High Grade"),
@@ -63,7 +83,12 @@ GRADE_COLUMNS = [
     ("COB", "COB / COB Mix Grade"),
 ]
 
-_MINE_IN = ", ".join(f"'{b}'" for b, _ in MINE_BUCKETS)
+#: Everything the form writes at the mine — the four buckets plus the two
+#: sub-buckets. Used to READ the grid; the four alone are what gets SUMMED.
+MINE_BUCKETS_ALL = [b for b, _ in MINE_BUCKETS] + [
+    b for b, _ in AWAITING_PERMISSION_PARTS]
+
+_MINE_IN = ", ".join(f"'{b}'" for b in MINE_BUCKETS_ALL)
 
 # ── The two tables the page shows, side by side ──────────────────────────────
 # Both are the same grade x bucket grid read along different axes: clearance
@@ -79,10 +104,47 @@ _MINE_IN = ", ".join(f"'{b}'" for b, _ in MINE_BUCKETS)
 CLEARANCE_GRADES = ["HG", "MG", "COB", "LG"]
 LOCATION_GRADES = ["HG", "MG", "LG", "COB"]
 
-# Row 6 of the sheet: the sum of the four below it, never stored.
-CLEARANCE_ROWS = [("TOTAL", "Total Stock", None)] + [
-    (b.replace("MINE_", ""), label, b) for b, label in MINE_BUCKETS
-]
+# Row 6 of the sheet: the sum of the four below it, never stored. Rows 8A and
+# 8B follow their parent immediately, as they do on the mine's own sheet, and
+# are flagged `is_child` so the screen can indent them and a reader can see at a
+# glance that they are inside row 8 rather than beside it.
+#: The letters a sub-row is numbered with, in order.
+_SUB_LETTERS = "abcdefgh"
+
+
+def _clearance_rows() -> list[tuple[str, str, str | None, bool, str]]:
+    """Every row of the clearance table, numbered as the mine numbers its sheet.
+
+    A top-level row takes the next whole number; a sub-row takes its PARENT's
+    number with a letter — 3(a), 3(b) — rather than a number of its own. The
+    numbering then carries the structure: anyone adding the column downwards
+    can see that 3(a) and 3(b) are already inside 3 and must be skipped, which
+    is the one mistake this table invites.
+    """
+    rows: list[tuple[str, str, str | None, bool, str]] = []
+    n = 0
+
+    def add(key: str, label: str, bucket: str | None, parent_no: int | None,
+            letter: str = "") -> None:
+        nonlocal n
+        if parent_no is None:
+            n += 1
+            sl = str(n)
+        else:
+            sl = f"{parent_no}({letter})"
+        rows.append((key, label, bucket, parent_no is not None, sl))
+
+    add("TOTAL", "Total Stock", None, None)
+    for b, label in MINE_BUCKETS:
+        add(b.replace("MINE_", ""), label, b, None)
+        if b == AWAITING_PERMISSION_BUCKET:
+            parent = n
+            for i, (cb, clabel) in enumerate(AWAITING_PERMISSION_PARTS):
+                add(cb.replace("MINE_", ""), clabel, cb, parent, _SUB_LETTERS[i])
+    return rows
+
+
+CLEARANCE_ROWS = _clearance_rows()
 
 LOCATION_COLUMNS = [
     ("mines",      "Mines (Ore)",            None),          # the mine buckets
@@ -145,15 +207,18 @@ def _location_head() -> list[dict]:
 def _clearance_table(cell) -> list[dict]:
     """Clearance status down, grade across. Row 6 is the sum of rows 7-10."""
     out = []
-    for key, label, bucket in CLEARANCE_ROWS:
+    for key, label, bucket, is_child, sl_no in CLEARANCE_ROWS:
         buckets = [b for b, _ in MINE_BUCKETS] if bucket is None else [bucket]
         by_grade = {g: round(sum(cell(g, b) for b in buckets), 2)
                     for g in CLEARANCE_GRADES}
         out.append({
-            "key": key, "label": label, "uom": UOM,
+            "key": key, "sl_no": sl_no, "label": label, "uom": UOM,
             "by_grade": by_grade,
             "total": round(sum(by_grade.values()), 2),
             "is_total": bucket is None,
+            # Inside the row above it, not beside it. The screen indents on
+            # this; nothing sums on it.
+            "is_child": is_child,
         })
     return out
 
@@ -256,11 +321,16 @@ def get_stock_position(db: Session, as_on: date | None = None) -> dict:
     by_bucket: dict[str, float] = {}
     # The full grid, which both side-by-side tables are read out of.
     grid: dict[tuple[str, str], float] = {}
+    # THE SUB-BUCKETS GO IN THE GRID BUT NEVER IN A SUM. Rows 8A and 8B already
+    # sit inside row 8, so adding them to by_grade would overstate Total Stock
+    # and the grade split by the whole of Awaiting Permission.
+    totalled = {b for b, _ in MINE_BUCKETS}
     for r in mine_rows:
         q = _f(r.qty)
-        by_grade[r.Grade] = by_grade.get(r.Grade, 0.0) + q
-        by_bucket[r.Bucket] = by_bucket.get(r.Bucket, 0.0) + q
         grid[(r.Grade, r.Bucket)] = grid.get((r.Grade, r.Bucket), 0.0) + q
+        by_bucket[r.Bucket] = by_bucket.get(r.Bucket, 0.0) + q
+        if r.Bucket in totalled:
+            by_grade[r.Grade] = by_grade.get(r.Grade, 0.0) + q
 
     grades = [{
         "grade_key":   key,
@@ -268,14 +338,19 @@ def get_stock_position(db: Session, as_on: date | None = None) -> dict:
         "mines":       round(by_grade.get(key, 0.0), 2),
     } for key, label in GRADE_COLUMNS]
 
+    # Ordered by CLEARANCE_ROWS rather than by a second list of its own, so the
+    # sub-rows cannot end up in one order on the table and another here.
     statuses = [{
         "label": label,
         "qty":   round(by_bucket.get(bucket, 0.0), 2),
-    } for bucket, label in MINE_BUCKETS]
+        "is_child": is_child,
+    } for _key, label, bucket, is_child, _sl in CLEARANCE_ROWS
+        if bucket is not None]
 
     # Total Stock and the Mines location are the same quantity by definition,
-    # so they are summed once and reported in both places.
-    total_stock = round(sum(by_bucket.values()), 2)
+    # so they are summed once and reported in both places. Over the FOUR
+    # buckets, not everything by_bucket holds — see `totalled` above.
+    total_stock = round(sum(by_bucket.get(b, 0.0) for b in totalled), 2)
     mines = total_stock
 
     # ── stock held elsewhere ─────────────────────────────────────────────────

@@ -7,6 +7,8 @@ import LCMCobSection from "@/components/sections/LCMCobSection";
 import KamLossTreeSection from "@/components/sections/KamLossTreeSection";
 import { useDateFilter }  from "@/contexts/useDateFilter";
 import { useOEE }         from "@/hooks/useOEE";
+import { useTipperOEE }   from "@/hooks/useTipperOEE";
+import TipperOEETable     from "@/components/sections/TipperOEETable";
 import type { OEEMachineRow, OEEFleet } from "@/types";
 import { formatIndian }   from "@/lib/utils";
 import { toCsv, download } from "@/components/minehub/spreadsheet";
@@ -53,7 +55,7 @@ function FleetKpis({ fleet, loading }: { fleet: OEEFleet | undefined; loading: b
     },
     {
       label: "Availability",
-      sub: "Σ operating ÷ Σ ideal time",
+      sub: "Σ available ÷ Σ ideal time",
       value: loading ? null : fleet?.availability ?? null,
       unit: "%",
       colorFn: (v: number) => pctColor(v, 85, 70),
@@ -124,8 +126,8 @@ function FleetKpis({ fleet, loading }: { fleet: OEEFleet | undefined; loading: b
 // Columns of their own here rather than two values in one cell: a spreadsheet is
 // sorted and filtered, and "17 CuM/hr" inside the machine name defeats both.
 const EXPORT_HEADINGS = [
-  "Excavator", "God Hrs", "BD Hrs", "PM Hrs", "Running Hrs", "Deviation Hrs",
-  "Operating Hrs",
+  "Excavator", "God Hrs", "BD Hrs", "PM Hrs", "Available Hrs", "Running Hrs",
+  "Deviation Hrs",
   "Actual CuM", "Ideal CuM", "Availability %", "Performance %",
   "Quality %", "OEE %", "Utilisation %",
   "Ideal Capacity (CuM/hr)", "Ownership", "Breakdown Source", "Deviation % of Shift",
@@ -142,9 +144,9 @@ const n2 = (v: number) => Number(v.toFixed(2));
 
 function exportRows(machines: OEEMachineRow[], fleet: OEEFleet | undefined): unknown[][] {
   const rows: unknown[][] = machines.map((m) => [
-    m.machine, n1(m.god_hours), n2(m.bd_hours), n2(m.pm_hours), n2(m.running_hrs),
-    n2(m.deviation_hrs),
-    n2(m.operating_hrs), n1(m.actual_cum), n1(m.ideal_cum), n2(m.availability),
+    m.machine, n1(m.god_hours), n2(m.bd_hours), n2(m.pm_hours),
+    n2(m.operating_hrs), n2(m.running_hrs),
+    n2(m.deviation_hrs), n1(m.actual_cum), n1(m.ideal_cum), n2(m.availability),
     n2(m.performance), n2(m.quality), n2(m.oee), m.utilisation ?? "",
     n1(m.ideal_cap), m.hired ? "Hired" : "Owned",
     m.bd_source === "sap" ? "SAP" : "Shift log",
@@ -158,8 +160,8 @@ function exportRows(machines: OEEMachineRow[], fleet: OEEFleet | undefined): unk
   if (fleet && machines.length) {
     rows.push([
       "OVERALL", n1(fleet.god_hours), n2(fleet.bd_hours), n2(fleet.pm_hours),
-      n2(fleet.running_hrs), n2(fleet.deviation_hrs),
-      n2(fleet.operating_hrs), n1(fleet.actual_cum),
+      n2(fleet.operating_hrs), n2(fleet.running_hrs),
+      n2(fleet.deviation_hrs), n1(fleet.actual_cum),
       n1(fleet.ideal_cum), n2(fleet.availability),
       n2(fleet.performance), n2(fleet.quality), n2(fleet.oee), fleet.utilisation ?? "",
       "", "", "", fleet.deviation_pct ?? "",
@@ -206,7 +208,8 @@ function MaterialTag({ m }: {
 }
 
 // ── Per-machine OEE table ──────────────────────────────────────────────────────
-function OEETable({ machines, fleet, loading, from, to }: {
+function OEETable({ title, slug, machines, fleet, loading, from, to }: {
+  title: string; slug: string;
   machines: OEEMachineRow[]; fleet: OEEFleet | undefined; loading: boolean;
   from?: string; to?: string;
 }) {
@@ -216,7 +219,7 @@ function OEETable({ machines, fleet, loading, from, to }: {
       {/* Card header */}
       <div className="px-4 pt-3 pb-2.5 border-b border-border-light flex items-center justify-between gap-3">
         <span className="font-condensed font-bold text-[13px] text-navy tracking-widest uppercase">
-          OEE Breakdown — Per Excavator
+          {title}
         </span>
         {/* The period goes in the FILENAME, not a banner row above the data. A
             title row stops Excel treating row 1 as headings, which breaks sort,
@@ -225,7 +228,7 @@ function OEETable({ machines, fleet, loading, from, to }: {
           type="button"
           onClick={() => download(
             toCsv(EXPORT_HEADINGS, exportRows(machines, fleet)),
-            `oee-per-excavator-${from ?? ""}-to-${to ?? ""}.csv`)}
+            `oee-${slug}-${from ?? ""}-to-${to ?? ""}.csv`)}
           disabled={!canExport}
           title={canExport ? "Download this table as a spreadsheet" : "Nothing to export yet"}
           className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded border
@@ -246,7 +249,7 @@ function OEETable({ machines, fleet, loading, from, to }: {
             <tr className="bg-bg-section border-b border-border-light">
               {[
                 "Excavator", "God Hrs",
-                "BD Hrs", "PM Hrs", "Running Hrs", "Deviation Hrs", "Operating Hrs",
+                "BD Hrs", "PM Hrs", "Available Hrs", "Running Hrs", "Deviation Hrs",
                 "Actual CuM", "Ore / OB", "Ideal CuM",
                 "Availability %", "Performance %", "Quality %", "OEE %", "Utilisation %",
               ].map((h) => (
@@ -315,8 +318,17 @@ function OEETable({ machines, fleet, loading, from, to }: {
                   <td className={`px-3 py-2.5 font-semibold ${m.pm_hours > 0 ? "text-[#c8960c]" : "text-txt-light"}`}>
                     {fmt2(m.pm_hours)}
                   </td>
-                  {/* RUNNING HRS — beside PM, and before Deviation, because the
-                      two are one 8-hour shift split in two: every shift row in
+                  {/* AVAILABLE HRS — Ideal Time less BD less PM, so it sits
+                      directly after the two columns it subtracts and the
+                      arithmetic reads left to right across the row. (Ideal Time
+                      is God Hrs less planned loss, so where none is booked this
+                      is simply God − BD − PM, which is how most rows read.)
+                      NOT the denominator of Utilisation at the far right, which
+                      deliberately leaves PM in — see _utilisation() in
+                      services/oee.py for why. */}
+                  <td className="px-3 py-2.5 text-[#1565c0] font-semibold">{fmt2(m.operating_hrs)}</td>
+                  {/* RUNNING HRS — before Deviation, because the two are one
+                      8-hour shift split in two: every shift row in
                       mines_tipper_details has running + deviation = 8.00
                       exactly. Reading them apart puts the pair back together.
                       It is also the numerator of Utilisation at the far right,
@@ -331,8 +343,6 @@ function OEETable({ machines, fleet, loading, from, to }: {
                       <div className="text-[9px] text-txt-light">{m.deviation_pct}% of shift</div>
                     )}
                   </td>
-                  {/* Operating hrs */}
-                  <td className="px-3 py-2.5 text-[#1565c0] font-semibold">{fmt2(m.operating_hrs)}</td>
                   {/* Actual CuM */}
                   <td className="px-3 py-2.5 text-txt-secondary">{fmt1(m.actual_cum)}</td>
                   {/* WHAT WAS IN THE BUCKET, not just how much. Five of the ten
@@ -382,6 +392,7 @@ function OEETable({ machines, fleet, loading, from, to }: {
                 <td className="px-3 py-3 text-navy">{fmt1(fleet.god_hours)}</td>
                 <td className="px-3 py-3 text-[#c62828]">{fmt2(fleet.bd_hours)}</td>
                 <td className="px-3 py-3 text-[#c8960c]">{fmt2(fleet.pm_hours)}</td>
+                <td className="px-3 py-3 text-[#1565c0]">{fmt2(fleet.operating_hrs)}</td>
                 <td className="px-3 py-3 text-[#2e7d32]">{fmt2(fleet.running_hrs)}</td>
                 <td className="px-3 py-3">
                   <div className="text-navy">{fmt2(fleet.deviation_hrs)}</div>
@@ -389,7 +400,6 @@ function OEETable({ machines, fleet, loading, from, to }: {
                     <div className="text-[9px] font-normal text-txt-light">{fleet.deviation_pct}% of shift</div>
                   )}
                 </td>
-                <td className="px-3 py-3 text-[#1565c0]">{fmt2(fleet.operating_hrs)}</td>
                 <td className="px-3 py-3 text-navy">{fmt1(fleet.actual_cum)}</td>
                 <td className="px-3 py-3"><MaterialTag m={fleet} /></td>
                 <td className="px-3 py-3 text-txt-secondary">{fmt1(fleet.ideal_cum)}</td>
@@ -444,6 +454,11 @@ export default function OEESection() {
   const { apiTo }           = useDateFilter();
   const { data, isLoading } = useOEE();
   const machines            = data?.machines ?? [];
+  // Partitioned on the server's own tag, not on a name list repeated here —
+  // one place decides which machines are new (NEW_EXCAVATORS in oee.py).
+  const oldMachines         = machines.filter((m) => m.generation !== "new");
+  const newMachines         = machines.filter((m) => m.generation === "new");
+  const tippers             = useTipperOEE();
   const [showFormulae, setShowFormulae] = useState(false);
 
   return (
@@ -487,9 +502,40 @@ export default function OEESection() {
       {/* Fleet KPI strip */}
       <FleetKpis fleet={data?.fleet} loading={isLoading} />
 
-      {/* Per-machine breakdown table */}
-      <OEETable machines={machines} fleet={data?.fleet} loading={isLoading}
+      {/* TWO TABLES, SPLIT BY GENERATION. The new machines are read on their
+          own because a 58 CuM/hr excavator commissioned this year and a
+          seven-year-old 17 CuM/hr one are not answering the same question, and
+          one OVERALL row across both hid that. Each table carries its own
+          weighted roll-up from the server — see fleet_old / fleet_new. */}
+      <OEETable title="OEE Breakdown — For Old Excavator" slug="old-excavator"
+                machines={oldMachines} fleet={data?.fleet_old} loading={isLoading}
                 from={data?.from_date} to={data?.to_date} />
+
+      <OEETable title="OEE Breakdown — For New Excavator" slug="new-excavator"
+                machines={newMachines} fleet={data?.fleet_new} loading={isLoading}
+                from={data?.from_date} to={data?.to_date} />
+
+      {/* ── TIPPERS. Same four factors, but Yield in place of Performance:
+          an excavator is measured in volume against capacity, a tipper in
+          trips against the trips it should have turned. The two fleets are
+          split because their numbers come from different systems entirely —
+          the PRIMA trucks have no Technoton unit and no SAP record, so hours
+          and breakdown both come from the shift log. ─────────────────── */}
+      <TipperOEETable
+        title="OEE Breakdown — For Old Tipper" slug="old-tipper"
+        machines={tippers.data?.old_machines ?? []}
+        fleet={tippers.data?.old_fleet} loading={tippers.isLoading}
+        from={tippers.data?.from_date} to={tippers.data?.to_date}
+        note="Engine Hrs · Technoton telematics   ·   BD Hrs · SAP M2 notifications. A Utilisation above 100% means the breakdown hours are overstated by a notification left open in SAP."
+      />
+
+      <TipperOEETable
+        title="OEE Breakdown — For New Tipper" slug="new-tipper"
+        machines={tippers.data?.new_machines ?? []}
+        fleet={tippers.data?.new_fleet} loading={tippers.isLoading}
+        from={tippers.data?.from_date} to={tippers.data?.to_date}
+        note="These ten have no Technoton unit and no SAP equipment record, so Engine Hrs and BD Hrs both come from the shift log. BD reads 0.00 until the mine fills the breakdown column, so Availability of 100% is the absence of a record, not a measurement."
+      />
 
       {/* ── LCM — Lost Cost Matrix, inline below the OEE reference ────── */}
       <div className="flex items-center gap-2 pt-3">

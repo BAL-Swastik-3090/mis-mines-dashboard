@@ -148,10 +148,11 @@ def _get_bd_hours(
 ) -> dict[str, dict]:
     """SAP breakdown hours + counts for a given list of machine names.
 
-    Hours are merged per machine and selected by OVERLAP with the window — see
-    services/breakdown.py. A machine down since last month therefore reports
-    the hours that fall inside this window instead of nothing at all, and one
-    carrying several open notifications is down once rather than once per fault.
+    Hours are merged per machine and selected by START DATE — see
+    services/breakdown.py. A breakdown belongs to the range it was raised in,
+    so a fault carried over from last month is not charged to this one, and a
+    machine carrying several open notifications is down once rather than once
+    per fault.
 
     Returns {machine_name: {"hours", "count", "count_start", "count_closed",
     "count_open"}}
@@ -214,8 +215,9 @@ def get_breakdown_details(
     error rather than quietly degrade into blank notification numbers and
     'Not specified' reasons.
     """
-    # One row per notification overlapping the window, each clipped to it —
-    # services/breakdown.py. This is a LIST, so overlapping notifications are
+    # One row per notification RAISED in the window, each clipped to it —
+    # services/breakdown.py, the same selection as the summary figure this
+    # list opens from. This is a LIST, so overlapping notifications are
     # shown separately and their hours can add up to more than the machine's
     # merged downtime in the summary above. That is right for a list of faults
     # and wrong for a total, which is why the total is never built from here.

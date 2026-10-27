@@ -409,10 +409,10 @@ def _equipment_summary(db: Session, from_date: date, to_date: date) -> dict:
         bind_exc = {f"x{i}": e for i, e in enumerate(sap_eqs)}
         total_excavators = len(sap_eqs)
 
-        # Selected by OVERLAP with the window and merged per machine — see
-        # services/breakdown.py — so a breakdown still running from last month
-        # counts the part falling inside this one, and a machine carrying
-        # several open notifications is down once rather than once per fault.
+        # Selected by START DATE and merged per machine — see
+        # services/breakdown.py — so a breakdown belongs to the range it was
+        # raised in, and a machine carrying several open notifications is down
+        # once rather than once per fault.
         total_bd_hrs = round(bd.total_hours(
             db, key="EQUIPMENT", from_date=from_date, to_date=to_date,
             where=where_exc, bind=bind_exc), 1)

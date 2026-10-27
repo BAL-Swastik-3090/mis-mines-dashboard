@@ -1,26 +1,44 @@
 """How long a machine was broken down — one definition, used everywhere.
 
-THE RULE. Downtime is wall-clock time between a notification's malfunction
-start and its malfunction end, clipped to the window being reported, and
-MERGED PER MACHINE so that time is never counted twice. A notification with no
-end is still running and is counted to now, or to the window's end if that is
-sooner.
+THE RULE. A breakdown belongs to the window IT STARTED IN. Downtime is
+wall-clock time from that malfunction start to its malfunction end, clipped to
+the window being reported, and MERGED PER MACHINE so that time is never counted
+twice. A notification with no end is still running and is counted to now, or to
+the window's end if that is sooner.
 
-── THREE THINGS THIS GETS RIGHT THAT THE PREVIOUS VERSION DID NOT ───────────
+── SELECTION IS BY START DATE, AND THAT IS A DELIBERATE CHOICE ──────────────
 
-1. A BREAKDOWN THAT STARTED BEFORE THE WINDOW STILL COUNTS INSIDE IT.
-   The old filter was `MALFUNCTION_START BETWEEN :from AND :to`, which selects
-   on the start date alone. A machine that went down on 10 September and is
-   still down contributed NOTHING to an October report — so the longer a
-   machine had been broken, the more certain its column was to read 0.00.
-   TATA-470(7) (notification 20002435, open since 10 Sep) and TATA-370(4)
-   (20002456, open since 21 Sep) both showed 0.00 hours for 1-7 October while
-   SAP had them down for all 156.9 of them.
+Asked for by the mine on 26 October 2026, after the tipper table showed
+breakdown hours larger than the hours in the month: "it should show the
+breakdown hours for the selected date range only, it should not show all the
+breakdowns."
 
-   Selection is now by OVERLAP — the event starts before the window ends and
-   ends after the window begins — and each interval is clipped to the window.
+It was the OVERLAP rule that put them there. Under overlap, a notification
+raised on 2 OCTOBER 2024 and never closed was still clipped into every window
+since, so MAN-18 (20000795, SILENCER DAMAGE, open 754 days) and MAN-80
+(20000853, HYDRAULIC HOSE, open 748 days) each charged 612.94 hours to a 624
+hour October — while MAN-80's Technoton box recorded 326.17 engine hours in the
+same month. Six tippers read exactly the window length for this reason, and 13
+of 27 reported engine + breakdown hours greater than the calendar itself.
 
-2. SIMULTANEOUS NOTIFICATIONS ARE NOT ADDED UP.
+WHAT THIS COSTS, STATED PLAINLY. A machine that went down on 25 September and
+is still down now contributes NOTHING to an October report. That is the bug the
+overlap rule was introduced to fix — TATA-470(7) and TATA-370(4) both read 0.00
+for 1-7 October while SAP had them down for all 156.9 of those hours — and
+choosing a start-date rule brings it back. The mine has chosen the error it
+prefers: a carried-over outage reads low, which is visible beside the running
+hours, rather than a stale notification reading impossibly high, which is not.
+
+Measured over September 2026 (a month that has closed) the rule is exact:
+970.68 fleet hours against 5,259.74 under overlap, and NOT ONE tipper reporting
+more hours than the month holds.
+
+   For the current month this is necessary but NOT sufficient — see
+   "WHAT THIS STILL CANNOT DECIDE" below.
+
+── TWO THINGS THIS STILL GETS RIGHT THAT THE OLDEST VERSION DID NOT ─────────
+
+1. SIMULTANEOUS NOTIFICATIONS ARE NOT ADDED UP.
    A machine can only be broken once at a time, but the mine raises one
    notification per fault. TATA-370(5) had five touching 1-7 October, three
    open at once; summing them gave 597.58 hours of downtime inside a 156.90
@@ -33,7 +51,7 @@ sooner.
    they are NOT merged: two different excavators down at the same time really
    is two machine-hours lost.
 
-3. SAP's OWN DURATION COLUMN IS NO LONGER TRUSTED, BECAUSE IT IS NOT CONSISTENT.
+2. SAP's OWN DURATION COLUMN IS NO LONGER TRUSTED, BECAUSE IT IS NOT CONSISTENT.
    BREAKDOWN_DURAION (SAP's typo) reports unit 'H' on all 1,544 mine rows, but
    of the 1,519 closed ones 1,369 only reconcile with the clock if the value is
    SECONDS and 151 only if it is HOURS. Reading every row as seconds — which is
@@ -50,6 +68,20 @@ long this notification has been open", and where notifications are not closed
 promptly that is longer than the machine was actually stopped. SAP's BREAKDOWN
 flag is 'X' on every mine notification, so nothing here can tell the two apart;
 it is reported as-is rather than guessed at.
+
+THE START-DATE RULE DOES NOT FIX THAT, AND WAS NEVER GOING TO. A fault raised
+INSIDE the window and left open still runs to the window's end: on 26 October
+2026, 42 notifications stood open on the MAN fleet, including every tyre
+puncture logged since the 6th. MAN-77's puncture (20002501, raised 6 October)
+alone still reports 556.16 hours of a 624 hour month, and the fleet reads
+6,760.96 hours rather than 10,119.83. Eleven tippers still show engine +
+breakdown hours beyond the calendar.
+
+Only closing the notification, or an independent witness, can settle those.
+Technoton is that witness and disagrees flatly — MAN-55 is "down" on 23 days of
+October and recorded running hours on all 23 — but using it would change what
+the column MEANS, from "this fault is not yet closed" to "this machine did not
+work", and that is the mine's decision to make, not this module's.
 """
 from __future__ import annotations
 
@@ -62,13 +94,18 @@ from sqlalchemy.orm import Session
 
 TABLE = "zpm_iw29_notifications"
 
-# An event belongs to the window if it OVERLAPS it, not if it starts in it.
-# Compared on the DATE columns so the comparison can use their index; the
-# precise clipping happens in Python against the full timestamps.
-OVERLAP_WHERE = """
+# An event belongs to the window IT STARTED IN. A breakdown raised in October
+# 2024 is October 2024's, however long its notification stays open afterwards.
+#
+# Compared on the DATE column so the comparison can use its index; the precise
+# clipping happens in Python against the full timestamps. MALFUNCTION_START is
+# a DATE, so BETWEEN takes both end days whole — a fault raised late on the
+# closing day is selected here and then clipped to nothing by `window()`, which
+# clamps the end to now. It appears once time has actually passed, which is the
+# right answer rather than a missing row.
+IN_WINDOW_WHERE = """
     MALFUNCTION_START IS NOT NULL
-    AND MALFUNCTION_START <= :bd_to_d
-    AND (MALFUNCTION_END IS NULL OR MALFUNCTION_END >= :bd_from_d)
+    AND MALFUNCTION_START BETWEEN :bd_from_d AND :bd_to_d
 """
 
 # Midnight when the time component is missing, which is the conservative end of
@@ -127,7 +164,7 @@ def window(from_date: date, to_date: date,
 
 
 def params(from_date: date, to_date: date) -> dict[str, Any]:
-    """Bind parameters OVERLAP_WHERE needs. Merge into the query's own."""
+    """Bind parameters IN_WINDOW_WHERE needs. Merge into the query's own."""
     return {"bd_from_d": from_date, "bd_to_d": to_date}
 
 
@@ -168,7 +205,7 @@ def spans_by(
     sql = text(f"""
         SELECT {key} AS bd_key, {_START} AS bd_s, {_END} AS bd_e
         FROM {TABLE}
-        WHERE {OVERLAP_WHERE}
+        WHERE {IN_WINDOW_WHERE}
         {("AND " + where) if where else ""}
     """)
     out: dict[Any, list[tuple[datetime, datetime]]] = defaultdict(list)
@@ -228,12 +265,14 @@ def counts_by(
     where: str = "",
     bind: dict[str, Any] | None = None,
 ) -> dict[Any, dict[str, int]]:
-    """Notification counts per `key`, on the same overlap basis as the hours.
+    """Notification counts per `key`, on the same start-date basis as the hours.
 
-    An event that began in September and is still running is counted in an
-    October window, because it is a breakdown October suffered. Counting it
-    only in September would leave the hours and the count telling different
-    stories about the same machine.
+    Counted where it STARTED, so the count and the hours always describe the
+    same set of events. A breakdown that began in September and ran into
+    October is September's on both columns — if the two rules differed, a
+    machine could show hours with no breakdowns, or breakdowns with no hours.
+
+    This is also what MTBF already assumed: "breakdowns started in period".
     """
     sql = text(f"""
         SELECT {key} AS bd_key,
@@ -241,7 +280,7 @@ def counts_by(
                COUNT(CASE WHEN MALFUNCTION_END IS NOT NULL THEN 1 END) AS n_closed,
                COUNT(CASE WHEN {IS_OPEN} THEN 1 END)                   AS n_open
         FROM {TABLE}
-        WHERE {OVERLAP_WHERE}
+        WHERE {IN_WINDOW_WHERE}
         {("AND " + where) if where else ""}
         GROUP BY {key}
     """)
@@ -263,7 +302,11 @@ def event_rows(
     order: str = "MALFUNCTION_START DESC, MALFUNCTION_START_TIME DESC",
     extra: Sequence[str] = (),
 ) -> list[dict[str, Any]]:
-    """One row per notification overlapping the window, each clipped to it.
+    """One row per notification RAISED in the window, each clipped to it.
+
+    Same selection as the hours beside it, so the detail a user opens always
+    accounts for the figure they clicked — a list that showed a carried-over
+    fault the total did not count would read as a bug in the total.
 
     For a LIST of events, not for a total. Where notifications overlap these
     rows add up to more than the machine's merged downtime, which is correct
@@ -276,7 +319,7 @@ def event_rows(
         SELECT {_START} AS bd_s, {_END} AS bd_e,
                {IS_OPEN} AS bd_open{cols}
         FROM {TABLE}
-        WHERE {OVERLAP_WHERE}
+        WHERE {IN_WINDOW_WHERE}
         {("AND " + where) if where else ""}
         ORDER BY {order}
     """)
@@ -314,7 +357,7 @@ def upto(_to_date: date) -> datetime:
 
 
 __all__ = [
-    "IS_OPEN", "OVERLAP_WHERE", "TABLE",
+    "IS_OPEN", "IN_WINDOW_WHERE", "TABLE",
     "window", "params", "spans_by", "hours_by", "total_hours",
     "counts_by", "event_rows",
 ]

@@ -1,9 +1,10 @@
 "use client";
-import { Activity, BarChart3, Boxes, CalendarRange, ChevronLeft, ChevronRight, Calculator, ClipboardCheck, ClipboardList, CloudSun, DoorOpen, ExternalLink, Gauge, LayoutDashboard, LineChart, Network, Radar, Scale, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
+import { Activity, BarChart3, Boxes, Database, CalendarRange, ChevronLeft, ChevronRight, Calculator, ClipboardCheck, ClipboardList, CloudSun, DoorOpen, ExternalLink, Gauge, LayoutDashboard, LineChart, Network, Radar, Scale, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { canOpen } from "@/contexts/pageAccess";
 import { useSidebar }               from "@/contexts/useSidebar";
 import { useAuth }                  from "@/contexts/useAuth";
+import { useDataHealth } from "@/hooks/useDataHealth";
 
 /** PR/PO Status is a separate application built by another IT team. It opens in
  *  its own tab rather than being embedded, so this dashboard stays alive behind
@@ -62,6 +63,13 @@ const ACCESS_ITEM: NavItem =
    for, and this is the screen that says so. */
 /* Usage sits below Access Control and shares its permission. Access Control
    says who may do what; Usage says who did. */
+/* Last in the rail and open to everyone, like the forecast. The page banners
+   tell you that a screen you opened is stale; this is the one place that
+   answers "what is behind anywhere", which is how a feed stopped for three
+   months without anybody noticing. */
+const DATA_HEALTH_ITEM: NavItem =
+  { kind: "page", id: "data-health", label: "Data Health", icon: Database };
+
 const USAGE_ITEM: NavItem =
   { kind: "page", id: "usage", label: "Usage", icon: BarChart3 };
 
@@ -105,6 +113,10 @@ const OPERATIONS_ITEM: NavItem =
 const WORKFORCE_ITEM: NavItem =
   { kind: "page", id: "workforce", label: "Workforce Planning", icon: CalendarRange };
 
+/* The freshness dot. Read here as well as on the page banner, because a
+   banner only warns whoever already opened the screen — the point of the dot
+   is to say that OEE is behind to somebody who is looking at Despatch. The
+   hook is shared, so this costs no extra request. */
 const ITEM_BASE =
   "w-full flex items-center gap-3 px-3 py-2.5 transition-colors duration-150 relative group";
 
@@ -154,6 +166,7 @@ function buildNav(user: ReturnType<typeof useAuth.getState>["user"]): NavItem[] 
     ...(canOpen(user, "workforce") ? [WORKFORCE_ITEM] : []),
     ...(canOpen(user, "access-control") ? [ACCESS_ITEM] : []),
     ...(canOpen(user, "usage") ? [USAGE_ITEM] : []),
+    ...(canOpen(user, "data-health") ? [DATA_HEALTH_ITEM] : []),
   ];
   return items;
 }
@@ -163,6 +176,33 @@ export default function AppSidebar() {
   const { collapsed, toggle }  = useSidebar();
   const user                   = useAuth((s) => s.user);
   const items                  = buildNav(user);
+  const { data: health }       = useDataHealth();
+
+  /* DELIBERATELY QUIET. This was a red pip, and red in a navigation rail reads
+     as "this screen is broken, go there now" to every user who passes it —
+     which is wrong twice over: the screen works, and stale data is the mine's
+     own entry to catch up on rather than an emergency. The marker is now a
+     faint neutral pip in the same family as the rail itself. Somebody looking
+     for it finds it; nobody else is pulled towards it, and the header button
+     is where the actual dates are.
+
+     No colour by severity either. A three-day gap and a ninety-nine-day gap
+     are a different conversation, not a different glance — the Data Health
+     page ranks them, the rail only says "there is something here". */
+  const dotTone = (id: AppPage): string | null => {
+    const st = health?.sections?.[id]?.status;
+    if (!st || st === "ok") return null;
+    return st === "stale" ? "bg-white/45" : "bg-white/25";
+  };
+
+  const dotTitle = (id: AppPage): string => {
+    const sec = health?.sections?.[id];
+    if (!sec) return "";
+    const n = sec.stale_count;
+    return n === 1
+      ? "1 data feed behind — see the freshness button in the header"
+      : `${n} data feeds behind — see the freshness button in the header`;
+  };
 
   return (
     <aside
@@ -211,6 +251,20 @@ export default function AppSidebar() {
                   section rather than a jump to someone else's application. */}
               {isLink && !collapsed && (
                 <ExternalLink size={11} className="shrink-0 ml-auto opacity-45" />
+              )}
+              {/* Data behind this section is late. Drawn for the collapsed rail
+                  too — a rail of icons is exactly when you cannot see which
+                  screen needs attention — where it rides the icon's corner
+                  instead of taking a column of its own. */}
+              {!isLink && dotTone(item.id as AppPage) && (
+                <span
+                  title={dotTitle(item.id as AppPage)}
+                  className={collapsed
+                    ? `absolute left-[31px] top-[10px] h-1.5 w-1.5 rounded-full
+                       ring-2 ring-[#1a2744] ${dotTone(item.id as AppPage)}`
+                    : `ml-auto h-1.5 w-1.5 rounded-full shrink-0
+                       ${dotTone(item.id as AppPage)}`}
+                />
               )}
               {collapsed && (
                 <span className="

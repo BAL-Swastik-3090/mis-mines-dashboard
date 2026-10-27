@@ -33,13 +33,14 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import {
-  ClipboardList, Package, Truck, Factory, Pickaxe, ShieldCheck, Send,
+  ClipboardList, Package, Truck, Factory, Pickaxe, ShieldCheck, Send, Mountain,
 } from "lucide-react";
 import api from "@/lib/api";
 import { formatIndian } from "@/lib/utils";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import type {
   ExecutiveSummaryResponse, ExecGradeRow, ExecWeightedTotal, ExecPlantRow,
+  ExecExcavationRow, ExecSource,
 } from "@/types";
 
 /* ── one hue per grade, used in every table on the page ─────────────────── */
@@ -49,6 +50,10 @@ const GRADE_TONE: Record<string, { chip: string; text: string }> = {
   LG:        { chip: "bg-amber-bg text-amber ring-1 ring-amber-ring",       text: "text-amber" },
   COB:       { chip: "bg-violet-bg text-violet ring-1 ring-violet-ring",    text: "text-violet" },
   UNASSAYED: { chip: "bg-slate-bg text-slate ring-1 ring-slate-ring",       text: "text-slate" },
+  // The mine's own ore figure for days SAP has not posted. Deliberately NOT
+  // one of the four grade hues: it is not a grade, it has no assay, and it
+  // must not be mistaken for one at a glance.
+  EST:       { chip: "bg-[#fff3e0] text-[#e65100] ring-1 ring-[#ffcc80]",   text: "text-[#e65100]" },
 };
 const tone = (k: string) => GRADE_TONE[k] ?? GRADE_TONE.UNASSAYED;
 
@@ -208,6 +213,7 @@ function StockBlock({ d }: { d: ExecutiveSummaryResponse }) {
         <table className="w-full text-[12px] tabular-nums border-collapse bg-white">
           <thead>
             <tr className={THEAD}>
+              <th className={`${TH} text-right w-[1%]`}>#</th>
               <th className={`${TH} text-left min-w-[150px]`}>Mines Clearance Status</th>
               <th className={`${TH} text-center`}>UoM</th>
               <th className={`${TH} text-right`}>Total</th>
@@ -218,9 +224,18 @@ function StockBlock({ d }: { d: ExecutiveSummaryResponse }) {
             {(s.clearance?.rows ?? []).map((r) => (
               <tr key={r.key}
                   className={r.is_total ? "bg-bg-section/70" : "hover:bg-bg-light"}>
-                <td className={`${TD} font-condensed font-bold text-[11px] text-navy`}>{r.label}</td>
+                {/* 3(a) and 3(b) are a breakdown of row 3, not two more
+                    positions. The number says so and the indent repeats it, so
+                    a reader adding the column downwards can see which rows are
+                    already counted above them. */}
+                <td className={`pl-3 pr-1 py-2 text-right text-[10px] tabular-nums
+                                whitespace-nowrap w-[1%] text-txt-light
+                                ${r.is_child ? "" : "font-bold"}`}>{r.sl_no}</td>
+                <td className={`${TD} font-condensed text-[11px] ${r.is_child
+                  ? "pl-5 font-normal text-txt-secondary"
+                  : "font-bold text-navy"}`}>{r.label}</td>
                 <td className={`${TD} text-center text-[10px] text-txt-light`}>{r.uom}</td>
-                <td className={`${TD} text-right`}><N v={r.total} strong /></td>
+                <td className={`${TD} text-right`}><N v={r.total} strong={!r.is_child} /></td>
                 {/* by_grade, NOT the row itself — the grade figures are nested a
                     level down, and reading r[key] gives undefined, which renders
                     as a dash while the Total column keeps working. */}
@@ -328,13 +343,17 @@ function GradeTable({ icon, title, sub, qtyLabel, tdLabel, mtdLabel,
                     {a?.label ?? b?.label ?? k}
                   </span>
                 </td>
-                <td className={`${TD} text-right border-l border-border-light`}><N v={a?.qty} strong /></td>
+                <td className={`${TD} text-right border-l border-border-light whitespace-nowrap`}>
+                  <N v={a?.qty} strong /><Src s={a?.source} qty={a?.manual_qty} />
+                </td>
                 <td className={`${TD} text-right`}><N v={a?.crfe} /></td>
                 <td className={`${TD} text-right whitespace-nowrap`}>
                   <N v={a?.cr2o3} /><Est pct={a?.estimated_pct} qty={a?.estimated_qty} />
                 </td>
                 <td className={GAP} aria-hidden />
-                <td className={`${TD} text-right border-l border-border ${MTD_BG}`}><N v={b?.qty} strong /></td>
+                <td className={`${TD} text-right border-l border-border whitespace-nowrap ${MTD_BG}`}>
+                  <N v={b?.qty} strong /><Src s={b?.source} qty={b?.manual_qty} />
+                </td>
                 <td className={`${TD} text-right ${MTD_BG}`}><N v={b?.crfe} /></td>
                 <td className={`${TD} text-right whitespace-nowrap ${MTD_BG}`}>
                   <N v={b?.cr2o3} /><Est pct={b?.estimated_pct} qty={b?.estimated_qty} />
@@ -348,13 +367,17 @@ function GradeTable({ icon, title, sub, qtyLabel, tdLabel, mtdLabel,
             <td className={`${TD} font-condensed font-extrabold tracking-widest uppercase text-[11px] text-navy`}>
               Weighted Avg
             </td>
-            <td className={`${TD} text-right border-l border-border-light`}><N v={tdTotal?.qty} strong /></td>
+            <td className={`${TD} text-right border-l border-border-light whitespace-nowrap`}>
+              <N v={tdTotal?.qty} strong /><Src s={tdTotal?.source} qty={tdTotal?.manual_qty} />
+            </td>
             <td className={`${TD} text-right`}><N v={tdTotal?.crfe} strong /></td>
             <td className={`${TD} text-right whitespace-nowrap`}>
               <N v={tdTotal?.cr2o3} strong /><Est pct={tdTotal?.estimated_pct} qty={tdTotal?.estimated_qty} />
             </td>
             <td className={GAP} aria-hidden />
-            <td className={`${TD} text-right border-l border-border`}><N v={mtdTotal?.qty} strong /></td>
+            <td className={`${TD} text-right border-l border-border whitespace-nowrap`}>
+              <N v={mtdTotal?.qty} strong /><Src s={mtdTotal?.source} qty={mtdTotal?.manual_qty} />
+            </td>
             <td className={`${TD} text-right`}><N v={mtdTotal?.crfe} strong /></td>
             <td className={`${TD} text-right whitespace-nowrap`}>
               <N v={mtdTotal?.cr2o3} strong /><Est pct={mtdTotal?.estimated_pct} qty={mtdTotal?.estimated_qty} />
@@ -374,6 +397,134 @@ function GradeTable({ icon, title, sub, qtyLabel, tdLabel, mtdLabel,
           files. Tonnage is unaffected.
         </p>
       ) : null}
+    </Card>
+  );
+}
+
+/* Where a tonnage came from, printed beside it.
+ *
+ * SAP IS NOT CHIPPED. Marking every ordinary row would make the page noisier
+ * without telling anyone anything — SAP is what this report is normally made
+ * of, and a label on all 40 rows is read once and then ignored. Only the
+ * exception is marked, which is the whole point of marking it.
+ *
+ * The chip is recomputed from the data on every request, so when SAP finally
+ * posts the day, the manual figure drops out and the chip disappears by
+ * itself. Nobody has to remember to clear anything. */
+function Src({ s, qty }: { s?: ExecSource; qty?: number | null }) {
+  if (!s || s === "sap") return null;
+  const manual = s === "manual";
+  return (
+    <span
+      title={manual
+        ? "The mine's own figure — SAP has not posted this day yet. It is "
+          + "replaced automatically the moment SAP does."
+        : `Includes ${qty ? formatIndian(qty, 2) : "some"} MT the mine entered `
+          + "by hand for days SAP has not posted yet."}
+      className={`ml-1 align-middle px-1 py-px rounded-sm text-[8px] font-bold
+                  tracking-wide uppercase ${manual
+        ? "bg-[#fff3e0] text-[#e65100] border border-[#ffcc80]"
+        : "bg-[#eef2ff] text-[#3949ab] border border-[#c5cae9]"}`}>
+      {manual ? "Manual" : "SAP + Manual"}
+    </span>
+  );
+}
+
+/* ── Block 4b · overburden and de-silting ──────────────────────────────────
+   THE SAME FIGURES THE MIS DASHBOARD REPORTS, from the same backend functions
+   its KPI strip and plan-vs-actual charts are built on — not a second
+   derivation that would agree today and drift later.
+
+   A TABLE, NOT THE CHARTS. MIS draws these as day-by-day bars, which answers
+   "how did the month go"; this page answers "where are we against plan", and
+   every other block on it is a TD/MTD table. Keeping the shape means the whole
+   screen can be read down one pair of columns.
+
+   DE-SILTING HAS NO PLAN ANYWHERE — no table holds one, which is why MIS shows
+   its card with a blank target too. The cell says "no plan" rather than a bare
+   dash, because a dash on this page means "not reported yet" and would have
+   somebody chasing the mine for a figure that does not exist. */
+function ExcavationBlock({ statusTill, td, mtd }: {
+  statusTill: string; td: ExecExcavationRow[]; mtd: ExecExcavationRow[];
+}) {
+  const keys: string[] = [];
+  for (const r of [...td, ...mtd]) if (!keys.includes(r.key)) keys.push(r.key);
+  const at = (rows: ExecExcavationRow[], k: string) => rows.find((r) => r.key === k);
+
+  /* Achievement colouring, on the same thresholds the OEE tables use so a
+     percentage means one thing across the dashboard. */
+  const pctTone = (v: number | null | undefined) =>
+    v == null ? "text-txt-light"
+      : v >= 90 ? "text-[#2e7d32]" : v >= 70 ? "text-[#c8960c]" : "text-[#c62828]";
+
+  const cells = (r: ExecExcavationRow | undefined, tint: string) => (
+    <>
+      <td className={`${TD} text-right border-l border-border-light ${tint}`}>
+        <N v={r?.plan} />
+      </td>
+      <td className={`${TD} text-right ${tint}`}><N v={r?.actual} strong /></td>
+      <td className={`${TD} text-right whitespace-nowrap ${tint}`}>
+        {r?.no_plan
+          ? <span className="text-[9px] uppercase tracking-wide text-txt-light"
+                  title="No de-silting plan is held in any system — the MIS dashboard shows this blank too">
+              no plan
+            </span>
+          : <span className={`font-bold ${pctTone(r?.pct)}`}>
+              {r?.pct == null ? "—" : `${r.pct.toFixed(1)}%`}
+            </span>}
+      </td>
+    </>
+  );
+
+  return (
+    <Card icon={<Mountain size={14} />} title="Overburden & De-Silting"
+          sub={statusTill}>
+      <table className="w-full text-[12px] font-mono border-collapse">
+        <thead>
+          <tr className={THEAD}>
+            <th className={`${TH} text-left min-w-[130px]`} rowSpan={2}>Activity</th>
+            <th className={`${TH} text-center border-l border-border text-steel`} colSpan={3}>
+              TD · Today
+            </th>
+            <th className={`${TH} text-center border-l-2 border-border text-steel ${MTD_BG}`} colSpan={3}>
+              MTD · Month to Date
+            </th>
+          </tr>
+          <tr className={THEAD}>
+            <th className={`${TH} text-right border-l border-border`}>Plan (CuM)</th>
+            <th className={`${TH} text-right`}>Actual (CuM)</th>
+            <th className={`${TH} text-right`}>Ach %</th>
+            <th className={`${TH} text-right border-l-2 border-border ${MTD_BG}`}>Plan (CuM)</th>
+            <th className={`${TH} text-right ${MTD_BG}`}>Actual (CuM)</th>
+            <th className={`${TH} text-right ${MTD_BG}`}>Ach %</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border-light">
+          {keys.map((k) => {
+            const a = at(td, k), b = at(mtd, k);
+            return (
+              <tr key={k} className="hover:bg-bg-light">
+                <td className={TD}>
+                  <span className={`px-1.5 py-0.5 rounded-sm text-[10px] font-bold tracking-wide ${
+                    k === "ob" ? "bg-[#f3ece3] text-[#7a5a2e]"
+                               : "bg-[#e0f2f1] text-[#00695c]"}`}>
+                    {a?.label ?? b?.label ?? k}
+                  </span>
+                </td>
+                {cells(a, "")}
+                {cells(b, MTD_BG)}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <p className="px-4 py-2 border-t border-border-light bg-bg-section/40
+                    text-[9px] font-mono leading-relaxed text-txt-secondary">
+        <span className="font-semibold">OB PLAN · </span>IMOS daily excavation plan
+        {"   "}<span className="font-semibold">OB ACTUAL · </span>SAP
+        {"   "}<span className="font-semibold">DE-SILTING · </span>IMOS day-wise
+        excavation, variant 4 — no plan is held for it in any system.
+      </p>
     </Card>
   );
 }
@@ -436,10 +587,14 @@ function PlantBlock({ statusTill, tdLabel, mtdLabel, td, mtd, tdTotal, mtdTotal 
             <td className={`${TD} font-condensed font-extrabold tracking-widest uppercase text-[11px] text-navy`}>
               Total
             </td>
-            <td className={`${TD} text-right border-l border-border-light`}><N v={tdTotal?.qty} strong /></td>
+            <td className={`${TD} text-right border-l border-border-light whitespace-nowrap`}>
+              <N v={tdTotal?.qty} strong /><Src s={tdTotal?.source} qty={tdTotal?.manual_qty} />
+            </td>
             <td className={`${TD} text-right`}><N v={tdTotal?.cr} strong /></td>
             <td className={GAP} aria-hidden />
-            <td className={`${TD} text-right border-l border-border`}><N v={mtdTotal?.qty} strong /></td>
+            <td className={`${TD} text-right border-l border-border whitespace-nowrap`}>
+              <N v={mtdTotal?.qty} strong /><Src s={mtdTotal?.source} qty={mtdTotal?.manual_qty} />
+            </td>
             <td className={`${TD} text-right`}><N v={mtdTotal?.cr} strong /></td>
           </tr>
         </tfoot>
@@ -610,6 +765,12 @@ export default function ExecutiveSummarySection() {
             tdLabel={tdLabel} mtdLabel={mtdLabel}
             td={d.td.production} mtd={d.mtd.production}
             tdTotal={d.td.production_total} mtdTotal={d.mtd.production_total} />
+
+          {/* Directly under Mines Production: ore, overburden and de-silting
+              are one shift's work at the same faces, and the OB figure is the
+              first thing asked for after the ore figure. */}
+          <ExcavationBlock statusTill={statusTill}
+            td={d.td.excavation ?? []} mtd={d.mtd.excavation ?? []} />
 
           {DEST.map((x, i) => (
             <GradeTable key={x.key}

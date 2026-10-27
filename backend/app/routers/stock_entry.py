@@ -46,10 +46,29 @@ BUCKETS: dict[str, bool] = {
     "MINE_AWAITING_PERMISSION":   True,
     "MINE_AWAITING_VERIFICATION": True,
     "MINE_AWAITING_STACKING":     True,
+    # Rows 8A and 8B of the mine's sheet: WHY the permission is still awaited.
+    # They are a BREAKDOWN of MINE_AWAITING_PERMISSION, not two more places
+    # stock can stand, so they are deliberately absent from MINE_BUCKETS in
+    # services/stock.py — counting them there would add the same tonnage to
+    # Total Stock twice.
+    "MINE_AWAIT_ANALYSIS_REPORT": True,
+    "MINE_AWAIT_ROYALTY_PAYMENT": True,
     "BAL_PLANT":                  False,
     "SUK_PLANT":                  False,
     "LG_FOR_COB":                 False,
 }
+
+# The parent, and the children that must add up to it. The mine's rule:
+# "sum of Awaiting Analysis Report and Awaiting Royalty Payment will be
+# Awaiting Permission". Enforced on the way in rather than trusted, because the
+# form computes the parent but the API is reachable without the form.
+AWAITING_PERMISSION = "MINE_AWAITING_PERMISSION"
+AWAITING_PERMISSION_PARTS = ("MINE_AWAIT_ANALYSIS_REPORT",
+                             "MINE_AWAIT_ROYALTY_PAYMENT")
+
+# NOTE: both names are 26 characters. The obvious MINE_AWAITING_ANALYSIS_REPORT
+# is 29 and does not fit Bucket's varchar(28) — it would be refused by a strict
+# server and silently truncated by a lenient one, which is worse.
 
 # LG for COB exists on the Low Grade row only — the IMOS form shows a dash for
 # every other grade, and the database refuses anything else.
@@ -166,6 +185,29 @@ def put_day(
 
     if not clean:
         raise HTTPException(400, "Nothing to submit.")
+
+    # ── Awaiting Permission must equal its two reasons, per grade ────────────
+    # Checked per GRADE, not just on the total: two grades whose errors cancel
+    # would pass a total-only check while both rows were wrong, and the grade
+    # columns are what the mine reads.
+    #
+    # Only enforced where the day actually carries the split. A correction to an
+    # older day submitted without the two new cells is still a valid day — the
+    # split did not exist when it was filed, and refusing it would make history
+    # uneditable.
+    submitted = {(g, b): q for g, b, q in clean}
+    if any((g, p) in submitted for g in GRADES for p in AWAITING_PERMISSION_PARTS):
+        for g in GRADES:
+            parts = sum(submitted.get((g, p), 0.0)
+                        for p in AWAITING_PERMISSION_PARTS)
+            parent = submitted.get((g, AWAITING_PERMISSION), 0.0)
+            # Tolerance of half a kilo: the figures are decimal(14,2) and the
+            # form adds them in floating point.
+            if abs(parts - parent) > 0.005:
+                raise HTTPException(400, (
+                    f"{g}: Awaiting Analysis Report + Awaiting Royalty Payment "
+                    f"= {parts:,.2f}, which does not equal Awaiting Permission "
+                    f"({parent:,.2f})."))
 
     who = _actor(request)
 

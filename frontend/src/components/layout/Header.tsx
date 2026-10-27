@@ -6,6 +6,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import DateFilter from "./DateFilter";
 import ProfileMenu from "./ProfileMenu";
+import DataHealthButton from "./DataHealthButton";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import { useAppPage } from "@/contexts/useAppPage";
 import { useEntryDialog } from "@/contexts/useEntryDialog";
@@ -129,6 +130,14 @@ export default function Header() {
               thing worth knowing, that the weighbridge had stopped sending
               readings on Saturday morning, was not among them. A badge that is
               always 3 teaches people the bell means nothing. */}
+          {/* How current the data is. Beside the bell but deliberately not
+              in it: the bell reports equipment that has stopped and carries a
+              personal "clear"; this reports how fresh each table is, has
+              nothing to acknowledge, and is derived fresh each time. It
+              replaced a banner across the top of every section, which read as
+              an error with the page rather than a note about its data. */}
+          <DataHealthButton />
+
           <AlertsBell />
 
           {/* Data-entry actions. Separate from the profile menu, which is about

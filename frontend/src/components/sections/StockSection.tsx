@@ -44,8 +44,23 @@ function Shimmer({ w = "w-20", h = "h-5" }: { w?: string; h?: string }) {
 
 // Cell styles shared by the two tables, so they line up when read side by side.
 const TH = "px-2 py-1.5 font-condensed font-extrabold text-[10px] tracking-[.1em]";
+
+// NUMERIC cells. text-right lives here and nowhere else — a label cell that
+// said `${TD} text-left` was two Tailwind utilities of equal specificity
+// fighting, and which one won depended on their order in the generated
+// stylesheet rather than on the order written here. That is why the Status
+// column rendered right-aligned and the sub-row indentation read backwards.
 const TD = "px-2 py-1.5 text-right text-[11px] font-mono tabular-nums " +
            "whitespace-nowrap text-txt-primary";
+
+// LABEL cells. Its own class, left-aligned by construction, and not monospaced
+// — words are read, not column-aligned, and the proportional face fits a long
+// status in the width available.
+const TD_LABEL = "px-2 py-1.5 text-left text-[11px] whitespace-nowrap";
+
+// The serial number column: narrow, tabular so 3(a) lines up under 3.
+const TD_SL = "pl-2 pr-1 py-1.5 text-right text-[10px] font-mono tabular-nums " +
+              "whitespace-nowrap w-[1%] text-txt-light";
 
 
 export default function StockSection() {
@@ -215,6 +230,7 @@ export default function StockSection() {
                 <table className="w-full border-collapse min-w-[360px]">
                   <thead>
                     <tr className="bg-navy text-white">
+                      <th className={`${TH} text-right w-[1%]`}>#</th>
                       <th className={`${TH} text-left`}>Status</th>
                       <th className={`${TH} text-center`}>UoM</th>
                       <th className={`${TH} text-right`}>Total</th>
@@ -228,13 +244,27 @@ export default function StockSection() {
                       <tr key={r.key}
                           className={`border-b border-border-light last:border-0
                             ${r.is_total ? "bg-bg-section font-semibold" : "hover:bg-bg-soft/60"}`}>
-                        <td className={`${TD} text-left ${r.is_total ? "text-navy font-bold" : "text-txt-primary"}`}>
+                        {/* 3(a) and 3(b) sit INSIDE row 3. The number carries
+                            that, the indent repeats it, and both matter: a
+                            reader adding the column downwards has to see which
+                            rows are already counted above them. */}
+                        <td className={`${TD_SL} ${r.is_child ? "" : "font-bold text-txt-secondary"}`}>
+                          {r.sl_no}
+                        </td>
+                        <td className={`${TD_LABEL} ${r.is_total
+                          ? "text-navy font-bold"
+                          : r.is_child ? "pl-6 text-txt-secondary"
+                          : "text-txt-primary font-semibold"}`}>
                           {r.label}
                         </td>
-                        <td className={`${TD} text-center text-txt-light`}>{r.uom}</td>
-                        <td className={`${TD} font-bold text-navy`}>{mt(r.total)}</td>
+                        <td className={`${TD} !text-center text-txt-light`}>{r.uom}</td>
+                        <td className={`${TD} ${r.is_child
+                          ? "text-txt-secondary" : "font-bold text-navy"}`}>{mt(r.total)}</td>
                         {(clearance?.grades ?? []).map((g) => (
-                          <td key={g.key} className={TD}>{mt(r.by_grade[g.key])}</td>
+                          <td key={g.key}
+                              className={`${TD} ${r.is_child ? "text-txt-secondary" : ""}`}>
+                            {mt(r.by_grade[g.key])}
+                          </td>
                         ))}
                       </tr>
                     ))}
@@ -270,10 +300,10 @@ export default function StockSection() {
                       <tr key={r.key}
                           className={`border-b border-border-light last:border-0
                             ${r.is_total ? "bg-bg-section font-semibold" : "hover:bg-bg-soft/60"}`}>
-                        <td className={`${TD} text-left ${r.is_total ? "text-navy font-bold" : "text-txt-primary"}`}>
+                        <td className={`${TD_LABEL} ${r.is_total ? "text-navy font-bold" : "text-txt-primary font-semibold"}`}>
                           {r.label}
                         </td>
-                        <td className={`${TD} text-center text-txt-light`}>{r.uom}</td>
+                        <td className={`${TD} !text-center text-txt-light`}>{r.uom}</td>
                         {(locationGrid?.columns ?? []).map((c) => (
                           <td key={c.key} className={TD}>{mt(r.cells[c.key])}</td>
                         ))}
