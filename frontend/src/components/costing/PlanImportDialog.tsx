@@ -1,30 +1,27 @@
 "use client";
 /**
- * The monthly cost plan as uploaded from SAP.
+ * Importing the monthly cost plan.
  *
- * Mines is the default view because that is whose costing this serves, but
- * the export covers the whole company and the section split is shown rather
- * than hidden - a plan that silently dropped three quarters of its rows
- * would be worse than one that shows them.
+ * The plan is not a report - nobody opens it to read it, they open it to
+ * load the month's SAP CO export so the cost sheet has a plan column and
+ * the month-end accrual has a number to pro-rate. So it lives here, as a
+ * dialog on the cost sheet, rather than as a screen of its own.
+ *
+ * Two uploads, because the export carries numbers and the workbook carries
+ * what they mean: the plan files, and the CE and CC List that names them.
  */
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useState } from "react";
 import {
-  IndianRupee, Upload, X, AlertTriangle, CheckCircle2, FileSpreadsheet,
-  Loader2, BookOpen, Building2,
+  Upload, X, AlertTriangle, CheckCircle2, FileSpreadsheet, Loader2, BookOpen,
 } from "lucide-react";
 import api from "@/lib/api";
-import { useCostPlanPeriods, useCostPlanSummary } from "@/hooks/useCostPlan";
+import { useCostPlanPeriods } from "@/hooks/useCostPlan";
 
-const SECTIONS = ["MINES", "COB"] as const;
-
-/* While the plan is still being fetched the tiles say nothing rather than
-   zero: "0 cost centres" is a finding, and we have not found it yet. */
-const LOADING_TILES = (section: string) => [
-  { label: `${section} plan`, value: "…", hint: "loading" },
-  { label: "This site", value: "…", hint: "Mines + COB" },
-  { label: "Cost centres", value: "…", hint: `in ${section}` },
-  { label: "Cost elements", value: "…", hint: `in ${section}` },
-];
+interface Props {
+  onClose: () => void;
+  /** Fired once rows are actually written, so the sheet can re-read. */
+  onDone: () => void;
+}
 
 const rupees = (n: number | null | undefined) =>
   n == null ? "-" : n.toLocaleString("en-IN", { maximumFractionDigits: 0 });
@@ -49,7 +46,9 @@ interface PlanUploadResponse {
 }
 
 /* ── upload dialog ──────────────────────────────────────────────── */
-function UploadDialog({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+export default function PlanImportDialog({ onClose, onDone }: Props) {
+  const { data: loaded, refetch: refetchLoaded } = useCostPlanPeriods();
+  const current = loaded?.periods?.[0];
   const [files, setFiles] = useState<File[]>([]);
   const [master, setMaster] = useState<File | null>(null);
   const [dryRun, setDryRun] = useState(true);
@@ -67,7 +66,7 @@ function UploadDialog({ onClose, onDone }: { onClose: () => void; onDone: () => 
       form.append("dry_run", String(dryRun));
       const res = await api.post<PlanUploadResponse>("/cost-plan/upload", form);
       setResult(res.data);
-      if (!dryRun && res.data.rows_written > 0) onDone();
+      if (!dryRun && res.data.rows_written > 0) { refetchLoaded(); onDone(); }
     } catch (err: unknown) {
       const e = err as { response?: { data?: { detail?: unknown } }; message?: string };
       const detail = e.response?.data?.detail;
@@ -105,6 +104,13 @@ function UploadDialog({ onClose, onDone }: { onClose: () => void; onDone: () => 
             </h2>
             <p className="mt-0.5 text-[11px] text-txt-light">
               The same SAP CO export you load into SAP - one period at a time
+            </p>
+            {/* Removing the Cost Plan screen left nowhere else to see what the
+                sheet is currently planning against. It belongs here. */}
+            <p className="mt-1 text-[11px] text-txt-secondary">
+              {current
+                ? `Loaded now: ${monthLabel(current.plan_month)} · ${current.rows} rows · Rs ${rupees(current.amount_total)}`
+                : "No plan loaded yet - the month-end accrual has nothing to pro-rate."}
             </p>
           </div>
           <button onClick={onClose} className="rounded p-1 text-txt-light hover:bg-bg-section hover:text-navy">
@@ -211,184 +217,5 @@ function UploadDialog({ onClose, onDone }: { onClose: () => void; onDone: () => 
         </div>
       </div>
     </div>
-  );
-}
-
-/* ── section ────────────────────────────────────────────────────── */
-export default function CostPlanSection() {
-  const { data: periodData, isLoading: periodsLoading, refetch: refetchPeriods } = useCostPlanPeriods();
-  const [selected, setSelected] = useState<string>("");
-  const [section, setSection] = useState<string>("MINES");
-  const [showUpload, setShowUpload] = useState(false);
-
-  const periods = periodData?.periods ?? [];
-  useEffect(() => {
-    if (!selected && periods.length) setSelected(`${periods[0].fiscal_year}-${periods[0].period}`);
-  }, [periods, selected]);
-
-  const [fy, p] = useMemo(() => {
-    const [a, b] = (selected || "-").split("-");
-    return [Number(a) || null, Number(b) || null];
-  }, [selected]);
-
-  const { data: summary, isLoading, refetch: refetchSummary } = useCostPlanSummary(fy, p, section);
-  const loading = periodsLoading || (isLoading && !summary);
-  const refreshAll = () => { refetchPeriods(); refetchSummary(); };
-
-  const masters = periodData?.masters;
-  const mastersMissing = masters && masters.elements === 0 && masters.centres === 0;
-  const unmapped = (masters?.unmapped_elements ?? 0) + (masters?.unmapped_centres ?? 0);
-
-  return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-border-light pb-3">
-        <div>
-          <div className="flex items-center gap-2">
-            <IndianRupee size={18} className="text-gold" />
-            <h1 className="font-condensed text-[22px] font-black uppercase tracking-[.04em] text-navy">
-              Cost Plan
-            </h1>
-          </div>
-          <p className="ml-[26px] mt-0.5 text-[11px] text-txt-light">
-            Planned cost per cost centre and cost element, as uploaded from SAP
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <select value={selected} onChange={(e) => setSelected(e.target.value)}
-            className="rounded border border-border bg-white px-2 py-1.5 text-[11px] font-semibold text-navy">
-            {periods.length === 0 ? (
-              <option value="">{periodsLoading ? "Loading…" : "No plan uploaded"}</option>
-            ) : null}
-            {periods.map((pr) => (
-              <option key={`${pr.fiscal_year}-${pr.period}`} value={`${pr.fiscal_year}-${pr.period}`}>
-                {monthLabel(pr.plan_month)} · FY{pr.fiscal_year} P{pr.period}
-              </option>
-            ))}
-          </select>
-          <select value={section} onChange={(e) => setSection(e.target.value)}
-            className="rounded border border-border bg-white px-2 py-1.5 text-[11px] font-semibold text-navy">
-            {SECTIONS.map((u) => <option key={u} value={u}>{u}</option>)}
-          </select>
-          <button onClick={() => setShowUpload(true)}
-            className="flex items-center gap-1.5 rounded border border-border bg-white px-3 py-1.5 text-[11px] font-condensed font-bold tracking-widest text-txt-secondary shadow-sm hover:bg-bg-section hover:text-navy">
-            <Upload size={12} /> UPLOAD PLAN
-          </button>
-        </div>
-      </div>
-
-      {mastersMissing ? (
-        <div className="flex items-start gap-2 rounded-md border border-gold/30 bg-gold-light/10 px-4 py-3 text-[12px] text-txt-secondary">
-          <BookOpen size={15} className="mt-0.5 shrink-0 text-gold-dark" />
-          <span>
-            <span className="font-semibold text-txt-primary">Descriptions not loaded. </span>
-            The plan will show numbers without names until the CE and CC List workbook is uploaded.
-          </span>
-        </div>
-      ) : null}
-
-      {unmapped > 0 ? (
-        <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-[12px] text-amber-800">
-          <AlertTriangle size={15} className="mt-0.5 shrink-0" />
-          <span>
-            {masters?.unmapped_elements} cost element(s) and {masters?.unmapped_centres} cost centre(s) in the plan
-            have no description. Re-upload the CE and CC List to pick them up.
-          </span>
-        </div>
-      ) : null}
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {(loading ? LOADING_TILES(section) : [
-          { label: `${section} plan`, value: summary ? `Rs ${rupees(summary.totals.amount)}` : "-", hint: `${summary?.totals.rows ?? 0} rows` },
-          {
-            label: "This site",
-            value: summary
-              ? `Rs ${rupees(summary.by_section
-                  .filter((s) => s.section === "MINES" || s.section === "COB")
-                  .reduce((a, b) => a + b.amount, 0))}`
-              : "-",
-            hint: "Mines + COB",
-          },
-          { label: "Cost centres", value: String(summary?.by_centre.length ?? 0), hint: `in ${section}` },
-          { label: "Cost elements", value: String(summary?.by_element.length ?? 0), hint: `in ${section}` },
-        ]).map((k) => (
-          <div key={k.label} className="rounded-md border border-border-light bg-white p-4 shadow-sm">
-            <div className="text-[10px] font-condensed font-bold uppercase tracking-widest text-txt-light">{k.label}</div>
-            <div className="mt-1 font-condensed text-[24px] font-black text-navy">{k.value}</div>
-            <div className="text-[11px] text-txt-light">{k.hint}</div>
-          </div>
-        ))}
-      </div>
-
-      {loading ? <p className="text-[12px] text-txt-light">Loading…</p> : null}
-
-      {summary ? (
-        <>
-          <Panel
-            title="By section"
-            subtitle="OTHER is the other plants carried in the same export — stored for fidelity, not this mine's cost"
-          >
-            <Table head={["Section", "Rows", "Planned (Rs)"]}
-              rows={summary.by_section.map((u) => [u.section, String(u.rows), rupees(u.amount)])}
-              highlight={(r) => r[0] === section} />
-          </Panel>
-
-          <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-            <Panel title={`Cost elements — ${section}`} subtitle="largest first">
-              <Table head={["Element", "Description", "Centres", "Planned (Rs)"]}
-                rows={summary.by_element.map((e) => [e.cost_element, e.cost_element_desc, String(e.centres), rupees(e.amount)])} />
-            </Panel>
-            <Panel title={`Cost centres — ${section}`} subtitle="largest first">
-              <Table head={["Centre", "Description", "Elements", "Planned (Rs)"]}
-                rows={summary.by_centre.map((c) => [c.cost_centre, c.cost_centre_desc, String(c.elements), rupees(c.amount)])} />
-            </Panel>
-          </div>
-        </>
-      ) : null}
-
-      {showUpload ? <UploadDialog onClose={() => setShowUpload(false)} onDone={refreshAll} /> : null}
-    </div>
-  );
-}
-
-function Panel({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
-  return (
-    <div className="rounded-md border border-border-light bg-white shadow-sm">
-      <div className="border-b border-border-light px-4 py-2.5">
-        <h3 className="font-condensed text-[13px] font-black uppercase tracking-[.05em] text-navy">{title}</h3>
-        {subtitle ? <p className="text-[11px] text-txt-light">{subtitle}</p> : null}
-      </div>
-      <div className="max-h-[420px] overflow-auto">{children}</div>
-    </div>
-  );
-}
-
-function Table({ head, rows, highlight }: {
-  head: string[]; rows: string[][]; highlight?: (r: string[]) => boolean;
-}) {
-  if (!rows.length) return <p className="px-4 py-6 text-center text-[12px] text-txt-light">Nothing for this selection.</p>;
-  return (
-    <table className="w-full text-[11px]">
-      <thead className="sticky top-0 bg-bg-section">
-        <tr>
-          {head.map((h, i) => (
-            <th key={h} className={`px-3 py-2 font-condensed font-bold uppercase tracking-wider text-txt-light ${i >= head.length - 2 ? "text-right" : "text-left"}`}>
-              {h}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((r, idx) => (
-          <tr key={`${r[0]}-${idx}`} className={`border-t border-border-light ${highlight?.(r) ? "bg-gold-light/15 font-semibold" : ""}`}>
-            {r.map((cell, i) => (
-              <td key={i} className={`px-3 py-1.5 ${i >= r.length - 2 ? "text-right tabular-nums" : "text-left"} ${i === 0 ? "font-mono text-navy" : "text-txt-secondary"}`}>
-                {cell}
-              </td>
-            ))}
-          </tr>
-        ))}
-      </tbody>
-    </table>
   );
 }

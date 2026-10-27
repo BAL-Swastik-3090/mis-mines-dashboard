@@ -79,15 +79,11 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   // the screen. Promote it to its own page permission when the mine wants the
   // two audiences separated — the API prefix is already mapped in auth.py.
   "amira": ["dashboard.mis"],
-  // Gated on the MIS dashboard's own permission, for the same reason AMIRA is.
-  // The cost plan is the planned side of the figures that dashboard already
-  // shows, and inventing dashboard.cost-plan would mean seeding a row per role
-  // in mines_role_page_access before a single person could see the screen —
-  // which is precisely how this page spent its first hour invisible to
-  // everybody. Promote it to its own permission when the plan needs an audience
-  // separate from the dashboard's.
-  "cost-plan": ["dashboard.mis"],
-  // The cost sheet reads the same ledger the MIS dashboard does.
+  // Gated on the MIS dashboard's own permission, for the same reason AMIRA is:
+  // inventing dashboard.product-costing would mean seeding a row per role in
+  // mines_role_page_access before a single person could see the screen. The
+  // cost sheet reads the same ledger the MIS dashboard does; the plan import
+  // lives inside it, so one permission covers both.
   "product-costing": ["dashboard.mis"],
 };
 
@@ -120,8 +116,7 @@ const LANDING_RANK: Record<AppPage, number> = {
   "market": 35,
   "fuel-management": 40,
   "ev-tracking": 50,
-  "cost-plan": 55,
-  "product-costing": 56,
+  "product-costing": 55,
   // Before the registers: a machine, a person and a material all have to be
   // held against a department, so the department is the thing to see first.
   "organisation": 55,

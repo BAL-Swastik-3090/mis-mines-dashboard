@@ -1,6 +1,8 @@
 "use client";
 import { useState } from "react";
-import { Calculator, Info } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Calculator, Info, Upload } from "lucide-react";
+import PlanImportDialog from "@/components/costing/PlanImportDialog";
 import CostingKpiStrip from "@/components/kpi/CostingKpiStrip";
 import CostCurveChart from "@/components/charts/CostCurveChart";
 import CostSummaryTable from "@/components/tables/CostSummaryTable";
@@ -28,6 +30,11 @@ export default function CostingSection() {
   const [period, setPeriod] = useState<string>("");
   const [section, setSection] = useState<CostSection>("MINES");
   const [phase, setPhase] = useState<Phase>("summary");
+  // The plan is an input to this sheet, not a report of its own, so it is
+  // imported from here. A fresh plan changes the month-end accrual, so the
+  // sheet is re-read rather than left showing figures built on the old one.
+  const [importing, setImporting] = useState(false);
+  const qc = useQueryClient();
 
   // Settle on the newest period the backend actually has, once it is known.
   const periods = meta?.periods ?? [];
@@ -89,6 +96,16 @@ export default function CostingSection() {
               </button>
             ))}
           </div>
+
+          <button
+            onClick={() => setImporting(true)}
+            title="Load the month's SAP CO plan export"
+            className="flex items-center gap-1.5 border border-[#d0d9e8] rounded px-3 py-1.5
+                       font-condensed text-[12px] font-bold tracking-wide uppercase
+                       text-txt-secondary bg-white hover:bg-bg-soft transition-colors"
+          >
+            <Upload size={13} /> Import Plan
+          </button>
 
           <select
             id="costing-period"
@@ -190,6 +207,15 @@ export default function CostingSection() {
             </ul>
           )}
         </div>
+      )}
+      {importing && (
+        <PlanImportDialog
+          onClose={() => setImporting(false)}
+          onDone={() => {
+            qc.invalidateQueries({ queryKey: ["costing"] });
+            qc.invalidateQueries({ queryKey: ["cost-plan"] });
+          }}
+        />
       )}
     </section>
   );
