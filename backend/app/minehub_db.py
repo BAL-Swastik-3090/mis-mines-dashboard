@@ -118,7 +118,23 @@ if settings.minehub_enabled:
         # session returns to the pool — silently reverts it, and every later
         # query fails with "relation does not exist". As a connection option it
         # is part of the session itself and no rollback can undo it.
-        connect_args={"options": f"-csearch_path={settings.pg_schema},public"},
+        # ── WHY sap_odata_api IS ON THE PATH, AND WHY IT IS SECOND ──────
+        #
+        # SAP writes this database directly through an OData pipeline, into
+        # sap_odata_api. Its tables carry the SAP names and -- for everything
+        # but the quality feed -- the SAP column names, so a query written
+        # against balcorpdb resolves there unchanged once the schema is on the
+        # path. That is what makes this migration a change of session rather
+        # than a rewrite of forty queries.
+        #
+        # ORDER MATTERS AND minehub COMES FIRST. An unqualified name resolves
+        # against the first schema that has it. minehub is this platform's own
+        # data and must never be shadowed by a table SAP happens to name the
+        # same way. The reverse risk -- a stale local copy shadowing the live
+        # feed -- is why migration 088 drops the old mirror outright rather
+        # than leaving it in place unused.
+        connect_args={"options":
+                      f"-csearch_path={settings.pg_schema},sap_odata_api,public"},
     )
 
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

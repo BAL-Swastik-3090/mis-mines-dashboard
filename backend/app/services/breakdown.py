@@ -110,11 +110,41 @@ IN_WINDOW_WHERE = """
 
 # Midnight when the time component is missing, which is the conservative end of
 # the day for a start.
-_START = ("TIMESTAMP(MALFUNCTION_START, "
-          "COALESCE(MALFUNCTION_START_TIME, '00:00:00'))")
-_END = ("CASE WHEN MALFUNCTION_END IS NULL THEN NULL ELSE "
-        "TIMESTAMP(MALFUNCTION_END, COALESCE(MALFUNCTION_END_TIME, '00:00:00')) "
-        "END")
+# ── THE SAME INSTANT, IN TWO DIALECTS ───────────────────────────────────────
+#
+# SAP keeps the malfunction date and its time in separate columns, so they have
+# to be combined before anything can be measured. MySQL does that with
+# TIMESTAMP(date, time). Postgres has no such function -- it adds a date and a
+# time directly -- and the SAP OData feed is Postgres.
+#
+# This is the one place the migration was not a drop-in. The table names and
+# the column names are identical on both sides, so a SELECT list needs no
+# change; anything that CALLS a function does.
+_START_MY = ("TIMESTAMP(MALFUNCTION_START, "
+             "COALESCE(MALFUNCTION_START_TIME, '00:00:00'))")
+_END_MY = ("CASE WHEN MALFUNCTION_END IS NULL THEN NULL ELSE "
+           "TIMESTAMP(MALFUNCTION_END, COALESCE(MALFUNCTION_END_TIME, '00:00:00')) "
+           "END")
+
+# In the feed MALFUNCTION_START is a date and the time is text, so the time is
+# cast before it is added. A missing time is midnight, as it is on MySQL.
+_START_PG = ("(MALFUNCTION_START + "
+             "COALESCE(NULLIF(MALFUNCTION_START_TIME, ''), '00:00:00')::time)")
+_END_PG = ("CASE WHEN MALFUNCTION_END IS NULL THEN NULL ELSE "
+           "(MALFUNCTION_END + "
+           "COALESCE(NULLIF(MALFUNCTION_END_TIME, ''), '00:00:00')::time) END")
+
+
+def _stamps(db: Session) -> tuple[str, str]:
+    """(start, end) expressions for the database this session is on."""
+    name = ""
+    try:
+        name = db.bind.dialect.name
+    except Exception:                                   # noqa: BLE001
+        pass
+    if name == "postgresql":
+        return _START_PG, _END_PG
+    return _START_MY, _END_MY
 
 # Still running. MALFUNCTION_END is the only reliable marker: SYSTEM_STATUS can
 # read OSNO on a notification that already has an end time.
@@ -140,8 +170,24 @@ def db_now(db: Session) -> datetime:
     for that reason.
 
     One clock, and it is the one the data is on.
+
+    RETURNED NAIVE, WHICHEVER DATABASE ANSWERED. MySQL's NOW() comes back
+    without a timezone; Postgres's now() is timestamptz and comes back with
+    one. The rest of this module builds window edges with datetime.combine(),
+    which is naive, and comparing the two raises:
+
+        TypeError: can't compare offset-naive and offset-aware datetimes
+
+    That is not hypothetical -- it is what every OEE window did the moment the
+    breakdown read moved to the SAP OData feed. The timezone is dropped rather
+    than applied to the other side, because the SAP timestamps this is compared
+    against carry no zone either: they are IST wall-clock, written by a server
+    in IST, and the only correct reading of them is as local time on that
+    server. Attaching a zone here would make the arithmetic look rigorous while
+    changing what the numbers mean.
     """
-    return db.execute(text("SELECT NOW()")).scalar()
+    value = db.execute(text("SELECT NOW()")).scalar()
+    return value.replace(tzinfo=None) if value and value.tzinfo else value
 
 
 def window(from_date: date, to_date: date,
@@ -202,8 +248,9 @@ def spans_by(
     DESC_TECH_OBJECT); `where` is the caller's own filter, ANDed on.
     """
     w_start, w_end = window(from_date, to_date, now=db_now(db))
+    _start, _end = _stamps(db)
     sql = text(f"""
-        SELECT {key} AS bd_key, {_START} AS bd_s, {_END} AS bd_e
+        SELECT {key} AS bd_key, {_start} AS bd_s, {_end} AS bd_e
         FROM {TABLE}
         WHERE {IN_WINDOW_WHERE}
         {("AND " + where) if where else ""}
@@ -314,9 +361,10 @@ def event_rows(
     total must use hours_by or total_hours.
     """
     w_start, w_end = window(from_date, to_date, now=db_now(db))
+    _start, _end = _stamps(db)
     cols = ("".join(f", {e}" for e in extra)) if extra else ""
     sql = text(f"""
-        SELECT {_START} AS bd_s, {_END} AS bd_e,
+        SELECT {_start} AS bd_s, {_end} AS bd_e,
                {IS_OPEN} AS bd_open{cols}
         FROM {TABLE}
         WHERE {IN_WINDOW_WHERE}

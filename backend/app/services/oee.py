@@ -33,6 +33,7 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from app.services import breakdown as bd
+from app.services.sap_source import sap_session
 
 PLANT           = "1200"
 WORK_CENTRE     = "MINEAUTO"
@@ -296,16 +297,21 @@ def _sap_hours(db: Session, fd: date, td: date) -> tuple[dict, dict]:
     # SQL as text, so anything put there must already be a placeholder.
     eq_names = {f"eq{i}": e for i, e in enumerate(eqs)}
     in_list = ", ".join(f":{k}" for k in eq_names)
-    bd_by = bd.hours_by(
-        db, key="EQUIPMENT", from_date=fd, to_date=td,
-        where=("MAINTENANCE_PLANT = :plant AND NOTIFICATION_TYPE = :ntype"
-               f" AND MAIN_WORK_CENTER = :wc AND EQUIPMENT IN ({in_list})"),
-        bind={"plant": PLANT, "ntype": BD_NOTIF_TYPE, "wc": WORK_CENTRE,
-              **eq_names})
-    pm_by = {r["eq"]: _num(r["pm_hours"]) for r in db.execute(_PM_ALL_SQL, {
-        "otype": PM_ORDER_TYPE, "plant": PLANT, "wc": WORK_CENTRE,
-        "eqs": eqs, "fd": fd, "td": td,
-    }).mappings()}
+    # Both tables come from the SAP OData feed in Postgres, where the dates
+    # are indexed. zpm_iw29_notifications is 54,765 rows and
+    # mm_plant_maint_calibration 43,606, and neither carries an index on a date
+    # in balcorpdb -- so every OEE window was two full scans.
+    with sap_session(db) as sap:
+        bd_by = bd.hours_by(
+            sap, key="EQUIPMENT", from_date=fd, to_date=td,
+            where=("MAINTENANCE_PLANT = :plant AND NOTIFICATION_TYPE = :ntype"
+                   f" AND MAIN_WORK_CENTER = :wc AND EQUIPMENT IN ({in_list})"),
+            bind={"plant": PLANT, "ntype": BD_NOTIF_TYPE, "wc": WORK_CENTRE,
+                  **eq_names})
+        pm_by = {r["eq"]: _num(r["pm_hours"]) for r in sap.execute(_PM_ALL_SQL, {
+            "otype": PM_ORDER_TYPE, "plant": PLANT, "wc": WORK_CENTRE,
+            "eqs": eqs, "fd": fd, "td": td,
+        }).mappings()}
     return bd_by, pm_by
 
 
