@@ -50,10 +50,6 @@ const GRADE_TONE: Record<string, { chip: string; text: string }> = {
   LG:        { chip: "bg-amber-bg text-amber ring-1 ring-amber-ring",       text: "text-amber" },
   COB:       { chip: "bg-violet-bg text-violet ring-1 ring-violet-ring",    text: "text-violet" },
   UNASSAYED: { chip: "bg-slate-bg text-slate ring-1 ring-slate-ring",       text: "text-slate" },
-  // The mine's own ore figure for days SAP has not posted. Deliberately NOT
-  // one of the four grade hues: it is not a grade, it has no assay, and it
-  // must not be mistaken for one at a glance.
-  EST:       { chip: "bg-[#fff3e0] text-[#e65100] ring-1 ring-[#ffcc80]",   text: "text-[#e65100]" },
 };
 const tone = (k: string) => GRADE_TONE[k] ?? GRADE_TONE.UNASSAYED;
 
@@ -284,7 +280,7 @@ function StockBlock({ d }: { d: ExecutiveSummaryResponse }) {
 
 /* ── Blocks 2-4 · a grade table, TD beside MTD ─────────────────────────── */
 function GradeTable({ icon, title, sub, qtyLabel, tdLabel, mtdLabel,
-                     td, mtd, tdTotal, mtdTotal }: {
+                     td, mtd, tdTotal, mtdTotal, showPlan = false }: {
   icon: React.ReactNode; title: string; sub: string; qtyLabel: string;
   /* The heading says WHICH day and WHICH span, not just "Today". The page is
      read a day or two in arrears — the mine files in arrears — so "Today" on a
@@ -292,6 +288,10 @@ function GradeTable({ icon, title, sub, qtyLabel, tdLabel, mtdLabel,
   tdLabel: string; mtdLabel: string;
   td: ExecGradeRow[]; mtd: ExecGradeRow[];
   tdTotal?: ExecWeightedTotal; mtdTotal?: ExecWeightedTotal;
+  /* Production only. Despatch plans against mines_despatch_plan, a different
+     table with a different shape, so it keeps its three columns rather than
+     gaining two empty ones. */
+  showPlan?: boolean;
 }) {
   /* Rows are keyed by grade and merged across the two periods, never zipped by
      index: a grade present in MTD but not TD — "Not yet assayed" is the live
@@ -313,22 +313,28 @@ function GradeTable({ icon, title, sub, qtyLabel, tdLabel, mtdLabel,
         <thead>
           <tr className={THEAD}>
             <th className={`${TH} text-left min-w-[130px]`} rowSpan={2}>Grade</th>
-            <th className={`${TH} text-center border-l border-border text-steel`} colSpan={3}>
+            <th className={`${TH} text-center border-l border-border text-steel`}
+                colSpan={showPlan ? 5 : 3}>
               {tdLabel}
             </th>
             <th className={GAP} rowSpan={2} aria-hidden />
             {/* The MTD half keeps its tint through BOTH header rows and the body.
                 Two periods with identical column names side by side is the
                 easiest place on this page to read a figure off the wrong one. */}
-            <th className={`${TH} text-center border-l-2 border-border text-steel ${MTD_BG}`} colSpan={3}>
+            <th className={`${TH} text-center border-l-2 border-border text-steel ${MTD_BG}`}
+                colSpan={showPlan ? 5 : 3}>
               {mtdLabel}
             </th>
           </tr>
           <tr className={THEAD}>
-            <th className={`${TH} text-right border-l border-border`}>{qtyLabel}</th>
+            {showPlan && <th className={`${TH} text-right border-l border-border`}>Plan (MT)</th>}
+            <th className={`${TH} text-right ${showPlan ? "" : "border-l border-border"}`}>{qtyLabel}</th>
+            {showPlan && <th className={`${TH} text-right`}>Ach %</th>}
             <th className={`${TH} text-right`}>Cr/Fe</th>
             <th className={`${TH} text-right`}>Cr2O3 %</th>
-            <th className={`${TH} text-right border-l-2 border-border ${MTD_BG}`}>{qtyLabel}</th>
+            {showPlan && <th className={`${TH} text-right border-l-2 border-border ${MTD_BG}`}>Plan (MT)</th>}
+            <th className={`${TH} text-right ${MTD_BG} ${showPlan ? "" : "border-l-2 border-border"}`}>{qtyLabel}</th>
+            {showPlan && <th className={`${TH} text-right ${MTD_BG}`}>Ach %</th>}
             <th className={`${TH} text-right ${MTD_BG}`}>Cr/Fe</th>
             <th className={`${TH} text-right ${MTD_BG}`}>Cr2O3 %</th>
           </tr>
@@ -343,17 +349,29 @@ function GradeTable({ icon, title, sub, qtyLabel, tdLabel, mtdLabel,
                     {a?.label ?? b?.label ?? k}
                   </span>
                 </td>
-                <td className={`${TD} text-right border-l border-border-light whitespace-nowrap`}>
+                {showPlan && (
+                  <td className={`${TD} text-right border-l border-border-light text-txt-light`}>
+                    <N v={a?.plan} />
+                  </td>
+                )}
+                <td className={`${TD} text-right whitespace-nowrap ${showPlan ? "" : "border-l border-border-light"}`}>
                   <N v={a?.qty} strong /><Src s={a?.source} qty={a?.manual_qty} />
                 </td>
+                {showPlan && <td className={`${TD} text-right`}><Ach v={a?.ach_pct} manual={a?.manual_qty} /></td>}
                 <td className={`${TD} text-right`}><N v={a?.crfe} /></td>
                 <td className={`${TD} text-right whitespace-nowrap`}>
                   <N v={a?.cr2o3} /><Est pct={a?.estimated_pct} qty={a?.estimated_qty} />
                 </td>
                 <td className={GAP} aria-hidden />
-                <td className={`${TD} text-right border-l border-border whitespace-nowrap ${MTD_BG}`}>
+                {showPlan && (
+                  <td className={`${TD} text-right border-l border-border text-txt-light ${MTD_BG}`}>
+                    <N v={b?.plan} />
+                  </td>
+                )}
+                <td className={`${TD} text-right whitespace-nowrap ${MTD_BG} ${showPlan ? "" : "border-l border-border"}`}>
                   <N v={b?.qty} strong /><Src s={b?.source} qty={b?.manual_qty} />
                 </td>
+                {showPlan && <td className={`${TD} text-right ${MTD_BG}`}><Ach v={b?.ach_pct} manual={b?.manual_qty} /></td>}
                 <td className={`${TD} text-right ${MTD_BG}`}><N v={b?.crfe} /></td>
                 <td className={`${TD} text-right whitespace-nowrap ${MTD_BG}`}>
                   <N v={b?.cr2o3} /><Est pct={b?.estimated_pct} qty={b?.estimated_qty} />
@@ -367,17 +385,29 @@ function GradeTable({ icon, title, sub, qtyLabel, tdLabel, mtdLabel,
             <td className={`${TD} font-condensed font-extrabold tracking-widest uppercase text-[11px] text-navy`}>
               Weighted Avg
             </td>
-            <td className={`${TD} text-right border-l border-border-light whitespace-nowrap`}>
+            {showPlan && (
+              <td className={`${TD} text-right border-l border-border-light text-txt-secondary`}>
+                <N v={tdTotal?.plan} />
+              </td>
+            )}
+            <td className={`${TD} text-right whitespace-nowrap ${showPlan ? "" : "border-l border-border-light"}`}>
               <N v={tdTotal?.qty} strong /><Src s={tdTotal?.source} qty={tdTotal?.manual_qty} />
             </td>
+            {showPlan && <td className={`${TD} text-right`}><Ach v={tdTotal?.ach_pct} strong manual={tdTotal?.manual_qty} /></td>}
             <td className={`${TD} text-right`}><N v={tdTotal?.crfe} strong /></td>
             <td className={`${TD} text-right whitespace-nowrap`}>
               <N v={tdTotal?.cr2o3} strong /><Est pct={tdTotal?.estimated_pct} qty={tdTotal?.estimated_qty} />
             </td>
             <td className={GAP} aria-hidden />
-            <td className={`${TD} text-right border-l border-border whitespace-nowrap`}>
+            {showPlan && (
+              <td className={`${TD} text-right border-l border-border text-txt-secondary`}>
+                <N v={mtdTotal?.plan} />
+              </td>
+            )}
+            <td className={`${TD} text-right whitespace-nowrap ${showPlan ? "" : "border-l border-border"}`}>
               <N v={mtdTotal?.qty} strong /><Src s={mtdTotal?.source} qty={mtdTotal?.manual_qty} />
             </td>
+            {showPlan && <td className={`${TD} text-right`}><Ach v={mtdTotal?.ach_pct} strong manual={mtdTotal?.manual_qty} /></td>}
             <td className={`${TD} text-right`}><N v={mtdTotal?.crfe} strong /></td>
             <td className={`${TD} text-right whitespace-nowrap`}>
               <N v={mtdTotal?.cr2o3} strong /><Est pct={mtdTotal?.estimated_pct} qty={mtdTotal?.estimated_qty} />
@@ -430,6 +460,33 @@ function Src({ s, qty }: { s?: ExecSource; qty?: number | null }) {
   );
 }
 
+/* Achievement against plan. Thresholds match the OB table and the OEE
+ * screens, so one percentage means one thing across the dashboard. A plan of
+ * nothing gives no percentage — a dash, never 0%, which would read as a miss
+ * rather than as "nothing was planned". */
+function Ach({ v, strong = false, manual = 0 }: {
+  v?: number | null; strong?: boolean; manual?: number | null;
+}) {
+  if (v == null) return <span className="text-txt-light">—</span>;
+  const cls = v >= 90 ? "text-[#2e7d32]" : v >= 70 ? "text-[#c8960c]" : "text-[#c62828]";
+  /* A percentage resting on a hand-entered tonnage must say so, or 40.0%
+     reads as firm as any other. Marked with a dotted rule rather than a
+     colour or a second chip: colour here already means achievement, and a
+     chip beside the one on the tonnage would be two labels for one fact.
+     It clears itself when SAP posts, because `manual` does. */
+  const body = <span className={`${cls} ${strong ? "font-extrabold" : "font-bold"}`}>
+    {v.toFixed(1)}%
+  </span>;
+  if (!manual) return body;
+  return (
+    <span className="border-b border-dotted border-[#e65100]/60"
+          title={`Against ${formatIndian(manual, 2)} MT the mine entered by hand `
+               + "for days SAP has not posted. This percentage moves when SAP does."}>
+      {body}
+    </span>
+  );
+}
+
 /* ── Block 4b · overburden and de-silting ──────────────────────────────────
    THE SAME FIGURES THE MIS DASHBOARD REPORTS, from the same backend functions
    its KPI strip and plan-vs-actual charts are built on — not a second
@@ -462,7 +519,9 @@ function ExcavationBlock({ statusTill, td, mtd }: {
       <td className={`${TD} text-right border-l border-border-light ${tint}`}>
         <N v={r?.plan} />
       </td>
-      <td className={`${TD} text-right ${tint}`}><N v={r?.actual} strong /></td>
+      <td className={`${TD} text-right whitespace-nowrap ${tint}`}>
+        <N v={r?.actual} strong /><Src s={r?.source} qty={r?.manual_qty} />
+      </td>
       <td className={`${TD} text-right whitespace-nowrap ${tint}`}>
         {r?.no_plan
           ? <span className="text-[9px] uppercase tracking-wide text-txt-light"
@@ -483,10 +542,12 @@ function ExcavationBlock({ statusTill, td, mtd }: {
         <thead>
           <tr className={THEAD}>
             <th className={`${TH} text-left min-w-[130px]`} rowSpan={2}>Activity</th>
-            <th className={`${TH} text-center border-l border-border text-steel`} colSpan={3}>
+            <th className={`${TH} text-center border-l border-border text-steel`}
+                colSpan={3}>
               TD · Today
             </th>
-            <th className={`${TH} text-center border-l-2 border-border text-steel ${MTD_BG}`} colSpan={3}>
+            <th className={`${TH} text-center border-l-2 border-border text-steel ${MTD_BG}`}
+                colSpan={3}>
               MTD · Month to Date
             </th>
           </tr>
@@ -761,7 +822,7 @@ export default function ExecutiveSummarySection() {
           <StockBlock d={d} />
 
           <GradeTable icon={<Pickaxe size={14} />} title="Mines Production"
-            sub={statusTill} qtyLabel="Production (MT)"
+            sub={statusTill} qtyLabel="Production (MT)" showPlan
             tdLabel={tdLabel} mtdLabel={mtdLabel}
             td={d.td.production} mtd={d.mtd.production}
             tdTotal={d.td.production_total} mtdTotal={d.mtd.production_total} />

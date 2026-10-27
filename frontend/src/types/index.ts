@@ -147,6 +147,10 @@ export interface ExecGradeRow {
    *  the two cannot be derived from one another. */
   estimated_pct?: number | null;
   estimated_qty?: number | null;
+  /** Planned tonnage for this grade and actual against it. Production rows
+   *  only — despatch plans against a different table and does not use these. */
+  plan?:    number | null;
+  ach_pct?: number | null;
   /** Where the TONNAGE came from — a different question from the assay above. */
   source?: ExecSource;
   /** Of `qty`, how much is the mine's hand-entered figure standing in for days
@@ -164,6 +168,8 @@ export interface ExecWeightedTotal {
   cr:    number | null;
   estimated_pct?: number | null;
   estimated_qty?: number | null;
+  plan?:    number | null;
+  ach_pct?: number | null;
   source?: ExecSource;
   manual_qty?: number | null;
 }
@@ -188,6 +194,8 @@ export interface ExecExcavationRow {
   actual:  number | null;
   pct:     number | null;
   no_plan: boolean;
+  source?: ExecSource;
+  manual_qty?: number | null;
 }
 
 export interface ExecPeriodBlock {

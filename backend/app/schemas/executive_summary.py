@@ -30,6 +30,10 @@ class GradeRow(BaseModel):
     # cannot be derived from the other.
     estimated_pct: Optional[float] = None
     estimated_qty: Optional[float] = None
+    #: Planned tonnage for this grade, and actual against it. Production rows
+    #: only — despatch has its own plan table and does not use these.
+    plan:    Optional[float] = None
+    ach_pct: Optional[float] = None
     # WHERE THE TONNAGE CAME FROM: 'sap' | 'manual' | 'mixed'. A DIFFERENT idea
     # from estimated_qty above, which is about a borrowed ASSAY rather than a
     # hand-entered TONNAGE. A row can carry both and they must never be added.
@@ -47,6 +51,8 @@ class WeightedTotal(BaseModel):
     cr:    Optional[float] = None
     estimated_pct: Optional[float] = None
     estimated_qty: Optional[float] = None
+    plan:    Optional[float] = None
+    ach_pct: Optional[float] = None
     #: Summed from the rows beneath, so the total says the same thing they do.
     source:     str = "sap"
     manual_qty: Optional[float] = None
@@ -76,6 +82,10 @@ class ExcavationRow(BaseModel):
     actual:  Optional[float] = None
     pct:     Optional[float] = None
     no_plan: bool = False
+    #: 'sap' | 'manual' | 'mixed' — the mine's own figure stands in for days
+    #: SAP has not posted, exactly as it does on the production table.
+    source:     str = "sap"
+    manual_qty: Optional[float] = None
 
 
 class PeriodBlock(BaseModel):
