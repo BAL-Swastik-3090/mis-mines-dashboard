@@ -469,13 +469,16 @@ def get_summary(period: str, section: str = "MINES",
     days_elapsed = (as_of - start).days + 1
     factor = days_elapsed / days_in_month
 
-    # The whole month asked for, on a month that is over: everything that was
-    # going to post has posted, so there is nothing left to estimate. Any
-    # earlier as_of - closed month or not - is a part-month question.
-    settled = closed and as_of >= end
     prorate = 1.0 if as_of >= end else factor
 
     actuals = [a for a in get_actuals(period, section, basis) if a["accrual_date"] <= as_of]
+
+    # The whole month asked for, on a month that is over AND has postings
+    # behind it: everything that was going to post has posted, so there is
+    # nothing left to estimate. An earlier as_of is a part-month question.
+    # A closed month with NO postings is not settled - it is simply not
+    # loaded, and the plan stays the best answer there is.
+    settled = closed and as_of >= end and bool(actuals)
     qty_key = "ore_mt" if section == "MINES" else "cob_mt"
     qty = sum(p[qty_key] for p in get_production(period) if p["date"] and p["date"] <= as_of)
     plan_lines = plan_by_line(section, period)
