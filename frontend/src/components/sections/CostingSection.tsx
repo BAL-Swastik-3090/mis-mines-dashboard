@@ -43,8 +43,14 @@ export default function CostingSection() {
   // What the backend actually holds. The prototype runs on one extracted
   // month, so asking for any other is normal and must be said out loud
   // rather than answered with someone else's numbers.
-  const periods = meta?.periods ?? [];
-  const hasData = periods.length === 0 || periods.includes(active);
+  const ledgerPeriods = meta?.ledger_periods ?? meta?.periods ?? [];
+  const planPeriods = meta?.plan_periods ?? [];
+  const hasLedger = ledgerPeriods.includes(active);
+  // A month with a plan and no postings is still answerable: the whole
+  // sheet is accrual. That is a real answer early in a month and must not
+  // be withheld - it just has to say what it is.
+  const planOnly = !hasLedger && planPeriods.includes(active);
+  const hasData = ledgerPeriods.length === 0 || hasLedger || planOnly;
   const { data: cov } = useCostCoverage(active, section);
 
   return (
@@ -135,9 +141,25 @@ export default function CostingSection() {
             No ledger for <strong>{periodLabel(active)}</strong>.
           </p>
           <p className="mt-1 text-[12px] text-txt-muted">
-            The prototype extract holds{" "}
-            {periods.map(periodLabel).join(", ")}. Change the date range in the
-            header, or load the month from SAP.
+            {ledgerPeriods.length
+              ? `The prototype extract holds ${ledgerPeriods.map(periodLabel).join(", ")}.`
+              : "No month has been loaded."}{" "}
+            {planPeriods.length
+              ? `A cost plan is loaded for ${planPeriods.map(periodLabel).join(", ")}.`
+              : "No cost plan is loaded either - use Import Plan."}{" "}
+            Change the date range in the header, or load the month from SAP.
+          </p>
+        </div>
+      )}
+
+      {planOnly && (
+        <div className="flex items-start gap-2.5 bg-[#eaf3fb] border border-[#b9d4ec] rounded px-4 py-2.5">
+          <Info size={15} className="text-steel shrink-0 mt-0.5" />
+          <p className="text-[12px] text-txt-secondary leading-relaxed">
+            Nothing has posted to the ledger for <strong>{periodLabel(active)}</strong> yet, so
+            every figure below is the <strong>uploaded plan accrued to the date selected</strong> —
+            a forecast, not a measurement. Daily costs such as diesel and power stay at nil until
+            postings arrive. GL Detail will be empty for the same reason.
           </p>
         </div>
       )}

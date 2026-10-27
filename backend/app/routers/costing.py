@@ -34,10 +34,18 @@ def _default_period() -> str:
 @router.get("/periods")
 def periods():
     """Months the data actually covers, so the UI offers only real options."""
+    ledger = costing.available_periods()
+    plan = costing.plan_periods()
     return {
         "source": costing.SOURCE,
         "default_basis": costing.DEFAULT_BASIS,
-        "periods": costing.available_periods(),
+        # Months with postings behind them. A month with only an uploaded
+        # plan is answerable too - as accrual, with nothing posted yet - so
+        # it is listed separately rather than folded in: the difference is
+        # the difference between a measurement and a forecast.
+        "periods": ledger,
+        "ledger_periods": ledger,
+        "plan_periods": plan,
     }
 
 

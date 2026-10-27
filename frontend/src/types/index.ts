@@ -1579,6 +1579,10 @@ export interface CostSummaryResponse {
   is_closed:     boolean;
   /** The whole month asked for, on a month that is over: nothing left to estimate. */
   is_settled:    boolean;
+  /** "uploaded" (minehub.cost_plan) or "seed". */
+  plan_source:   string;
+  /** False when nothing has posted yet and every figure is accrual. */
+  has_postings:  boolean;
   days_in_month: number;
   days_elapsed:  number;
   accrual_factor: number;

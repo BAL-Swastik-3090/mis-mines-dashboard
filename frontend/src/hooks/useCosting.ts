@@ -40,7 +40,15 @@ export function useCostingPeriod(): { period: string; asOf: string } {
 
 /** Months the backend actually holds data for. */
 export function usePeriods() {
-  return useQuery<{ source: string; default_basis: string; periods: string[] }>({
+  return useQuery<{
+    source: string;
+    default_basis: string;
+    periods: string[];
+    /** Months with postings behind them. */
+    ledger_periods: string[];
+    /** Months an uploaded plan exists for - answerable as accrual alone. */
+    plan_periods: string[];
+  }>({
     queryKey: ["costing", "periods"],
     queryFn: async () => (await api.get("/costing/periods")).data,
     staleTime: 30 * 60 * 1000,

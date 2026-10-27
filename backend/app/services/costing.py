@@ -274,23 +274,93 @@ def production_basis(period: str) -> list[dict]:
 
 
 # ────────────────────────────── plan ────────────────────────────────────
+# The plan arrives monthly as a SAP CO export and is uploaded through the
+# cost sheet's own Import Plan dialog, which writes minehub.cost_plan. That
+# table is the plan of record; the seed CSV below it is a fallback for a
+# month nobody has uploaded yet, and for running with minehub unreachable.
 def get_plan(section: str | None = None) -> list[dict]:
     rows = [r for r in COST_PLAN if r["include_in_costing"] == "1"]
     return [r for r in rows if r["section"] == section] if section else rows
 
 
-def plan_by_line(section: str | None = None) -> dict[str, float]:
+def _db_plan(period: str) -> list[dict]:
+    """Uploaded plan rows for the month, or [] if there are none to be had."""
+    try:
+        from sqlalchemy import text
+        import app.minehub_db as minehub
+        if minehub.SessionLocal is None:
+            return []
+        start, _ = period_bounds(period)
+        with minehub.SessionLocal() as db:
+            rows = db.execute(text("""
+                SELECT cost_element, section, plan_fix_cost
+                  FROM minehub.cost_plan_detail
+                 WHERE plan_month = :m AND section IN ('MINES', 'COB')
+            """), {"m": start}).mappings().all()
+        return [dict(r) for r in rows]
+    except Exception as exc:                       # minehub down, table absent
+        log.warning("costing: uploaded plan unavailable for %s (%s)", period, exc)
+        return []
+
+
+def plan_periods() -> list[str]:
+    """Months an uploaded plan exists for, newest first."""
+    try:
+        from sqlalchemy import text
+        import app.minehub_db as minehub
+        if minehub.SessionLocal is None:
+            return []
+        with minehub.SessionLocal() as db:
+            rows = db.execute(text("""
+                SELECT DISTINCT to_char(plan_month, 'YYYY-MM') AS p
+                  FROM minehub.cost_plan_detail
+                 WHERE section IN ('MINES', 'COB') ORDER BY 1 DESC
+            """)).scalars().all()
+        return list(rows)
+    except Exception:
+        return []
+
+
+def _db_plan_grouped(period: str, section: str | None, key: str) -> dict[str, float]:
+    """Uploaded plan folded onto summary lines or buckets via the GL master."""
+    out: dict[str, float] = {}
+    for r in _db_plan(period):
+        if section and r["section"] != section:
+            continue
+        m = GL_MASTER.get(str(r["cost_element"]))
+        if not m or m["include_in_costing"] != "1" or not m[key]:
+            continue
+        out[m[key]] = out.get(m[key], 0.0) + float(r["plan_fix_cost"])
+    return out
+
+
+def plan_by_line(section: str | None = None,
+                 period: str | None = None) -> dict[str, float]:
+    if period:
+        live = _db_plan_grouped(period, section, "summary_line")
+        if live:
+            return live
     out: dict[str, float] = {}
     for r in get_plan(section):
         out[r["summary_line"]] = out.get(r["summary_line"], 0.0) + _f(r["plan_fix_cost_inr"])
     return out
 
 
-def plan_by_bucket(section: str | None = None) -> dict[str, float]:
+def plan_by_bucket(section: str | None = None,
+                   period: str | None = None) -> dict[str, float]:
+    if period:
+        live = _db_plan_grouped(period, section, "bucket")
+        if live:
+            return live
     out: dict[str, float] = {}
     for r in get_plan(section):
         out[r["bucket"]] = out.get(r["bucket"], 0.0) + _f(r["plan_fix_cost_inr"])
     return out
+
+
+def plan_source(period: str) -> str:
+    """Where the plan behind this month's accrual came from."""
+    return "uploaded" if _db_plan(period) else "seed"
 
 
 # ──────────────────────────── daily curve ───────────────────────────────
@@ -299,7 +369,7 @@ def get_daily_curve(period: str, section: str = "MINES",
     start, end = period_bounds(period)
     actuals = get_actuals(period, section, basis)
     prod_by_day = {p["date"]: p for p in get_production(period)}
-    plan_month_end = plan_by_bucket(section).get("MONTH_END", 0.0)
+    plan_month_end = plan_by_bucket(section, period).get("MONTH_END", 0.0)
     days_in_month = (end - start).days + 1
     qty_key = "ore_mt" if section == "MINES" else "cob_mt"
 
@@ -408,7 +478,7 @@ def get_summary(period: str, section: str = "MINES",
     actuals = [a for a in get_actuals(period, section, basis) if a["accrual_date"] <= as_of]
     qty_key = "ore_mt" if section == "MINES" else "cob_mt"
     qty = sum(p[qty_key] for p in get_production(period) if p["date"] and p["date"] <= as_of)
-    plan_lines = plan_by_line(section)
+    plan_lines = plan_by_line(section, period)
     bucket_of = _bucket_by_line()
 
     actual_lines: dict[str, float] = {}
@@ -461,6 +531,8 @@ def get_summary(period: str, section: str = "MINES",
             "from_date": start.isoformat(), "to_date": end.isoformat(),
             "as_of": as_of.isoformat(), "is_closed": closed,
             "is_settled": settled,
+            "plan_source": plan_source(period),
+            "has_postings": bool(actuals),
             "days_in_month": days_in_month, "days_elapsed": days_elapsed,
             "accrual_factor": round(factor, 6),
             "production_mt": round(qty, 2),
@@ -493,7 +565,7 @@ def get_coverage(period: str, section: str = "MINES",
     the number says which. This is what lets the UI say it.
     """
     actuals = get_actuals(period, section, basis)
-    plan_b = plan_by_bucket(section)
+    plan_b = plan_by_bucket(section, period)
 
     act_b: dict[str, float] = {}
     for a in actuals:
