@@ -9,6 +9,7 @@ from sqlalchemy import text
 # Production is net of SAP reversal documents — see sap_movement for the rule and
 # the proof against SAP. Summing QUANTITY without this counts a mistaken posting
 # AND its correction: Aug 2026 ore read 19,982 MT against SAP's 16,542.
+from app.services.sap_source import sap_session
 from app.services.sap_movement import PRODUCTION_QTY
 
 
@@ -50,31 +51,35 @@ def get_daily_actuals(db: Session, from_date: date, to_date: date) -> list[dict]
         SELECT
             POSTING_DATE                                                          AS dt,
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_NO = :lg       THEN ({PRODUCTION_QTY}) ELSE 0 END) AS ore_lg,
+                      AND MATERIAL_NO = :lg       THEN ({PRODUCTION_QTY}) ELSE CAST(0 AS DECIMAL(13,3)) END) AS ore_lg,
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_NO = :mg       THEN ({PRODUCTION_QTY}) ELSE 0 END) AS ore_mg,
+                      AND MATERIAL_NO = :mg       THEN ({PRODUCTION_QTY}) ELSE CAST(0 AS DECIMAL(13,3)) END) AS ore_mg,
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_NO = :hg       THEN ({PRODUCTION_QTY}) ELSE 0 END) AS ore_hg,
+                      AND MATERIAL_NO = :hg       THEN ({PRODUCTION_QTY}) ELSE CAST(0 AS DECIMAL(13,3)) END) AS ore_hg,
             SUM(CASE WHEN PLANT = :plant_mines
                       AND MATERIAL_NO IN (:lg, :mg, :hg)
-                                                  THEN ({PRODUCTION_QTY}) ELSE 0 END) AS ore_total,
+                                                  THEN ({PRODUCTION_QTY}) ELSE CAST(0 AS DECIMAL(13,3)) END) AS ore_total,
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_NO = :ob       THEN ({PRODUCTION_QTY}) ELSE 0 END) AS ob_qty,
+                      AND MATERIAL_NO = :ob       THEN ({PRODUCTION_QTY}) ELSE CAST(0 AS DECIMAL(13,3)) END) AS ob_qty,
             SUM(CASE WHEN PLANT = :plant_cobp
-                      AND MATERIAL_DESC = :cob    THEN ({PRODUCTION_QTY}) ELSE 0 END) AS cob_qty
+                      AND MATERIAL_DESC = :cob    THEN ({PRODUCTION_QTY}) ELSE CAST(0 AS DECIMAL(13,3)) END) AS cob_qty
         FROM pp_production
         WHERE POSTING_DATE BETWEEN :from_date AND :to_date
           AND PLANT IN (:plant_mines, :plant_cobp)
         GROUP BY POSTING_DATE
         ORDER BY POSTING_DATE
     """)
-    rows = db.execute(sql, {
-        "plant_mines": PLANT_MINES,
-        "plant_cobp":  PLANT_COBP,
-        "lg": ORE_LG_NO, "mg": ORE_MG_NO, "hg": ORE_HG_NO,
-        "ob": OB_NO, "cob": COB_MATERIAL,
-        "from_date": from_date, "to_date": to_date,
-    }).fetchall()
+    # pp_production is mirrored into MineHub (migration 086): the SAP table
+    # carries no index on POSTING_DATE, so this one query took 1,978 ms
+    # against balcorpdb, reading 336,701 rows to find the mine's 3,381.
+    with sap_session(db) as sap:
+        rows = sap.execute(sql, {
+            "plant_mines": PLANT_MINES,
+            "plant_cobp":  PLANT_COBP,
+            "lg": ORE_LG_NO, "mg": ORE_MG_NO, "hg": ORE_HG_NO,
+            "ob": OB_NO, "cob": COB_MATERIAL,
+            "from_date": from_date, "to_date": to_date,
+        }).fetchall()
     return [dict(r._mapping) for r in rows]
 
 
@@ -179,27 +184,28 @@ def get_mtd_totals(db: Session, from_date: date, to_date: date) -> dict:
     sql_actual = text(f"""
         SELECT
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_NO IN (:lg, :mg, :hg)  THEN ({PRODUCTION_QTY}) ELSE 0 END) AS ore_mtd,
+                      AND MATERIAL_NO IN (:lg, :mg, :hg)  THEN ({PRODUCTION_QTY}) ELSE CAST(0 AS DECIMAL(13,3)) END) AS ore_mtd,
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_NO = :ob               THEN ({PRODUCTION_QTY}) ELSE 0 END) AS ob_mtd,
+                      AND MATERIAL_NO = :ob               THEN ({PRODUCTION_QTY}) ELSE CAST(0 AS DECIMAL(13,3)) END) AS ob_mtd,
             SUM(CASE WHEN PLANT = :plant_cobp
-                      AND MATERIAL_DESC = :cob            THEN ({PRODUCTION_QTY}) ELSE 0 END) AS cob_mtd,
+                      AND MATERIAL_DESC = :cob            THEN ({PRODUCTION_QTY}) ELSE CAST(0 AS DECIMAL(13,3)) END) AS cob_mtd,
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_NO = :hg               THEN ({PRODUCTION_QTY}) ELSE 0 END) AS hg_mtd,
+                      AND MATERIAL_NO = :hg               THEN ({PRODUCTION_QTY}) ELSE CAST(0 AS DECIMAL(13,3)) END) AS hg_mtd,
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_NO = :mg               THEN ({PRODUCTION_QTY}) ELSE 0 END) AS mg_mtd,
+                      AND MATERIAL_NO = :mg               THEN ({PRODUCTION_QTY}) ELSE CAST(0 AS DECIMAL(13,3)) END) AS mg_mtd,
             SUM(CASE WHEN PLANT = :plant_mines
-                      AND MATERIAL_NO = :lg               THEN ({PRODUCTION_QTY}) ELSE 0 END) AS lg_mtd
+                      AND MATERIAL_NO = :lg               THEN ({PRODUCTION_QTY}) ELSE CAST(0 AS DECIMAL(13,3)) END) AS lg_mtd
         FROM pp_production
         WHERE POSTING_DATE BETWEEN :from_date AND :to_date
           AND PLANT IN (:plant_mines, :plant_cobp)
     """)
-    ar = db.execute(sql_actual, {
-        "plant_mines": PLANT_MINES, "plant_cobp": PLANT_COBP,
-        "lg": ORE_LG_NO, "mg": ORE_MG_NO, "hg": ORE_HG_NO,
-        "ob": OB_NO, "cob": COB_MATERIAL,
-        "from_date": from_date, "to_date": to_date,
-    }).fetchone()
+    with sap_session(db) as sap:
+        ar = sap.execute(sql_actual, {
+            "plant_mines": PLANT_MINES, "plant_cobp": PLANT_COBP,
+            "lg": ORE_LG_NO, "mg": ORE_MG_NO, "hg": ORE_HG_NO,
+            "ob": OB_NO, "cob": COB_MATERIAL,
+            "from_date": from_date, "to_date": to_date,
+        }).fetchone()
 
     sql_plan = text("""
         SELECT
@@ -280,6 +286,11 @@ def get_rehandling_daywise(db: Session, from_date: date, to_date: date) -> list[
         GROUP BY POSTING_DATE
         ORDER BY POSTING_DATE
     """)
+    # NOT through the mirror. pp_prod_order_confirmation is the one SAP table
+    # here that already carries an index on POSTING_DATE, so this read is 46 ms
+    # against balcorpdb and 284 ms against MineHub -- the mirror is a cure for
+    # a full scan, and applying it to a query that never had one just adds a
+    # second database to the round trip.
     rows = db.execute(sql, {
         "plant":       PLANT_MINES,
         "work_center": "MINE_EXV",
@@ -306,6 +317,7 @@ def get_rehandling_mtd(db: Session, from_date: date, to_date: date) -> float:
               AND POSTING_DATE BETWEEN :from_date AND :to_date
         ) dedup
     """)
+    # Stays on balcorpdb — see get_rehandling_daywise.
     row = db.execute(sql, {
         "plant":       PLANT_MINES,
         "work_center": "MINE_EXV",

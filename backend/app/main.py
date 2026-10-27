@@ -209,6 +209,47 @@ async def _fuel_mirror():
         await asyncio.sleep(fuel_sync.SYNC_SECONDS)
 
 
+async def _sap_mirror():
+    """Keep our copy of the SAP production and quality rows current.
+
+    Every production, quality, breakdown and maintenance figure comes from a
+    table SAP writes into balcorpdb, and four of the five carry no index on a
+    date. pp_production is 336,701 rows; 3,381 of them are this mine's, and
+    the single query behind the Production screen took 1,978 ms to find them.
+
+    The rows are mirrored into minehub (migration 086) where they are indexed,
+    and the screens read them there through sap_source.sap_session -- which
+    falls back to balcorpdb whenever this mirror is cold or unreachable, so a
+    failed pass makes the screens slow rather than empty.
+    """
+    from app.database import SessionLocal
+    from app.minehub_db import SessionLocal as MineHubSession
+    from app.services import sap_sync, sap_source
+
+    await asyncio.sleep(55)     # after the usage and fuel mirrors, not against them
+    while True:
+        try:
+            def go() -> dict:
+                if MineHubSession is None:
+                    return {"errors": ["minehub is not configured"]}
+                with SessionLocal() as db, MineHubSession() as pg:
+                    return sap_sync.run_once(db, pg)
+            out = await run_in_threadpool(go)
+            if out.get("errors"):
+                logger.warning("SAP mirror: %s", "; ".join(out["errors"]))
+            else:
+                # A first pass that fills an empty mirror has to be noticed, or
+                # reads keep falling back to balcorpdb until the cached answer
+                # expires.
+                sap_source.invalidate()
+                logger.debug("SAP mirror: %s", out.get("tables"))
+        except asyncio.CancelledError:
+            raise
+        except Exception:                               # noqa: BLE001
+            logger.warning("SAP mirror pass failed", exc_info=True)
+        await asyncio.sleep(sap_sync.SYNC_SECONDS)
+
+
 # How far apart the two clocks may be before it is worth saying something.
 # Hosts drift by seconds against NTP; this is looking for whole hours.
 CLOCK_TOLERANCE = timedelta(minutes=5)
@@ -341,6 +382,7 @@ async def lifespan(app: FastAPI):
     # The SAP fuel rows, for the same reason: 2,068 rows we were reading four
     # million to find.
     fuel_task = asyncio.create_task(_fuel_mirror())
+    sap_task = asyncio.create_task(_sap_mirror())
     # Release pooled connections when the app goes quiet. The MySQL instance is
     # shared and has been refusing connections, so holding idle ones costs
     # somebody else their connection.
@@ -354,6 +396,7 @@ async def lifespan(app: FastAPI):
     market_task.cancel()
     usage_task.cancel()
     fuel_task.cancel()
+    sap_task.cancel()
     reaper_task.cancel()
     # Close every pooled connection rather than leaving the server to time them
     # out eight hours later.

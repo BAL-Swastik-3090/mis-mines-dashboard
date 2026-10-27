@@ -60,7 +60,11 @@ ISSUE_REVERSAL    = "262"
 PRODUCTION_QTY = """
         CASE WHEN MOVEMENT_TYPE IN ('101','531') THEN QUANTITY
              WHEN MOVEMENT_TYPE IN ('102','532') THEN -QUANTITY
-             ELSE 0 END
+             -- Typed, not bare: a day where every row takes this branch sums
+             -- integers, and Postgres then returns 0 where MySQL returns
+             -- 0.000. The same figure, and a difference that would show up in
+             -- every comparison between the mirror and the source.
+             ELSE CAST(0 AS DECIMAL(13,3)) END
 """
 
 # Signed consumption quantity — goods issue to a production order, net of its
@@ -68,7 +72,7 @@ PRODUCTION_QTY = """
 CONSUMPTION_QTY = """
         CASE WHEN MOVEMENT_TYPE = '261' THEN QUANTITY
              WHEN MOVEMENT_TYPE = '262' THEN -QUANTITY
-             ELSE 0 END
+             ELSE CAST(0 AS DECIMAL(13,3)) END
 """
 
 # Bare SQL predicate for callers that only need to exclude non-production rows
