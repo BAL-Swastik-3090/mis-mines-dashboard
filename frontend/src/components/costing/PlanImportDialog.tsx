@@ -106,10 +106,14 @@ export default function PlanImportDialog({ onClose, onDone }: Props) {
               The same SAP CO export you load into SAP - one period at a time
             </p>
             {/* Removing the Cost Plan screen left nowhere else to see what the
-                sheet is currently planning against. It belongs here. */}
+                sheet is currently planning against. It belongs here.
+
+                Mines + COB only. The export carries the whole company, so
+                its row count and total are mostly other plants and say
+                nothing about what this mine is planning to spend. */}
             <p className="mt-1 text-[11px] text-txt-secondary">
               {current
-                ? `Loaded now: ${monthLabel(current.plan_month)} · ${current.rows} rows · Rs ${rupees(current.amount_total)}`
+                ? `Loaded now: ${monthLabel(current.plan_month)} · ${current.mines_rows} rows for this mine · Rs ${rupees(current.mines_amount)}`
                 : "No plan loaded yet - the month-end accrual has nothing to pro-rate."}
             </p>
           </div>

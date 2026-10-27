@@ -377,11 +377,15 @@ def get_summary(period: str, section: str = "MINES",
     the mine has cost is asking for ten days of them, so a month-end line is
     accrued as plan / days in month x days elapsed.
 
-    Where such a line has ALREADY posted mid-month, the larger of the accrual
+    Where such a line has ALREADY posted by as_of, the larger of the accrual
     and the posting stands: adding them would count the same cost twice, and
     taking the accrual alone would understate a month where payroll ran early.
-    Once the period is closed there is nothing left to estimate and the posted
-    figure is the answer.
+
+    What switches the accrual off is reaching the END of the month on a
+    period that has closed - not the period being closed. December is over,
+    but "December as at the 10th" is still a question about the 10th, and
+    answering it with the full month's salary against ten days of diesel and
+    ten days of tonnes would be incoherent in both directions at once.
     """
     start, end = period_bounds(period)
     today = date.today()
@@ -394,6 +398,12 @@ def get_summary(period: str, section: str = "MINES",
     days_in_month = (end - start).days + 1
     days_elapsed = (as_of - start).days + 1
     factor = days_elapsed / days_in_month
+
+    # The whole month asked for, on a month that is over: everything that was
+    # going to post has posted, so there is nothing left to estimate. Any
+    # earlier as_of - closed month or not - is a part-month question.
+    settled = closed and as_of >= end
+    prorate = 1.0 if as_of >= end else factor
 
     actuals = [a for a in get_actuals(period, section, basis) if a["accrual_date"] <= as_of]
     qty_key = "ore_mt" if section == "MINES" else "cob_mt"
@@ -409,7 +419,7 @@ def get_summary(period: str, section: str = "MINES",
     def value_for(name: str) -> tuple[float, float, bool]:
         """Actual to use, the accrual behind it, and whether it was accrued."""
         posted = actual_lines.get(name, 0.0)
-        if closed or bucket_of.get(name) != "MONTH_END":
+        if settled or bucket_of.get(name) != "MONTH_END":
             return posted, 0.0, False
         accrued = plan_lines.get(name, 0.0) * factor
         return (accrued, accrued, True) if accrued > posted else (posted, accrued, False)
@@ -417,7 +427,7 @@ def get_summary(period: str, section: str = "MINES",
     lines = []
     for name in SUMMARY_ORDER:
         act, accrued, is_accrued = value_for(name)
-        pl = plan_lines.get(name, 0.0) * (1.0 if closed else factor)
+        pl = plan_lines.get(name, 0.0) * prorate
         if act == 0 and pl == 0:
             continue
         row = _line(name, act, pl, qty, bucket_of.get(name))
@@ -431,7 +441,7 @@ def get_summary(period: str, section: str = "MINES",
 
     dep_act, dep_accrued, dep_is_accrued = value_for(DEPRECIATION_LINE)
     dep = _line(DEPRECIATION_LINE, dep_act,
-                plan_lines.get(DEPRECIATION_LINE, 0.0) * (1.0 if closed else factor),
+                plan_lines.get(DEPRECIATION_LINE, 0.0) * prorate,
                 qty, bucket_of.get(DEPRECIATION_LINE))
     dep["accrued"] = round(dep_accrued, 2)
     dep["is_accrued"] = dep_is_accrued
@@ -442,7 +452,7 @@ def get_summary(period: str, section: str = "MINES",
     out = lines + [before, dep, after]
     if section == "COB":
         feed = _line(FEED_LINE, actual_lines.get(FEED_LINE, 0.0),
-                     plan_lines.get(FEED_LINE, 0.0), qty, "FEED")
+                     plan_lines.get(FEED_LINE, 0.0) * prorate, qty, "FEED")
         out += [feed, _total("Total Cost of Concentrate",
                              after["actual"] + feed["actual"],
                              after["plan"] + feed["plan"], qty)]
@@ -450,6 +460,7 @@ def get_summary(period: str, section: str = "MINES",
     return {"period": period, "section": section, "basis": basis,
             "from_date": start.isoformat(), "to_date": end.isoformat(),
             "as_of": as_of.isoformat(), "is_closed": closed,
+            "is_settled": settled,
             "days_in_month": days_in_month, "days_elapsed": days_elapsed,
             "accrual_factor": round(factor, 6),
             "production_mt": round(qty, 2),

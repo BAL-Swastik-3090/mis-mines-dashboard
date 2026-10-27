@@ -62,6 +62,7 @@ function Sheet({
 }) {
   const by = new Map((data?.lines ?? []).map((l) => [l.line, l]));
   const particulars = [...LINES, tailLine];
+  const anyAccrued = (data?.lines ?? []).some((l) => l.is_accrued);
 
   return (
     <div className="bg-white border border-[#d0d9e8] rounded shadow-sm overflow-hidden">
@@ -109,6 +110,18 @@ function Sheet({
           </tbody>
         </table>
       </div>
+
+      {/* A month-end cost that has not posted yet is an estimate. Printed
+          plain it reads as a payment, so the lines carrying one say so and
+          the arithmetic behind them is stated rather than assumed. */}
+      {anyAccrued && data && (
+        <div className="px-4 py-2 border-t border-[#d0d9e8] bg-[#fff8e6] text-[11px] text-txt-secondary">
+          <span className="text-gold-dark font-bold">†</span>{" "}
+          accrued, not yet posted: plan ÷ {data.days_in_month} days
+          × {data.days_elapsed} days elapsed
+          {" "}({(data.accrual_factor * 100).toFixed(1)}% of the month)
+        </div>
+      )}
     </div>
   );
 }
@@ -117,7 +130,7 @@ function Line({
   name, row, total = false,
 }: {
   name: string;
-  row?: { actual: number; rs_per_mt: number | null };
+  row?: { actual: number; rs_per_mt: number | null; is_accrued?: boolean };
   total?: boolean;
 }) {
   // A nil line is a dash, as on the sheet - not a zero, which reads as a
@@ -131,7 +144,14 @@ function Line({
       "border-b border-[#eef2f8]",
       total ? "bg-[#fdeadb] font-bold text-txt-primary" : "text-txt-secondary",
     ].join(" ")}>
-      <td className="py-1.5 pl-4">{name}</td>
+      <td className="py-1.5 pl-4">
+        {name}
+        {row?.is_accrued ? (
+          <span className="text-gold-dark font-bold" title="Accrued from plan - not yet posted">
+            {" "}†
+          </span>
+        ) : null}
+      </td>
       <td className="py-1.5 pr-3 text-right font-mono tabular-nums">{amount}</td>
       <td className="py-1.5 pr-4 text-right font-mono tabular-nums">{rate}</td>
     </tr>

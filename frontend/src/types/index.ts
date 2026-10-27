@@ -1563,6 +1563,10 @@ export interface CostLine {
   rs_per_mt:       number | null;
   plan_rs_per_mt:  number | null;
   is_total:        boolean;
+  /** Plan pro-rated to as_of, for a month-end line that has not posted. */
+  accrued?:        number;
+  /** True when `actual` above IS that accrual rather than a posting. */
+  is_accrued?:     boolean;
 }
 
 export interface CostSummaryResponse {
@@ -1570,6 +1574,14 @@ export interface CostSummaryResponse {
   section:       CostSection;
   from_date:     string;
   to_date:       string;
+  /** The day the sheet answers for; month-end costs are pro-rated to it. */
+  as_of:         string;
+  is_closed:     boolean;
+  /** The whole month asked for, on a month that is over: nothing left to estimate. */
+  is_settled:    boolean;
+  days_in_month: number;
+  days_elapsed:  number;
+  accrual_factor: number;
   production_mt: number;
   lines:         CostLine[];
 }
