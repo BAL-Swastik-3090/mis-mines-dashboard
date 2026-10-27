@@ -261,6 +261,88 @@ def parse_masters(content: bytes, filename: str) -> dict:
                        "cost_centres": len(centres)}}
 
 
+# ── completeness ─────────────────────────────────────────────────────
+# A month's plan arrives as four separate SAP exports, and uploading two of
+# them produces a sheet that is quietly a quarter of the cost rather than an
+# error.
+#
+# Which export a row came from is recorded as source_file, and that is what
+# this checks. Content cannot answer it: September's "Mines and COB" export
+# also carries an Overhead element, so judging by the lines filled reported
+# CC OH Plan as loaded in a month where it was never uploaded. The period
+# still comes from the header block and never from the name - a filename is
+# good enough to say WHICH export this is, not good enough to say WHEN.
+EXPECTED_PLAN_FILES: tuple[dict, ...] = (
+    {"name": "Mines and COB", "match": "mines and cob",
+     "fills": ("Excavation Charges", "Labour", "Electricity Cost",
+               "Sampling & Analysis", "Diesel", "Cons., Spares & Maintenance")},
+    {"name": "depreciation Plan", "match": "depreciation",
+     "fills": ("Depreciation",)},
+    {"name": "CC OH Plan", "match": "cc oh",
+     "fills": ("Overhead",)},
+    {"name": "Salary Planning", "match": "salary planning",
+     "fills": ("Salary",)},
+)
+
+
+def get_plan_coverage(db: Session, fiscal_year: int, period: int) -> dict:
+    """Which of the month's four plan exports are in, and what is missing."""
+    from app.services import costing          # GL -> cost-sheet line mapping
+
+    rows = db.execute(text(f"""
+        SELECT cost_element, SUM(plan_fix_cost) AS amt
+          FROM {SCHEMA}.cost_plan_detail
+         WHERE fiscal_year = :fy AND period = :p
+           AND section IN ('MINES', 'COB')
+         GROUP BY cost_element
+    """), {"fy": fiscal_year, "p": period}).mappings().all()
+
+    by_line: dict[str, float] = {}
+    unmapped = 0.0
+    for r in rows:
+        m = costing.GL_MASTER.get(str(r["cost_element"]))
+        if m and m["include_in_costing"] == "1" and m["summary_line"]:
+            by_line[m["summary_line"]] = by_line.get(m["summary_line"], 0.0) + float(r["amt"])
+        else:
+            unmapped += float(r["amt"])
+
+    loaded_files = [r[0] for r in db.execute(text(f"""
+        SELECT DISTINCT source_file FROM {SCHEMA}.cost_plan
+         WHERE fiscal_year = :fy AND period = :p
+    """), {"fy": fiscal_year, "p": period}).fetchall()]
+
+    files, recognised = [], set()
+    for spec in EXPECTED_PLAN_FILES:
+        hit = next((f for f in loaded_files if spec["match"] in f.lower()), None)
+        if hit:
+            recognised.add(hit)
+        files.append({
+            "name": spec["name"],
+            "present": hit is not None,
+            "source_file": hit,
+            "fills": list(spec["fills"]),
+            "amount": round(sum(by_line.get(l, 0.0) for l in spec["fills"]), 2) if hit else 0.0,
+            "missing_lines": [] if hit else [
+                l for l in spec["fills"] if by_line.get(l, 0.0) == 0
+            ],
+        })
+
+    loaded = sum(1 for f in files if f["present"])
+    return {
+        "fiscal_year": fiscal_year, "period": period,
+        "plan_month": _plan_month(fiscal_year, period).isoformat(),
+        "files_loaded": loaded,
+        "files_expected": len(files),
+        "complete": loaded == len(files),
+        "files": files,
+        # A file nobody expected is worth saying out loud rather than
+        # ignoring: it is either a renamed export or the wrong one.
+        "unrecognised_files": sorted(set(loaded_files) - recognised),
+        "amount_total": round(sum(by_line.values()) + unmapped, 2),
+        "amount_unmapped": round(unmapped, 2),
+    }
+
+
 # ── writing ──────────────────────────────────────────────────────────
 def upsert_masters(db: Session, elements: dict, centres: dict, source_file: str) -> dict:
     for table, key, data in (("cost_element_master", "cost_element", elements),

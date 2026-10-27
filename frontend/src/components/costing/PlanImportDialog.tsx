@@ -14,7 +14,8 @@ import {
   Upload, X, AlertTriangle, CheckCircle2, FileSpreadsheet, Loader2, BookOpen,
 } from "lucide-react";
 import api from "@/lib/api";
-import { useCostPlanPeriods } from "@/hooks/useCostPlan";
+import { useAuth } from "@/contexts/useAuth";
+import { useCostPlanPeriods, usePlanCoverage } from "@/hooks/useCostPlan";
 
 interface Props {
   onClose: () => void;
@@ -62,6 +63,13 @@ interface Inspected {
 export default function PlanImportDialog({ onClose, onDone }: Props) {
   const { data: loaded, refetch: refetchLoaded } = useCostPlanPeriods();
   const current = loaded?.periods?.[0];
+  const empId = useAuth((s) => s.user?.emp_id);
+
+  // A month's plan is four exports. Which ones are in is the question this
+  // dialog exists to answer - loading two of four produces a sheet that is
+  // quietly a quarter of the cost, with nothing on screen to say so.
+  const { data: cover, refetch: refetchCover } =
+    usePlanCoverage(current?.fiscal_year, current?.period);
 
   const [files, setFiles] = useState<File[]>([]);
   const [found, setFound] = useState<Inspected[] | null>(null);
@@ -103,6 +111,7 @@ export default function PlanImportDialog({ onClose, onDone }: Props) {
         const form = new FormData();
         planFiles.forEach((f) => form.append("files", f));
         form.append("dry_run", "false");
+        if (empId) form.append("uploaded_by", empId);
         const res = await api.post<{ rows_written: number }>("/cost-plan/upload", form);
         written = res.data.rows_written;
       }
@@ -119,6 +128,7 @@ export default function PlanImportDialog({ onClose, onDone }: Props) {
         names ? `${names} descriptions saved` : "",
       ].filter(Boolean).join(" · ") || "Nothing to save.");
       refetchLoaded();
+      refetchCover();
       onDone();
     } catch (err: unknown) {
       const e = err as { response?: { data?: { detail?: unknown } }; message?: string };
@@ -150,6 +160,44 @@ export default function PlanImportDialog({ onClose, onDone }: Props) {
             <X size={16} />
           </button>
         </div>
+
+        {cover ? (
+          <div className={`border-b border-border-light px-5 py-3 ${
+            cover.complete ? "bg-green-50/60" : "bg-gold-light/10"}`}>
+            <p className="text-[11px] font-semibold text-txt-primary">
+              {monthLabel(cover.plan_month)} — {cover.files_loaded} of {cover.files_expected} plan
+              exports loaded
+              {cover.complete ? " · complete" : ""}
+            </p>
+            <ul className="mt-1.5 space-y-1">
+              {cover.files.map((f) => (
+                <li key={f.name} className="flex items-start gap-1.5 text-[11px]">
+                  {f.present
+                    ? <CheckCircle2 size={12} className="mt-0.5 shrink-0 text-green-600" />
+                    : <AlertTriangle size={12} className="mt-0.5 shrink-0 text-gold-dark" />}
+                  <span className={f.present ? "text-txt-secondary" : "text-txt-primary"}>
+                    <span className="font-semibold">{f.name}</span>
+                    {f.present ? (
+                      <> — Rs {rupees(f.amount)}</>
+                    ) : f.missing_lines.length ? (
+                      <> — not loaded, so{" "}
+                        <span className="text-amber-800">{f.missing_lines.join(", ")}</span>{" "}
+                        {f.missing_lines.length === 1 ? "is" : "are"} missing from the cost sheet
+                      </>
+                    ) : (
+                      <> — not loaded, though its lines are already covered by another export</>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            {cover.unrecognised_files.length ? (
+              <p className="mt-1.5 text-[11px] text-txt-light">
+                Also loaded, not one of the four: {cover.unrecognised_files.join(", ")}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="space-y-3 px-5 py-4">
           {/* ── 1. choose, and it reads itself ───────────────────── */}

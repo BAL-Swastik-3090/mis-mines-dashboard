@@ -145,6 +145,18 @@ def periods(db: Session = Depends(get_minehub_db)):
             "masters": cost_plan.get_master_status(db)}
 
 
+@router.get("/coverage")
+def coverage(
+    fiscal_year: int | None = Query(None),
+    period: int | None = Query(None, ge=1, le=16),
+    db: Session = Depends(get_minehub_db),
+):
+    """Which of the month's four plan exports are loaded, and what is missing."""
+    if fiscal_year is None or period is None:
+        fiscal_year, period = _latest(db)
+    return cost_plan.get_plan_coverage(db, fiscal_year, period)
+
+
 @router.get("/summary")
 def summary(
     fiscal_year: int | None = Query(None),

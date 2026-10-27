@@ -28,3 +28,40 @@ export function useCostPlanPeriods() {
     staleTime: 60_000,
   });
 }
+
+export interface PlanCoverageFile {
+  name: string;
+  present: boolean;
+  source_file: string | null;
+  fills: string[];
+  amount: number;
+  /** Lines this export carries that nothing else has supplied either. */
+  missing_lines: string[];
+}
+
+export interface PlanCoverage {
+  fiscal_year: number;
+  period: number;
+  plan_month: string;
+  files_loaded: number;
+  files_expected: number;
+  complete: boolean;
+  files: PlanCoverageFile[];
+  unrecognised_files: string[];
+  amount_total: number;
+  amount_unmapped: number;
+}
+
+/** Which of the month's four plan exports are in. Null fiscal year = latest. */
+export function usePlanCoverage(fiscalYear?: number | null, period?: number | null) {
+  return useQuery<PlanCoverage>({
+    queryKey: ["cost-plan", "coverage", fiscalYear ?? null, period ?? null],
+    queryFn: async () => {
+      const res = await api.get("/cost-plan/coverage", {
+        params: { fiscal_year: fiscalYear ?? undefined, period: period ?? undefined },
+      });
+      return res.data;
+    },
+    staleTime: 30_000,
+  });
+}
