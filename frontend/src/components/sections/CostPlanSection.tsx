@@ -17,6 +17,15 @@ import { useCostPlanPeriods, useCostPlanSummary } from "@/hooks/useCostPlan";
 
 const SECTIONS = ["MINES", "COB"] as const;
 
+/* While the plan is still being fetched the tiles say nothing rather than
+   zero: "0 cost centres" is a finding, and we have not found it yet. */
+const LOADING_TILES = (section: string) => [
+  { label: `${section} plan`, value: "…", hint: "loading" },
+  { label: "This site", value: "…", hint: "Mines + COB" },
+  { label: "Cost centres", value: "…", hint: `in ${section}` },
+  { label: "Cost elements", value: "…", hint: `in ${section}` },
+];
+
 const rupees = (n: number | null | undefined) =>
   n == null ? "-" : n.toLocaleString("en-IN", { maximumFractionDigits: 0 });
 
@@ -207,7 +216,7 @@ function UploadDialog({ onClose, onDone }: { onClose: () => void; onDone: () => 
 
 /* ── section ────────────────────────────────────────────────────── */
 export default function CostPlanSection() {
-  const { data: periodData, refetch: refetchPeriods } = useCostPlanPeriods();
+  const { data: periodData, isLoading: periodsLoading, refetch: refetchPeriods } = useCostPlanPeriods();
   const [selected, setSelected] = useState<string>("");
   const [section, setSection] = useState<string>("MINES");
   const [showUpload, setShowUpload] = useState(false);
@@ -223,6 +232,7 @@ export default function CostPlanSection() {
   }, [selected]);
 
   const { data: summary, isLoading, refetch: refetchSummary } = useCostPlanSummary(fy, p, section);
+  const loading = periodsLoading || (isLoading && !summary);
   const refreshAll = () => { refetchPeriods(); refetchSummary(); };
 
   const masters = periodData?.masters;
@@ -247,7 +257,9 @@ export default function CostPlanSection() {
         <div className="flex flex-wrap items-center gap-2">
           <select value={selected} onChange={(e) => setSelected(e.target.value)}
             className="rounded border border-border bg-white px-2 py-1.5 text-[11px] font-semibold text-navy">
-            {periods.length === 0 ? <option value="">No plan uploaded</option> : null}
+            {periods.length === 0 ? (
+              <option value="">{periodsLoading ? "Loading…" : "No plan uploaded"}</option>
+            ) : null}
             {periods.map((pr) => (
               <option key={`${pr.fiscal_year}-${pr.period}`} value={`${pr.fiscal_year}-${pr.period}`}>
                 {monthLabel(pr.plan_month)} · FY{pr.fiscal_year} P{pr.period}
@@ -286,7 +298,7 @@ export default function CostPlanSection() {
       ) : null}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {[
+        {(loading ? LOADING_TILES(section) : [
           { label: `${section} plan`, value: summary ? `Rs ${rupees(summary.totals.amount)}` : "-", hint: `${summary?.totals.rows ?? 0} rows` },
           {
             label: "This site",
@@ -299,7 +311,7 @@ export default function CostPlanSection() {
           },
           { label: "Cost centres", value: String(summary?.by_centre.length ?? 0), hint: `in ${section}` },
           { label: "Cost elements", value: String(summary?.by_element.length ?? 0), hint: `in ${section}` },
-        ].map((k) => (
+        ]).map((k) => (
           <div key={k.label} className="rounded-md border border-border-light bg-white p-4 shadow-sm">
             <div className="text-[10px] font-condensed font-bold uppercase tracking-widest text-txt-light">{k.label}</div>
             <div className="mt-1 font-condensed text-[24px] font-black text-navy">{k.value}</div>
@@ -308,7 +320,7 @@ export default function CostPlanSection() {
         ))}
       </div>
 
-      {isLoading ? <p className="text-[12px] text-txt-light">Loading…</p> : null}
+      {loading ? <p className="text-[12px] text-txt-light">Loading…</p> : null}
 
       {summary ? (
         <>
