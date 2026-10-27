@@ -72,6 +72,52 @@ async def upload(
     }
 
 
+@router.post("/inspect")
+async def inspect(
+    files: list[UploadFile] = File(..., description="Any cost-plan file - plan export or CE and CC List"),
+):
+    """Say what each file IS, without writing anything.
+
+    Every SAP CO export carries its own identity in the header block above
+    the rows - CO Area, Version, Fiscal Year, Period n To m, currency - so
+    the file does not need to be announced by whoever uploads it, and must
+    not be: the filename is written by hand and has been wrong before.
+
+    A file that is not a plan export is tried as the CE and CC List, which
+    is the only other thing this screen accepts.
+    """
+    out = []
+    for f in files:
+        name = f.filename or ""
+        content = await f.read()
+        if len(content) > MAX_UPLOAD_BYTES:
+            out.append({"file": name, "kind": "error",
+                        "error": f"File is larger than {MAX_UPLOAD_BYTES // 1024 // 1024} MB"})
+            continue
+        try:
+            rep = cost_plan.parse_plan(content, name)["report"]
+            site = {k: v for k, v in rep["by_section"].items() if k in SECTIONS}
+            out.append({
+                "file": name, "kind": "plan", **rep,
+                "site_rows": sum(v["rows"] for v in site.values()),
+                "site_amount": round(sum(v["amount"] for v in site.values()), 2),
+            })
+            continue
+        except PlanParseError as exc:
+            # `except ... as` unbinds the name at the end of the block, so
+            # keep the message: it is the one worth reporting if the file
+            # turns out not to be the CE and CC List either.
+            why = str(exc)
+        try:
+            rep = cost_plan.parse_masters(content, name)["report"]
+            out.append({"file": name, "kind": "masters", **rep})
+        except PlanParseError:
+            # Report why it failed AS A PLAN: that is what the user was
+            # almost certainly uploading, so it is the useful message.
+            out.append({"file": name, "kind": "error", "error": why})
+    return {"files": out}
+
+
 @router.post("/masters")
 async def upload_masters(
     file: UploadFile = File(..., description="CE and CC List workbook (.xlsx)"),

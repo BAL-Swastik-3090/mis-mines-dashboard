@@ -2,13 +2,12 @@
 /**
  * Importing the monthly cost plan.
  *
- * The plan is not a report - nobody opens it to read it, they open it to
- * load the month's SAP CO export so the cost sheet has a plan column and
- * the month-end accrual has a number to pro-rate. So it lives here, as a
- * dialog on the cost sheet, rather than as a screen of its own.
- *
- * Two uploads, because the export carries numbers and the workbook carries
- * what they mean: the plan files, and the CE and CC List that names them.
+ * Two steps and nothing else: choose the files, then save. What the files
+ * ARE is never asked - every SAP CO export carries its identity in the
+ * header block above the rows (CO Area, Version, Fiscal Year, Period n To
+ * m), so the server reads that and reports which month it covers and how
+ * many rows will be written. The CE and CC List is recognised the same way,
+ * so both kinds of file go through one picker.
  */
 import React, { useState } from "react";
 import {
@@ -26,72 +25,108 @@ interface Props {
 const rupees = (n: number | null | undefined) =>
   n == null ? "-" : n.toLocaleString("en-IN", { maximumFractionDigits: 0 });
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
 const monthLabel = (iso: string | null | undefined) => {
   if (!iso) return "-";
   const [y, m] = iso.split("-");
-  const names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  return `${names[parseInt(m, 10) - 1]} ${y}`;
+  return `${MONTHS[parseInt(m, 10) - 1]} ${y}`;
 };
 
-interface PlanFileReport {
-  file: string; fiscal_year: number; period: number; plan_month: string;
-  rows_parsed: number; amount_total: number; negative_rows: number;
-  rows_skipped_unreadable: number; duplicate_pairs_collapsed: number;
-  by_section: Record<string, { rows: number; amount: number }>;
-  written: boolean; rows_new?: number; rows_changed?: number; rows_identical?: number;
-}
-interface PlanUploadResponse {
-  files_accepted: number; files_rejected: number; rows_written: number;
-  results: PlanFileReport[]; errors: { file: string; error: string }[];
+/** The dates a period covers, since a date range is what is being written. */
+const monthRange = (iso: string) => {
+  const [y, m] = iso.split("-").map(Number);
+  const last = new Date(y, m, 0).getDate();
+  return `1 - ${last} ${MONTHS[m - 1]} ${y}`;
+};
+
+interface Inspected {
+  file: string;
+  kind: "plan" | "masters" | "error";
+  error?: string;
+  /* plan */
+  fiscal_year?: number;
+  period?: number;
+  plan_month?: string;
+  rows_parsed?: number;
+  site_rows?: number;
+  site_amount?: number;
+  negative_rows?: number;
+  rows_skipped_unreadable?: number;
+  /* masters */
+  cost_elements?: number;
+  cost_centres?: number;
 }
 
-/* ── upload dialog ──────────────────────────────────────────────── */
 export default function PlanImportDialog({ onClose, onDone }: Props) {
   const { data: loaded, refetch: refetchLoaded } = useCostPlanPeriods();
   const current = loaded?.periods?.[0];
+
   const [files, setFiles] = useState<File[]>([]);
-  const [master, setMaster] = useState<File | null>(null);
-  const [dryRun, setDryRun] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<PlanUploadResponse | null>(null);
-  const [masterResult, setMasterResult] = useState<string | null>(null);
+  const [found, setFound] = useState<Inspected[] | null>(null);
+  const [reading, setReading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const sendPlan = async () => {
-    if (!files.length) return;
-    setBusy(true); setError(null); setResult(null);
+  const plans = (found ?? []).filter((f) => f.kind === "plan");
+  const masters = (found ?? []).filter((f) => f.kind === "masters");
+  const bad = (found ?? []).filter((f) => f.kind === "error");
+  const canSave = plans.length + masters.length > 0 && !reading && !saving && !saved;
+
+  /** Choosing the files reads them at once - there is nothing to decide first. */
+  const choose = async (picked: File[]) => {
+    setFiles(picked);
+    setFound(null); setError(null); setSaved(null);
+    if (!picked.length) return;
+    setReading(true);
     try {
       const form = new FormData();
-      files.forEach((f) => form.append("files", f));
-      form.append("dry_run", String(dryRun));
-      const res = await api.post<PlanUploadResponse>("/cost-plan/upload", form);
-      setResult(res.data);
-      if (!dryRun && res.data.rows_written > 0) { refetchLoaded(); onDone(); }
+      picked.forEach((f) => form.append("files", f));
+      const res = await api.post<{ files: Inspected[] }>("/cost-plan/inspect", form);
+      setFound(res.data.files);
     } catch (err: unknown) {
       const e = err as { response?: { data?: { detail?: unknown } }; message?: string };
-      const detail = e.response?.data?.detail;
-      if (detail && typeof detail === "object" && Array.isArray((detail as { errors?: unknown }).errors)) {
-        const d = detail as { errors: { file: string; error: string }[] };
-        setResult({ files_accepted: 0, files_rejected: d.errors.length, rows_written: 0, results: [], errors: d.errors });
-      } else {
-        setError(typeof detail === "string" ? detail : e.message ?? "Upload failed");
-      }
-    } finally { setBusy(false); }
+      setError(String(e.response?.data?.detail ?? e.message ?? "Could not read the files"));
+    } finally {
+      setReading(false);
+    }
   };
 
-  const sendMaster = async () => {
-    if (!master) return;
-    setBusy(true); setError(null); setMasterResult(null);
+  const save = async () => {
+    setSaving(true); setError(null); setSaved(null);
     try {
-      const form = new FormData();
-      form.append("file", master);
-      const res = await api.post("/cost-plan/masters", form);
-      setMasterResult(`${res.data.cost_elements} cost elements and ${res.data.cost_centres} cost centres loaded.`);
+      let written = 0;
+      const planFiles = files.filter((f) => plans.some((p) => p.file === f.name));
+      if (planFiles.length) {
+        const form = new FormData();
+        planFiles.forEach((f) => form.append("files", f));
+        form.append("dry_run", "false");
+        const res = await api.post<{ rows_written: number }>("/cost-plan/upload", form);
+        written = res.data.rows_written;
+      }
+      let names = 0;
+      for (const f of files.filter((x) => masters.some((m) => m.file === x.name))) {
+        const form = new FormData();
+        form.append("file", f);
+        const res = await api.post<{ cost_elements: number; cost_centres: number }>(
+          "/cost-plan/masters", form);
+        names += res.data.cost_elements + res.data.cost_centres;
+      }
+      setSaved([
+        written ? `${written} plan rows saved` : "",
+        names ? `${names} descriptions saved` : "",
+      ].filter(Boolean).join(" · ") || "Nothing to save.");
+      refetchLoaded();
       onDone();
     } catch (err: unknown) {
       const e = err as { response?: { data?: { detail?: unknown } }; message?: string };
-      setError(String(e.response?.data?.detail ?? e.message ?? "Upload failed"));
-    } finally { setBusy(false); }
+      const detail = e.response?.data?.detail;
+      setError(typeof detail === "string" ? detail : e.message ?? "Save failed");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -100,75 +135,97 @@ export default function PlanImportDialog({ onClose, onDone }: Props) {
         <div className="flex items-start justify-between border-b border-border-light px-5 py-3">
           <div>
             <h2 className="font-condensed text-[15px] font-black uppercase tracking-[.05em] text-navy">
-              Upload cost plan
+              Import cost plan
             </h2>
+            {/* Mines + COB only. The export carries the whole company, so its
+                own total says nothing about what this mine plans to spend. */}
             <p className="mt-0.5 text-[11px] text-txt-light">
-              The same SAP CO export you load into SAP - one period at a time
-            </p>
-            {/* Removing the Cost Plan screen left nowhere else to see what the
-                sheet is currently planning against. It belongs here.
-
-                Mines + COB only. The export carries the whole company, so
-                its row count and total are mostly other plants and say
-                nothing about what this mine is planning to spend. */}
-            <p className="mt-1 text-[11px] text-txt-secondary">
               {current
                 ? `Loaded now: ${monthLabel(current.plan_month)} · ${current.mines_rows} rows for this mine · Rs ${rupees(current.mines_amount)}`
                 : "No plan loaded yet - the month-end accrual has nothing to pro-rate."}
             </p>
           </div>
-          <button onClick={onClose} className="rounded p-1 text-txt-light hover:bg-bg-section hover:text-navy">
+          <button onClick={onClose}
+            className="rounded p-1 text-txt-light hover:bg-bg-section hover:text-navy">
             <X size={16} />
           </button>
         </div>
 
-        <div className="space-y-4 px-5 py-4">
+        <div className="space-y-3 px-5 py-4">
+          {/* ── 1. choose, and it reads itself ───────────────────── */}
           <label className="block cursor-pointer rounded border-2 border-dashed border-border px-4 py-5 text-center hover:border-gold hover:bg-bg-section">
-            <FileSpreadsheet size={20} className="mx-auto text-txt-light" />
+            {reading
+              ? <Loader2 size={20} className="mx-auto animate-spin text-gold-dark" />
+              : <FileSpreadsheet size={20} className="mx-auto text-txt-light" />}
             <p className="mt-2 text-[12px] font-semibold text-navy">
-              {files.length ? `${files.length} plan file${files.length > 1 ? "s" : ""} selected` : "Choose plan exports (.csv or .xlsx)"}
+              {reading
+                ? "Reading the files…"
+                : files.length
+                  ? `${files.length} file${files.length > 1 ? "s" : ""} chosen`
+                  : "Choose plan exports (.csv or .xlsx)"}
             </p>
             <p className="mt-0.5 text-[11px] text-txt-light">
-              Salary Planning, CC OH Plan, depreciation Plan - all of a month at once is fine
+              Salary Planning, CC OH Plan, depreciation Plan, or the CE and CC List
             </p>
             <input type="file" accept=".csv,.xlsx" multiple hidden
-              onChange={(e) => { setFiles(Array.from(e.target.files ?? [])); setResult(null); setError(null); }} />
+              onChange={(e) => choose(Array.from(e.target.files ?? []))} />
           </label>
 
-          <label className="flex cursor-pointer items-center gap-2 text-[12px] text-txt-secondary">
-            <input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} />
-            Check without saving - parse and report, write nothing
-          </label>
-
-          <div className="flex justify-end">
-            <button onClick={sendPlan} disabled={busy || !files.length}
-              className="flex items-center gap-1.5 rounded border border-gold-dark bg-gold px-3 py-1.5 text-[11px] font-condensed font-bold tracking-widest text-white disabled:opacity-40">
-              {busy ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
-              {dryRun ? "CHECK PLAN" : "UPLOAD PLAN"}
-            </button>
-          </div>
-
-          <div className="border-t border-border-light pt-3">
-            <p className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold text-txt-secondary">
-              <BookOpen size={12} /> Descriptions (CE and CC List) - load once, refresh when it changes
-            </p>
-            <div className="flex items-center gap-2">
-              <label className="flex-1 cursor-pointer truncate rounded border border-border px-3 py-1.5 text-[11px] text-txt-secondary hover:bg-bg-section">
-                {master ? master.name : "Choose CE and CC List.xlsx"}
-                <input type="file" accept=".xlsx" hidden
-                  onChange={(e) => { setMaster(e.target.files?.[0] ?? null); setMasterResult(null); }} />
-              </label>
-              <button onClick={sendMaster} disabled={busy || !master}
-                className="rounded border border-border px-3 py-1.5 text-[11px] font-condensed font-bold tracking-widest text-txt-secondary hover:bg-bg-section disabled:opacity-40">
-                LOAD
-              </button>
+          {/* ── what each file turned out to be ──────────────────── */}
+          {plans.map((p) => (
+            <div key={p.file} className="rounded border border-border-light px-3 py-2 text-[11px]">
+              <div className="flex items-center gap-1.5 font-semibold text-navy">
+                <CheckCircle2 size={12} className="text-green-600" />
+                <span className="truncate">{p.file}</span>
+                <span className="ml-auto shrink-0 rounded bg-bg-section px-1.5 py-0.5 tracking-wider text-txt-secondary">
+                  COST PLAN
+                </span>
+              </div>
+              <div className="mt-1 text-[12px] font-semibold text-txt-primary">
+                {monthRange(p.plan_month!)}
+                <span className="ml-1.5 font-normal text-txt-light">
+                  FY{p.fiscal_year} P{p.period}
+                </span>
+              </div>
+              <div className="mt-0.5 text-txt-secondary">
+                <strong>{p.rows_parsed}</strong> rows to write, of which{" "}
+                <strong>{p.site_rows}</strong> are this mine &middot; Rs {rupees(p.site_amount)}
+              </div>
+              {p.negative_rows ? (
+                <div className="mt-1 text-amber-700">
+                  {p.negative_rows} credit row(s) - deduction elements carry negatives.
+                </div>
+              ) : null}
+              {p.rows_skipped_unreadable ? (
+                <div className="mt-1 text-amber-700">
+                  {p.rows_skipped_unreadable} row(s) unreadable and will be skipped.
+                </div>
+              ) : null}
             </div>
-            {masterResult ? (
-              <p className="mt-2 flex items-center gap-1.5 text-[11px] text-green-700">
-                <CheckCircle2 size={12} /> {masterResult}
-              </p>
-            ) : null}
-          </div>
+          ))}
+
+          {masters.map((m) => (
+            <div key={m.file} className="rounded border border-border-light px-3 py-2 text-[11px]">
+              <div className="flex items-center gap-1.5 font-semibold text-navy">
+                <BookOpen size={12} className="text-gold-dark" />
+                <span className="truncate">{m.file}</span>
+                <span className="ml-auto shrink-0 rounded bg-bg-section px-1.5 py-0.5 tracking-wider text-txt-secondary">
+                  DESCRIPTIONS
+                </span>
+              </div>
+              <div className="mt-1 text-txt-secondary">
+                {m.cost_elements} cost elements and {m.cost_centres} cost centres - names, not
+                amounts, so they carry no period and apply to every month.
+              </div>
+            </div>
+          ))}
+
+          {bad.map((b) => (
+            <div key={b.file}
+              className="rounded border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-700">
+              <span className="font-semibold">{b.file}</span> &mdash; {b.error}
+            </div>
+          ))}
 
           {error ? (
             <div className="flex gap-2 rounded border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-700">
@@ -176,47 +233,23 @@ export default function PlanImportDialog({ onClose, onDone }: Props) {
             </div>
           ) : null}
 
-          {result ? (
-            <div className="space-y-2">
-              <div className="flex flex-wrap gap-x-4 rounded border border-border-light bg-bg-section px-3 py-2 text-[12px]">
-                <span className="font-semibold text-navy">{result.files_accepted} accepted</span>
-                {result.files_rejected > 0 ? <span className="text-red-600">{result.files_rejected} rejected</span> : null}
-                <span className="text-txt-secondary">{result.rows_written} rows written</span>
-              </div>
-              {result.results.map((r) => (
-                <div key={r.file} className="rounded border border-border-light px-3 py-2 text-[11px]">
-                  <div className="flex items-center gap-1.5 font-semibold text-navy">
-                    <CheckCircle2 size={12} className="text-green-600" />
-                    <span className="truncate">{r.file}</span>
-                    {!r.written ? <span className="ml-auto shrink-0 rounded bg-gold-light/30 px-1.5 py-0.5 text-gold-dark">NOT SAVED</span> : null}
-                  </div>
-                  <div className="mt-1 text-txt-secondary">
-                    FY{r.fiscal_year} P{r.period} = {monthLabel(r.plan_month)} · {r.rows_parsed} rows · Rs {rupees(r.amount_total)}
-                    {r.written ? ` · ${r.rows_new} new, ${r.rows_changed} changed, ${r.rows_identical} unchanged` : ""}
-                  </div>
-                  <div className="mt-1 text-txt-light">
-                    {Object.entries(r.by_section).map(([u, v]) => `${u} ${v.rows}`).join(" · ")}
-                  </div>
-                  {r.negative_rows > 0 ? (
-                    <div className="mt-1 text-amber-700">{r.negative_rows} credit row(s) - deduction elements carry negatives.</div>
-                  ) : null}
-                  {r.rows_skipped_unreadable > 0 ? (
-                    <div className="mt-1 text-amber-700">{r.rows_skipped_unreadable} row(s) skipped as unreadable.</div>
-                  ) : null}
-                </div>
-              ))}
-              {result.errors.map((e) => (
-                <div key={e.file} className="rounded border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-700">
-                  <span className="font-semibold">{e.file}</span> — {e.error}
-                </div>
-              ))}
+          {saved ? (
+            <div className="flex items-center gap-1.5 rounded border border-green-200 bg-green-50 px-3 py-2 text-[12px] text-green-700">
+              <CheckCircle2 size={14} /> {saved}
             </div>
           ) : null}
         </div>
 
-        <div className="flex justify-end border-t border-border-light px-5 py-3">
-          <button onClick={onClose} className="rounded border border-border px-3 py-1.5 text-[11px] font-condensed font-bold tracking-widest text-txt-secondary hover:bg-bg-section">
+        {/* ── 2. save ──────────────────────────────────────────── */}
+        <div className="flex items-center justify-end gap-2 border-t border-border-light px-5 py-3">
+          <button onClick={onClose}
+            className="rounded border border-border px-3 py-1.5 text-[11px] font-condensed font-bold tracking-widest text-txt-secondary hover:bg-bg-section">
             CLOSE
+          </button>
+          <button onClick={save} disabled={!canSave}
+            className="flex items-center gap-1.5 rounded border border-gold-dark bg-gold px-4 py-1.5 text-[11px] font-condensed font-bold tracking-widest text-white disabled:opacity-40">
+            {saving ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+            SAVE
           </button>
         </div>
       </div>
