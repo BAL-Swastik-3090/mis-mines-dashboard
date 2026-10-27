@@ -42,6 +42,7 @@ const NAV_ITEMS: NavItem[] = [
   { kind: "page", id: "fuel-management", label: "Fuel Management",            icon: Gauge           },
   { kind: "page", id: "ev-tracking",     label: "Electric Vehicles Tracking", icon: Zap             },
   { kind: "page", id: "cost-plan",       label: "Cost Plan",                  icon: IndianRupee     },
+  { kind: "page", id: "product-costing", label: "Product Costing",            icon: Calculator      },
   // Procurement, built by another IT team. Every role that existed before this
   // permission was added already holds it, so nobody lost a shortcut they were
   // using; the roles that should not see it simply are not given it.

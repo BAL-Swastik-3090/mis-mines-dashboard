@@ -87,6 +87,8 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   // everybody. Promote it to its own permission when the plan needs an audience
   // separate from the dashboard's.
   "cost-plan": ["dashboard.mis"],
+  // The cost sheet reads the same ledger the MIS dashboard does.
+  "product-costing": ["dashboard.mis"],
 };
 
 /**
@@ -119,6 +121,7 @@ const LANDING_RANK: Record<AppPage, number> = {
   "fuel-management": 40,
   "ev-tracking": 50,
   "cost-plan": 55,
+  "product-costing": 56,
   // Before the registers: a machine, a person and a material all have to be
   // held against a department, so the department is the thing to see first.
   "organisation": 55,

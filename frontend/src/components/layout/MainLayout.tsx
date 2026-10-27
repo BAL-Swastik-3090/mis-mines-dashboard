@@ -6,6 +6,7 @@ import IntelligenceTabBar      from "./IntelligenceTabBar";
 import FuelManagementSection   from "@/components/sections/FuelManagementSection";
 import ElectricVehiclesSection from "@/components/sections/ElectricVehiclesSection";
 import CostPlanSection from "@/components/sections/CostPlanSection";
+import CostingSection from "@/components/sections/CostingSection";
 import OEESection              from "@/components/sections/OEESection";
 import IntelligenceSection     from "@/components/sections/IntelligenceSection";
 import AmiraAccountingTable    from "@/components/tables/AmiraAccountingTable";
@@ -103,6 +104,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           {page === "fuel-management"  && <FuelManagementSection />}
           {page === "ev-tracking"      && <ElectricVehiclesSection />}
         {page === "cost-plan"        && <CostPlanSection />}
+        {page === "product-costing"  && <CostingSection />}
           {page === "access-control"   && <AccessControlSection />}
           {page === "minehub"          && <MineHubSection />}
           {page === "manpower"         && <ManpowerSection />}

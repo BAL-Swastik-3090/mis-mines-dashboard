@@ -276,6 +276,11 @@ PREFIX_PAGE: tuple[tuple[str, str], ...] = (
     # as /api/amira above, and it matches the dashboard.mis gate the Cost Plan
     # page carries on the front end.
     ("/api/cost-plan", "mis"),
+    # The product cost sheet. A separate prefix from /api/cost-plan above and
+    # neither is a prefix of the other, so order between them does not matter.
+    # It needs an entry for the same reason everything here does: unmapped
+    # means unguarded.
+    ("/api/costing", "mis"),
     ("/api/ev-tracking", "ev-tracking"),
     # Must stay BELOW /api/ev-tracking: the lookup takes the first match, and a
     # bare /api/ev would otherwise shadow it. Unmapped, this upload endpoint was
