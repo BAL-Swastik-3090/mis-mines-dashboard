@@ -148,9 +148,9 @@ def _get_bd_hours(
 ) -> dict[str, dict]:
     """SAP breakdown hours + counts for a given list of machine names.
 
-    Hours are merged per machine and selected by START DATE — see
-    services/breakdown.py. A breakdown belongs to the range it was raised in,
-    so a fault carried over from last month is not charged to this one, and a
+    Hours are merged per machine and selected by OVERLAP with the window —
+    see services/breakdown.py. A fault still open from last month contributes
+    the hours that fall inside THIS window and resets at its start, and a
     machine carrying several open notifications is down once rather than once
     per fault.
 
