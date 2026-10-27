@@ -353,32 +353,89 @@ def get_daily_curve(period: str, section: str = "MINES",
 
 
 # ─────────────────────────── period summary ─────────────────────────────
+def _bucket_by_line() -> dict[str, str]:
+    """Which bucket each cost-sheet line belongs to, from the GL master.
+
+    Read from the master rather than from whatever happened to post, so a
+    line with no actuals yet is still known to be a month-end one and gets
+    accrued instead of showing nil.
+    """
+    out: dict[str, str] = {}
+    for m in GL_MASTER.values():
+        if m["include_in_costing"] == "1" and m["summary_line"]:
+            out.setdefault(m["summary_line"], m["bucket"])
+    return out
+
+
 def get_summary(period: str, section: str = "MINES",
-                basis: str = DEFAULT_BASIS) -> dict[str, Any]:
-    actuals = get_actuals(period, section, basis)
+                basis: str = DEFAULT_BASIS, as_of: date | None = None) -> dict[str, Any]:
+    """The cost sheet as at a date.
+
+    Costs that post once a month - salary, PF, depreciation, the overheads
+    uploaded from the plan - have not happened yet when the month is half
+    done, but they are being incurred all the same. Asking on the 10th what
+    the mine has cost is asking for ten days of them, so a month-end line is
+    accrued as plan / days in month x days elapsed.
+
+    Where such a line has ALREADY posted mid-month, the larger of the accrual
+    and the posting stands: adding them would count the same cost twice, and
+    taking the accrual alone would understate a month where payroll ran early.
+    Once the period is closed there is nothing left to estimate and the posted
+    figure is the answer.
+    """
+    start, end = period_bounds(period)
+    today = date.today()
+    closed = end < today
+    # Default to the last day that can have cost on it: today mid-month, the
+    # month end once it is over.
+    as_of = min(as_of or (end if closed else today), end)
+    as_of = max(as_of, start)
+
+    days_in_month = (end - start).days + 1
+    days_elapsed = (as_of - start).days + 1
+    factor = days_elapsed / days_in_month
+
+    actuals = [a for a in get_actuals(period, section, basis) if a["accrual_date"] <= as_of]
     qty_key = "ore_mt" if section == "MINES" else "cob_mt"
-    qty = sum(p[qty_key] for p in get_production(period))
+    qty = sum(p[qty_key] for p in get_production(period) if p["date"] and p["date"] <= as_of)
     plan_lines = plan_by_line(section)
+    bucket_of = _bucket_by_line()
 
     actual_lines: dict[str, float] = {}
-    bucket_of: dict[str, str] = {}
     for a in actuals:
         actual_lines[a["summary_line"]] = actual_lines.get(a["summary_line"], 0.0) + a["amount"]
         bucket_of.setdefault(a["summary_line"], a["bucket"])
 
+    def value_for(name: str) -> tuple[float, float, bool]:
+        """Actual to use, the accrual behind it, and whether it was accrued."""
+        posted = actual_lines.get(name, 0.0)
+        if closed or bucket_of.get(name) != "MONTH_END":
+            return posted, 0.0, False
+        accrued = plan_lines.get(name, 0.0) * factor
+        return (accrued, accrued, True) if accrued > posted else (posted, accrued, False)
+
     lines = []
     for name in SUMMARY_ORDER:
-        act, pl = actual_lines.get(name, 0.0), plan_lines.get(name, 0.0)
+        act, accrued, is_accrued = value_for(name)
+        pl = plan_lines.get(name, 0.0) * (1.0 if closed else factor)
         if act == 0 and pl == 0:
             continue
-        lines.append(_line(name, act, pl, qty, bucket_of.get(name)))
+        row = _line(name, act, pl, qty, bucket_of.get(name))
+        row["accrued"] = round(accrued, 2)
+        row["is_accrued"] = is_accrued
+        lines.append(row)
 
     before = _total("Mining Cost Before Depreciation",
                     sum(l["actual"] for l in lines),
                     sum(l["plan"] for l in lines), qty)
-    dep = _line(DEPRECIATION_LINE, actual_lines.get(DEPRECIATION_LINE, 0.0),
-                plan_lines.get(DEPRECIATION_LINE, 0.0), qty,
-                bucket_of.get(DEPRECIATION_LINE))
+
+    dep_act, dep_accrued, dep_is_accrued = value_for(DEPRECIATION_LINE)
+    dep = _line(DEPRECIATION_LINE, dep_act,
+                plan_lines.get(DEPRECIATION_LINE, 0.0) * (1.0 if closed else factor),
+                qty, bucket_of.get(DEPRECIATION_LINE))
+    dep["accrued"] = round(dep_accrued, 2)
+    dep["is_accrued"] = dep_is_accrued
+
     after = _total("Mining Cost After Depreciation",
                    before["actual"] + dep["actual"], before["plan"] + dep["plan"], qty)
 
@@ -390,9 +447,11 @@ def get_summary(period: str, section: str = "MINES",
                              after["actual"] + feed["actual"],
                              after["plan"] + feed["plan"], qty)]
 
-    start, end = period_bounds(period)
     return {"period": period, "section": section, "basis": basis,
             "from_date": start.isoformat(), "to_date": end.isoformat(),
+            "as_of": as_of.isoformat(), "is_closed": closed,
+            "days_in_month": days_in_month, "days_elapsed": days_elapsed,
+            "accrual_factor": round(factor, 6),
             "production_mt": round(qty, 2),
             "production_basis": production_basis(period),
             "lines": out}

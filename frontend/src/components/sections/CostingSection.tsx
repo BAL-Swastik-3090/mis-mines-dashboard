@@ -5,6 +5,7 @@ import CostingKpiStrip from "@/components/kpi/CostingKpiStrip";
 import CostCurveChart from "@/components/charts/CostCurveChart";
 import CostSummaryTable from "@/components/tables/CostSummaryTable";
 import GlWiseTable from "@/components/tables/GlWiseTable";
+import CostSheet from "@/components/tables/CostSheet";
 import {
   currentPeriod, periodLabel, usePeriods, useCostCoverage,
 } from "@/hooks/useCosting";
@@ -118,7 +119,11 @@ export default function CostingSection() {
       {/* ── Phase 2: the GL wise summary sheet ─────────────────── */}
       {phase === "detail" && <GlWiseTable period={active} />}
 
-      {/* ── Phase 1: the cost sheet ────────────────────────────── */}
+      {/* ── Phase 1: the cost sheet, both sections side by side ─── */}
+      {phase === "summary" && <CostSheet period={active} />}
+
+      {/* Everything below is analysis the workbook does not carry: it reads
+          one section at a time, so it follows the Mines/COB switch. */}
       {phase === "summary" && <CostingKpiStrip period={active} section={section} />}
       {phase === "summary" && <CostCurveChart period={active} section={section} />}
       {phase === "summary" && <CostSummaryTable period={active} section={section} />}

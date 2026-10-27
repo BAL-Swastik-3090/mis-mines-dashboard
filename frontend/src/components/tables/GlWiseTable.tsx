@@ -80,12 +80,12 @@ export default function GlWiseTable({ period }: { period: string }) {
         <table className="w-full text-[12px] min-w-[940px]">
           <thead className="sticky top-0 z-10">
             <tr className="border-y border-[#d0d9e8] bg-bg-soft text-txt-muted">
-              <Th className="text-left pl-4">Account</Th>
-              <Th className="text-left">GL description</Th>
+              <Th className="text-left pl-4">Account Number</Th>
+              <Th className="text-left">GL Description</Th>
               <Th className="text-left">Group</Th>
-              <Th className="text-right">Total (Rs.)</Th>
-              <Th className="text-right">Mines (Rs.)</Th>
-              <Th className="text-right">COB (Rs.)</Th>
+              <Th className="text-right">Total As per Accounts</Th>
+              <Th className="text-right">Accounts - Mines</Th>
+              <Th className="text-right">Accounts - COB</Th>
               <Th className="text-left pr-4">Remarks</Th>
             </tr>
           </thead>
@@ -121,21 +121,23 @@ export default function GlWiseTable({ period }: { period: string }) {
   );
 }
 
+/** Nil reads as a dash on the sheet, not as a measured zero. */
+function dash(n: number) {
+  return n === 0 ? "-" : formatIndian(n);
+}
+
 function Row({ r }: { r: GlWiseRow }) {
   return (
     <tr className={`border-b border-[#eef2f8] ${r.included ? "" : "bg-[#fbfbfc] text-txt-muted"}`}>
       <td className="py-1.5 pl-4 font-mono tabular-nums text-txt-secondary">{r.gl_account}</td>
       <td className="py-1.5 pr-3">{r.gl_description}</td>
-      <td className="py-1.5 pr-3">
-        {r.included ? (
-          <span className="text-txt-secondary">{r.summary_line ?? r.costing_group}</span>
-        ) : (
-          <span className="text-[11px] italic">{r.costing_group || "not required"}</span>
-        )}
-      </td>
-      <Td mono>{formatIndian(r.total)}</Td>
-      <Td mono>{formatIndian(r.mines)}</Td>
-      <Td mono>{formatIndian(r.cob)}</Td>
+      {/* The workbook's Group column verbatim - "Not Required", "Feed Cost",
+          "Excavation Cost" and so on. Not summary_line: the two differ, and
+          that difference is the mapping defect this sheet exists to expose. */}
+      <td className="py-1.5 pr-3">{r.costing_group || "—"}</td>
+      <Td mono>{dash(r.total)}</Td>
+      <Td mono>{dash(r.mines)}</Td>
+      <Td mono>{dash(r.cob)}</Td>
       <td className="py-1.5 pr-4 text-[11px] text-txt-muted max-w-[300px]">{r.remark}</td>
     </tr>
   );

@@ -16,7 +16,7 @@ from app.services.cost_plan import PlanParseError
 router = APIRouter(prefix="/api/cost-plan", tags=["Cost Plan"])
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024      # these exports run well under 100 KB
-UNITS = ("MINES", "BALASORE", "SUKINDA", "OTHER")
+SECTIONS = ("MINES", "COB")
 
 
 def _latest(db: Session) -> tuple[int, int]:
@@ -103,35 +103,35 @@ def periods(db: Session = Depends(get_minehub_db)):
 def summary(
     fiscal_year: int | None = Query(None),
     period: int | None = Query(None, ge=1, le=16),
-    unit: str | None = Query(None, description="MINES, BALASORE, SUKINDA or OTHER"),
+    section: str | None = Query(None, description="MINES or COB"),
     db: Session = Depends(get_minehub_db),
 ):
-    """Planned cost for a period, broken down by unit, element and centre."""
-    if unit and unit not in UNITS:
-        raise HTTPException(400, f"unit must be one of {UNITS}")
+    """Planned cost for a period, broken down by section, element and centre."""
+    if section and section not in SECTIONS:
+        raise HTTPException(400, f"section must be one of {SECTIONS}")
     if fiscal_year is None or period is None:
         fiscal_year, period = _latest(db)
-    return cost_plan.get_summary(db, fiscal_year, period, unit)
+    return cost_plan.get_summary(db, fiscal_year, period, section)
 
 
 @router.get("/rows")
 def rows(
     fiscal_year: int | None = Query(None),
     period: int | None = Query(None, ge=1, le=16),
-    unit: str | None = Query(None),
+    section: str | None = Query(None),
     cost_centre: str | None = Query(None),
     cost_element: str | None = Query(None),
     limit: int = Query(1000, ge=1, le=10000),
     db: Session = Depends(get_minehub_db),
 ):
     """The plan line by line, with descriptions resolved."""
-    if unit and unit not in UNITS:
-        raise HTTPException(400, f"unit must be one of {UNITS}")
+    if section and section not in SECTIONS:
+        raise HTTPException(400, f"section must be one of {SECTIONS}")
     if fiscal_year is None or period is None:
         fiscal_year, period = _latest(db)
     return {
-        "fiscal_year": fiscal_year, "period": period, "unit": unit,
-        "rows": cost_plan.get_rows(db, fiscal_year, period, unit,
+        "fiscal_year": fiscal_year, "period": period, "section": section,
+        "rows": cost_plan.get_rows(db, fiscal_year, period, section,
                                    cost_centre, cost_element, limit),
     }
 

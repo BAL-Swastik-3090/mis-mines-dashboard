@@ -24,12 +24,12 @@ export interface MasterStatus {
 export interface PlanSummary {
   fiscal_year: number;
   period: number;
-  unit: string | null;
+  section: string | null;
   plan_month: string | null;
   totals: { amount: number; rows: number };
-  by_unit: { unit: string; rows: number; amount: number }[];
+  by_section: { section: string; rows: number; amount: number }[];
   by_element: { cost_element: string; cost_element_desc: string; centres: number; amount: number }[];
-  by_centre: { cost_centre: string; cost_centre_desc: string; unit: string; elements: number; amount: number }[];
+  by_centre: { cost_centre: string; cost_centre_desc: string; section: string; elements: number; amount: number }[];
 }
 
 export function useCostPlanPeriods() {
@@ -43,13 +43,13 @@ export function useCostPlanPeriods() {
 export function useCostPlanSummary(
   fiscalYear: number | null,
   period: number | null,
-  unit: string | null,
+  section: string | null,
 ) {
   return useQuery<PlanSummary>({
-    queryKey: ["cost-plan", "summary", fiscalYear, period, unit],
+    queryKey: ["cost-plan", "summary", fiscalYear, period, section],
     queryFn: async () => {
       const res = await api.get("/cost-plan/summary", {
-        params: { fiscal_year: fiscalYear, period, unit: unit || undefined },
+        params: { fiscal_year: fiscalYear, period, section: section || undefined },
       });
       return res.data;
     },

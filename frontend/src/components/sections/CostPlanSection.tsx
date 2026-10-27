@@ -3,7 +3,7 @@
  * The monthly cost plan as uploaded from SAP.
  *
  * Mines is the default view because that is whose costing this serves, but
- * the export covers the whole company and the unit split is shown rather
+ * the export covers the whole company and the section split is shown rather
  * than hidden - a plan that silently dropped three quarters of its rows
  * would be worse than one that shows them.
  */
@@ -15,7 +15,7 @@ import {
 import api from "@/lib/api";
 import { useCostPlanPeriods, useCostPlanSummary } from "@/hooks/useCostPlan";
 
-const UNITS = ["MINES", "BALASORE", "SUKINDA", "OTHER"] as const;
+const SECTIONS = ["MINES", "COB"] as const;
 
 const rupees = (n: number | null | undefined) =>
   n == null ? "-" : n.toLocaleString("en-IN", { maximumFractionDigits: 0 });
@@ -31,7 +31,7 @@ interface PlanFileReport {
   file: string; fiscal_year: number; period: number; plan_month: string;
   rows_parsed: number; amount_total: number; negative_rows: number;
   rows_skipped_unreadable: number; duplicate_pairs_collapsed: number;
-  by_unit: Record<string, { rows: number; amount: number }>;
+  by_section: Record<string, { rows: number; amount: number }>;
   written: boolean; rows_new?: number; rows_changed?: number; rows_identical?: number;
 }
 interface PlanUploadResponse {
@@ -176,7 +176,7 @@ function UploadDialog({ onClose, onDone }: { onClose: () => void; onDone: () => 
                     {r.written ? ` · ${r.rows_new} new, ${r.rows_changed} changed, ${r.rows_identical} unchanged` : ""}
                   </div>
                   <div className="mt-1 text-txt-light">
-                    {Object.entries(r.by_unit).map(([u, v]) => `${u} ${v.rows}`).join(" · ")}
+                    {Object.entries(r.by_section).map(([u, v]) => `${u} ${v.rows}`).join(" · ")}
                   </div>
                   {r.negative_rows > 0 ? (
                     <div className="mt-1 text-amber-700">{r.negative_rows} credit row(s) - deduction elements carry negatives.</div>
@@ -209,7 +209,7 @@ function UploadDialog({ onClose, onDone }: { onClose: () => void; onDone: () => 
 export default function CostPlanSection() {
   const { data: periodData, refetch: refetchPeriods } = useCostPlanPeriods();
   const [selected, setSelected] = useState<string>("");
-  const [unit, setUnit] = useState<string>("MINES");
+  const [section, setSection] = useState<string>("MINES");
   const [showUpload, setShowUpload] = useState(false);
 
   const periods = periodData?.periods ?? [];
@@ -222,7 +222,7 @@ export default function CostPlanSection() {
     return [Number(a) || null, Number(b) || null];
   }, [selected]);
 
-  const { data: summary, isLoading, refetch: refetchSummary } = useCostPlanSummary(fy, p, unit);
+  const { data: summary, isLoading, refetch: refetchSummary } = useCostPlanSummary(fy, p, section);
   const refreshAll = () => { refetchPeriods(); refetchSummary(); };
 
   const masters = periodData?.masters;
@@ -254,9 +254,9 @@ export default function CostPlanSection() {
               </option>
             ))}
           </select>
-          <select value={unit} onChange={(e) => setUnit(e.target.value)}
+          <select value={section} onChange={(e) => setSection(e.target.value)}
             className="rounded border border-border bg-white px-2 py-1.5 text-[11px] font-semibold text-navy">
-            {UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
+            {SECTIONS.map((u) => <option key={u} value={u}>{u}</option>)}
           </select>
           <button onClick={() => setShowUpload(true)}
             className="flex items-center gap-1.5 rounded border border-border bg-white px-3 py-1.5 text-[11px] font-condensed font-bold tracking-widest text-txt-secondary shadow-sm hover:bg-bg-section hover:text-navy">
@@ -287,10 +287,18 @@ export default function CostPlanSection() {
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {[
-          { label: `${unit} plan`, value: summary ? `Rs ${rupees(summary.totals.amount)}` : "-", hint: `${summary?.totals.rows ?? 0} rows` },
-          { label: "Whole company", value: summary ? `Rs ${rupees(summary.by_unit.reduce((a, b) => a + b.amount, 0))}` : "-", hint: `${summary?.by_unit.length ?? 0} units` },
-          { label: "Cost centres", value: String(summary?.by_centre.length ?? 0), hint: `in ${unit}` },
-          { label: "Cost elements", value: String(summary?.by_element.length ?? 0), hint: `in ${unit}` },
+          { label: `${section} plan`, value: summary ? `Rs ${rupees(summary.totals.amount)}` : "-", hint: `${summary?.totals.rows ?? 0} rows` },
+          {
+            label: "This site",
+            value: summary
+              ? `Rs ${rupees(summary.by_section
+                  .filter((s) => s.section === "MINES" || s.section === "COB")
+                  .reduce((a, b) => a + b.amount, 0))}`
+              : "-",
+            hint: "Mines + COB",
+          },
+          { label: "Cost centres", value: String(summary?.by_centre.length ?? 0), hint: `in ${section}` },
+          { label: "Cost elements", value: String(summary?.by_element.length ?? 0), hint: `in ${section}` },
         ].map((k) => (
           <div key={k.label} className="rounded-md border border-border-light bg-white p-4 shadow-sm">
             <div className="text-[10px] font-condensed font-bold uppercase tracking-widest text-txt-light">{k.label}</div>
@@ -304,18 +312,21 @@ export default function CostPlanSection() {
 
       {summary ? (
         <>
-          <Panel title="By unit" subtitle="the whole export, not just the selected unit">
-            <Table head={["Unit", "Rows", "Planned (Rs)"]}
-              rows={summary.by_unit.map((u) => [u.unit, String(u.rows), rupees(u.amount)])}
-              highlight={(r) => r[0] === unit} />
+          <Panel
+            title="By section"
+            subtitle="OTHER is the other plants carried in the same export — stored for fidelity, not this mine's cost"
+          >
+            <Table head={["Section", "Rows", "Planned (Rs)"]}
+              rows={summary.by_section.map((u) => [u.section, String(u.rows), rupees(u.amount)])}
+              highlight={(r) => r[0] === section} />
           </Panel>
 
           <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-            <Panel title={`Cost elements — ${unit}`} subtitle="largest first">
+            <Panel title={`Cost elements — ${section}`} subtitle="largest first">
               <Table head={["Element", "Description", "Centres", "Planned (Rs)"]}
                 rows={summary.by_element.map((e) => [e.cost_element, e.cost_element_desc, String(e.centres), rupees(e.amount)])} />
             </Panel>
-            <Panel title={`Cost centres — ${unit}`} subtitle="largest first">
+            <Panel title={`Cost centres — ${section}`} subtitle="largest first">
               <Table head={["Centre", "Description", "Elements", "Planned (Rs)"]}
                 rows={summary.by_centre.map((c) => [c.cost_centre, c.cost_centre_desc, String(c.elements), rupees(c.amount)])} />
             </Panel>

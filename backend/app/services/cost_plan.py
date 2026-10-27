@@ -38,9 +38,17 @@ SCHEMA = settings.pg_schema
 if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", SCHEMA):
     raise ValueError(f"Invalid PG_SCHEMA {SCHEMA!r}")
 
-# Cost centre prefix -> the unit that owns it. Mirrors the CASE in the
-# cost_plan_detail view; change both together.
-UNIT_BY_PREFIX = {"1210": "MINES", "1100": "BALASORE", "1110": "SUKINDA"}
+# The beneficiation plant's own cost centres. Everything else on 1210 is the
+# mine; anything else is another plant and is not this dashboard's business.
+# Seeded into cost_centre_master.section by migration 088 - this copy exists
+# only so an upload can report its own breakdown before the database is read.
+COB_COST_CENTRES = {"1210021002", "1210023009", "1210023010", "1210023011"}
+
+
+def section_of(cost_centre: str) -> str:
+    if cost_centre in COB_COST_CENTRES:
+        return "COB"
+    return "MINES" if cost_centre.startswith("1210") else "OTHER"
 
 
 class PlanParseError(ValueError):
@@ -171,10 +179,10 @@ def parse_plan(content: bytes, filename: str) -> dict:
         deduped[(rec["cost_centre"], rec["cost_element"])] = rec
     final = list(deduped.values())
 
-    by_unit: dict[str, dict[str, Any]] = {}
+    by_section: dict[str, dict[str, Any]] = {}
     for rec in final:
-        unit = UNIT_BY_PREFIX.get(rec["cost_centre"][:4], "OTHER")
-        slot = by_unit.setdefault(unit, {"rows": 0, "amount": 0.0})
+        section = section_of(rec["cost_centre"])
+        slot = by_section.setdefault(section, {"rows": 0, "amount": 0.0})
         slot["rows"] += 1
         slot["amount"] = round(slot["amount"] + rec["plan_fix_cost"], 2)
 
@@ -200,7 +208,7 @@ def parse_plan(content: bytes, filename: str) -> dict:
             "rows_skipped_unreadable": skipped,
             "amount_total": round(sum(r["plan_fix_cost"] for r in final), 2),
             "negative_rows": sum(1 for r in final if r["plan_fix_cost"] < 0),
-            "by_unit": by_unit,
+            "by_section": by_section,
         },
     }
 
@@ -363,12 +371,12 @@ def available_periods(db: Session) -> list[dict]:
     return [_shape(dict(r._mapping)) for r in rows]
 
 
-def get_summary(db: Session, fiscal_year: int, period: int, unit: str | None = None) -> dict:
+def get_summary(db: Session, fiscal_year: int, period: int, section: str | None = None) -> dict:
     where = "WHERE fiscal_year = :fy AND period = :p"
     params: dict[str, Any] = {"fy": fiscal_year, "p": period}
-    if unit:
-        where += " AND unit = :unit"
-        params["unit"] = unit
+    if section:
+        where += " AND section = :section"
+        params["section"] = section
 
     by_element = db.execute(text(f"""
         SELECT cost_element, cost_element_desc,
@@ -379,18 +387,18 @@ def get_summary(db: Session, fiscal_year: int, period: int, unit: str | None = N
     """), params).fetchall()
 
     by_centre = db.execute(text(f"""
-        SELECT cost_centre, cost_centre_desc, unit,
+        SELECT cost_centre, cost_centre_desc, section,
                COUNT(*) AS elements, ROUND(SUM(plan_fix_cost), 2) AS amount
         FROM {SCHEMA}.cost_plan_detail {where}
-        GROUP BY cost_centre, cost_centre_desc, unit
+        GROUP BY cost_centre, cost_centre_desc, section
         ORDER BY SUM(plan_fix_cost) DESC
     """), params).fetchall()
 
-    by_unit = db.execute(text(f"""
-        SELECT unit, COUNT(*) AS rows, ROUND(SUM(plan_fix_cost), 2) AS amount
+    by_section = db.execute(text(f"""
+        SELECT section, COUNT(*) AS rows, ROUND(SUM(plan_fix_cost), 2) AS amount
         FROM {SCHEMA}.cost_plan_detail
         WHERE fiscal_year = :fy AND period = :p
-        GROUP BY unit ORDER BY SUM(plan_fix_cost) DESC
+        GROUP BY section ORDER BY SUM(plan_fix_cost) DESC
     """), {"fy": fiscal_year, "p": period}).fetchall()
 
     total = db.execute(text(f"""
@@ -401,21 +409,21 @@ def get_summary(db: Session, fiscal_year: int, period: int, unit: str | None = N
     total = _shape(dict(total._mapping)) if total else {"amount": 0, "rows": 0}
 
     return {
-        "fiscal_year": fiscal_year, "period": period, "unit": unit,
+        "fiscal_year": fiscal_year, "period": period, "section": section,
         "plan_month": total.get("plan_month"),
         "totals": {"amount": total.get("amount") or 0, "rows": total.get("rows") or 0},
-        "by_unit": [_shape(dict(r._mapping)) for r in by_unit],
+        "by_section": [_shape(dict(r._mapping)) for r in by_section],
         "by_element": [_shape(dict(r._mapping)) for r in by_element],
         "by_centre": [_shape(dict(r._mapping)) for r in by_centre],
     }
 
 
-def get_rows(db: Session, fiscal_year: int, period: int, unit: str | None = None,
+def get_rows(db: Session, fiscal_year: int, period: int, section: str | None = None,
              cost_centre: str | None = None, cost_element: str | None = None,
              limit: int = 1000) -> list[dict]:
     where = "WHERE fiscal_year = :fy AND period = :p"
     params: dict[str, Any] = {"fy": fiscal_year, "p": period, "lim": limit}
-    for column, value, name in (("unit", unit, "unit"),
+    for column, value, name in (("section", section, "section"),
                                 ("cost_centre", cost_centre, "cc"),
                                 ("cost_element", cost_element, "ce")):
         if value:
@@ -423,7 +431,7 @@ def get_rows(db: Session, fiscal_year: int, period: int, unit: str | None = None
             params[name] = value
     rows = db.execute(text(f"""
         SELECT cost_centre, cost_centre_desc, cost_element, cost_element_desc,
-               plan_fix_cost, currency, unit, plan_month, source_file
+               plan_fix_cost, currency, section, plan_month, source_file
         FROM {SCHEMA}.cost_plan_detail {where}
         ORDER BY cost_centre, cost_element
         LIMIT :lim

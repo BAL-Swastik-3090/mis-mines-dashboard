@@ -3,6 +3,8 @@
 Served from seed files while the SAP costing interface is being built; see
 services/costing.py for what those are and how to switch to the live ledger.
 """
+from datetime import date
+
 from fastapi import APIRouter, HTTPException, Query
 
 from app.services import costing
@@ -44,10 +46,15 @@ def summary(
     period: str = Query(default_factory=_default_period),
     section: str = Query("MINES"),
     basis: str = Query(costing.DEFAULT_BASIS),
+    as_of: date | None = Query(None, description="Cost as at this day; defaults to today"),
 ):
-    """Cost-sheet layout: one row per summary line, actual against plan."""
+    """Cost-sheet layout: one row per summary line, actual against plan.
+
+    Month-end costs are accrued to `as_of` - plan / days in month x days
+    elapsed - so asking on the 10th gives ten days of salary rather than none.
+    """
     _validate(period, section, basis)
-    return costing.get_summary(period, section, basis)
+    return costing.get_summary(period, section, basis, as_of)
 
 
 @router.get("/daily")
