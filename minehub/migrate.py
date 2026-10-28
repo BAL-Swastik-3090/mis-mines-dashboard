@@ -51,9 +51,39 @@ def connect(env: dict[str, str]):
     if missing:
         sys.exit("Missing connection settings: " + ", ".join(missing) +
                  "\nSet them in backend/.env or the environment.")
+
+    # ── THE SAME LAN/VPN SWITCH THE APPLICATION MAKES ───────────────────────
+    # PG_HOST is the SSH tunnel on localhost, and PG_FALLBACK_HOST is the
+    # server on the LAN. app/minehub_db.py already tries the first and falls
+    # back to the second; this did not, so running the migrations with the
+    # tunnel down failed with a connection timeout against localhost while the
+    # application beside it was happily talking to the LAN address.
+    #
+    # Worth fixing rather than working around with PG_HOST=... on the command
+    # line: a migration runner that cannot find the database the application
+    # is using is a trap, and the person who falls into it is usually
+    # mid-deploy.
+    addresses = [(env["PG_HOST"], env.get("PG_PORT", "5432"))]
+    if env.get("PG_FALLBACK_HOST"):
+        addresses.append((env["PG_FALLBACK_HOST"],
+                          env.get("PG_FALLBACK_PORT", "5432")))
+
+    last: Exception | None = None
+    for i, (host, port) in enumerate(addresses):
+        try:
+            return _connect_to(env, host, port)
+        except psycopg.Error as exc:
+            last = exc
+            if i + 1 < len(addresses):
+                print(f"  {host}:{port} did not answer; trying "
+                      f"{addresses[i + 1][0]}:{addresses[i + 1][1]}")
+    raise last                                          # type: ignore[misc]
+
+
+def _connect_to(env: dict[str, str], host: str, port: str):
     return psycopg.connect(
-        host=env["PG_HOST"],
-        port=env.get("PG_PORT", "5432"),
+        host=host,
+        port=port,
         dbname=env["PG_DATABASE"],
         user=env["PG_USER"],
         password=env["PG_PASSWORD"],
