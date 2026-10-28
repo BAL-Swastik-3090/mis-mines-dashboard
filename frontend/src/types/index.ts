@@ -199,8 +199,13 @@ export interface ExecExcavationRow {
 }
 
 export interface ExecPeriodBlock {
+  /** HG, MG and LG only. COB is concentrate out of plant 1210 rather than ore
+   *  raised at the mine, so it carries its own block and its own total and the
+   *  two are never averaged together. */
   production:       ExecGradeRow[];
   production_total: ExecWeightedTotal;
+  cob:              ExecGradeRow[];
+  cob_total:        ExecWeightedTotal;
   despatch:         Record<string, ExecGradeRow[]>;
   despatch_total:   Record<string, ExecWeightedTotal>;
   plant:            ExecPlantRow[];

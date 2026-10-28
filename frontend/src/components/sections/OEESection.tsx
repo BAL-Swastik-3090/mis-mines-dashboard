@@ -128,7 +128,9 @@ function FleetKpis({ fleet, loading }: { fleet: OEEFleet | undefined; loading: b
 const EXPORT_HEADINGS = [
   "Excavator", "God Hrs", "BD Hrs", "PM Hrs", "Available Hrs", "Running Hrs",
   "Deviation Hrs",
-  "Actual CuM", "Ideal CuM", "Availability %", "Performance %",
+  // Ideal before Actual, as on screen. The material split is not here but in
+  // its own columns at the end, so this pair is adjacent in both places.
+  "Ideal CuM", "Actual CuM", "Availability %", "Performance %",
   "Quality %", "OEE %", "Utilisation %",
   "Ideal Capacity (CuM/hr)", "Ownership", "Breakdown Source", "Deviation % of Shift",
   // Shares as their own columns, not "ORE 83%" in one cell: a spreadsheet is
@@ -146,7 +148,7 @@ function exportRows(machines: OEEMachineRow[], fleet: OEEFleet | undefined): unk
   const rows: unknown[][] = machines.map((m) => [
     m.machine, n1(m.god_hours), n2(m.bd_hours), n2(m.pm_hours),
     n2(m.operating_hrs), n2(m.running_hrs),
-    n2(m.deviation_hrs), n1(m.actual_cum), n1(m.ideal_cum), n2(m.availability),
+    n2(m.deviation_hrs), n1(m.ideal_cum), n1(m.actual_cum), n2(m.availability),
     n2(m.performance), n2(m.quality), n2(m.oee), m.utilisation ?? "",
     n1(m.ideal_cap), m.hired ? "Hired" : "Owned",
     m.bd_source === "sap" ? "SAP" : "Shift log",
@@ -161,8 +163,8 @@ function exportRows(machines: OEEMachineRow[], fleet: OEEFleet | undefined): unk
     rows.push([
       "OVERALL", n1(fleet.god_hours), n2(fleet.bd_hours), n2(fleet.pm_hours),
       n2(fleet.operating_hrs), n2(fleet.running_hrs),
-      n2(fleet.deviation_hrs), n1(fleet.actual_cum),
-      n1(fleet.ideal_cum), n2(fleet.availability),
+      n2(fleet.deviation_hrs), n1(fleet.ideal_cum),
+      n1(fleet.actual_cum), n2(fleet.availability),
       n2(fleet.performance), n2(fleet.quality), n2(fleet.oee), fleet.utilisation ?? "",
       "", "", "", fleet.deviation_pct ?? "",
       fleet.material ?? "", n1(fleet.ore_cum), n1(fleet.ob_cum), n1(fleet.other_cum),
@@ -250,7 +252,11 @@ function OEETable({ title, slug, machines, fleet, loading, from, to }: {
               {[
                 "Excavator", "God Hrs",
                 "BD Hrs", "PM Hrs", "Available Hrs", "Running Hrs", "Deviation Hrs",
-                "Actual CuM", "Ore / OB", "Ideal CuM",
+                // WHAT, THEN THE TARGET, THEN WHAT WAS DONE. Actual sits last
+                // of the three so it lands beside Ideal, which is the number
+                // it is read against — Performance is Actual ÷ Ideal, and the
+                // two were separated by the material tag.
+                "Ore / OB", "Ideal CuM", "Actual CuM",
                 "Availability %", "Performance %", "Quality %", "OEE %", "Utilisation %",
               ].map((h) => (
                 <th
@@ -343,8 +349,6 @@ function OEETable({ title, slug, machines, fleet, loading, from, to }: {
                       <div className="text-[9px] text-txt-light">{m.deviation_pct}% of shift</div>
                     )}
                   </td>
-                  {/* Actual CuM */}
-                  <td className="px-3 py-2.5 text-txt-secondary">{fmt1(m.actual_cum)}</td>
                   {/* WHAT WAS IN THE BUCKET, not just how much. Five of the ten
                       machines move almost no ore — EV 2 is entirely tailing and
                       COB feed — so a CuM figure alone says nothing about which
@@ -355,6 +359,8 @@ function OEETable({ title, slug, machines, fleet, loading, from, to }: {
                   </td>
                   {/* Ideal CuM */}
                   <td className="px-3 py-2.5 text-txt-light">{fmt1(m.ideal_cum)}</td>
+                  {/* Actual CuM */}
+                  <td className="px-3 py-2.5 text-txt-secondary">{fmt1(m.actual_cum)}</td>
                   {/* Availability */}
                   <td className={`px-3 py-2.5 font-bold ${pctColor(m.availability, 85, 70)}`}>
                     {fmt2(m.availability)}
@@ -400,9 +406,9 @@ function OEETable({ title, slug, machines, fleet, loading, from, to }: {
                     <div className="text-[9px] font-normal text-txt-light">{fleet.deviation_pct}% of shift</div>
                   )}
                 </td>
-                <td className="px-3 py-3 text-navy">{fmt1(fleet.actual_cum)}</td>
                 <td className="px-3 py-3"><MaterialTag m={fleet} /></td>
                 <td className="px-3 py-3 text-txt-secondary">{fmt1(fleet.ideal_cum)}</td>
+                <td className="px-3 py-3 text-navy">{fmt1(fleet.actual_cum)}</td>
                 <td className={`px-3 py-3 ${pctColor(fleet.availability, 85, 70)}`}>{fmt2(fleet.availability)}</td>
                 <td className={`px-3 py-3 ${pctColor(fleet.performance, 85, 70)}`}>{fmt2(fleet.performance)}</td>
                 <td className="px-3 py-3 text-txt-secondary">{fmt2(fleet.quality)}</td>
