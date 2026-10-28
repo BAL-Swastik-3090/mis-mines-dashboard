@@ -127,7 +127,24 @@ CREATE INDEX IF NOT EXISTS cost_plan_upload_change_batch_idx
 -- ---------------------------------------------------------------------
 -- 4. READER VIEW - the plan with its descriptions attached
 -- ---------------------------------------------------------------------
-CREATE OR REPLACE VIEW minehub.cost_plan_detail AS
+-- DROPPED AND RECREATED, NOT "CREATE OR REPLACE".
+--
+-- CREATE OR REPLACE VIEW cannot rename an existing view's columns, and the
+-- next migration renames one of them: 088 rebuilds this view with `section`
+-- where this file has `unit`. So on any database that has already reached
+-- 088 -- which is every database this has actually run on, because the
+-- tables were created by hand before the ledger knew about them -- a replay
+-- of this file failed outright:
+--
+--   InvalidTableDefinition: cannot change name of view column "section"
+--                           to "unit"
+--
+-- A migration has to be replayable against a database that is ahead of it,
+-- not only against an empty one. Dropping first makes this file arrive at
+-- the same view whatever shape it finds, and 088 still has the last word.
+DROP VIEW IF EXISTS minehub.cost_plan_detail;
+
+CREATE VIEW minehub.cost_plan_detail AS
 SELECT p.fiscal_year,
        p.period,
        p.plan_month,
