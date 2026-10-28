@@ -96,6 +96,19 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   // Unlike AMIRA there is no narrower audience to separate, so a permission of
   // its own would be a row to seed per role for no gain.
   "executive-summary": ["dashboard.mis"],
+  // Gated on the MIS dashboard's own permission. Inventing
+  // dashboard.product-costing would mean seeding a row per role in
+  // mines_role_page_access before a single person could see the screen. The
+  // cost sheet reads the same ledger the MIS dashboard does; the plan import
+  // lives inside it, so one permission covers both.
+  //
+  // This was written when AMIRA was gated the same way and said "for the same
+  // reason AMIRA is". AMIRA has since been given a permission of its own, just
+  // above, because its audience turned out to be narrower. Costing may want
+  // the same treatment once the mine decides who should read it -- the figures
+  // here are a cost per tonne, which is not obviously something everyone who
+  // reads production figures should see.
+  "product-costing": ["dashboard.mis"],
 };
 
 /**
@@ -130,6 +143,7 @@ const LANDING_RANK: Record<AppPage, number> = {
   "market": 35,
   "fuel-management": 40,
   "ev-tracking": 50,
+  "product-costing": 55,
   // Before the registers: a machine, a person and a material all have to be
   // held against a department, so the department is the thing to see first.
   "organisation": 55,
