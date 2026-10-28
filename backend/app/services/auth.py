@@ -24,21 +24,61 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import contextlib
 import threading
 import secrets
 import time
+from typing import Iterator
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.orm import Session
 
-LOGIN_TBL = "intranet_user_login"
-EMP_TBL = "sap_employee_details"
+# ── WHERE EACH OF THESE NOW LIVES ───────────────────────────────────────────
+# All of them are in Postgres, which is why this module no longer uses the
+# MySQL session it is handed -- see _auth_db() below.
+#
+# balcorpdb.intranet_user_login is the intranet's credentials. It is QUALIFIED
+# because the balcorpdb schema is not on the connection's search_path and must
+# not be: putting it there would expose a whole mirrored database to every
+# unqualified name in the application.
+#
+# IT IS A MIRROR, AND MIRRORS GO STALE. When this was written its newest
+# password change was 23 October and the mirror itself had stopped on the
+# 26th. A password changed on the intranet after that will not open this
+# dashboard until the copy is refreshed -- which is what
+# scripts/import/refresh_login_copy.py exists to do, and why it should run on
+# a schedule rather than by hand.
+LOGIN_TBL = "balcorpdb.intranet_user_login"
+
+# The live SAP feed, not a copy: this one is written by the OData pipeline and
+# is more complete than the MySQL table it replaces.
+EMP_TBL = "sap_odata_api.sap_employee_details"
 log = logging.getLogger(__name__)
 
 # MySQL says 1213 for a deadlock and 1205 for a lock-wait timeout. Both mean
 # "somebody else had it, try again" rather than "this statement is wrong".
 _RETRYABLE = (1213, 1205)
+
+# Postgres reports the same two conditions as SQLSTATEs, not as numbers:
+# 40P01 deadlock_detected and 55P03 lock_not_available. Without these the
+# retry loop below would simply never retry -- it would look like it was
+# working, and quietly give up on the first contended flush.
+_RETRYABLE_SQLSTATE = ("40P01", "40001", "55P03")
+
+
+def _sqlstate(exc: BaseException) -> str | None:
+    """The SQLSTATE of a database error, wherever SQLAlchemy has wrapped it."""
+    for holder in (getattr(exc, "orig", None), exc):
+        code = getattr(holder, "sqlstate", None) or getattr(holder, "pgcode", None)
+        if isinstance(code, str):
+            return code
+    return None
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    return (_mysql_errno(exc) in _RETRYABLE
+            or _sqlstate(exc) in _RETRYABLE_SQLSTATE)
 
 # How long one of these writes may wait on a row lock before giving up.
 #
@@ -49,6 +89,36 @@ _RETRYABLE = (1213, 1205)
 # gone — which is how a stalled timestamp update turned into "Could not read
 # the attendance readers" on a screen that reads a different database entirely.
 _LOCK_WAIT_SECONDS = 2
+
+
+@contextlib.contextmanager
+def _auth_db(db: Session) -> Iterator[Session]:
+    """The session the login tables live on, which is Postgres.
+
+    Every table this module reads or writes -- credentials, employee details,
+    the two mines_* access tables and the two mines_* session tables -- is in
+    Postgres now. The `db` parameter is still accepted because this module is
+    called from middleware and from a dozen routers that all hold a MySQL
+    session, and changing every one of those signatures would be a diff across
+    the whole application for no gain.
+
+    IT FALLS BACK TO `db`, AND THAT IS NOT A SAFETY NET. If Postgres is
+    unreachable the tables are not there either, so the queries will fail --
+    the fallback exists only so that a misconfigured deployment fails on a
+    query it can explain, rather than on None.
+    """
+    from app.minehub_db import SessionLocal as PgSession
+    if PgSession is None:
+        yield db
+        return
+    pg = PgSession()
+    try:
+        yield pg
+    finally:
+        try:
+            pg.close()
+        except Exception:                               # noqa: BLE001
+            pass
 
 
 def _mysql_errno(exc: BaseException) -> int | None:
@@ -62,6 +132,44 @@ def _mysql_errno(exc: BaseException) -> int | None:
         if args and isinstance(args[0], int):
             return args[0]
     return None
+
+
+def _short_lock_wait(db: Session) -> bool:
+    """Ask for a short lock wait. Returns whether it must be restored after.
+
+    MySQL and Postgres spell this differently and, more importantly, SCOPE it
+    differently. innodb_lock_wait_timeout is set on the SESSION and rides the
+    pooled connection into whatever runs next, so it has to be put back.
+    Postgres's lock_timeout can be set LOCAL, which means it dies with the
+    transaction and there is nothing to restore -- so the restore path, which
+    is the fiddly half, simply does not apply there.
+
+    Returning False on Postgres is therefore the correct answer and not a
+    failure: nothing was left behind to undo.
+    """
+    try:
+        if db.bind.dialect.name == "postgresql":
+            # SET TAKES NO BIND PARAMETERS. Postgres parses SET before the
+            # parameter is ever bound, so "SET LOCAL lock_timeout = :s" is a
+            # syntax error at "$1" -- which this function CATCHES and logs,
+            # meaning the short lock wait would silently never be applied.
+            # The value is an int defined in this module, so interpolating it
+            # is safe; there is no other way to write this statement.
+            db.execute(text(
+                f"SET LOCAL lock_timeout = '{int(_LOCK_WAIT_SECONDS) * 1000}ms'"))
+            return False
+        db.execute(text("SET SESSION innodb_lock_wait_timeout = :s"),
+                   {"s": _LOCK_WAIT_SECONDS})
+        return True
+    except Exception as exc:                            # noqa: BLE001
+        # Not fatal, and not worth failing over: without it the write simply
+        # has the server's patience instead of ours.
+        try:
+            db.rollback()
+        except Exception:                               # noqa: BLE001
+            pass
+        log.warning("could not shorten the lock wait: %s", str(exc)[:120])
+        return False
 
 
 def _best_effort(db: Session, what: str, run) -> bool:
@@ -86,16 +194,7 @@ def _best_effort(db: Session, what: str, run) -> bool:
     Two seconds here, restored afterwards so the next caller on this pooled
     connection inherits the server's own setting rather than ours.
     """
-    restore = False
-    try:
-        db.execute(text("SET SESSION innodb_lock_wait_timeout = :s"),
-                   {"s": _LOCK_WAIT_SECONDS})
-        restore = True
-    except Exception as exc:                            # noqa: BLE001
-        # Not fatal, and not worth failing over: without it the write simply
-        # has the server's patience instead of ours.
-        db.rollback()
-        log.warning("could not shorten the lock wait: %s", str(exc)[:120])
+    restore = _short_lock_wait(db)
 
     try:
         return _attempt(db, what, run)
@@ -142,8 +241,16 @@ def _attempt(db: Session, what: str, run) -> bool:
     return False
 
 
-SESS_TBL = "digital_apps_user_sessions"
-VIEW_TBL = "digital_apps_page_views"
+# Mines' OWN session tables (migration 092), not the shared intranet ones.
+# digital_apps_user_sessions is written by about twenty-five applications and
+# read from MySQL by all of them; a Mines session written to its Postgres
+# mirror would be invisible to every one of them, and would race the
+# usage_sync job that also writes that mirror. So Mines keeps its own.
+#
+# The cost, stated where it will be read: Mines sessions no longer appear in
+# the shared intranet session list.
+SESS_TBL = "mines_user_session"
+VIEW_TBL = "mines_page_view"
 ROLE_TBL = "mines_user_role"
 PAGE_TBL = "mines_role_page_access"
 
@@ -194,8 +301,9 @@ def mines_role(db: Session, emp_id: str) -> str:
     mines_user_role — the table only records elevated access.
     """
     try:
-        r = db.execute(text(f"SELECT role FROM {ROLE_TBL} WHERE emp_id = :e"),
-                       {"e": emp_id}).scalar()
+        with _auth_db(db) as s_:
+            r = s_.execute(text(f"SELECT role FROM {ROLE_TBL} WHERE emp_id = :e"),
+                           {"e": emp_id}).scalar()
     except Exception:
         # The role table not existing must not lock everyone out of the app.
         return DEFAULT_ROLE
@@ -223,8 +331,9 @@ def explicit_role(db: Session, emp_id: str) -> str | None:
     costs privileges, not access.
     """
     try:
-        r = db.execute(text(f"SELECT role FROM {ROLE_TBL} WHERE emp_id = :e"),
-                       {"e": emp_id}).scalar()
+        with _auth_db(db) as s_:
+            r = s_.execute(text(f"SELECT role FROM {ROLE_TBL} WHERE emp_id = :e"),
+                           {"e": emp_id}).scalar()
     except Exception:
         return DEFAULT_ROLE
     if r is None or not str(r).strip():
@@ -322,8 +431,9 @@ def _page_access_map(db: Session) -> dict[str, set[str]]:
     if _PAGE_CACHE and (now - _PAGE_CACHE_AT) < _PAGE_CACHE_TTL:
         return _PAGE_CACHE
     try:
-        rows = db.execute(text(
-            f"SELECT role, page, allowed FROM {PAGE_TBL}")).mappings().all()
+        with _auth_db(db) as s_:
+            rows = s_.execute(text(
+                f"SELECT role, page, allowed FROM {PAGE_TBL}")).mappings().all()
     except Exception:
         # The table not existing must not lock everyone out — fall back to the
         # pre-table behaviour, which is that every role sees every page.
@@ -355,21 +465,31 @@ def authenticate(db: Session, empid: str, password: str) -> dict | None:
     wrong password get the same message, so this endpoint can't be used to
     enumerate employee IDs.
     """
-    row = db.execute(text(
-        f"SELECT EMPID, USER_PWD, STATUS FROM {LOGIN_TBL} WHERE EMPID = :e"),
-        {"e": empid}).mappings().first()
-    if not row or (row["STATUS"] or "").upper() != "A":
+    # ALIASED TO LOWERCASE ON PURPOSE. Postgres folds an unquoted EMPID to
+    # `empid` and hands the row back under that name, so row["STATUS"] raises
+    # NoSuchColumnError -- every login failing with a 500 rather than a refusal.
+    # MySQL honours an alias too, so this one spelling reads on both.
+    with _auth_db(db) as s_:
+        row = s_.execute(text(
+            f"""SELECT EMPID AS empid, USER_PWD AS user_pwd, STATUS AS status
+                FROM {LOGIN_TBL} WHERE EMPID = :e"""),
+            {"e": empid}).mappings().first()
+    if not row or (row["status"] or "").upper() != "A":
         return None
-    if (row["USER_PWD"] or "").lower() != _sha1(password).lower():
+    if (row["user_pwd"] or "").lower() != _sha1(password).lower():
         return None
     return employee(db, empid)
 
 
 def employee(db: Session, empid: str) -> dict:
     """The employee profile shown in the UI, plus their Mines access role."""
-    e = db.execute(text(
-        f"""SELECT EMPID, EMPNAME, TITLE, EMPDESG, EMPDEPT, EMAILID, LOCATION, PLANT_CD, STATUS
-            FROM {EMP_TBL} WHERE EMPID = :e"""), {"e": empid}).mappings().first()
+    with _auth_db(db) as s_:
+        e = s_.execute(text(
+            f"""SELECT EMPID AS empid, EMPNAME AS empname, TITLE AS title,
+                       EMPDESG AS empdesg, EMPDEPT AS empdept, EMAILID AS emailid,
+                       LOCATION AS location, PLANT_CD AS plant_cd, STATUS AS status
+                FROM {EMP_TBL} WHERE EMPID = :e"""),
+            {"e": empid}).mappings().first()
     if not e:
         # A valid login with no HR record still gets in — as a viewer.
         from app.services import access as access_svc
@@ -386,17 +506,17 @@ def employee(db: Session, empid: str) -> dict:
                 ) if code in perms]}
     s = lambda v: (v or "").strip() or None  # noqa: E731
     from app.services import access as access_svc
-    _perms = sorted(access_svc.permissions_for(db, e["EMPID"]))
-    _roles = access_svc.roles_for(db, e["EMPID"])
+    _perms = sorted(access_svc.permissions_for(db, e["empid"]))
+    _roles = access_svc.roles_for(db, e["empid"])
     return {
-        "emp_id": e["EMPID"],
-        "name": s(e["EMPNAME"]) or empid,
-        "title": s(e["TITLE"]),
-        "designation": s(e["EMPDESG"]),
-        "department": s(e["EMPDEPT"]),
-        "email": s(e["EMAILID"]),
-        "location": s(e["LOCATION"]),
-        "plant": s(e["PLANT_CD"]),
+        "emp_id": e["empid"],
+        "name": s(e["empname"]) or empid,
+        "title": s(e["title"]),
+        "designation": s(e["empdesg"]),
+        "department": s(e["empdept"]),
+        "email": s(e["emailid"]),
+        "location": s(e["location"]),
+        "plant": s(e["plant_cd"]),
         # Roles are data now, so the UI is given the permissions themselves
         # rather than a role name to reason about.
         "roles": _roles,
@@ -437,16 +557,18 @@ def create_session(db: Session, emp: dict, ip: str | None, ua: str | None) -> st
     """
     sid = secrets.token_hex(32)          # 64 hex characters
     browser, os_, device = _ua_parse(ua or "")
-    db.execute(text(
-        f"""INSERT INTO {SESS_TBL}
-              (session_id, emp_id, emp_name, role, department, login_at, last_active_at,
-               is_active, app_source, ip_address, user_agent, device_type, browser, os)
-            VALUES (:sid,:eid,:nm,:role,:dept, NOW(), NOW(), 1, :app, :ip, :ua, :dev, :br, :os)"""),
-        {"sid": sid, "eid": emp["emp_id"], "nm": emp["name"],
-         "role": emp.get("designation"), "dept": emp.get("department"),
-         "app": APP_SOURCE, "ip": ip, "ua": (ua or "")[:500],
-         "dev": device, "br": browser, "os": os_})
-    db.commit()
+    # is_active is a real BOOLEAN in the Postgres table, not MySQL's TINYINT(1).
+    with _auth_db(db) as s_:
+        s_.execute(text(
+            f"""INSERT INTO {SESS_TBL}
+                  (session_id, emp_id, emp_name, role, department, login_at, last_active_at,
+                   is_active, app_source, ip_address, user_agent, device_type, browser, os)
+                VALUES (:sid,:eid,:nm,:role,:dept, NOW(), NOW(), TRUE, :app, :ip, :ua, :dev, :br, :os)"""),
+            {"sid": sid, "eid": emp["emp_id"], "nm": emp["name"],
+             "role": emp.get("designation"), "dept": emp.get("department"),
+             "app": APP_SOURCE, "ip": ip, "ua": (ua or "")[:500],
+             "dev": device, "br": browser, "os": os_})
+        s_.commit()
     return sid
 
 
@@ -590,12 +712,15 @@ def get_session(db: Session, sid: str | None) -> dict | None:
     if hit and (time.monotonic() - hit[1]) < _SESSION_TTL:
         return hit[0]
 
-    row = db.execute(text(
-        f"""SELECT session_id, emp_id, emp_name, role, department, last_active_at
-            FROM {SESS_TBL}
-            WHERE session_id = :sid AND is_active = 1 AND app_source = :app
-              AND last_active_at > (NOW() - INTERVAL {IDLE_MINUTES} MINUTE)"""),
-        {"sid": sid, "app": APP_SOURCE}).mappings().first()
+    # INTERVAL '30 minutes', not MySQL's INTERVAL 30 MINUTE -- the second is a
+    # syntax error in Postgres, and this runs on every single api request.
+    with _auth_db(db) as s_:
+        row = s_.execute(text(
+            f"""SELECT session_id, emp_id, emp_name, role, department, last_active_at
+                FROM {SESS_TBL}
+                WHERE session_id = :sid AND is_active AND app_source = :app
+                  AND last_active_at > (NOW() - INTERVAL '{IDLE_MINUTES} minutes')"""),
+            {"sid": sid, "app": APP_SOURCE}).mappings().first()
     if not row:
         _session_cache.pop(sid, None)
         return None
@@ -667,9 +792,10 @@ def touch_now(db: Session, sid: str) -> bool:
     with _seen_lock:
         _seen.pop(sid, None)        # written here; the flusher need not repeat it
         _real_seen[sid] = time.monotonic()
-    return _best_effort(db, "heartbeat", lambda: db.execute(text(
-        f"UPDATE {SESS_TBL} SET last_active_at = NOW() "
-        f"WHERE session_id = :sid AND is_active = 1"), {"sid": sid}))
+    with _auth_db(db) as s_:
+        return _best_effort(s_, "heartbeat", lambda: s_.execute(text(
+            f"UPDATE {SESS_TBL} SET last_active_at = NOW() "
+            f"WHERE session_id = :sid AND is_active"), {"sid": sid}))
 
 
 def flush_touches(db: Session) -> int:
@@ -715,11 +841,28 @@ def flush_touches(db: Session) -> int:
         if not sids:
             return 0
 
+    # ── ON THE SESSION TABLE'S OWN DATABASE ─────────────────────────────────
+    # This is called from a background task holding a MySQL session, and
+    # mines_user_session is in Postgres. Run on the caller's session and every
+    # pass fails with 42P01 undefined_table -- which _best_effort-style
+    # logging reports once and then swallows, so the flush looks like it is
+    # running while writing nothing, and every active user idles out anyway.
+    # That is exactly the failure this whole mechanism exists to prevent.
+    with _auth_db(db) as db:
+        return _flush_on(db, sids)
+
+
+def _flush_on(db: Session, sids: list[str]) -> int:
+    """The flush itself, once the right database is in hand."""
     restore = False
     try:
-        db.execute(text("SET SESSION innodb_lock_wait_timeout = :s"),
-                   {"s": FLUSH_LOCK_WAIT})
-        restore = True
+        # lock_timeout is Postgres's name for it, and it takes milliseconds.
+        # SET LOCAL dies with this transaction, so unlike the MySQL session
+        # setting it replaces there is nothing to hand back.
+        # Interpolated, not bound: SET takes no parameters (see _short_lock_wait).
+        db.execute(text(
+            f"SET LOCAL lock_timeout = '{int(FLUSH_LOCK_WAIT) * 1000}ms'"))
+        restore = False
     except Exception as exc:                            # noqa: BLE001
         db.rollback()
         log.warning("could not set the flush lock wait: %s", str(exc)[:120])
@@ -729,7 +872,7 @@ def flush_touches(db: Session) -> int:
             try:
                 res = db.execute(text(
                     f"UPDATE {SESS_TBL} SET last_active_at = NOW() "
-                    f"WHERE is_active = 1 AND session_id IN :sids"
+                    f"WHERE is_active AND session_id IN :sids"
                 ).bindparams(bindparam("sids", expanding=True)), {"sids": sids})
                 db.commit()
                 # Rows actually written, not sessions attempted. The bug this
@@ -741,8 +884,8 @@ def flush_touches(db: Session) -> int:
                 return int(res.rowcount or 0)
             except (OperationalError, DBAPIError) as exc:
                 db.rollback()
-                errno = _mysql_errno(exc)
-                if errno in _RETRYABLE and attempt < FLUSH_ATTEMPTS:
+                errno = _mysql_errno(exc) or _sqlstate(exc)
+                if _is_retryable(exc) and attempt < FLUSH_ATTEMPTS:
                     time.sleep(0.5 * attempt)
                     continue
                 log.warning("activity flush failed for %d sessions "
@@ -754,7 +897,7 @@ def flush_touches(db: Session) -> int:
                 log.warning("activity flush failed: %s", str(exc)[:160])
                 break
     finally:
-        if restore:
+        if restore:                                     # MySQL only; see above
             try:
                 db.execute(text("SET SESSION innodb_lock_wait_timeout = "
                                 "@@GLOBAL.innodb_lock_wait_timeout"))
@@ -782,11 +925,12 @@ def end_session(db: Session, sid: str, reason: str = "LOGOUT") -> None:
     with _seen_lock:
         _seen.pop(sid, None)
     # duration_minutes is a generated column — the DB derives it from login/logout.
-    db.execute(text(
-        f"""UPDATE {SESS_TBL}
-            SET is_active = 0, logout_at = NOW(), end_reason = :r
-            WHERE session_id = :sid AND is_active = 1"""), {"sid": sid, "r": reason})
-    db.commit()
+    with _auth_db(db) as s_:
+        s_.execute(text(
+            f"""UPDATE {SESS_TBL}
+                SET is_active = FALSE, logout_at = NOW(), end_reason = :r
+                WHERE session_id = :sid AND is_active"""), {"sid": sid, "r": reason})
+        s_.commit()
 
 
 def record_time_spent(db: Session, sid: str, path: str, seconds: int) -> None:
@@ -805,35 +949,38 @@ def record_time_spent(db: Session, sid: str, path: str, seconds: int) -> None:
     seconds = min(int(seconds), 86_400)     # a tab left open for days is not "time spent"
 
     def go() -> None:
-        db.execute(text(
-            f"""UPDATE {VIEW_TBL}
-                SET time_spent_seconds = :ts
-                WHERE session_id = :sid AND page_path = :p AND app_source = :app
-                  AND time_spent_seconds IS NULL
-                ORDER BY viewed_at DESC LIMIT 1"""),
+        s_.execute(text(
+            f"""UPDATE {VIEW_TBL} SET time_spent_seconds = :ts
+                 WHERE id = (SELECT id FROM {VIEW_TBL}
+                              WHERE session_id = :sid AND page_path = :p
+                                AND app_source = :app
+                                AND time_spent_seconds IS NULL
+                              ORDER BY viewed_at DESC LIMIT 1)"""),
             {"ts": seconds, "sid": sid, "p": (path or "/")[:255], "app": APP_SOURCE})
-        db.execute(text(
+        s_.execute(text(
             f"UPDATE {SESS_TBL} SET last_active_at = NOW() "
-            f"WHERE session_id = :sid AND is_active = 1"), {"sid": sid})
+            f"WHERE session_id = :sid AND is_active"), {"sid": sid})
 
     # Usage reporting. Losing a page's dwell time to a lock race costs a row in
     # a report; failing the request costs the user their page.
-    _best_effort(db, "time spent", go)
+    with _auth_db(db) as s_:
+        _best_effort(s_, "time spent", go)
 
 
 def record_page_view(db: Session, sid: str, emp_id: str, path: str,
                      time_spent: int | None = None, referrer: str | None = None) -> None:
     def go() -> None:
-        db.execute(text(
+        s_.execute(text(
             f"""INSERT INTO {VIEW_TBL}
                   (session_id, emp_id, page_path, app_source, referrer_path,
                    viewed_at, time_spent_seconds)
                 VALUES (:sid,:eid,:p,:app,:ref, NOW(), :ts)"""),
             {"sid": sid, "eid": emp_id, "p": (path or "/")[:255], "app": APP_SOURCE,
              "ref": (referrer or None), "ts": time_spent})
-        db.execute(text(
+        s_.execute(text(
             f"UPDATE {SESS_TBL} SET last_active_at = NOW() "
-            f"WHERE session_id = :sid AND is_active = 1"), {"sid": sid})
+            f"WHERE session_id = :sid AND is_active"), {"sid": sid})
 
     # Same bargain as above: the page view is reporting, the page is the job.
-    _best_effort(db, "page view", go)
+    with _auth_db(db) as s_:
+        _best_effort(s_, "page view", go)

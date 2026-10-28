@@ -129,10 +129,19 @@ def _map() -> tuple[dict[str, set[str]], dict[str, list[dict]]]:
 
 
 def _legacy(db, emp_id: str) -> set[str]:
-    """Last resort: derive permissions from the old MySQL role column."""
+    """Last resort: derive permissions from the old role column.
+
+    That column is in Postgres now (migration 091), so this reads the login
+    session rather than the MySQL one it is handed. `db` is kept in the
+    signature because a dozen callers pass it and none of them should have to
+    care which database answers.
+    """
+    from app.services.auth import _auth_db
     try:
-        role = db.execute(text(
-            "SELECT role FROM mines_user_role WHERE emp_id = :e"), {"e": emp_id}).scalar()
+        with _auth_db(db) as s_:
+            role = s_.execute(text(
+                "SELECT role FROM mines_user_role WHERE emp_id = :e"),
+                {"e": emp_id}).scalar()
     except Exception:
         return set()
     return set(_LEGACY_PERMISSIONS.get(role, set()))
@@ -170,9 +179,12 @@ def roles_for(db, emp_id: str) -> list[dict]:
         _, roles = _map()
         return roles.get(emp_id, [])
     except Exception:
+        from app.services.auth import _auth_db
         try:
-            role = db.execute(text(
-                "SELECT role FROM mines_user_role WHERE emp_id = :e"), {"e": emp_id}).scalar()
+            with _auth_db(db) as s_:
+                role = s_.execute(text(
+                    "SELECT role FROM mines_user_role WHERE emp_id = :e"),
+                    {"e": emp_id}).scalar()
         except Exception:
             return []
         return [{"code": role, "name": role}] if role else []

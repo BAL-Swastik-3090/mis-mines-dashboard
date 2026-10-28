@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.services import auth as auth_svc
-from app.services.auth import EMP_TBL, PAGE_TBL, PAGES, ROLE_RANK, ROLE_TBL
+from app.services.auth import (EMP_TBL, PAGE_TBL, PAGES, ROLE_RANK, ROLE_TBL,
+                               _auth_db)
 
 router = APIRouter(prefix="/api/roles", tags=["Roles"])
 
@@ -20,12 +21,22 @@ router = APIRouter(prefix="/api/roles", tags=["Roles"])
 @router.get("")
 def list_roles(db: Session = Depends(get_db)) -> list[dict]:
     """Everyone with an explicitly assigned role, with their HR details."""
-    rows = db.execute(text(
-        f"""SELECT r.emp_id, r.role, r.updated_by, r.updated_at,
-                   e.EMPNAME AS name, e.EMPDEPT AS department, e.EMPDESG AS designation
-            FROM {ROLE_TBL} r
-            LEFT JOIN {EMP_TBL} e ON e.EMPID = r.emp_id
-            ORDER BY FIELD(r.role,'superadmin','admin','manager','viewer'), r.emp_id""")).mappings().all()
+    # array_position where MySQL had FIELD(): same ordering, and both put a
+    # role outside the list last. This join only works because BOTH sides are
+    # in Postgres now -- the role table in minehub, the employee details in
+    # sap_odata_api. A cross-database join is not a thing, so if either had
+    # stayed on MySQL this query would have had to become two.
+    with _auth_db(db) as s_:
+        rows = s_.execute(text(
+            f"""SELECT r.emp_id, r.role, r.updated_by, r.updated_at,
+                       e.EMPNAME AS name, e.EMPDEPT AS department,
+                       e.EMPDESG AS designation
+                FROM {ROLE_TBL} r
+                LEFT JOIN {EMP_TBL} e ON e.EMPID = r.emp_id
+                ORDER BY array_position(
+                             ARRAY['superadmin','admin','manager','viewer'],
+                             r.role),
+                         r.emp_id""")).mappings().all()
     return [dict(r) for r in rows]
 
 
@@ -40,13 +51,18 @@ def search_employees(q: str = Query("", min_length=0), db: Session = Depends(get
     # silently returned no one. Excluding 'Withdrawn' rather than requiring
     # 'Active' keeps the handful of rows with a NULL status visible instead of
     # making those people unassignable for a reason nobody could see.
-    rows = db.execute(text(
-        f"""SELECT EMPID AS emp_id, EMPNAME AS name, EMPDEPT AS department,
-                   EMPDESG AS designation, STATUS AS status
-            FROM {EMP_TBL}
-            WHERE (EMPID LIKE :like OR EMPNAME LIKE :like)
-              AND (STATUS IS NULL OR STATUS <> 'Withdrawn')
-            ORDER BY EMPNAME LIMIT 25"""), {"like": f"%{term}%"}).mappings().all()
+    # ILIKE, not LIKE. MySQL's collation is case-insensitive and Postgres's is
+    # not, so a LIKE carried over unchanged would quietly stop matching
+    # anything typed in the wrong case -- the picker would just look empty.
+    with _auth_db(db) as s_:
+        rows = s_.execute(text(
+            f"""SELECT EMPID AS emp_id, EMPNAME AS name, EMPDEPT AS department,
+                       EMPDESG AS designation, STATUS AS status
+                FROM {EMP_TBL}
+                WHERE (EMPID ILIKE :like OR EMPNAME ILIKE :like)
+                  AND (STATUS IS NULL OR STATUS <> 'Withdrawn')
+                ORDER BY EMPNAME LIMIT 25"""),
+            {"like": f"%{term}%"}).mappings().all()
     return [dict(r) for r in rows]
 
 
@@ -74,12 +90,17 @@ def set_role(request: Request, body: dict = Body(...), db: Session = Depends(get
         # away from everyone and need a DBA to undo.
         raise HTTPException(400, "You cannot reduce your own access level.")
 
-    db.execute(text(
-        f"""INSERT INTO {ROLE_TBL} (emp_id, role, updated_by, updated_at)
-            VALUES (:e, :r, :by, NOW())
-            ON DUPLICATE KEY UPDATE role = :r, updated_by = :by, updated_at = NOW()"""),
-        {"e": emp_id, "r": role, "by": by})
-    db.commit()
+    # ON CONFLICT where MySQL had ON DUPLICATE KEY UPDATE.
+    with _auth_db(db) as s_:
+        s_.execute(text(
+            f"""INSERT INTO {ROLE_TBL} (emp_id, role, updated_by, updated_at)
+                VALUES (:e, :r, :by, NOW())
+                ON CONFLICT (emp_id) DO UPDATE
+                   SET role = EXCLUDED.role,
+                       updated_by = EXCLUDED.updated_by,
+                       updated_at = NOW()"""),
+            {"e": emp_id, "r": role, "by": by})
+        s_.commit()
     return {"ok": True, "emp_id": emp_id, "role": role}
 
 
@@ -92,8 +113,9 @@ def delete_role(emp_id: str, request: Request, db: Session = Depends(get_db)) ->
     """
     if emp_id == getattr(request.state, "emp_id", None):
         raise HTTPException(400, "You cannot remove your own admin access.")
-    db.execute(text(f"DELETE FROM {ROLE_TBL} WHERE emp_id = :e"), {"e": emp_id})
-    db.commit()
+    with _auth_db(db) as s_:
+        s_.execute(text(f"DELETE FROM {ROLE_TBL} WHERE emp_id = :e"), {"e": emp_id})
+        s_.commit()
     return {"ok": True, "emp_id": emp_id}
 
 
@@ -105,8 +127,9 @@ def get_page_access(db: Session = Depends(get_db)) -> dict:
     Any (role, page) with no row is reported as allowed, matching the fallback in
     the service — the absence of configuration must not read as "denied".
     """
-    rows = db.execute(text(
-        f"SELECT role, page, allowed FROM {PAGE_TBL}")).mappings().all()
+    with _auth_db(db) as s_:
+        rows = s_.execute(text(
+            f"SELECT role, page, allowed FROM {PAGE_TBL}")).mappings().all()
     stored = {(r["role"], r["page"]): bool(r["allowed"]) for r in rows}
     return {
         "roles": sorted(ROLE_RANK, key=lambda r: ROLE_RANK[r]),
@@ -142,12 +165,16 @@ def set_page_access(request: Request, body: dict = Body(...),
     if not admin_pages and any(u["r"] == "admin" for u in updates):
         raise HTTPException(400, "Admin must keep access to at least one page.")
 
-    for u in updates:
-        db.execute(text(
-            f"""INSERT INTO {PAGE_TBL} (role, page, allowed, updated_by, updated_at)
-                VALUES (:r, :p, :a, :by, NOW())
-                ON DUPLICATE KEY UPDATE allowed = :a, updated_by = :by, updated_at = NOW()"""), u)
-    db.commit()
+    with _auth_db(db) as s_:
+        for u in updates:
+            s_.execute(text(
+                f"""INSERT INTO {PAGE_TBL} (role, page, allowed, updated_by, updated_at)
+                    VALUES (:r, :p, :a, :by, NOW())
+                    ON CONFLICT (role, page) DO UPDATE
+                       SET allowed = EXCLUDED.allowed,
+                           updated_by = EXCLUDED.updated_by,
+                           updated_at = NOW()"""), u)
+        s_.commit()
 
     # Takes effect immediately rather than after the 60s cache TTL.
     auth_svc.invalidate_page_access()
