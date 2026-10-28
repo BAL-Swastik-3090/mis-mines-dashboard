@@ -32,8 +32,17 @@ PAGE_COLS = ("role", "page", "allowed", "updated_by", "updated_at")
 
 
 def _rows(db, table, cols):
-    return [dict(r) for r in db.execute(
+    rows = [dict(r) for r in db.execute(
         text(f"SELECT {', '.join(cols)} FROM {table}")).mappings()]
+    # MySQL stores `allowed` as TINYINT(1) and hands back 0/1; the Postgres
+    # column is a real BOOLEAN, and psycopg will not quietly coerce one to the
+    # other -- it refuses with "column is of type boolean but expression is of
+    # type smallint". Cast here so both sides of the comparison below are
+    # reading the same kind of value too.
+    for r in rows:
+        if "allowed" in r and r["allowed"] is not None:
+            r["allowed"] = bool(r["allowed"])
+    return rows
 
 
 def _key(table, row):

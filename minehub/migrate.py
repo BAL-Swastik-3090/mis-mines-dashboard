@@ -116,7 +116,13 @@ def main() -> int:
         return 0
 
     with connect(env) as conn:
-        print(f"connected to {env['PG_DATABASE']} @ {env['PG_HOST']}  schema={schema}")
+        # The host CONNECTED TO, not the one configured first. Those differ
+        # whenever the fallback fires, and a migration runner that reports the
+        # wrong database while writing to the right one is exactly the sort of
+        # thing somebody reads past at the wrong moment.
+        info = conn.info
+        print(f"connected to {info.dbname} @ {info.host}:{info.port}  "
+              f"schema={schema}")
 
         # Set it here rather than relying on migration 001 to do it.
         #
