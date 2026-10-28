@@ -131,7 +131,7 @@ if settings.minehub_enabled:
         # against the first schema that has it. minehub is this platform's own
         # data and must never be shadowed by a table SAP happens to name the
         # same way. The reverse risk -- a stale local copy shadowing the live
-        # feed -- is why migration 088 drops the old mirror outright rather
+        # feed -- is why migration 090 drops the old mirror outright rather
         # than leaving it in place unused.
         connect_args={"options":
                       f"-csearch_path={settings.pg_schema},sap_odata_api,public"},

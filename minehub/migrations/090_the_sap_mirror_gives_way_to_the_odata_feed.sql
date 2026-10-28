@@ -1,4 +1,4 @@
--- 088: drop the MySQL-sourced SAP mirror. The OData feed replaces it.
+-- 090: drop the MySQL-sourced SAP mirror. The OData feed replaces it.
 --
 -- WHAT THIS REMOVES AND WHY.
 --

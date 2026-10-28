@@ -1,4 +1,4 @@
--- 087: the SAP quality feed, under the names the code already uses.
+-- 089: the SAP quality feed, under the names the code already uses.
 --
 -- WHY THIS VIEW EXISTS. The dashboard reads SAP quality inspections from
 -- balcorpdb.pp_quality_inspection on MySQL. The same feed now lands in
@@ -83,4 +83,4 @@ SELECT
 FROM sap_odata_api.quality_inspect;
 
 COMMENT ON VIEW sap_odata_api.pp_quality_inspection IS
-    'sap_odata_api.quality_inspect under the column names the Mines dashboard uses. Added by 087 so the application could move off the MySQL copy, which is a strict subset of this feed. Do not add a column here without adding it to quality_inspect first.';
+    'sap_odata_api.quality_inspect under the column names the Mines dashboard uses. Added by 089 so the application could move off the MySQL copy, which is a strict subset of this feed. Do not add a column here without adding it to quality_inspect first.';

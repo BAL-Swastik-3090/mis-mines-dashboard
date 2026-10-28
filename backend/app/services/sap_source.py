@@ -13,7 +13,7 @@ find the mine's 3,381 and took 1,978 ms.
 
 ── WHY THIS IS A SESSION AND NOT A SECOND PARAMETER ────────────────────────
 The OData tables carry the SAP table names and the SAP column names. The
-quality feed is the one exception and migration 087 gives it a view under the
+quality feed is the one exception and migration 089 gives it a view under the
 names the code already uses. So a query reading the feed IS the query that read
 balcorpdb, and the only thing that changes at a call site is which session it
 runs on:
@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 # need. A query touching anything else must not be wrapped in sap_session.
 AVAILABLE: frozenset[str] = frozenset({
     "pp_production",
-    "pp_quality_inspection",          # the view from migration 087
+    "pp_quality_inspection",          # the view from migration 089
     "pp_prod_order_confirmation",
     "zpm_iw29_notifications",
     "mm_plant_maint_calibration",
@@ -120,7 +120,7 @@ def _ready(pg: Session) -> bool:
 # moment the session returns to the pool, so a pooled connection can never
 # carry the reversed path into a minehub query.
 #
-# This does not make dropping the mirror optional -- migration 088 still does
+# This does not make dropping the mirror optional -- migration 090 still does
 # that, and until it runs the mirror is dead weight that two schemas have to
 # keep telling apart. It makes the code correct while the mirror is still
 # standing, and correct afterwards too.
