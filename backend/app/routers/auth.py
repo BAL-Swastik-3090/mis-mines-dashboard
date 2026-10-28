@@ -11,7 +11,6 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.database import get_db
 from app.services import auth
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
@@ -54,14 +53,13 @@ def _set_cookie(response: Response, sid: str) -> None:
 
 
 @router.post("/login")
-def login(response: Response, request: Request, body: dict = Body(...),
-          db: Session = Depends(get_db)) -> dict:
+def login(response: Response, request: Request, body: dict = Body(...)) -> dict:
     empid = (body.get("empid") or "").strip()
     password = body.get("password") or ""
     if not empid or not password:
         raise HTTPException(400, "Employee ID and password are required.")
 
-    emp = auth.authenticate(db, empid, password)
+    emp = auth.authenticate(None, empid, password)
     if not emp:
         # Deliberately identical for an unknown EMPID, a wrong password and an
         # inactive account — otherwise this endpoint enumerates employee IDs.
@@ -72,7 +70,7 @@ def login(response: Response, request: Request, body: dict = Body(...),
     # was happening — people from Medical, Secretarial and an unauthorised
     # external auditor account had all signed in without being granted anything.
     from app.services import access as access_svc
-    if not access_svc.has_access(db, emp["emp_id"]):
+    if not access_svc.has_access(None, emp["emp_id"]):
         raise HTTPException(
             403,
             "You do not have access to the Mines Dashboard. "
@@ -80,7 +78,7 @@ def login(response: Response, request: Request, body: dict = Body(...),
         )
 
     sid = auth.create_session(
-        db, emp,
+        None, emp,
         _client_ip(request),
         request.headers.get("user-agent"),
     )
@@ -89,38 +87,38 @@ def login(response: Response, request: Request, body: dict = Body(...),
 
 
 @router.get("/me")
-def me(request: Request, db: Session = Depends(get_db)) -> dict:
+def me(request: Request) -> dict:
     """The signed-in user. The frontend calls this on load to decide whether to
     show the app or the login screen — the server is the only authority."""
-    s = auth.get_session(db, request.cookies.get(COOKIE))
+    s = auth.get_session(None, request.cookies.get(COOKIE))
     if not s:
         raise HTTPException(401, "Not authenticated.")
-    return {"user": auth.employee(db, s["emp_id"])}
+    return {"user": auth.employee(None, s["emp_id"])}
 
 
 @router.post("/logout")
-def logout(response: Response, request: Request, db: Session = Depends(get_db)) -> dict:
+def logout(response: Response, request: Request) -> dict:
     sid = request.cookies.get(COOKIE)
     if sid:
-        auth.end_session(db, sid, "LOGOUT")
+        auth.end_session(None, sid, "LOGOUT")
     response.delete_cookie(COOKIE, path="/")
     return {"ok": True}
 
 
 @router.post("/track")
-def track(request: Request, body: dict = Body(...), db: Session = Depends(get_db)) -> dict:
+def track(request: Request, body: dict = Body(...)) -> dict:
     """Record a page view against the current session."""
     sid = request.cookies.get(COOKIE)
-    s = auth.get_session(db, sid)
+    s = auth.get_session(None, sid)
     if not s:
         raise HTTPException(401, "Not authenticated.")
-    auth.record_page_view(db, sid, s["emp_id"], body.get("path", "/"),
+    auth.record_page_view(None, sid, s["emp_id"], body.get("path", "/"),
                           body.get("time_spent"), body.get("referrer"))
     return {"ok": True}
 
 
 @router.post("/track-time")
-def track_time(request: Request, body: dict = Body(...), db: Session = Depends(get_db)) -> dict:
+def track_time(request: Request, body: dict = Body(...)) -> dict:
     """Record how long the user stayed on a page they have just left.
 
     Called on navigation and on the tab being hidden or closed, so it must be
@@ -128,19 +126,19 @@ def track_time(request: Request, body: dict = Body(...), db: Session = Depends(g
     does not wait for the answer.
     """
     sid = request.cookies.get(COOKIE)
-    s = auth.get_session(db, sid)
+    s = auth.get_session(None, sid)
     if not s:
         raise HTTPException(401, "Not authenticated.")
     try:
         seconds = int(body.get("time_spent") or 0)
     except (TypeError, ValueError):
         raise HTTPException(400, "time_spent must be a number of seconds.")
-    auth.record_time_spent(db, sid, body.get("path", "/"), seconds)
+    auth.record_time_spent(None, sid, body.get("path", "/"), seconds)
     return {"ok": True}
 
 
 @router.post("/heartbeat")
-def heartbeat(request: Request, db: Session = Depends(get_db)) -> dict:
+def heartbeat(request: Request) -> dict:
     """Keep a session alive while a dashboard is left open on a wall display."""
     sid = request.cookies.get(COOKIE)
     if not sid:
@@ -148,4 +146,4 @@ def heartbeat(request: Request, db: Session = Depends(get_db)) -> dict:
     # Written now, not noted for later. This is the only thing holding a
     # session open for somebody reading one screen, and until it wrote
     # directly no session in eleven days survived past thirty-one minutes.
-    return {"ok": True, "written": auth.touch_now(db, sid)}
+    return {"ok": True, "written": auth.touch_now(None, sid)}

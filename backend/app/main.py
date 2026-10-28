@@ -117,9 +117,10 @@ async def _flush_activity():
     while True:
         await asyncio.sleep(auth_svc.FLUSH_SECONDS)
         try:
+            # No MySQL session: flush_touches opens the Postgres one the
+            # session table actually lives in.
             def go() -> int:
-                with SessionLocal() as db:
-                    return auth_svc.flush_touches(db)
+                return auth_svc.flush_touches()
             n = await run_in_threadpool(go)
             if n:
                 logger.debug("activity flushed for %d sessions", n)
@@ -479,19 +480,22 @@ def _check_auth(sid: str | None, path: str) -> tuple[dict | None, str | None, se
     perms = access_svc.peek_permissions(s["emp_id"]) if s else None
 
     if s is None or perms is None:
-        # Cold: ask the databases, and cache the answers for the next caller.
-        with SessionLocal() as db:
-            s = auth_svc.get_session(db, sid)
-            if not s:
-                return None, None, None
-            perms = access_svc.permissions_for(db, s["emp_id"])
-            if auth_svc.touch_due(sid):
-                auth_svc.touch(db, sid)
+        # Cold: ask the database, and cache the answers for the next caller.
+        #
+        # NO MySQL SESSION IS OPENED HERE ANY MORE. This runs on every single
+        # api request, and it used to check out a MySQL connection to pass to
+        # functions that now read Postgres and ignore it -- a connection from
+        # a pool of eight, taken on every request, for nothing.
+        s = auth_svc.get_session(None, sid)
+        if not s:
+            return None, None, None
+        perms = access_svc.permissions_for(None, s["emp_id"])
+        if auth_svc.touch_due(sid):
+            auth_svc.touch(None, sid)
     elif auth_svc.touch_due(sid):
         # Warm, but the activity timestamp is stale enough to be worth a write.
         # Without this an active user would idle out while still working.
-        with SessionLocal() as db:
-            auth_svc.touch(db, sid)
+        auth_svc.touch(None, sid)
 
     # Invite-only, checked on every request rather than only at login, so
     # revoking someone takes effect at once instead of when their session
