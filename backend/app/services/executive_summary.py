@@ -63,6 +63,21 @@ GRADES: tuple[tuple[str, str], ...] = (
     ("HG", "HG"), ("MG", "MG"), ("LG", "LG"), ("COB", "COB"),
 )
 
+# COB IS REPORTED ON ITS OWN, AWAY FROM THE ORE GRADES. It is concentrate out
+# of the beneficiation plant at 1210, not ore raised at the mine, and the two
+# were sharing one Weighted Average row — a tonne of concentrate counting
+# equally with a tonne of run-of-mine against a single Ach %.
+#
+# Splitting the table therefore MOVES the production Weighted Average: it now
+# covers HG, MG and LG only. On 27 Oct 2026 the MTD total goes from 34,505.00
+# to 32,860.00 MT, and COB's 1,645.00 is reported beneath it under its own
+# plan. Nothing is lost and no figure is recomputed — the same rows are shown
+# in two tables instead of one.
+#
+# Despatch keeps all four together: a despatch row is a truck leaving the
+# mine, and concentrate and ore leave on the same trucks against one plan.
+ORE_GRADES: tuple[str, ...] = ("HG", "MG", "LG")
+
 # ── Block 2: where each grade's production tonnage comes from ────────────────
 #
 # THE SAME SOURCE AND THE SAME MOVEMENT RULE AS THE MIS DASHBOARD. Ore is
@@ -339,6 +354,58 @@ def _production_both(db: Session, mf: date, rd: date,
 
 
 # -- Blocks 3 and 4 ----------------------------------------------------------
+#
+# WHICH PLAN COLUMNS BELONG TO WHICH CUSTOMER. mines_despatch_plan splits every
+# grade three ways -- Bal_*, Suk_* and Tot_*, where Tot_ = Bal_ + Suk_ -- while
+# this table is keyed by SAP's CUSTOMERNO. despatch_grade already labels
+# JABAMOYEE as "Sukinda Plant", and October bears the mapping out:
+#
+#   BAL        actual 21,422.54   plan Bal_ 21,757.47
+#   JABAMOYEE  actual  3,076.34   plan Suk_  2,884.26
+#   Sukinda COB: planned 0.00, shipped 0.00
+#
+# The Grade-wise Despatch section reads Tot_* because it does not split by
+# customer. Both are the same table read at different grain, so the two
+# sections' plan totals still reconcile.
+_PLAN_PREFIX = {"BAL": "Bal", "JABAMOYEE": "Suk"}
+
+# CrFe and Lump are carried in the plan table and have no counterpart among the
+# assay bands, so they are left out here exactly as despatch_grade leaves them
+# out of its band comparison. They are zero in every row of the table today.
+_PLAN_GRADES: tuple[str, ...] = ("HG", "MG", "LG", "COB")
+
+
+def _despatch_plan(db: Session, mf: date,
+                   rd: date) -> dict[str, dict[str, dict[str, float]]]:
+    """Planned despatch per customer per grade, for TD and MTD.
+
+    A MONTH WITH NO PLAN ROWS IS NOT A PLAN OF ZERO. June 2026 has none at all
+    while April, May and July through October do. Where the table is silent
+    this returns nothing for that grade and the row prints no plan, rather than
+    claiming the mine planned to ship nought and then shipped 20,464 MT.
+    """
+    cols = ", ".join(
+        f"COALESCE(SUM(CASE WHEN Plan_date = :rd THEN {p}_{g}_Qty END), 0)"
+        f" AS td_{p}_{g},"
+        f" COALESCE(SUM({p}_{g}_Qty), 0) AS mtd_{p}_{g}"
+        for p in _PLAN_PREFIX.values() for g in _PLAN_GRADES)
+    r = db.execute(text(f"""
+        SELECT {cols}, COUNT(*) AS n
+        FROM   mines_despatch_plan
+        WHERE  Plan_date BETWEEN :mf AND :rd
+    """), {"mf": mf, "rd": rd}).fetchone()
+
+    out = {p: {c: {} for c in MINES_CUSTOMERS} for p in ("td", "mtd")}
+    if not r or not r.n:
+        return out
+    m = r._mapping
+    for cust, pre in _PLAN_PREFIX.items():
+        for per in ("td", "mtd"):
+            for g in _PLAN_GRADES:
+                out[per][cust][g] = float(m[f"{per}_{pre}_{g}"] or 0.0)
+    return out
+
+
 def _despatch_both(db: Session, mf: date, rd: date) -> dict[str, dict[str, list[dict]]]:
     """Despatch by grade and receiving plant, for TD and MTD, from one fetch.
 
@@ -392,11 +459,17 @@ def _despatch_both(db: Session, mf: date, rd: date) -> dict[str, dict[str, list[
         if t.dt == rd:
             acc["td"][t.customer][band].add(wt, cr, fe, est)
 
+    plan = _despatch_plan(db, mf, rd)
+
     out: dict[str, dict[str, list[dict]]] = {}
     for per, bycust in acc.items():
         out[per] = {}
         for cust, bands in bycust.items():
+            pl = plan[per].get(cust, {})
             rows = [{"grade": k, "label": lbl,
+                     "plan": _r(pl.get(k)) or None,
+                     "ach_pct": prod_svc._pct((bands.get(k) or _Acc()).tonnage,
+                                              pl.get(k) or 0.0),
                      "qty": _r((bands.get(k) or _Acc()).tonnage),
                      "cr2o3": (bands.get(k) or _Acc()).cr,
                      "crfe": (bands.get(k) or _Acc()).fe,
@@ -413,7 +486,12 @@ def _despatch_both(db: Session, mf: date, rd: date) -> dict[str, dict[str, list[
             # move real tonnes into a band they were never measured for.
             u = bands[UNASSAYED_KEY]
             if u.tonnage > 0:
+                # NO PLAN ON THIS ROW, and not because none was made: the plan
+                # is written per grade, and this tonnage has no grade yet. Its
+                # plan is already counted in whichever band it lands in once
+                # the lab files, so giving it one here would count it twice.
                 rows.append({"grade": "UNASSAYED", "label": "Not yet assayed",
+                             "plan": None, "ach_pct": None,
                              "qty": _r(u.tonnage), "cr2o3": None, "crfe": None,
                              "estimated_pct": None, "estimated_qty": None})
             out[per][cust] = rows
@@ -838,9 +916,16 @@ def get_executive_summary(db: Session, report_day: date,
     plant = _plant_both(db, mtd_from, report_day)
 
     def block(per: str) -> dict:
+        # ORE AND CONCENTRATE ARE TOTALLED SEPARATELY -- see ORE_GRADES. The
+        # same rows the builder produced, dealt into two tables; neither figure
+        # is recomputed and the two still add back to what the one table showed.
+        ore_rows = [r for r in prod[per] if r["grade"] in ORE_GRADES]
+        cob_rows = [r for r in prod[per] if r["grade"] not in ORE_GRADES]
         return {
-            "production": prod[per],
-            "production_total": _weighted(prod[per]),
+            "production": ore_rows,
+            "production_total": _weighted(ore_rows),
+            "cob": cob_rows,
+            "cob_total": _weighted(cob_rows),
             "despatch": {c: desp[per].get(c, []) for c in MINES_CUSTOMERS},
             "despatch_total": {c: _weighted(desp[per].get(c, []))
                                for c in MINES_CUSTOMERS},

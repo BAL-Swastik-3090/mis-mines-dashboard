@@ -31,6 +31,7 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   ClipboardList, Package, Truck, Factory, Pickaxe, ShieldCheck, Send, Mountain,
+  Layers,
 } from "lucide-react";
 import api from "@/lib/api";
 import { formatIndian } from "@/lib/utils";
@@ -234,9 +235,10 @@ function GradeTable({ icon, title, sub, qtyLabel, td, mtd, tdTotal, mtdTotal,
   icon: React.ReactNode; title: string; sub: string; qtyLabel: string;
   td: ExecGradeRow[]; mtd: ExecGradeRow[];
   tdTotal?: ExecWeightedTotal; mtdTotal?: ExecWeightedTotal;
-  /* Production only. Despatch plans against mines_despatch_plan, a different
-     table with a different shape, so it keeps its three columns rather than
-     gaining two empty ones. */
+  /* Production, COB and despatch all plan against something — the excavation
+     plan, mines_cobp_plan and mines_despatch_plan respectively — so all three
+     show the two extra columns. A row whose plan is null still prints a dash
+     there: no plan was written for that grade, which is not a plan of zero. */
   showPlan?: boolean;
 }) {
   /* Rows are keyed by grade and merged across the two periods, never zipped by
@@ -641,6 +643,14 @@ export default function ExecutiveSummarySection() {
             td={d.td.production} mtd={d.mtd.production}
             tdTotal={d.td.production_total} mtdTotal={d.mtd.production_total} />
 
+          {/* Concentrate, not ore, and reported apart from the grades above:
+              it is beneficiated at plant 1210 against its own plan, and a
+              tonne of it answers a different question from a tonne of ROM. */}
+          <GradeTable icon={<Layers size={14} />} title="COB Production"
+            sub={statusTill} qtyLabel="Production (MT)" showPlan
+            td={d.td.cob ?? []} mtd={d.mtd.cob ?? []}
+            tdTotal={d.td.cob_total} mtdTotal={d.mtd.cob_total} />
+
           {/* Directly under Mines Production: ore, overburden and de-silting
               are one shift's work at the same faces, and the OB figure is the
               first thing asked for after the ore figure. */}
@@ -650,7 +660,7 @@ export default function ExecutiveSummarySection() {
           {DEST.map((x, i) => (
             <GradeTable key={x.key}
               icon={i === 0 ? <Truck size={14} /> : <Send size={14} />}
-              title={x.label} sub={statusTill} qtyLabel="Despatch (MT)"
+              title={x.label} sub={statusTill} qtyLabel="Despatch (MT)" showPlan
               td={d.td.despatch[x.key] ?? []} mtd={d.mtd.despatch[x.key] ?? []}
               tdTotal={d.td.despatch_total[x.key]} mtdTotal={d.mtd.despatch_total[x.key]} />
           ))}

@@ -30,8 +30,12 @@ class GradeRow(BaseModel):
     # cannot be derived from the other.
     estimated_pct: Optional[float] = None
     estimated_qty: Optional[float] = None
-    #: Planned tonnage for this grade, and actual against it. Production rows
-    #: only — despatch has its own plan table and does not use these.
+    #: Planned tonnage for this grade, and actual against it.
+    #: Production and COB rows read mines_daily_excavation_plan and
+    #: mines_cobp_plan; despatch rows read mines_despatch_plan, split by
+    #: customer. None means no plan row exists for the window — never zero,
+    #: which would read as "planned nothing" (June 2026 has no despatch plan
+    #: at all). The "Not yet assayed" despatch row carries no plan by nature.
     plan:    Optional[float] = None
     ach_pct: Optional[float] = None
     # WHERE THE TONNAGE CAME FROM: 'sap' | 'manual' | 'mixed'. A DIFFERENT idea
@@ -91,8 +95,13 @@ class ExcavationRow(BaseModel):
 class PeriodBlock(BaseModel):
     """One column of the report — TD or MTD — across all three performance
     blocks. Despatch is keyed by CUSTOMERNO (BAL, JABAMOYEE)."""
+    #: HG, MG and LG only. COB is concentrate from plant 1210, not ore raised
+    #: at the mine, and is reported in its own block below so the two are not
+    #: averaged together — see ORE_GRADES in services/executive_summary.py.
     production:       list[GradeRow]
     production_total: WeightedTotal
+    cob:              list[GradeRow] = []
+    cob_total:        WeightedTotal = WeightedTotal()
     despatch:         dict[str, list[GradeRow]]
     despatch_total:   dict[str, WeightedTotal]
     plant:            list[PlantRow]
