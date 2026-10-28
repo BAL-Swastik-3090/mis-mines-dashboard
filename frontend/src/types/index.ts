@@ -199,8 +199,13 @@ export interface ExecExcavationRow {
 }
 
 export interface ExecPeriodBlock {
+  /** HG, MG and LG only. COB is concentrate out of plant 1210 rather than ore
+   *  raised at the mine, so it carries its own block and its own total and the
+   *  two are never averaged together. */
   production:       ExecGradeRow[];
   production_total: ExecWeightedTotal;
+  cob:              ExecGradeRow[];
+  cob_total:        ExecWeightedTotal;
   despatch:         Record<string, ExecGradeRow[]>;
   despatch_total:   Record<string, ExecWeightedTotal>;
   plant:            ExecPlantRow[];
@@ -1802,4 +1807,113 @@ export interface TipperOEEResponse {
   new_machines: TipperOEERow[];
   old_fleet:    TipperOEEFleet;
   new_fleet:    TipperOEEFleet;
+}
+
+/* ── Product Costing ─────────────────────────────────────────────
+   Restored after the 2026-10-15 history reset reverted this file; the
+   costing components are untracked and import these.
+   ──────────────────────────────────────────────────────────────── */
+export type CostSection = "MINES" | "COB";
+export type CostBucket  = "DAILY" | "FORM" | "FEED" | "MONTH_END";
+
+export interface CostLine {
+  line:            string;
+  bucket:          CostBucket | null;
+  actual:          number;
+  plan:            number;
+  variance:        number;
+  rs_per_mt:       number | null;
+  plan_rs_per_mt:  number | null;
+  is_total:        boolean;
+  /** Plan pro-rated to as_of, for a month-end line that has not posted. */
+  accrued?:        number;
+  /** True when `actual` above IS that accrual rather than a posting. */
+  is_accrued?:     boolean;
+}
+
+export interface CostSummaryResponse {
+  period:        string;   // "2026-09"
+  section:       CostSection;
+  from_date:     string;
+  to_date:       string;
+  /** The day the sheet answers for; month-end costs are pro-rated to it. */
+  as_of:         string;
+  is_closed:     boolean;
+  /** The whole month asked for, on a month that is over: nothing left to estimate. */
+  is_settled:    boolean;
+  /** "uploaded" (minehub.cost_plan) or "seed". */
+  plan_source:   string;
+  /** False when nothing has posted yet and every figure is accrual. */
+  has_postings:  boolean;
+  days_in_month: number;
+  days_elapsed:  number;
+  accrual_factor: number;
+  production_mt: number;
+  lines:         CostLine[];
+}
+
+export interface CostCurvePoint {
+  date:              string;
+  day:               number;
+  daily:             number;
+  form:              number;
+  feed:              number;
+  month_end_accrued: number;
+  month_end_posted:  number;
+  month_end_used:    number;
+  total_cost:        number;
+  cum_qty_mt:        number;
+  rs_per_mt:         number | null;
+}
+
+export interface CostCurveResponse {
+  period:          string;
+  section:         CostSection;
+  days_in_month:   number;
+  days_elapsed:    number;
+  plan_month_end:  number;
+  series:          CostCurvePoint[];
+}
+
+export interface CostBucketCoverage {
+  bucket:   CostBucket;
+  source:   string;      // "actual" | "plan, prorated"
+  actual:   number;
+  plan:     number;
+  has_plan: boolean;
+}
+
+export interface CostCoverageResponse {
+  period:  string;
+  section: CostSection;
+  buckets: CostBucketCoverage[];
+  posting_lag: {
+    accrued_on:          string;
+    median_lag_days:     number | null;
+    late_posted_lines:   number;
+    late_posted_amount:  number;
+    detail: {
+      gl: string; description: string;
+      accrual_date: string | null; post_date: string | null;
+      lag_days: number | null; amount: number;
+    }[];
+  };
+  warnings: string[];
+}
+
+export interface CostGlRow {
+  gl_account:     string;
+  gl_description: string;
+  summary_line:   string;
+  bucket:         CostBucket;
+  cost_centre:    string;
+  amount:         number;
+  lines:          number;
+}
+
+export interface CostGlDetailResponse {
+  period:       string;
+  section:      CostSection;
+  summary_line: string | null;
+  rows:         CostGlRow[];
 }

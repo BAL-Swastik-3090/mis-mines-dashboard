@@ -227,14 +227,15 @@ _SHIFT_ALL_SQL = text(f"""
 """)
 
 # Breakdown hours come from services/breakdown.py, which selects notifications
-# that START inside the window and merges a machine's simultaneous
-# notifications so no hour is counted twice. The merge matters here: TATA-370(5)
-# reported exactly its God Hours because five overlapping notifications summed
-# past the window and were then clamped.
+# that OVERLAP the window, clips each to it, and merges a machine's
+# simultaneous notifications so no hour is counted twice. Both matter here:
+# TATA-470(7), open since September, read 0.00 hours under the start-date rule
+# that stood on 26-27 October while standing idle all month; and TATA-370(5)
+# once reported exactly its God Hours because five overlapping notifications
+# summed past the window and were then clamped.
 #
-# The start-date selection is the mine's instruction of 26 October 2026 and it
-# cuts the other way — a machine still down from last month reports 0.00 for
-# this one. That trade is argued in full at the top of breakdown.py.
+# The selection rule has been both ways in two days. Why it is back to overlap,
+# and what that costs, is argued in full at the top of breakdown.py.
 #
 # Asked for the whole fleet in ONE call rather than once per machine: hours_by
 # already groups by equipment, so the per-machine loop would have been five

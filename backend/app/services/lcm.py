@@ -327,8 +327,9 @@ def _sap_breakdown(db: Session, machines: list[dict], fd: date, td: date) -> flo
 
     Merged per machine and then added across them: one excavator with three
     open notifications is down once, but two excavators down together is two
-    machine-hours lost. Selected by START DATE, so a breakdown that began last
-    month is charged to last month and does not reappear in this one.
+    machine-hours lost. Selected by OVERLAP with the window, so a breakdown
+    that began last month and is still running counts the part that falls in
+    this one.
     """
     if not machines:
         return 0.0

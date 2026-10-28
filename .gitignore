@@ -68,3 +68,8 @@ backend/storage/
 # Claude Code's own working files: an editor's launch config and local
 # settings, created by whoever happens to be using it. Not the project's.
 .claude/
+
+# Loose env files dropped in the repo root (mail attachments, backups).
+# These carry live credentials and must never be committed.
+*.env
+.env*.bak
