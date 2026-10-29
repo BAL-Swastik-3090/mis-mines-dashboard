@@ -130,7 +130,7 @@ _ROM_SQL = text("""
            AND LOT_QUANTITY IS NOT NULL
     ) l
     LEFT JOIN (
-        SELECT LOT_NUMBER, MAX(CAST(NULLIF(RESULT,'') AS DECIMAL(16,6))) AS v
+        SELECT LOT_NUMBER, MAX(CAST(RESULT AS DECIMAL(16,6))) AS v
           FROM pp_quality_inspection
          WHERE PLANT = :plant AND STORAGE_LOCATION = :sloc
            AND QLT_START_DATE BETWEEN :frm AND :to
@@ -138,7 +138,7 @@ _ROM_SQL = text("""
          GROUP BY LOT_NUMBER
     ) c ON c.LOT_NUMBER = l.LOT_NUMBER
     LEFT JOIN (
-        SELECT LOT_NUMBER, MAX(CAST(NULLIF(RESULT,'') AS DECIMAL(16,6))) AS v
+        SELECT LOT_NUMBER, MAX(CAST(RESULT AS DECIMAL(16,6))) AS v
           FROM pp_quality_inspection
          WHERE PLANT = :plant AND STORAGE_LOCATION = :sloc
            AND QLT_START_DATE BETWEEN :frm AND :to
