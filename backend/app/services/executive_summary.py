@@ -49,6 +49,7 @@ from typing import Any, NamedTuple
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.services import desilting_plan as desilt_svc
 from app.services import production as prod_svc
 from app.services import stock as stock_svc
 from app.services.despatch_grade import (
@@ -833,12 +834,18 @@ def _excavation(db: Session, mf: date, rd: date,
     already fetched. `ob_actual` is (td, mtd) lifted out of the single scan in
     _prod_qty, where overburden sits beside the ore grades at plant 1200.
 
-    DE-SILTING HAS NO PLAN, AND THAT IS NOT AN OMISSION HERE. There is no plan
-    table for it anywhere in the database — services/production.py returns
-    `"silt_plan": None` with that same note, and the MIS KPI card passes
-    today_plan=None and mtd_plan=None. Its actual is reported and its plan
-    column stays empty, which is what MIS shows. Inventing a target, or reusing
-    the OB plan, would be worse than a blank.
+    DE-SILTING NOW HAS A PLAN, FROM A DIFFERENT DATABASE. The mine uploads it
+    month by month into minehub.desilting_plan on Postgres, while everything
+    else on this page is MySQL, so the two CANNOT be joined in SQL — the plan
+    comes back as a {date: CuM} map and is summed here in Python.
+
+    A MONTH NOBODY HAS UPLOADED STILL READS NO PLAN, and so does a Postgres
+    that cannot be reached: desilting_plan.plan_for never raises and returns an
+    empty map, which lands on exactly the blank this page showed before the
+    upload existed. That is the honest answer to "what was the target" when the
+    table holding it is unavailable, and it keeps a cold Postgres from taking
+    down a page that is otherwise entirely MySQL. Inventing a target, or
+    reusing the OB plan, would still be worse than a blank.
 
     OB is CuM, not MT. The ore tables above it are tonnes, so the unit travels
     with the row rather than sitting in a column heading somewhere.
@@ -874,8 +881,13 @@ def _excavation(db: Session, mf: date, rd: date,
         WHERE Variant = '4' AND Prod_date BETWEEN :mf AND :rd
     """), {"mf": mf, "rd": rd}).fetchone()
 
+    # The de-silting plan, out of Postgres and matched by date in Python.
+    silt_plan = desilt_svc.plan_for(mf, rd)
+    sp_td = silt_plan.get(rd)
+    sp_mtd = round(sum(silt_plan.values()), 3) if silt_plan else None
+
     def rows(ob_act: float, ob_plan: float, silt_act: float | None,
-             manual: float = 0.0) -> list[dict]:
+             silt_plan_qty: float | None, manual: float = 0.0) -> list[dict]:
         return [
             {"key": "ob", "label": "Overburden", "unit": "CuM",
              "plan": _r(ob_plan), "actual": _r(ob_act),
@@ -883,16 +895,29 @@ def _excavation(db: Session, mf: date, rd: date,
              "source": _source(ob_act - manual, manual),
              "manual_qty": _r(manual) or None},
             # get_desilt_actual reports nothing rather than nought when there
-            # was none; matched here so the two screens read alike.
+            # was none; matched here so the two screens read alike. no_plan is
+            # now a fact about the month rather than about de-silting -- it
+            # says this month has no uploaded plan, not that none can exist.
             {"key": "desilt", "label": "De-Silting", "unit": "CuM",
-             "plan": None, "actual": _r(silt_act) if silt_act else None,
-             "pct": None, "no_plan": True,
+             "plan": _r(silt_plan_qty) if silt_plan_qty is not None else None,
+             "actual": _r(silt_act) if silt_act else None,
+             # AN ACHIEVEMENT NEEDS BOTH HALVES. A day with a plan and no
+             # actual is not 0% — get_desilt_actual returns None both when no
+             # de-silting was done and when IMOS has not filed the day yet,
+             # and the two are indistinguishable here. Printing 0.0% beside a
+             # dash would read as a failed day when the figure may simply not
+             # have arrived, so the cell stays empty until the actual does.
+             "pct": (prod_svc._pct(silt_act, silt_plan_qty)
+                     if (silt_plan_qty and silt_act) else None),
+             "no_plan": silt_plan_qty is None,
              "source": SRC_SAP, "manual_qty": None},
         ]
 
     return {
-        "td":  rows(ob_td,  _f(plan.td_plan)  or 0.0, _f(silt.td_silt),  e_td),
-        "mtd": rows(ob_mtd, _f(plan.mtd_plan) or 0.0, _f(silt.mtd_silt), e_mtd),
+        "td":  rows(ob_td,  _f(plan.td_plan)  or 0.0, _f(silt.td_silt),
+                    sp_td,  e_td),
+        "mtd": rows(ob_mtd, _f(plan.mtd_plan) or 0.0, _f(silt.mtd_silt),
+                    sp_mtd, e_mtd),
     }
 
 

@@ -10,6 +10,8 @@ from sqlalchemy import text
 # the proof against SAP. Summing QUANTITY without this counts a mistaken posting
 # AND its correction: Aug 2026 ore read 19,982 MT against SAP's 16,542.
 from app.services.sap_movement import PRODUCTION_QTY
+# The de-silting plan, the one figure on this page that is not in balcorpdb.
+from app.services import desilting_plan
 
 
 # ── Material number constants (pp_production.MATERIAL_NO) ─────
@@ -146,6 +148,12 @@ def get_production_daywise(db: Session, from_date: date, to_date: date) -> list[
     ore_plan  = {r["dt"]: r for r in get_daily_ore_ob_plan(db, from_date, to_date)}
     cob_plan  = {r["dt"]: r for r in get_daily_cob_plan(db, from_date, to_date)}
     silt_data = _get_silt_daywise(db, from_date, to_date)
+    # The de-silting plan lives in minehub on POSTGRES while everything
+    # else here is MySQL, so it is fetched as a {date: CuM} map and
+    # matched on the spine below rather than joined in SQL. plan_for never
+    # raises: an unreachable Postgres reports no plan, which is the blank
+    # this column held before the upload existed.
+    silt_plan = desilting_plan.plan_for(from_date, to_date)
 
     all_dates = _date_spine(from_date, to_date)
 
@@ -169,7 +177,9 @@ def get_production_daywise(db: Session, from_date: date, to_date: date) -> list[
             "mg_plan":     _f(op.get("mg_plan")),
             "lg_plan":     _f(op.get("lg_plan")),
             "silt_actual": silt_data.get(dt),   # None when no silt on that day
-            "silt_plan":   None,                 # No plan table for de-silting
+            # None where the mine has uploaded no plan for that day --
+            # never 0.0, which would read as a day planned at nothing.
+            "silt_plan":   silt_plan.get(dt),
         })
     return rows
 
