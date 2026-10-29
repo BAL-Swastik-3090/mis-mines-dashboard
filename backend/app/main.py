@@ -462,6 +462,7 @@ from app.routers import fields
 from app.routers import checklists, operators_analytics
 from app.routers import prev_day_actual
 from app.routers import stock_entry
+from app.routers import desilting_plan
 from app.routers import quality_e2e
 from app.routers import amira
 from app.routers import executive_summary
@@ -506,6 +507,7 @@ app.include_router(roles.router)
 app.include_router(minehub.router)
 app.include_router(prev_day_actual.router)
 app.include_router(stock_entry.router)
+app.include_router(desilting_plan.router)
 app.include_router(quality_e2e.router)
 app.include_router(amira.router)
 app.include_router(executive_summary.router)

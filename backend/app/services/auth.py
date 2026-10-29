@@ -265,6 +265,12 @@ PREFIX_PAGE: tuple[tuple[str, str], ...] = (
     ("/api/stock-entry", "mis"),
     # End-to-end quality, read-only over SAP. Mapped for the same reason as
     # the two above: an unmapped path skips the page check entirely.
+    # The uploaded de-silting plan. Mapped for the same reason, and it matters
+    # more here than for a read-only path: this one WRITES the target every
+    # de-silting achievement on the dashboard is measured against. Listed
+    # before /api/despatch because neither prefixes the other today, and
+    # keeping the entry-point paths together makes that easy to keep true.
+    ("/api/desilting-plan", "mis"),
     ("/api/quality-e2e", "mis"),
     ("/api/amira", "mis"),
     ("/api/executive-summary", "mis"),
