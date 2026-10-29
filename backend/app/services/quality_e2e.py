@@ -48,6 +48,8 @@ from typing import Any, Iterable
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
+from app.services.sap_source import (is_postgres as _is_postgres,
+                                     sap_one, sap_rows)
 
 # THE TWO DESTINATIONS, AND WHY EACH IS A PAIR.
 #
@@ -167,13 +169,21 @@ def _despatches(db: Session, customer: str, frm: date, to: date,
         # a 59,000-row table and away from an identically numbered batch in
         # another year.
         frm, to = frm - timedelta(days=BATCH_PAD_DAYS), to + timedelta(days=BATCH_PAD_DAYS)
+    # ── REGEXP IS MySQL's SPELLING, ~ IS POSTGRES'S ─────────────────────────
+    # Neither engine understands the other's operator, and there is no third
+    # spelling both accept -- SIMILAR TO is Postgres-only, and the pattern
+    # ("a letter, then six or more digits") cannot be written as a LIKE. So
+    # the operator is chosen from the session that is about to run the query,
+    # which is why this one builds its SQL inside the `with` rather than
+    # going through sap_rows().
+    _re = "~" if _is_postgres(db) else "REGEXP"
     sql = text(f"""
         SELECT BATCH AS batch, GATEINDATE AS d, COUNT(*) AS trips,
-               SUM(CAST(NETWEIGHT AS DECIMAL(14,3))) AS qty
+               SUM(CAST(NULLIF(TRIM(NETWEIGHT),'') AS DECIMAL(14,3))) AS qty
           FROM zsd_outbound_despatch
          WHERE CUSTOMERNO = :cust
            AND BATCH IS NOT NULL AND BATCH <> ''
-           AND BATCH REGEXP '{STACK_SHAPE}'
+           AND BATCH {_re} '{STACK_SHAPE}'
            {clause}
          GROUP BY BATCH, GATEINDATE
          ORDER BY GATEINDATE, BATCH
@@ -183,7 +193,7 @@ def _despatches(db: Session, customer: str, frm: date, to: date,
         sql = sql.bindparams(bindparam("batches", expanding=True))
         params["batches"] = batches
     params |= {"frm": frm, "to": to}
-    rows = db.execute(sql, params).fetchall()
+    rows = sap_rows(db, sql, params)
     return [
         {"batch": r.batch.strip(), "date": r.d, "trips": int(r.trips),
          "qty": round(float(r.qty or 0), 2)}
@@ -208,10 +218,10 @@ def _mine_lots(db: Session, batches: list[str]) -> dict[str, list[dict]]:
         bindparam("plants", expanding=True),
         bindparam("batches", expanding=True),
     )
-    rows = db.execute(sql, {
+    rows = sap_rows(db, sql, {
         "plants": list(MINE_PLANTS), "loc": MINE_STORAGE,
         "batches": batches,
-    }).fetchall()
+    })
     out: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         out[r.batch.strip()].append({
@@ -237,10 +247,10 @@ def _plant_lots(db: Session, plant: str,
            AND h.MOVEMENT_TYPE = :mvt AND h.BATCH IN :batches
          GROUP BY h.BATCH, h.LOT_NUMBER
     """).bindparams(bindparam("batches", expanding=True))
-    rows = db.execute(sql, {
+    rows = sap_rows(db, sql, {
         "plant": plant, "insp": PLANT_INSPECTION,
         "mvt": PLANT_MOVEMENT, "batches": batches,
-    }).fetchall()
+    })
     out: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         out[r.batch.strip()].append({

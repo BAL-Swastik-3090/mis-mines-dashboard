@@ -47,6 +47,7 @@ from __future__ import annotations
 from datetime import date
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from app.services.sap_source import sap_one, sap_rows
 
 from app.services import ibm_rates
 
@@ -162,7 +163,7 @@ def _actual_qty(db: Session, fd: date, td: date) -> dict:
         WHERE PLANT = :plant
           AND POSTING_DATE BETWEEN :fd AND :td
     """)
-    r = db.execute(sql, {"plant": PLANT_COB, "fd": fd, "td": td}).fetchone()
+    r = sap_one(db, sql, {"plant": PLANT_COB, "fd": fd, "td": td})
     return {
         "feed":        _f(r.feed),
         "concentrate": _f(r.concentrate),
@@ -194,10 +195,10 @@ def _actual_grades(db: Session, fd: date, td: date) -> dict:
           AND QLT_START_DATE BETWEEN :fd AND :td
         GROUP BY MATERIAL_NO
     """)
-    rows = db.execute(sql, {
+    rows = sap_rows(db, sql, {
         "plant": PLANT_COB, "mat_feed": MAT_LG_ORE, "mat_conc": MAT_CONCENTRATE,
         "fd": fd, "td": td,
-    }).fetchall()
+    })
 
     out = {"feed_grade": None, "conc_grade": None, "weighted": False, "lots": 0}
     for r in rows:

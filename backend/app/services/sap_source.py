@@ -147,6 +147,36 @@ def sap_rows(db: Session, sql, params: dict | None = None) -> list:
         return sap.execute(sql, params or {}).fetchall()
 
 
+def is_postgres(db: Session) -> bool:
+    """Whether a SAP read from this session would land on the feed.
+
+    For the handful of queries that cannot be written once for both engines --
+    a regular-expression match, say, where MySQL spells it REGEXP and Postgres
+    spells it ~ -- the SQL has to know which it is about to run on. Asking
+    sap_session() the same question it is about to answer keeps the two in
+    step: if the feed is unreachable this returns False and the MySQL spelling
+    is used, which is exactly where the query will then run.
+    """
+    # The cached answer first, WITHOUT opening a connection. _ready() returns
+    # the cache when it is fresh, but only after it has been handed a session
+    # -- and this is called once per query, so checking out a Postgres
+    # connection merely to read a boolean that is already known is a round
+    # trip per call on the pool.
+    if _READY is not None and (time.monotonic() - _CHECKED_AT) < _TTL:
+        return _READY
+    try:
+        from app.minehub_db import SessionLocal as PgSession
+        if PgSession is None:
+            return False
+        pg = PgSession()
+        try:
+            return _ready(pg)
+        finally:
+            pg.close()
+    except Exception:                                   # noqa: BLE001
+        return False
+
+
 def sap_one(db: Session, sql, params: dict | None = None):
     """The first row of a SAP read, or None. Same rules as sap_rows()."""
     with sap_session(db) as sap:

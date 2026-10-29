@@ -27,6 +27,7 @@ from __future__ import annotations
 from datetime import date
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from app.services.sap_source import sap_one
 
 from app.services import breakdown as bd
 from app.services import ibm_rates
@@ -383,17 +384,17 @@ def _plan_actual(db: Session, fd: date, td: date) -> dict:
     p = {"fd": fd, "td": td, "plant": PLANT}
     for i, mat in enumerate(ORE_MATERIALS):
         p[f"m{i}"] = mat
-    ore_act = db.execute(text(f"""
+    ore_act = sap_one(db, text(f"""
         SELECT COALESCE(SUM({PRODUCTION_QTY}), 0) AS q FROM pp_production
         WHERE PLANT = :plant AND MATERIAL_NO IN ({ph})
           AND POSTING_DATE BETWEEN :fd AND :td
-    """), p).fetchone()
+    """), p)
 
-    ob_act = db.execute(text(f"""
+    ob_act = sap_one(db, text(f"""
         SELECT COALESCE(SUM({PRODUCTION_QTY}), 0) AS q FROM pp_production
         WHERE PLANT = :plant AND MATERIAL_NO = :mat
           AND POSTING_DATE BETWEEN :fd AND :td
-    """), {"plant": PLANT, "mat": OB_MATERIAL, "fd": fd, "td": td}).fetchone()
+    """), {"plant": PLANT, "mat": OB_MATERIAL, "fd": fd, "td": td})
 
     return {
         "ore_plan":   _n(ore_plan.q),

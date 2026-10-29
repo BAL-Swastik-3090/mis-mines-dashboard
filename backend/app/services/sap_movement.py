@@ -48,6 +48,7 @@ from datetime import date
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from app.services.sap_source import sap_rows
 
 RECEIPT_TYPES     = ("101", "531")
 RECEIPT_REVERSALS = ("102", "532")
@@ -100,24 +101,35 @@ def reversal_summary(db: Session, from_date: date, to_date: date,
         where += " AND PLANT = :plant"
         params["plant"] = plant
 
-    rows = db.execute(text(f"""
-        SELECT PLANT, MOVEMENT_TYPE, MATERIAL_NO, MATERIAL_DESC,
+    # Aliased to lowercase: Postgres folds the unquoted names, so r.plant
+    # raises AttributeError the moment this reads the feed.
+    rows = sap_rows(db, text(f"""
+        SELECT PLANT         AS plant,
+               MOVEMENT_TYPE AS movement_type,
+               MATERIAL_NO   AS material_no,
+               MATERIAL_DESC AS material_desc,
                COUNT(*) AS docs, SUM(QUANTITY) AS qty
         FROM pp_production
         WHERE {where}
           AND MOVEMENT_TYPE IN ('102','532','262')
         GROUP BY PLANT, MOVEMENT_TYPE, MATERIAL_NO, MATERIAL_DESC
-        ORDER BY qty DESC
-    """), params).fetchall()
+        -- TIE-BROKEN ON PURPOSE. `ORDER BY qty DESC` alone leaves rows of
+        -- equal quantity in whatever order the engine happens to produce,
+        -- and MySQL and Postgres do not happen to agree -- which showed up
+        -- as this report "differing" between the two databases when every
+        -- row in it was identical. An unstable sort is a real defect in a
+        -- report somebody reads twice; the extra keys cost nothing.
+        ORDER BY qty DESC, plant, movement_type, material_no
+    """), params)
 
     return {
         "documents": sum(int(r.docs) for r in rows),
         "quantity":  round(sum(float(r.qty or 0) for r in rows), 3),
         "rows": [{
-            "plant":         r.PLANT,
-            "movement_type": r.MOVEMENT_TYPE,
-            "material_no":   r.MATERIAL_NO,
-            "material_desc": r.MATERIAL_DESC,
+            "plant":         r.plant,
+            "movement_type": r.movement_type,
+            "material_no":   r.material_no,
+            "material_desc": r.material_desc,
             "documents":     int(r.docs),
             "quantity":      float(r.qty or 0),
         } for r in rows],
