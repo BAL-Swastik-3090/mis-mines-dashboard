@@ -127,6 +127,32 @@ def _ready(pg: Session) -> bool:
 _SAP_FIRST = text("SET LOCAL search_path TO sap_odata_api, minehub, public")
 
 
+def sap_rows(db: Session, sql, params: dict | None = None) -> list:
+    """One SAP read, on the feed if it is there. Returns the rows.
+
+    The same thing as `with sap_session(db) as sap: sap.execute(...)`, in a
+    form that replaces a `db.execute(...).fetchall()` without moving the lines
+    around it. That matters at the scale this is being applied: forty-odd call
+    sites across a dozen services, where re-indenting each one into a `with`
+    block is forty chances to put a line in the wrong place.
+
+    ONLY FOR A QUERY THAT TOUCHES SAP TABLES ALONE. The feed holds no
+    mines_* table, so a query joining pp_production to, say,
+    mines_daily_excavation_plan will fail there rather than fall back -- the
+    fallback chooses the session before the query runs, not after it fails.
+    That failure is loud and happens in testing, which is the intent: a
+    cross-database join should be found by a person, not papered over.
+    """
+    with sap_session(db) as sap:
+        return sap.execute(sql, params or {}).fetchall()
+
+
+def sap_one(db: Session, sql, params: dict | None = None):
+    """The first row of a SAP read, or None. Same rules as sap_rows()."""
+    with sap_session(db) as sap:
+        return sap.execute(sql, params or {}).fetchone()
+
+
 @contextlib.contextmanager
 def sap_session(db: Session) -> Iterator[Session]:
     """A session to run a SAP read on. Never raises; never yields None."""

@@ -74,6 +74,7 @@ MINES_HAULIER_SQL = "(COALESCE(WEIGHBRIDGE, '') = :wb OR COALESCE(TRANSPORTER, '
 MINES_HAULIER_PARAMS = {"wb": "WEIGH BRIDGE - 4", "hauler": "SHREE GANESH%"}
 from datetime import date, timedelta
 from sqlalchemy.orm import Session
+from app.services.sap_source import sap_one, sap_rows
 from sqlalchemy import text
 
 
@@ -129,7 +130,7 @@ def get_td_plan(db: Session, td_date: date) -> dict:
 
 _ACTUAL_SQL = """
     SELECT
-        DATE(z.GATEINDATE)                                                          AS dt,
+        z.GATEINDATE                                                          AS dt,
         COALESCE(SUM(CASE WHEN z.CUSTOMERNO = 'BAL'       THEN z.NETWEIGHT END), 0) AS bal_actual,
         COALESCE(SUM(CASE WHEN z.CUSTOMERNO = 'JABAMOYEE' THEN z.NETWEIGHT END), 0) AS suk_actual,
         COALESCE(SUM(z.NETWEIGHT), 0)                                               AS total_actual
@@ -137,24 +138,22 @@ _ACTUAL_SQL = """
         SELECT DELIVERYNO,
                MAX(CUSTOMERNO)  AS CUSTOMERNO,
                MAX(GATEINDATE)  AS GATEINDATE,
-               MAX(NETWEIGHT)   AS NETWEIGHT
+               MAX(CAST(NULLIF(TRIM(NETWEIGHT),'') AS DECIMAL(16,3))) AS NETWEIGHT
         FROM zsd_outbound_despatch
-        WHERE DATE(GATEINDATE) BETWEEN :f AND :t
+        WHERE GATEINDATE BETWEEN :f AND :t
           AND CUSTOMERNO IN ('BAL', 'JABAMOYEE')
           AND (COALESCE(WEIGHBRIDGE, '') = :wb OR COALESCE(TRANSPORTER, '') LIKE :hauler)
         GROUP BY DELIVERYNO
     ) z
-    GROUP BY DATE(z.GATEINDATE)
+    GROUP BY z.GATEINDATE
     ORDER BY dt
 """
 
 
 def get_actuals_daywise(db: Session, from_date: date, to_date: date) -> dict:
     """Returns dict keyed by date with per-day actual breakdown."""
-    rows = db.execute(
-        text(_ACTUAL_SQL),
-        {"f": from_date, "t": to_date, **MINES_HAULIER_PARAMS},
-    ).fetchall()
+    rows = sap_rows(db, text(_ACTUAL_SQL),
+                    {"f": from_date, "t": to_date, **MINES_HAULIER_PARAMS})
     return {
         r.dt: {
             "total_actual":   float(r.total_actual),
@@ -176,17 +175,16 @@ def get_actuals_summary(db: Session, from_date: date, to_date: date) -> dict:
         FROM (
             SELECT DELIVERYNO,
                    MAX(CUSTOMERNO) AS CUSTOMERNO,
-                   MAX(NETWEIGHT)  AS NETWEIGHT
+                   MAX(CAST(NULLIF(TRIM(NETWEIGHT),'') AS DECIMAL(16,3))) AS NETWEIGHT
             FROM zsd_outbound_despatch
-            WHERE DATE(GATEINDATE) BETWEEN :f AND :t
+            WHERE GATEINDATE BETWEEN :f AND :t
               AND CUSTOMERNO IN ('BAL', 'JABAMOYEE')
               AND (COALESCE(WEIGHBRIDGE, '') = :wb OR COALESCE(TRANSPORTER, '') LIKE :hauler)
             GROUP BY DELIVERYNO
         ) z
     """)
-    row = db.execute(
-        sql, {"f": from_date, "t": to_date, **MINES_HAULIER_PARAMS}
-    ).fetchone()
+    row = sap_one(db, sql,
+                  {"f": from_date, "t": to_date, **MINES_HAULIER_PARAMS})
     if not row or float(row.total_actual or 0) == 0:
         return {
             "total_actual": None, "bal_actual": None,
