@@ -26,7 +26,7 @@ def list_roles(db: Session = Depends(get_db)) -> list[dict]:
     # in Postgres now -- the role table in minehub, the employee details in
     # sap_odata_api. A cross-database join is not a thing, so if either had
     # stayed on MySQL this query would have had to become two.
-    with _auth_db(db) as s_:
+    with _auth_db() as s_:
         rows = s_.execute(text(
             f"""SELECT r.emp_id, r.role, r.updated_by, r.updated_at,
                        e.EMPNAME AS name, e.EMPDEPT AS department,
@@ -54,7 +54,7 @@ def search_employees(q: str = Query("", min_length=0), db: Session = Depends(get
     # ILIKE, not LIKE. MySQL's collation is case-insensitive and Postgres's is
     # not, so a LIKE carried over unchanged would quietly stop matching
     # anything typed in the wrong case -- the picker would just look empty.
-    with _auth_db(db) as s_:
+    with _auth_db() as s_:
         rows = s_.execute(text(
             f"""SELECT EMPID AS emp_id, EMPNAME AS name, EMPDEPT AS department,
                        EMPDESG AS designation, STATUS AS status
@@ -91,7 +91,7 @@ def set_role(request: Request, body: dict = Body(...), db: Session = Depends(get
         raise HTTPException(400, "You cannot reduce your own access level.")
 
     # ON CONFLICT where MySQL had ON DUPLICATE KEY UPDATE.
-    with _auth_db(db) as s_:
+    with _auth_db() as s_:
         s_.execute(text(
             f"""INSERT INTO {ROLE_TBL} (emp_id, role, updated_by, updated_at)
                 VALUES (:e, :r, :by, NOW())
@@ -113,7 +113,7 @@ def delete_role(emp_id: str, request: Request, db: Session = Depends(get_db)) ->
     """
     if emp_id == getattr(request.state, "emp_id", None):
         raise HTTPException(400, "You cannot remove your own admin access.")
-    with _auth_db(db) as s_:
+    with _auth_db() as s_:
         s_.execute(text(f"DELETE FROM {ROLE_TBL} WHERE emp_id = :e"), {"e": emp_id})
         s_.commit()
     return {"ok": True, "emp_id": emp_id}
@@ -127,7 +127,7 @@ def get_page_access(db: Session = Depends(get_db)) -> dict:
     Any (role, page) with no row is reported as allowed, matching the fallback in
     the service — the absence of configuration must not read as "denied".
     """
-    with _auth_db(db) as s_:
+    with _auth_db() as s_:
         rows = s_.execute(text(
             f"SELECT role, page, allowed FROM {PAGE_TBL}")).mappings().all()
     stored = {(r["role"], r["page"]): bool(r["allowed"]) for r in rows}
@@ -165,7 +165,7 @@ def set_page_access(request: Request, body: dict = Body(...),
     if not admin_pages and any(u["r"] == "admin" for u in updates):
         raise HTTPException(400, "Admin must keep access to at least one page.")
 
-    with _auth_db(db) as s_:
+    with _auth_db() as s_:
         for u in updates:
             s_.execute(text(
                 f"""INSERT INTO {PAGE_TBL} (role, page, allowed, updated_by, updated_at)

@@ -5,11 +5,25 @@
 # /api/* is routed straight to the backend here rather than through the Next
 # rewrite proxy. There are no websocket routes in this app.
 #
-# ── EVERYTHING HERE IS SCOPED TO THIS SERVER BLOCK ──────────────────────────
-# This nginx serves 28 sites. Nothing in this file is set in nginx.conf or in
-# any shared snippet, so no other application's headers change. server_tokens
-# in particular is left commented out globally and set here instead, for the
-# same reason.
+# ── WHY THE SECURITY HEADERS ARE NOT IN THIS FILE ───────────────────────────
+# They were, once. They are now set by the application itself:
+#
+#   frontend/next.config.ts   headers() -- every page response
+#   backend/app/main.py       security_headers middleware -- every /api/*
+#
+# Two reasons, and the second is the one that matters:
+#
+#   1. /etc/nginx needs root and the deploy account has no passwordless sudo,
+#      so a header that lives here waits on somebody finding a password while
+#      the scanner keeps reporting it. A header in the app ships with the app.
+#
+#   2. THEY MUST NOT BE SET IN BOTH PLACES. A browser does not merge two
+#      Content-Security-Policy headers -- it enforces each separately and the
+#      page gets the intersection of the two. Adding an add_header here "for
+#      belt and braces" would be a very confusing way to break a screen.
+#
+# So this file carries only the one finding the application cannot fix: nginx
+# naming its own version in every response.
 
 server {
     listen 80;
@@ -29,65 +43,10 @@ server {
     gzip on;
     gzip_types text/plain application/json application/javascript text/css;
 
-    # Was reporting "nginx/1.18.0 (Ubuntu)" in every response.
+    # Was reporting "nginx/1.18.0 (Ubuntu)" in every response. Set HERE rather
+    # than uncommented in nginx.conf: this host serves 28 sites and that would
+    # have changed all of them.
     server_tokens off;
-
-    # ── SECURITY HEADERS ────────────────────────────────────────────────────
-    # `always` on every one of them: without it nginx omits the header on
-    # error responses (4xx/5xx), which is exactly where a redirect or an error
-    # page would otherwise go out unprotected.
-    #
-    # A WARNING FOR WHOEVER EDITS THIS NEXT: add_header does not merge. If a
-    # `location` block below ever gains an add_header of its own, it replaces
-    # this whole set for that location rather than adding to it, and the
-    # scanner findings come back for those paths only. If that is needed, the
-    # full set has to be repeated there.
-
-    # HTTP over this name is already a 301 to HTTPS and the certificate is
-    # valid to 2027-01-13, so committing to HTTPS costs nothing today.
-    # includeSubDomains covers *.mines.balasorealloys.in only -- it does NOT
-    # reach crm., imos., finance. or the other sibling names, which are
-    # separate hosts and send their own policy. Browsers honour this for two
-    # years and ignore attempts to shorten it early, so it is the one header
-    # here that is hard to take back.
-    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
-
-    # SAMEORIGIN rather than DENY. The dashboard embeds windy.com, which this
-    # does not affect, but whether anything embeds the DASHBOARD -- the D&D
-    # portal, an intranet page -- was not something I could establish from
-    # here. SAMEORIGIN closes the clickjacking finding and leaves same-origin
-    # embedding working. Tighten to DENY once somebody confirms nothing frames
-    # it.
-    add_header X-Frame-Options "SAMEORIGIN" always;
-
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
-
-    # ── CSP: REPORT-ONLY FIRST, ON PURPOSE ──────────────────────────────────
-    # Report-Only observes and blocks nothing. An enforcing CSP that is one
-    # directive short does not degrade -- it blanks the screen, and on a
-    # dashboard the mine runs its morning meeting from, that is a worse
-    # outcome than the finding it fixes.
-    #
-    # The directives are drawn from what the app actually loads:
-    #   frame-src embed.windy.com  the Weather Forecast page embeds it.
-    #                              www.windy.com refuses framing itself, so
-    #                              only the embed host is listed.
-    #   font-src 'self' data:      next/font/google downloads the three faces
-    #                              at BUILD time and serves them from this
-    #                              origin, so there is no runtime call to
-    #                              fonts.googleapis.com or fonts.gstatic.com
-    #                              to allow.
-    #   'unsafe-inline'/'unsafe-eval' in script-src: Next.js needs both unless
-    #                              the app is reworked to emit a per-request
-    #                              nonce. Dropping them is a code change, not
-    #                              a header change.
-    #
-    # Switch the header name to Content-Security-Policy once the browser
-    # console is quiet on every page -- MIS, OEE, Weather, AMIRA, Fuel, EV,
-    # Costing and Despatch.
-    add_header Content-Security-Policy-Report-Only "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src https://embed.windy.com; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'" always;
 
     location /api/ {
         proxy_pass http://127.0.0.1:8006;
@@ -107,10 +66,10 @@ server {
         proxy_set_header X-Forwarded-Proto https;
         proxy_read_timeout 120s;
 
-        # Next.js announces itself in every response. Hidden here so it stops
-        # today; poweredByHeader:false in next.config.ts stops it at source on
-        # the next deploy, and the two are deliberately both in place -- this
-        # line keeps working if the app is ever served by something else.
+        # Belt and braces on this one only, because it REMOVES a header rather
+        # than adding one -- there is nothing to duplicate. poweredByHeader is
+        # already false in next.config.ts; this keeps it gone if the app is
+        # ever served by something else.
         proxy_hide_header X-Powered-By;
     }
 }

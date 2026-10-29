@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.minehub_db import get_minehub_db
 from app.services import access as access_svc
-from app.services.auth import EMP_TBL
+from app.services.auth import EMP_TBL, _auth_db
 
 router = APIRouter(prefix="/api/access", tags=["Access"])
 
@@ -47,12 +47,23 @@ def _employee_details(db, emp_ids: list[str]) -> dict[str, dict]:
     hit = _name_cache.get(key)
     if hit and (time.monotonic() - hit[1]) < _NAME_TTL:
         return hit[0]
+    # EMP_TBL is sap_odata_api.sap_employee_details -- in POSTGRES. It is no
+    # longer a table in the MySQL session this function is handed, which is
+    # what broke Access Control: every /api/access/users returned 503 and the
+    # page showed "Database error" with nobody listed.
+    #
+    # Columns are aliased to lowercase because Postgres folds an unquoted
+    # EMPID to `empid`, so r["EMPID"] would raise even once the session is
+    # right.
     stmt = text(
-        f"SELECT EMPID, EMPNAME, EMPDEPT, EMPDESG FROM {EMP_TBL} WHERE EMPID IN :ids"
+        f"""SELECT EMPID AS empid, EMPNAME AS empname,
+                   EMPDEPT AS empdept, EMPDESG AS empdesg
+            FROM {EMP_TBL} WHERE EMPID IN :ids"""
     ).bindparams(bindparam("ids", expanding=True))
-    rows = db.execute(stmt, {"ids": emp_ids}).mappings().all()
-    out = {r["EMPID"]: {"name": r["EMPNAME"], "department": r["EMPDEPT"],
-                        "designation": r["EMPDESG"]} for r in rows}
+    with _auth_db() as s_:
+        rows = s_.execute(stmt, {"ids": emp_ids}).mappings().all()
+    out = {r["empid"]: {"name": r["empname"], "department": r["empdept"],
+                        "designation": r["empdesg"]} for r in rows}
     _name_cache.clear()          # one entry is enough; the key is the id set
     _name_cache[key] = (out, time.monotonic())
     return out
@@ -454,13 +465,18 @@ def search_employees(request: Request, q: str = Query(""), db: Session = Depends
     term = (q or "").strip()
     if len(term) < 2:
         return []
-    rows = db.execute(text(
-        f"""SELECT EMPID AS emp_id, EMPNAME AS name, EMPDEPT AS department,
-                   EMPDESG AS designation
-            FROM {EMP_TBL}
-            WHERE (EMPID LIKE :like OR EMPNAME LIKE :like)
-              AND (STATUS IS NULL OR STATUS <> 'Withdrawn')
-            ORDER BY EMPNAME LIMIT 25"""), {"like": f"%{term}%"}).mappings().all()
+    # ILIKE, not LIKE: MySQL's collation is case-insensitive and Postgres's
+    # is not, so a LIKE carried over unchanged would quietly match nothing
+    # typed in the wrong case and the picker would just look empty.
+    with _auth_db() as s_:
+        rows = s_.execute(text(
+            f"""SELECT EMPID AS emp_id, EMPNAME AS name, EMPDEPT AS department,
+                       EMPDESG AS designation
+                FROM {EMP_TBL}
+                WHERE (EMPID ILIKE :like OR EMPNAME ILIKE :like)
+                  AND (STATUS IS NULL OR STATUS <> 'Withdrawn')
+                ORDER BY EMPNAME LIMIT 25"""),
+            {"like": f"%{term}%"}).mappings().all()
     return [dict(r) for r in rows]
 
 
@@ -493,8 +509,12 @@ def access_audit(request: Request,
     ids.discard("SYSTEM")
     names: dict[str, str] = {}
     if ids:
-        stmt = text(f"SELECT EMPID, EMPNAME FROM {EMP_TBL} WHERE EMPID IN :ids")             .bindparams(bindparam("ids", expanding=True))
-        names = {r[0]: r[1] for r in db.execute(stmt, {"ids": list(ids)}).all()}
+        stmt = text(
+            f"SELECT EMPID AS empid, EMPNAME AS empname "
+            f"FROM {EMP_TBL} WHERE EMPID IN :ids"
+        ).bindparams(bindparam("ids", expanding=True))
+        with _auth_db() as s_:
+            names = {r[0]: r[1] for r in s_.execute(stmt, {"ids": list(ids)}).all()}
 
     for r in out:
         r["actor_name"] = names.get(r["actor_emp_id"], r["actor_emp_id"])

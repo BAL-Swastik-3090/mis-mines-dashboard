@@ -551,6 +551,49 @@ async def require_auth(request: Request, call_next):
     return await call_next(request)
 
 
+# REGISTERED AFTER require_auth ON PURPOSE. Starlette runs the
+# LAST-registered http middleware OUTERMOST, so this has to come after
+# the auth gate to wrap it. Registered before it, require_auth's early
+# 401 returned from outside this one and went out bare -- which is how
+# /api/no-such-route came back with 0 of 5 headers while an
+# authenticated route had all 5.
+
+# ── SECURITY HEADERS ON THE API's OWN RESPONSES ─────────────────────────────
+# In production the host nginx routes /api/* STRAIGHT to this process on 8006,
+# bypassing the Next.js server entirely -- so the headers set in
+# frontend/next.config.ts never touch an API response. Without this, every
+# /api/* URL is still bare, and those are the ones that return the mine's data.
+#
+# No Content-Security-Policy here on purpose: CSP governs what a DOCUMENT may
+# load, and these responses are JSON. frame-options and nosniff still earn
+# their place -- an API response rendered directly in a tab is exactly where
+# MIME sniffing and framing tricks are used.
+#
+# Deliberately NOT also set in nginx; see the note in next.config.ts about two
+# CSP headers being enforced separately rather than merged.
+_SECURITY_HEADERS = {
+    "Strict-Transport-Security": "max-age=63072000; includeSubDomains",
+    "X-Frame-Options": "SAMEORIGIN",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+}
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Set on the way out, so error responses carry them too.
+
+    setdefault rather than assignment: if a route has already decided on one
+    of these -- a download endpoint relaxing X-Frame-Options, say -- it keeps
+    what it set rather than having it quietly overwritten here.
+    """
+    response = await call_next(request)
+    for name, value in _SECURITY_HEADERS.items():
+        response.headers.setdefault(name, value)
+    return response
+
+
 # ── Global exception handler (prevents raw tracebacks leaking) ──
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):

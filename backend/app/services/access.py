@@ -138,7 +138,7 @@ def _legacy(db, emp_id: str) -> set[str]:
     """
     from app.services.auth import _auth_db
     try:
-        with _auth_db(db) as s_:
+        with _auth_db() as s_:
             role = s_.execute(text(
                 "SELECT role FROM mines_user_role WHERE emp_id = :e"),
                 {"e": emp_id}).scalar()
@@ -181,7 +181,7 @@ def roles_for(db, emp_id: str) -> list[dict]:
     except Exception:
         from app.services.auth import _auth_db
         try:
-            with _auth_db(db) as s_:
+            with _auth_db() as s_:
                 role = s_.execute(text(
                     "SELECT role FROM mines_user_role WHERE emp_id = :e"),
                     {"e": emp_id}).scalar()
