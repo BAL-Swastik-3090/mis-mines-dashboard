@@ -12,6 +12,11 @@ const nextConfig: NextConfig = {
   // Emit .next/standalone — the Dockerfile's runner stage copies it.
   output: "standalone",
   devIndicators: false,
+  // Next.js sends `X-Powered-By: Next.js` on every response, which tells
+  // anyone scanning the site which framework to look up advisories for. The
+  // host nginx also strips it with proxy_hide_header; this stops it at the
+  // source, so it stays gone if the app is ever served some other way.
+  poweredByHeader: false,
   async rewrites() {
     return [
       {
