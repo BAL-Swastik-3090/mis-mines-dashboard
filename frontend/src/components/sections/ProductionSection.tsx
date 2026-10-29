@@ -1,5 +1,9 @@
 "use client";
+import { useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { TrendingUp } from "lucide-react";
+import { useEntryDialog } from "@/contexts/useEntryDialog";
+import DesiltingPlanModal from "@/components/sections/DesiltingPlanModal";
 import ProductionKpiStrip from "@/components/kpi/ProductionKpiStrip";
 import ProductionCharts   from "@/components/charts/ProductionCharts";
 import GradeChart         from "@/components/charts/GradeChart";
@@ -11,8 +15,33 @@ import GradeDespatchTable from "@/components/tables/GradeDespatchTable";
 import DaywiseTable       from "@/components/tables/DaywiseTable";
 
 export default function ProductionSection() {
+  const dialog = useEntryDialog((s) => s.which);
+  const closeDialog = useEntryDialog((s) => s.close);
+  const qc = useQueryClient();
+
+  /* The de-silting plan feeds the KPI card in this section, the day-wise
+     silt_plan beneath it, and the Executive Summary's achievement. Dropping
+     the ["production"] prefix covers the first two — summary and daywise are
+     both nested under it — and the summary page is keyed separately.
+
+     The dialog lives HERE because this section owns the De-Silting card the
+     plan fills, which is the rule the stock dialog already follows. */
+  const afterSave = useCallback(async () => {
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: ["production"] }),
+      qc.invalidateQueries({ queryKey: ["executive-summary"] }),
+      qc.invalidateQueries({ queryKey: ["desilting-plan"] }),
+    ]);
+  }, [qc]);
+
   return (
     <section className="space-y-4">
+
+      <DesiltingPlanModal
+        open={dialog === "desilting-plan"}
+        onClose={closeDialog}
+        onSaved={afterSave}
+      />
 
       {/* Section title */}
       <div className="section-title">

@@ -10,6 +10,7 @@ from app.database import get_db
 from app.schemas.production import (ProductionSummary, ProductionDaywise, GradeBreakdown,
                                     KpiCard, RehandlingDaywise, OreGradeResponse)
 from app.services import production as svc
+from app.services import desilting_plan
 from app.services.ore_grade import get_ore_grade_weighted
 
 router = APIRouter()
@@ -43,6 +44,14 @@ def production_summary(
 
     # MTD totals
     mtd = svc.get_mtd_totals(db, from_date, to_date)
+
+    # One read for both the day and the month — see the de_silt card below.
+    # The actuals are fetched once each too: the card asked for each of them
+    # twice, once for the figure and once inside its own percentage.
+    silt_plan = desilting_plan.plan_for(from_date, to_date)
+    silt_plan_mtd = round(sum(silt_plan.values()), 3) if silt_plan else None
+    silt_td = svc.get_desilt_actual(db, to_date, to_date)
+    silt_mtd = svc.get_desilt_actual(db, from_date, to_date)
 
     def pct(a, p):
         return round(a / p * 100, 1) if p and p != 0 and a is not None else None
@@ -84,13 +93,23 @@ def production_summary(
             mtd_pct      = pct(mtd["cob_actual"], mtd["cob_plan"]),
             unit         = "MT",
         ),
+        # DE-SILTING'S PLAN COMES OUT OF POSTGRES, not balcorpdb: the mine
+        # uploads it a month at a time into minehub.desilting_plan, so it is
+        # read as a {date: CuM} map and summed here. A month nobody has
+        # uploaded -- and a Postgres that cannot be reached -- leaves these
+        # None, which is the blank this card carried before the upload existed.
         de_silt = KpiCard(
-            today_actual = svc.get_desilt_actual(db, to_date, to_date),
-            today_plan   = None,
-            today_pct    = None,
-            mtd_actual   = svc.get_desilt_actual(db, from_date, to_date),
-            mtd_plan     = None,
-            mtd_pct      = None,
+            today_actual = silt_td,
+            today_plan   = silt_plan.get(to_date),
+            # NOT `actual or 0`: get_desilt_actual returns None both when no
+            # de-silting was done and when IMOS has not filed the day, so a
+            # 0% here would report a failed day against a figure that may
+            # simply be late. No actual, no achievement — the same rule the
+            # Executive Summary's de-silting row follows.
+            today_pct    = pct(silt_td, silt_plan.get(to_date)),
+            mtd_actual   = silt_mtd,
+            mtd_plan     = silt_plan_mtd,
+            mtd_pct      = pct(silt_mtd, silt_plan_mtd),
             unit         = "CuM",
         ),
     )

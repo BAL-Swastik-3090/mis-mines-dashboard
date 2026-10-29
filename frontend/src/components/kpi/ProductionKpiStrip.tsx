@@ -475,7 +475,11 @@ export default function ProductionKpiStrip() {
       data: data?.de_silt,      accentClass: "accent-bar-teal",
       iconBg: "bg-teal-50",     iconColor: "text-info",
       showGrades: false,
-      sourcePlan: undefined,
+      // Uploaded month by month through "Enter Desilting Plan" in the header
+      // menu. The only plan on this strip that is not an IMOS feed, which is
+      // why it is named differently — a blank here means nobody has uploaded
+      // the month, not that a feed is late.
+      sourcePlan: "Entry",
       sourceActual: "IMOS",
     },
   ];

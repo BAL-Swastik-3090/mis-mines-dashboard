@@ -1,6 +1,6 @@
 "use client";
 import { format } from "date-fns";
-import { RefreshCw, MoreVertical, PencilLine, Boxes } from "lucide-react";
+import { RefreshCw, MoreVertical, PencilLine, Boxes, Droplets } from "lucide-react";
 import AlertsBell from "./AlertsBell";
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -202,6 +202,10 @@ function ActionsMenu() {
           {([
             ["prev-day", "Enter Est Actual", PencilLine],
             ["mines-stock", "Enter Mines Stock", Boxes],
+            // An upload rather than a form, which is why it reads "Enter" like
+            // the other two: what the user is doing is entering a plan, and
+            // the dialog is where they find out it wants a spreadsheet.
+            ["desilting-plan", "Enter Desilting Plan", Droplets],
           ] as const).map(([which, label, Icon]) => (
             <button
               key={which}
