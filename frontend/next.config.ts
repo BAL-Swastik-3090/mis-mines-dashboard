@@ -64,9 +64,35 @@ const nextConfig: NextConfig = {
             key: "Permissions-Policy",
             value: "camera=(), microphone=(), geolocation=()",
           },
-          // REPORT-ONLY ON PURPOSE. An enforcing CSP that is one directive
-          // short does not degrade, it blanks the screen -- and this is the
-          // dashboard the mine runs its morning meeting from.
+          // ENFORCING. It shipped as Report-Only first, which was the right
+          // order -- an enforcing CSP one directive short does not degrade,
+          // it blanks the screen, and this is the dashboard the mine runs its
+          // morning meeting from.
+          //
+          // WHAT ACTUALLY JUSTIFIED THE PROMOTION, because "it was Report-Only
+          // for a while" did not: the header carried no report-uri, so it
+          // collected nothing anywhere -- violations appeared only in each
+          // viewer's own console, which nobody was reading. Waiting longer
+          // would have produced no more evidence than waiting an hour.
+          //
+          // So it was checked directly instead. The COMPILED bundle was
+          // scanned for external hosts across every page, not just the ones
+          // reachable without a login:
+          //   embed.windy.com     the Weather iframe -- allowed below
+          //   www.windy.com       a comment; it refuses framing, hence the
+          //                       embed host being used instead
+          //   omcltd.in           an <a href> to the OMC price page. A plain
+          //                       link is navigation, which no directive here
+          //                       governs
+          //   fonts.googleapis.com  an @import written INTO the downloadable
+          //                       HTML by downloadDashboard.ts. The live page
+          //                       never loads it -- next/font/google bakes the
+          //                       three faces in at build time
+          //   everything else     documentation URLs inside bundled libraries
+          // No client-side fetch to any external host, no Worker, and the
+          // blob: URLs are <a download> targets, which CSP does not govern.
+          // The page was then loaded against this policy with the console
+          // clean of violations.
           //
           // The directives are what the app actually loads. frame-src is for
           // the Weather page's embed.windy.com. There is NO font host,
@@ -75,11 +101,8 @@ const nextConfig: NextConfig = {
           // 'unsafe-eval' are what Next.js needs unless the app is reworked
           // to emit a per-request nonce -- a code change, not a header one.
           //
-          // Rename this key to Content-Security-Policy once the browser
-          // console is quiet on MIS, OEE, Weather, AMIRA, Fuel, EV, Costing
-          // and Despatch.
           {
-            key: "Content-Security-Policy-Report-Only",
+            key: "Content-Security-Policy",
             value: [
               "default-src 'self'",
               "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
