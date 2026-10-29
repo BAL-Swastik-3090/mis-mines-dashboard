@@ -1,0 +1,75 @@
+# Kaliapani Mines Operational Dashboard
+# docker compose project: mines_dashboard  (/home/baladmin/mines_dashboard)
+#   mines_frontend  Next.js standalone  -> 127.0.0.1:4012
+#   mines_backend   FastAPI/gunicorn    -> 127.0.0.1:8006
+# /api/* is routed straight to the backend here rather than through the Next
+# rewrite proxy. There are no websocket routes in this app.
+#
+# ── WHY THE SECURITY HEADERS ARE NOT IN THIS FILE ───────────────────────────
+# They were, once. They are now set by the application itself:
+#
+#   frontend/next.config.ts   headers() -- every page response
+#   backend/app/main.py       security_headers middleware -- every /api/*
+#
+# Two reasons, and the second is the one that matters:
+#
+#   1. /etc/nginx needs root and the deploy account has no passwordless sudo,
+#      so a header that lives here waits on somebody finding a password while
+#      the scanner keeps reporting it. A header in the app ships with the app.
+#
+#   2. THEY MUST NOT BE SET IN BOTH PLACES. A browser does not merge two
+#      Content-Security-Policy headers -- it enforces each separately and the
+#      page gets the intersection of the two. Adding an add_header here "for
+#      belt and braces" would be a very confusing way to break a screen.
+#
+# So this file carries only the one finding the application cannot fix: nginx
+# naming its own version in every response.
+
+server {
+    listen 80;
+    server_name mines.balasorealloys.in;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name mines.balasorealloys.in;
+
+    ssl_certificate     /etc/ssl/certs/fullchain.crt;
+    ssl_certificate_key /etc/ssl/private/private_decrypted.key;
+
+    client_max_body_size 20M;
+
+    gzip on;
+    gzip_types text/plain application/json application/javascript text/css;
+
+    # Was reporting "nginx/1.18.0 (Ubuntu)" in every response. Set HERE rather
+    # than uncommented in nginx.conf: this host serves 28 sites and that would
+    # have changed all of them.
+    server_tokens off;
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:8006;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 120s;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:4012;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 120s;
+
+        # Belt and braces on this one only, because it REMOVES a header rather
+        # than adding one -- there is nothing to duplicate. poweredByHeader is
+        # already false in next.config.ts; this keeps it gone if the app is
+        # ever served by something else.
+        proxy_hide_header X-Powered-By;
+    }
+}
