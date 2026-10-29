@@ -44,6 +44,7 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.services import auth as auth_svc
 from app.minehub_db import get_minehub_db
 from app.services import usage_sync
 
@@ -144,6 +145,33 @@ def _superadmins(pg: Session) -> list[str]:
     """)).all()]
 
 
+# ── "HERE NOW" MEANS WHAT THE LOGIN MEANS BY IT ─────────────────────────────
+# is_active on its own is not "signed in now". It is "nobody has written an
+# end to this row", and plenty of rows never get one: a browser closed without
+# signing out leaves is_active true for ever, and the only thing that retires
+# it is the idle rule in auth.get_session -- last_active_at inside
+# IDLE_MINUTES -- which is evaluated when somebody makes a request, not by
+# anything that sweeps the table.
+#
+# So the Usage page was reporting people as HERE NOW who were last seen 82 to
+# 85 HOURS earlier, under a heading that says "people, not browser tabs". A
+# figure read out in a morning meeting, quietly wrong in the flattering
+# direction.
+#
+# Both halves now apply the same rule the login does, so "here now" on this
+# page and "your session is still valid" in auth cannot disagree.
+_IDLE_MINUTES = auth_svc.IDLE_MINUTES
+
+
+def _is_live(last_active) -> bool:
+    """Whether a session would still be accepted by the login right now."""
+    if last_active is None:
+        return False
+    if last_active.tzinfo is not None:
+        last_active = last_active.replace(tzinfo=None)
+    return (datetime.now() - last_active) < timedelta(minutes=_IDLE_MINUTES)
+
+
 def _require(request: Request) -> None:
     perms = set(getattr(request.state, "permissions", None) or set())
     if not (set(VIEW) & perms):
@@ -234,7 +262,8 @@ def usage(request: Request,
     # where MySQL had no arrays and needed it comma-joined into a string.
     # Empty excludes nobody, so "include them" needs no second code path.
     skipped = [] if include_admins else _superadmins(pg)
-    p = {"app": app_source, "frm": frm, "to": to, "skip": list(skipped)}
+    p = {"app": app_source, "frm": frm, "to": to, "skip": list(skipped),
+         "idle": _IDLE_MINUTES}
 
     # ── the month, fetched whole, twice ──────────────────────────────────
     #
@@ -281,7 +310,8 @@ def usage(request: Request,
         "people": len({r["emp_id"] for r in ses}),
         "minutes": sum(_mins),
         "avg_minutes": round(sum(_mins) / len(_mins), 1) if _mins else 0,
-        "live": len({r["emp_id"] for r in ses if r["is_active"]}),
+        "live": len({r["emp_id"] for r in ses
+                     if r["is_active"] and _is_live(r["last_active_at"])}),
     }
 
     # Page views per person, in one pass rather than one query each.
@@ -395,6 +425,7 @@ def usage(request: Request,
                COUNT(*)            AS sessions
           FROM usage_session
          WHERE app_source = :app AND is_active
+           AND last_active_at > (now() - make_interval(mins => :idle))
            AND NOT (emp_id = ANY(:skip))
          GROUP BY emp_id
          ORDER BY last_active_at DESC

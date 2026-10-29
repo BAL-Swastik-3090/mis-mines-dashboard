@@ -120,6 +120,11 @@ async def _flush_activity():
             # No MySQL session: flush_touches opens the Postgres one the
             # session table actually lives in.
             def go() -> int:
+                # Retire what the idle rule has already expired, in the same
+                # pass. Without it is_active only ever means "never signed
+                # out", and anything that reads the flag -- the Usage page
+                # did -- reports stale sessions as people who are here now.
+                auth_svc.end_idle_sessions()
                 return auth_svc.flush_touches()
             n = await run_in_threadpool(go)
             if n:

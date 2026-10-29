@@ -780,6 +780,47 @@ def touch_now(db: Session | None, sid: str) -> bool:
             f"WHERE session_id = :sid AND is_active"), {"sid": sid}))
 
 
+def end_idle_sessions(db: Session | None = None) -> int:
+    """Close sessions the idle rule has already expired. Returns how many.
+
+    WHY THIS HAS TO EXIST. is_active does not mean "signed in" -- it means
+    nobody has written an end to this row. end_session() writes one on an
+    explicit sign-out, and that is the ONLY thing that does. Close the browser
+    tab and the row stays is_active for ever.
+
+    Nothing noticed because the login itself never trusted the flag alone:
+    get_session() also requires last_active_at within IDLE_MINUTES, so an
+    abandoned session stops working on time regardless. The flag was wrong and
+    the behaviour was right, which is the kind of wrong that survives a long
+    time.
+
+    It surfaced on the Usage page, which DID trust the flag: it reported eight
+    people as "here now" whose last request was 82 to 85 hours earlier. That
+    page now applies the same idle rule when it reads, but reading around a
+    wrong value is not the same as not writing one -- anything else that
+    believes is_active would be misled in turn.
+
+    logout_at is set to last_active_at rather than now(), so the duration is
+    the time the person was actually there, not the time until a sweeper
+    happened to run. end_reason says IDLE, which is true and distinguishes
+    these from a real sign-out in the reporting.
+    """
+    with _auth_db() as s_:
+        res = s_.execute(text(f"""
+            UPDATE {SESS_TBL}
+               SET is_active = FALSE,
+                   logout_at = last_active_at,
+                   end_reason = 'IDLE'
+             WHERE is_active
+               AND last_active_at < (now() - make_interval(mins => :idle))
+        """), {"idle": IDLE_MINUTES})
+        s_.commit()
+        n = int(res.rowcount or 0)
+    if n:
+        log.info("closed %d session(s) idle past %d minutes", n, IDLE_MINUTES)
+    return n
+
+
 def flush_touches(db: Session | None = None) -> int:
     """Write the activity noted since the last flush. One statement, patiently.
 
