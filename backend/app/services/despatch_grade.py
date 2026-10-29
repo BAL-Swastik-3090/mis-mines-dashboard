@@ -89,6 +89,17 @@ CUSTOMER_LABELS = {"BAL": "Balasore Plant", "JABAMOYEE": "Sukinda Plant"}
 # trips and mines despatch used WB-8 through 1-12 March, so neither test is
 # sufficient by itself. See despatch.MINES_HAULIER_SQL for the full measurement.
 from app.services.despatch import MINES_HAULIER_PARAMS, MINES_HAULIER_SQL
+from app.services.sap_source import sap_session
+
+# ── NUMBERS OUT OF TEXT COLUMNS, IN SQL BOTH ENGINES ACCEPT ─────────────────
+# NETWEIGHT is VARCHAR on MySQL and TEXT in the feed; BAGCOUNT is BIGINT on
+# MySQL and TEXT in the feed. MySQL reads either as a number on sight, which
+# is what `NETWEIGHT + 0` and `SUM(BAGCOUNT > 0)` relied on. Postgres does
+# not, so the conversion is written out -- and because it is written out it
+# now says the same thing on both engines rather than depending on one of
+# them being lenient.
+_WEIGHT = "CAST(NULLIF(TRIM(NETWEIGHT),'') AS DECIMAL(16,3))"
+_BAGS = "CAST(COALESCE(NULLIF(TRIM(CAST(BAGCOUNT AS CHAR(32))),''),'0') AS DECIMAL(20,0))"
 
 # Quality lives in TWO plants and both must be read.
 #
@@ -292,19 +303,29 @@ def _despatch_rows(db: Session, fd: date, td: date) -> list:
     params = {"fd": fd, "td": td, **MINES_HAULIER_PARAMS}
     for i, c in enumerate(MINES_CUSTOMERS):
         params[f"c{i}"] = c
+    # ── THE SAME SQL ON BOTH ENGINES ────────────────────────────────────
+    # DATE(GATEINDATE) is gone because GATEINDATE is already a DATE column on
+    # both sides -- the call was redundant on MySQL and does not exist in
+    # Postgres.
+    #
+    # NETWEIGHT + 0 was MySQL reading a VARCHAR as a number. It is text in the
+    # feed too, and Postgres will not add an integer to it, so the cast is now
+    # explicit. Proved equal before the change: 3,206 rows and 45,273.717 t in
+    # October from either database.
     sql = text(f"""
         SELECT
-            DATE(GATEINDATE)                 AS dt,
-            SALESNO                          AS po,
-            BATCH                            AS batch,
-            CUSTOMERNO                       AS customer,
-            COALESCE(NETWEIGHT + 0, 0)       AS wt
+            GATEINDATE                            AS dt,
+            SALESNO                               AS po,
+            BATCH                                 AS batch,
+            CUSTOMERNO                            AS customer,
+            COALESCE({_WEIGHT}, 0)                AS wt
         FROM zsd_outbound_despatch
-        WHERE DATE(GATEINDATE) BETWEEN :fd AND :td
+        WHERE GATEINDATE BETWEEN :fd AND :td
           AND CUSTOMERNO IN ({ph})
           AND {MINES_HAULIER_SQL}
     """)
-    return db.execute(sql, params).fetchall()
+    with sap_session(db) as sap:
+        return sap.execute(sql, params).fetchall()
 
 
 def _excluded_rows(db: Session, fd: date, td: date) -> dict:
@@ -319,17 +340,23 @@ def _excluded_rows(db: Session, fd: date, td: date) -> dict:
     params = {"fd": fd, "td": td, **MINES_HAULIER_PARAMS}
     for i, c in enumerate(MINES_CUSTOMERS):
         params[f"c{i}"] = c
-    rows = db.execute(text(f"""
+    # SUM(x > 0) is MySQL adding up booleans as 1 and 0; Postgres will not
+    # sum a boolean at all. BAGCOUNT is also BIGINT on MySQL and TEXT in the
+    # feed, so it is cast through CHAR before being read as a number -- which
+    # both engines accept and which returned the same 346 bagged trips on each.
+    sql = text(f"""
         SELECT TRANSPORTER AS transporter, COUNT(*) AS trips,
-               COALESCE(SUM(NETWEIGHT + 0), 0) AS wt,
-               SUM(COALESCE(BAGCOUNT, 0) > 0)  AS bagged
+               COALESCE(SUM({_WEIGHT}), 0)                           AS wt,
+               SUM(CASE WHEN {_BAGS} > 0 THEN 1 ELSE 0 END)          AS bagged
         FROM zsd_outbound_despatch
-        WHERE DATE(GATEINDATE) BETWEEN :fd AND :td
+        WHERE GATEINDATE BETWEEN :fd AND :td
           AND CUSTOMERNO IN ({ph})
           AND NOT {MINES_HAULIER_SQL}
         GROUP BY TRANSPORTER
         ORDER BY wt DESC
-    """), params).fetchall()
+    """)
+    with sap_session(db) as sap:
+        rows = sap.execute(sql, params).fetchall()
     return {
         "trips":   sum(int(r.trips) for r in rows),
         "tonnage": round(sum(_f(r.wt) for r in rows), 3),
@@ -395,7 +422,10 @@ def _quality(db: Session, pos: list[str]) -> tuple[dict, dict, dict, dict, dict]
           AND PO_NO IN ({ph})
         GROUP BY PO_NO, BATCH, PLANT, MATERIAL_NO, MATERIAL_DESC
     """)
-    rows = db.execute(sql, params).fetchall()
+    # The assay behind every despatch grade, from the feed: 424,596 quality
+    # rows there against 313,324 in balcorpdb, and the date is indexed.
+    with sap_session(db) as sap:
+        rows = sap.execute(sql, params).fetchall()
 
     def ratio(n, d):
         return (float(n) / float(d)) if (n is not None and d) else None
