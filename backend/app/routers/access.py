@@ -481,6 +481,55 @@ def search_employees(request: Request, q: str = Query(""), db: Session = Depends
 
 
 # ---------------------------------------------------------------------- audit
+@router.get("/login-attempts")
+def login_attempts(request: Request,
+                   limit: int = Query(100, le=500),
+                   emp_id: str = Query(""),
+                   failed_only: bool = Query(False),
+                   db: Session = Depends(get_db),
+                   pg: Session = Depends(get_minehub_db)) -> list[dict]:
+    """Sign-in attempts, newest first. Optionally one person, or failures only.
+
+    Behind access.users.view, the same gate as the rest of Access Control.
+    This is the one place the reason for a refusal is visible: the login
+    endpoint tells everybody the same thing on purpose, so that it cannot be
+    used to find out which employee IDs exist.
+
+    Names are looked up for IDs that exist. One that does not resolve is left
+    as typed -- which is the interesting case, because it means somebody
+    entered something that is not an employee ID at all.
+    """
+    _require(db, request, "access.users.view")
+    where, params = ["1=1"], {"lim": limit}
+    if emp_id.strip():
+        where.append("empid = :e")
+        params["e"] = emp_id.strip()
+    if failed_only:
+        where.append("outcome <> 'OK'")
+
+    rows = pg.execute(text(f"""
+        SELECT login_attempt_id, occurred_at, empid, outcome,
+               ip_address, user_agent
+        FROM login_attempt
+        WHERE {' AND '.join(where)}
+        ORDER BY occurred_at DESC
+        LIMIT :lim
+    """), params).mappings().all()
+    out = [dict(r) for r in rows]
+
+    ids = {r["empid"] for r in out if r["empid"]}
+    if ids:
+        stmt = text(
+            f"SELECT EMPID AS empid, EMPNAME AS empname "
+            f"FROM {EMP_TBL} WHERE EMPID IN :ids"
+        ).bindparams(bindparam("ids", expanding=True))
+        with _auth_db() as s_:
+            names = {r[0]: r[1] for r in s_.execute(stmt, {"ids": list(ids)}).all()}
+        for r in out:
+            r["name"] = names.get(r["empid"])
+    return out
+
+
 @router.get("/audit")
 def access_audit(request: Request,
                  limit: int = Query(100, le=500),

@@ -56,11 +56,19 @@ def _set_cookie(response: Response, sid: str) -> None:
 def login(response: Response, request: Request, body: dict = Body(...)) -> dict:
     empid = (body.get("empid") or "").strip()
     password = body.get("password") or ""
+    ip = _client_ip(request)
+    ua = request.headers.get("user-agent")
     if not empid or not password:
+        auth.record_login_attempt(empid, "INCOMPLETE", ip, ua)
         raise HTTPException(400, "Employee ID and password are required.")
 
-    emp = auth.authenticate(None, empid, password)
+    # The outcome is recorded; the MESSAGE is not. All three failures below
+    # read the same to the person trying, so this endpoint cannot be used to
+    # discover which employee IDs exist. Which check refused goes to
+    # login_attempt, where only an Access Manager can see it.
+    emp, why = auth.authenticate_detailed(None, empid, password)
     if not emp:
+        auth.record_login_attempt(empid, why, ip, ua)
         # Deliberately identical for an unknown EMPID, a wrong password and an
         # inactive account — otherwise this endpoint enumerates employee IDs.
         raise HTTPException(401, "Invalid Employee ID or Password")
@@ -71,17 +79,18 @@ def login(response: Response, request: Request, body: dict = Body(...)) -> dict:
     # external auditor account had all signed in without being granted anything.
     from app.services import access as access_svc
     if not access_svc.has_access(None, emp["emp_id"]):
+        # Credentials were right. Recorded separately from a bad password,
+        # because "we never invited them" and "they typed it wrong" are
+        # different problems with different fixes.
+        auth.record_login_attempt(empid, "NO_ACCESS", ip, ua)
         raise HTTPException(
             403,
             "You do not have access to the Mines Dashboard. "
             "Please contact Mr. Sudip Hajra (PPIC) to request access.",
         )
 
-    sid = auth.create_session(
-        None, emp,
-        _client_ip(request),
-        request.headers.get("user-agent"),
-    )
+    auth.record_login_attempt(empid, "OK", ip, ua)
+    sid = auth.create_session(None, emp, ip, ua)
     _set_cookie(response, sid)
     return {"status": "success", "user": emp}
 

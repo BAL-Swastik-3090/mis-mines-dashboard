@@ -439,13 +439,48 @@ def can_open_page(db: Session | None, role: str, page: str) -> bool:
 
 
 # --------------------------------------------------------------- authentication
-def authenticate(db: Session | None, empid: str, password: str) -> dict | None:
-    """Validate EMPID + password against the intranet login table.
+def record_login_attempt(empid: str, outcome: str,
+                         ip: str | None = None, ua: str | None = None) -> None:
+    """Write down that somebody tried, and how it ended.
 
-    Returns the employee profile on success, None on bad credentials. Callers must
-    not distinguish the two failure modes to the user — an unknown EMPID and a
-    wrong password get the same message, so this endpoint can't be used to
-    enumerate employee IDs.
+    BEST EFFORT, ALWAYS. A sign-in must never fail because the audit write
+    did -- and it must never SUCCEED because of one either, which is why this
+    is called after the decision is made rather than as part of making it.
+
+    The password is not passed to this function, so it cannot be recorded by
+    accident. empid is capped: it is whatever was typed into the form, and the
+    useful cases are the ones where that is not an employee ID at all.
+    """
+    try:
+        with _auth_db() as s_:
+            s_.execute(text("""
+                INSERT INTO login_attempt (empid, outcome, ip_address, user_agent)
+                VALUES (:e, :o, :ip, :ua)
+            """), {"e": (empid or "")[:80], "o": outcome,
+                   "ip": (ip or None), "ua": (ua or "")[:300] or None})
+            s_.commit()
+    except Exception as exc:                            # noqa: BLE001
+        log.warning("could not record login attempt: %s", str(exc)[:160])
+
+
+def authenticate_detailed(db: Session | None, empid: str,
+                          password: str) -> tuple[dict | None, str]:
+    """Validate EMPID + password, and say WHICH check refused.
+
+    Returns (profile, "OK") or (None, reason) where reason is UNKNOWN_ID,
+    INACTIVE or BAD_PASSWORD.
+
+    THE REASON IS FOR THE RECORD, NOT FOR THE PERSON. The login endpoint still
+    tells all three the same thing, because an endpoint that distinguishes
+    them can be used to discover which employee IDs exist. The distinction is
+    written to login_attempt and shown only to Access Managers -- which is the
+    difference between being discreet in public and being unhelpful to the
+    person who has to explain a refusal.
+
+    That was not a hypothetical. An auditor could not sign in; the stored
+    credential matched MySQL exactly, the grant was present, the role carried
+    eight permissions -- and there was no way to see what the server had
+    actually said when they tried.
     """
     # ALIASED TO LOWERCASE ON PURPOSE. Postgres folds an unquoted EMPID to
     # `empid` and hands the row back under that name, so row["STATUS"] raises
@@ -456,11 +491,19 @@ def authenticate(db: Session | None, empid: str, password: str) -> dict | None:
             f"""SELECT EMPID AS empid, USER_PWD AS user_pwd, STATUS AS status
                 FROM {LOGIN_TBL} WHERE EMPID = :e"""),
             {"e": empid}).mappings().first()
-    if not row or (row["status"] or "").upper() != "A":
-        return None
+    if not row:
+        return None, "UNKNOWN_ID"
+    if (row["status"] or "").upper() != "A":
+        return None, "INACTIVE"
     if (row["user_pwd"] or "").lower() != _sha1(password).lower():
-        return None
-    return employee(db, empid)
+        return None, "BAD_PASSWORD"
+    return employee(db, empid), "OK"
+
+
+def authenticate(db: Session | None, empid: str, password: str) -> dict | None:
+    """The profile on success, None on any failure. Unchanged for callers."""
+    emp, _why = authenticate_detailed(db, empid, password)
+    return emp
 
 
 def employee(db: Session | None, empid: str) -> dict:
