@@ -484,8 +484,11 @@ function ExcavationBlock({ statusTill, td, mtd }: {
                     text-[9px] font-mono leading-relaxed text-txt-secondary">
         <span className="font-semibold">OB PLAN · </span>IMOS daily excavation plan
         {"   "}<span className="font-semibold">OB ACTUAL · </span>SAP
-        {"   "}<span className="font-semibold">DE-SILTING · </span>IMOS day-wise
-        excavation, variant 4 — no plan is held for it in any system.
+        {"   "}<span className="font-semibold">DE-SILTING PLAN · </span>uploaded
+        month by month from the mine&apos;s sheet
+        {"   "}<span className="font-semibold">DE-SILTING ACTUAL · </span>IMOS
+        day-wise excavation, variant 4, with the mine&apos;s own figure standing
+        in for days IMOS has not filed.
       </p>
     </Card>
   );

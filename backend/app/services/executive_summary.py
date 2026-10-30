@@ -873,21 +873,38 @@ def _excavation(db: Session, mf: date, rd: date,
 
     # Variant '4' is de-silting, and Qty is VARCHAR here — the same filter and
     # cast services/production.py uses, so the two screens cannot disagree.
-    silt = db.execute(text("""
-        SELECT SUM(CASE WHEN Prod_date = :rd
-                   THEN CAST(Qty AS DECIMAL(13,3)) END)  AS td_silt,
-               SUM(CAST(Qty AS DECIMAL(13,3)))           AS mtd_silt
+    #
+    # GROUPED BY DAY, not summed outright, because the days IMOS has answered
+    # for are needed as well as the total: they are what stops the mine's own
+    # figure standing in for a day already filed. The table is one row per day,
+    # so this costs nothing over the SUM it replaces.
+    silt_rows = db.execute(text("""
+        SELECT Prod_date AS d, SUM(CAST(Qty AS DECIMAL(13,3))) AS q
         FROM mines_day_wise_excavation
         WHERE Variant = '4' AND Prod_date BETWEEN :mf AND :rd
-    """), {"mf": mf, "rd": rd}).fetchone()
+        GROUP BY Prod_date
+    """), {"mf": mf, "rd": rd}).fetchall()
+    silt_days = {r.d for r in silt_rows if r.q is not None}
+    silt_td_sap = next((_f(r.q) for r in silt_rows if r.d == rd), None)
+    silt_mtd_sap = sum(_f(r.q) or 0.0 for r in silt_rows) or None
 
     # The de-silting plan, out of Postgres and matched by date in Python.
     silt_plan = desilt_svc.plan_for(mf, rd)
     sp_td = silt_plan.get(rd)
     sp_mtd = round(sum(silt_plan.values()), 3) if silt_plan else None
 
+    # The mine's own de-silting figure for days IMOS has not filed, on exactly
+    # the rule ore, overburden and COB follow: it stands in, it never competes.
+    # The moment IMOS answers for a day, that day's typed figure stops counting
+    # and the row goes back to being the feed's — no intervention, because
+    # `silt_days` is recomputed on every request.
+    s_td, s_mtd, _ = _estimates(db, mf, rd, silt_days, "SILT")
+    silt_td = (silt_td_sap or 0.0) + s_td or None
+    silt_mtd = (silt_mtd_sap or 0.0) + s_mtd or None
+
     def rows(ob_act: float, ob_plan: float, silt_act: float | None,
-             silt_plan_qty: float | None, manual: float = 0.0) -> list[dict]:
+             silt_plan_qty: float | None, manual: float = 0.0,
+             silt_manual: float = 0.0) -> list[dict]:
         return [
             {"key": "ob", "label": "Overburden", "unit": "CuM",
              "plan": _r(ob_plan), "actual": _r(ob_act),
@@ -910,14 +927,17 @@ def _excavation(db: Session, mf: date, rd: date,
              "pct": (prod_svc._pct(silt_act, silt_plan_qty)
                      if (silt_plan_qty and silt_act) else None),
              "no_plan": silt_plan_qty is None,
-             "source": SRC_SAP, "manual_qty": None},
+             # IMOS or the mine's own entry, recomputed every request — the
+             # same three-way label the production rows carry.
+             "source": _source((silt_act or 0.0) - silt_manual, silt_manual),
+             "manual_qty": _r(silt_manual) or None},
         ]
 
     return {
-        "td":  rows(ob_td,  _f(plan.td_plan)  or 0.0, _f(silt.td_silt),
-                    sp_td,  e_td),
-        "mtd": rows(ob_mtd, _f(plan.mtd_plan) or 0.0, _f(silt.mtd_silt),
-                    sp_mtd, e_mtd),
+        "td":  rows(ob_td,  _f(plan.td_plan)  or 0.0, silt_td,
+                    sp_td,  e_td,  s_td),
+        "mtd": rows(ob_mtd, _f(plan.mtd_plan) or 0.0, silt_mtd,
+                    sp_mtd, e_mtd, s_mtd),
     }
 
 
