@@ -296,7 +296,16 @@ def get_cob_lcm(db: Session, from_date: date, to_date: date) -> dict:
     # it would count the recovery loss twice.
     lvl1         = [r for r in rows if r["level"] == 1 and r["loss_mt"] is not None]
     total_mt     = round(sum(r["loss_mt"] for r in lvl1), 1) if lvl1 else None
-    total_amount = round(sum(r["loss_amount"] for r in lvl1), 2) if lvl1 else None
+
+    # THE AMOUNT IS GUARDED ON THE AMOUNT, not on the tonnage. loss_amount is
+    # None whenever `rate` is -- there is no published IBM concentrate price
+    # for the month -- and that is independent of whether loss_mt is known.
+    # Summing lvl1 on the strength of loss_mt therefore added None to an int
+    # and took the whole COB LCM screen down with a 500, on every date range,
+    # the moment the rate was unavailable. A missing price should cost a dash,
+    # not the page.
+    priced       = [r for r in lvl1 if r["loss_amount"] is not None]
+    total_amount = round(sum(r["loss_amount"] for r in priced), 2) if priced else None
 
     # Share is on the rupee basis, one decimal — at two, independently rounded
     # shares drift past 100%. A period that matched plan has a zero total, making
