@@ -45,6 +45,35 @@ export function useExporting(): boolean {
 }
 
 /**
+ * WAIT FOR THE PAGE TO STOP FETCHING BEFORE PHOTOGRAPHING IT.
+ *
+ * Expanding everything does not only reveal markup — it mounts components, and
+ * a component that mounts starts its query. Capturing straight afterwards
+ * catches those sections mid-flight and writes their loading skeletons into the
+ * file: the OEE export arrived with `h-[280px] bg-bg-section animate-pulse`
+ * where the KAM loss tree should have been, a grey box that looks like a broken
+ * report rather than a section that had not loaded.
+ *
+ * `isFetching` is passed in rather than imported so this module stays free of
+ * react-query — it is a plain store, and three export buttons already use it
+ * without knowing anything about data fetching.
+ *
+ * It gives up after `timeoutMs`. A slow endpoint must not strand somebody on a
+ * page frozen in export mode; a capture with one skeleton in it is better than
+ * no capture and a stuck screen.
+ */
+async function waitForQuiet(isFetching: () => number, timeoutMs = 10_000) {
+  const until = Date.now() + timeoutMs;
+  // Settle twice: one finished query often starts the next, and a single
+  // zero-reading can fall in the gap between the two.
+  let quiet = 0;
+  while (Date.now() < until && quiet < 2) {
+    quiet = isFetching() === 0 ? quiet + 1 : 0;
+    await new Promise((r) => setTimeout(r, 120));
+  }
+}
+
+/**
  * Open everything, run `capture`, then put it back — even if capture throws,
  * because a page left permanently expanded because an export failed is a worse
  * bug than the failed export.
@@ -52,11 +81,21 @@ export function useExporting(): boolean {
  * The two rAF waits let React commit the expanded tree and the browser lay it
  * out before anything is cloned; one frame is enough for the commit but not
  * reliably enough for layout, and the export reads computed sizes.
+ *
+ * `isFetching` is optional only so the one caller that predates it keeps
+ * working; every caller should pass it.
  */
-export async function withExportMode<T>(capture: () => Promise<T>): Promise<T> {
+export async function withExportMode<T>(
+  capture: () => Promise<T>,
+  isFetching?: () => number,
+): Promise<T> {
   exporting = true;
   emit();
   try {
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+    if (isFetching) await waitForQuiet(isFetching);
+    // A second pair of frames: whatever arrived while waiting still has to be
+    // committed and laid out before it can be measured.
     await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
     return await capture();
   } finally {
