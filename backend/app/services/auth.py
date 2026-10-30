@@ -487,9 +487,21 @@ def authenticate_detailed(db: Session | None, empid: str,
     # NoSuchColumnError -- every login failing with a 500 rather than a refusal.
     # MySQL honours an alias too, so this one spelling reads on both.
     with _auth_db() as s_:
+        # ── CASE-INSENSITIVE, AS MySQL WAS ──────────────────────────────
+        # `EMPID = :e` matched 'auditor5' against 'AUDITOR5' for years,
+        # because MySQL's default collation ignores case. Postgres's `=` does
+        # not, so the day login moved here every employee ID containing a
+        # LETTER stopped working unless it was typed in the stored case.
+        #
+        # Nobody noticed for two days because almost every ID is numeric --
+        # 3101, 2627 -- and digits have no case. The accounts that broke are
+        # the alphanumeric ones: AUDITOR1..AUDITOR10 and anything like them.
+        #
+        # UPPER() on both sides restores exactly the old behaviour. It costs
+        # the index on a 1,012-row table, which is not a cost.
         row = s_.execute(text(
             f"""SELECT EMPID AS empid, USER_PWD AS user_pwd, STATUS AS status
-                FROM {LOGIN_TBL} WHERE EMPID = :e"""),
+                FROM {LOGIN_TBL} WHERE UPPER(EMPID) = UPPER(:e)"""),
             {"e": empid}).mappings().first()
     if not row:
         return None, "UNKNOWN_ID"
@@ -497,7 +509,11 @@ def authenticate_detailed(db: Session | None, empid: str,
         return None, "INACTIVE"
     if (row["user_pwd"] or "").lower() != _sha1(password).lower():
         return None, "BAD_PASSWORD"
-    return employee(db, empid), "OK"
+    # THE STORED SPELLING, NOT THE TYPED ONE. Everything downstream -- the
+    # session row, the access grant, the audit trail -- keys on this, and
+    # user_access holds 'AUDITOR5'. Carrying 'auditor5' forward would
+    # authenticate the person and then fail to find what they may do.
+    return employee(db, str(row["empid"]).strip()), "OK"
 
 
 def authenticate(db: Session | None, empid: str, password: str) -> dict | None:
@@ -513,7 +529,7 @@ def employee(db: Session | None, empid: str) -> dict:
             f"""SELECT EMPID AS empid, EMPNAME AS empname, TITLE AS title,
                        EMPDESG AS empdesg, EMPDEPT AS empdept, EMAILID AS emailid,
                        LOCATION AS location, PLANT_CD AS plant_cd, STATUS AS status
-                FROM {EMP_TBL} WHERE EMPID = :e"""),
+                FROM {EMP_TBL} WHERE UPPER(EMPID) = UPPER(:e)"""),
             {"e": empid}).mappings().first()
     if not e:
         # A valid login with no HR record still gets in — as a viewer.
