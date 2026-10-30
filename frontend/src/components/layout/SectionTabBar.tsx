@@ -9,6 +9,8 @@ import { useSectionObserver } from "@/hooks/useSectionObserver";
 import { useDateFilter }      from "@/contexts/useDateFilter";
 import { useSidebar }         from "@/contexts/useSidebar";
 import { downloadDashboard }  from "@/utils/downloadDashboard";
+import { withExportMode }     from "@/contexts/useExportMode";
+import { useQueryClient }     from "@tanstack/react-query";
 
 const TABS = [
   // Stock first. It is what the morning meeting opens on, and quality is the
@@ -33,6 +35,7 @@ export default function SectionTabBar() {
   const activeId                          = useSectionObserver(SECTION_IDS, TOP_OFFSET);
   const { label: dateRange, periodLabel } = useDateFilter();
   const { collapsed }                     = useSidebar();
+  const qc                            = useQueryClient();
   const [downloading, setDownloading] = useState(false);
   const [done, setDone]               = useState(false);
 
@@ -46,7 +49,18 @@ export default function SectionTabBar() {
     setDownloading(true);
     setDone(false);
     try {
-      await downloadDashboard({ dateRange, periodLabel });
+      // EXPORT MODE, as the Intelligence bar already does. Without it the
+      // clone is taken of the page as it sits: React has never rendered the
+      // contents of a collapsed expander, so they are not hidden in the DOM,
+      // they are absent from it. The downloaded MIS dashboard was arriving
+      // with empty sections that looked complete.
+      await withExportMode(
+        () => downloadDashboard({ dateRange, periodLabel }),
+        // Wait for every section's query to settle. Export mode mounts the
+        // collapsed ones, and a component that mounts starts fetching — the
+        // clone otherwise keeps their loading skeletons.
+        () => qc.isFetching(),
+      );
       setDone(true);
       setTimeout(() => setDone(false), 2500);
     } finally {

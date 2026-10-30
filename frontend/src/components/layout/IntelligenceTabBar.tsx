@@ -8,6 +8,7 @@ import { useDateFilter }      from "@/contexts/useDateFilter";
 import { useSidebar }         from "@/contexts/useSidebar";
 import { downloadDashboard }  from "@/utils/downloadDashboard";
 import { withExportMode }     from "@/contexts/useExportMode";
+import { useQueryClient }     from "@tanstack/react-query";
 
 /**
  * Section tab bar for Intelligence — the same bar the MIS Dashboard has, with
@@ -40,6 +41,7 @@ const TARGETS = [
 export default function IntelligenceTabBar() {
   const activeId                          = useSectionObserver(SECTION_IDS, TOP_OFFSET);
   const { label: dateRange, periodLabel } = useDateFilter();
+  const qc = useQueryClient();
   const { collapsed }                     = useSidebar();
 
   const [open, setOpen]   = useState(false);
@@ -73,14 +75,17 @@ export default function IntelligenceTabBar() {
     try {
       // Expand everything first — React does not render collapsed content, so
       // a clone taken as-is arrives with empty expanders.
-      await withExportMode(() =>
-        downloadDashboard({
-          dateRange,
-          periodLabel,
-          rootSelector: t.id ? `#${t.id}` : undefined,
-          title: t.title,
-          fileStem: `kaliapani-${t.stem}`,
-        }),
+      await withExportMode(
+        () =>
+          downloadDashboard({
+            dateRange,
+            periodLabel,
+            rootSelector: t.id ? `#${t.id}` : undefined,
+            title: t.title,
+            fileStem: `kaliapani-${t.stem}`,
+          }),
+        // The sections export mode has just mounted are still fetching.
+        () => qc.isFetching(),
       );
       setDone(true);
       setTimeout(() => setDone(false), 2500);

@@ -172,7 +172,7 @@ export function dayLabel(iso: string): string {
 }
 
 export interface KpiRow {
-  key: "ore" | "ob" | "total_excavation" | "cob" | "despatch";
+  key: "ore" | "ob" | "total_excavation" | "cob" | "silt" | "despatch";
   label: string;
   unit: string;
   plan: number | null;
@@ -213,6 +213,12 @@ export function buildRows(
       plan: totalPlan, actual: totalAct, manual: true },
     { key: "cob", label: "COB", unit: "MT", plan: p?.cob_plan ?? null,
       actual: p?.cob_actual ?? null, manual: true },
+    // DE-SILTING IS NOT PART OF TOTAL EXCAVATION above, which is ore plus
+    // overburden. It sits here, below COB, because it is another figure the
+    // mine knows at the morning meeting and IMOS files later — the same gap
+    // the rows above it exist to cover.
+    { key: "silt", label: "DE-SILTING", unit: "CuM",
+      plan: p?.silt_plan ?? null, actual: p?.silt_actual ?? null, manual: true },
     { key: "despatch", label: "DESPATCH", unit: "MT",
       plan: d?.total_plan ?? null, actual: d?.total_actual ?? null, manual: false },
   ];

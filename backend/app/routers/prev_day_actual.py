@@ -40,6 +40,12 @@ MATERIALS: dict[str, str] = {
     "ob": "OB",
     "total_excavation": "TOTAL_EXCAVATION",
     "cob": "COB",
+    # De-silting, in CuM. Its actual comes from IMOS rather than SAP, and IMOS
+    # is no quicker — the figure is known at the morning meeting and arrives in
+    # mines_day_wise_excavation later, which is the same gap the other four
+    # rows exist to cover. NOT part of TOTAL_EXCAVATION: that is ore plus
+    # overburden, and silt is neither.
+    "silt": "SILT",
     "despatch": "DESPATCH",
 }
 BY_CODE = {v: k for k, v in MATERIALS.items()}

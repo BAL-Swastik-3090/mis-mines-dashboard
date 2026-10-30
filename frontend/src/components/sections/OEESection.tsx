@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { Activity, Layers, Info, Factory, Download } from "lucide-react";
+import { Activity, Layers, Info, Factory, Download, Check } from "lucide-react";
 import FormulaModal from "@/components/sections/FormulaModal";
 import LCMSection from "@/components/sections/LCMSection";
 import LCMCobSection from "@/components/sections/LCMCobSection";
@@ -11,6 +11,9 @@ import { useTipperOEE }   from "@/hooks/useTipperOEE";
 import TipperOEETable     from "@/components/sections/TipperOEETable";
 import type { OEEMachineRow, OEEFleet } from "@/types";
 import { formatIndian }   from "@/lib/utils";
+import { useQueryClient } from "@tanstack/react-query";
+import { downloadDashboard } from "@/utils/downloadDashboard";
+import { withExportMode }    from "@/contexts/useExportMode";
 import { toCsv, download } from "@/components/minehub/spreadsheet";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -466,9 +469,43 @@ export default function OEESection() {
   const newMachines         = machines.filter((m) => m.generation === "new");
   const tippers             = useTipperOEE();
   const [showFormulae, setShowFormulae] = useState(false);
+  const { label: dateRange, periodLabel } = useDateFilter();
+  const qc = useQueryClient();
+  const [busy, setBusy]         = useState(false);
+  const [htmlDone, setHtmlDone] = useState(false);
+
+  async function handleHtml() {
+    if (busy) return;
+    setBusy(true);
+    setHtmlDone(false);
+    try {
+      // Export mode first, so the LCM loss trees and any collapsed register
+      // beneath these tables render whole rather than arriving as empty
+      // expanders — React does not render what is collapsed.
+      await withExportMode(
+        () =>
+          downloadDashboard({
+            dateRange,
+            periodLabel,
+            rootSelector: "#oee-section",
+            title: "OEE / LCM Analysis",
+            fileStem: "kaliapani-oee-lcm",
+          }),
+        // The LCM trees below these tables fetch on mount, and export mode is
+        // what mounts them. Without this the file keeps their skeletons.
+        () => qc.isFetching(),
+      );
+      setHtmlDone(true);
+      setTimeout(() => setHtmlDone(false), 2500);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
-    <div className="space-y-4">
+    // The id is what the download points at: the whole section, nothing of the
+    // chrome around it. Same mechanism the MIS and Intelligence exports use.
+    <div id="oee-section" className="space-y-4">
 
       <FormulaModal open={showFormulae} onClose={() => setShowFormulae(false)} />
 
@@ -492,6 +529,42 @@ export default function OEESection() {
               MTD till {tillLabel(apiTo)}
             </span>
           )}
+
+          {/* THE WHOLE SECTION AS ONE HTML FILE — the four fleet tables, the
+              KPI strip above them and the footnotes under each, exactly as
+              they sit here. The per-table Excel buttons are still the way to
+              get figures into a spreadsheet; this is the way to send somebody
+              the screen. Disabled while loading: a snapshot of skeleton rows
+              is worse than no file. */}
+          <button
+            type="button"
+            onClick={handleHtml}
+            disabled={isLoading || busy}
+            data-export-hide
+            title="Download this section as a self-contained HTML file"
+            /* The same green as the MIS bar's Export HTML, down to the three
+               states — they do the same job and should not look like two
+               different features. See SectionTabBar. */
+            className={`
+              flex items-center gap-[6px] px-3 py-1.5 rounded
+              font-condensed text-[11px] font-bold tracking-[.08em] uppercase
+              transition-all duration-150
+              ${htmlDone
+                ? "bg-[#e8f5e9] text-[#2e7d32] border border-[#a5d6a7]"
+                : busy || isLoading
+                  ? "bg-[#f5f7fb] text-[#8899bb] border border-[#d0d9e8] cursor-wait"
+                  : "bg-[#2e7d32] text-white border border-[#2e7d32] hover:bg-[#388e3c] hover:border-[#388e3c] active:scale-95"
+              }
+            `}
+          >
+            {htmlDone
+              ? <><Check size={12} className="shrink-0" /><span>Downloaded</span></>
+              : busy
+                ? <><span className="w-3 h-3 border border-[#b0bdd4] border-t-[#6b7ea8] rounded-full animate-spin shrink-0" /><span>Preparing…</span></>
+                : <><Download size={12} className="shrink-0" /><span>Export to HTML</span></>
+            }
+          </button>
+
           <button
             type="button"
             onClick={() => setShowFormulae(true)}
