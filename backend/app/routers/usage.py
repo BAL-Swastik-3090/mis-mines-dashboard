@@ -44,6 +44,7 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.services import auth as auth_svc
 from app.minehub_db import get_minehub_db
 from app.services import usage_sync
 
@@ -144,6 +145,58 @@ def _superadmins(pg: Session) -> list[str]:
     """)).all()]
 
 
+# ── "HERE NOW" MEANS WHAT THE LOGIN MEANS BY IT ─────────────────────────────
+# is_active on its own is not "signed in now". It is "nobody has written an
+# end to this row", and plenty of rows never get one: a browser closed without
+# signing out leaves is_active true for ever, and the only thing that retires
+# it is the idle rule in auth.get_session -- last_active_at inside
+# IDLE_MINUTES -- which is evaluated when somebody makes a request, not by
+# anything that sweeps the table.
+#
+# So the Usage page was reporting people as HERE NOW who were last seen 82 to
+# 85 HOURS earlier, under a heading that says "people, not browser tabs". A
+# figure read out in a morning meeting, quietly wrong in the flattering
+# direction.
+#
+# Both halves now apply the same rule the login does, so "here now" on this
+# page and "your session is still valid" in auth cannot disagree.
+_IDLE_MINUTES = auth_svc.IDLE_MINUTES
+
+
+def _is_live(last_active) -> bool:
+    """Whether a session would still be accepted by the login right now."""
+    if last_active is None:
+        return False
+    if last_active.tzinfo is not None:
+        last_active = last_active.replace(tzinfo=None)
+    return (datetime.now() - last_active) < timedelta(minutes=_IDLE_MINUTES)
+
+
+# ── HOW LONG SOMEBODY WAS ACTUALLY HERE ─────────────────────────────────────
+# NOT the stored duration_minutes, which is logout_at - login_at and is only
+# as honest as whoever wrote logout_at.
+#
+# Sessions in the shared intranet table get closed in bulk by another system
+# when the person signs in somewhere new -- end_reason NEW_SESSION, logout_at
+# stamped at the moment of that sweep. One row logged in on 26 October at
+# 09:41, made its last request at 10:40, and was stamped closed on 29 October
+# at 13:30: 59 minutes of work recorded as 4,549.
+#
+# Across 1,578 Mines sessions the stored figure totals 2,201 hours and the
+# observed activity totals 556. Three quarters of "time on it" was somebody
+# else's sweep timestamp. It put one person at the top of the adoption table
+# with 1,345 hours over 17 days -- 79 hours a day.
+#
+# last_active_at is the last moment the browser proved it was there: a request,
+# or the two-minute heartbeat while the tab is open. Login to that is what this
+# application can stand behind. A session closed properly is unaffected,
+# because its logout follows its last activity.
+#
+# Written out at each query below rather than interpolated: those SQL blocks
+# are plain strings, and turning them into f-strings to save a repetition
+# would put every brace in them at the mercy of str.format.
+
+
 def _require(request: Request) -> None:
     perms = set(getattr(request.state, "permissions", None) or set())
     if not (set(VIEW) & perms):
@@ -234,7 +287,8 @@ def usage(request: Request,
     # where MySQL had no arrays and needed it comma-joined into a string.
     # Empty excludes nobody, so "include them" needs no second code path.
     skipped = [] if include_admins else _superadmins(pg)
-    p = {"app": app_source, "frm": frm, "to": to, "skip": list(skipped)}
+    p = {"app": app_source, "frm": frm, "to": to, "skip": list(skipped),
+         "idle": _IDLE_MINUTES}
 
     # ── the month, fetched whole, twice ──────────────────────────────────
     #
@@ -249,7 +303,8 @@ def usage(request: Request,
     # per person on the list.
     ses = pg.execute(text("""
         SELECT session_id, emp_id, emp_name, department, role,
-               login_at, logout_at, last_active_at, duration_minutes,
+               login_at, logout_at, last_active_at,
+               GREATEST(0, ROUND(EXTRACT(EPOCH FROM (GREATEST(last_active_at, login_at) - login_at)) / 60)) AS duration_minutes,
                end_reason, browser, os, device_type, ip_address, is_active
           FROM usage_session
          WHERE app_source = :app AND login_at::date BETWEEN :frm AND :to
@@ -281,7 +336,8 @@ def usage(request: Request,
         "people": len({r["emp_id"] for r in ses}),
         "minutes": sum(_mins),
         "avg_minutes": round(sum(_mins) / len(_mins), 1) if _mins else 0,
-        "live": len({r["emp_id"] for r in ses if r["is_active"]}),
+        "live": len({r["emp_id"] for r in ses
+                     if r["is_active"] and _is_live(r["last_active_at"])}),
     }
 
     # Page views per person, in one pass rather than one query each.
@@ -395,6 +451,7 @@ def usage(request: Request,
                COUNT(*)            AS sessions
           FROM usage_session
          WHERE app_source = :app AND is_active
+           AND last_active_at > (now() - make_interval(mins => :idle))
            AND NOT (emp_id = ANY(:skip))
          GROUP BY emp_id
          ORDER BY last_active_at DESC
@@ -715,7 +772,7 @@ def apps(request: Request, days: int = Query(30, ge=1, le=365),
         SELECT app_source,
                COUNT(*) AS sessions,
                COUNT(DISTINCT emp_id) AS people,
-               COALESCE(SUM(duration_minutes), 0) AS minutes,
+               COALESCE(SUM(GREATEST(0, ROUND(EXTRACT(EPOCH FROM (GREATEST(last_active_at, login_at) - login_at)) / 60))), 0) AS minutes,
                MAX(last_active_at) AS last_seen
           FROM usage_session
          WHERE login_at::date BETWEEN :frm AND :to
@@ -755,7 +812,8 @@ def person(emp_id: str, request: Request,
     p = {"app": app_source, "frm": frm, "to": to, "e": emp_id}
 
     sessions = [dict(r) for r in pg.execute(text("""
-        SELECT session_id, login_at, logout_at, duration_minutes, end_reason,
+        SELECT session_id, login_at, logout_at,
+               GREATEST(0, ROUND(EXTRACT(EPOCH FROM (GREATEST(last_active_at, login_at) - login_at)) / 60)) AS duration_minutes, end_reason,
                is_active, browser, os, device_type, ip_address
           FROM usage_session
          WHERE app_source = :app AND emp_id = :e
@@ -785,7 +843,7 @@ def person(emp_id: str, request: Request,
     # somebody's month rather than only its total.
     by_day = [{"day": str(r[0]), "sessions": _int(r[1]), "minutes": _int(r[2])}
               for r in pg.execute(text("""
-        SELECT login_at::date, COUNT(*), COALESCE(SUM(duration_minutes), 0)
+        SELECT login_at::date, COUNT(*), COALESCE(SUM(GREATEST(0, ROUND(EXTRACT(EPOCH FROM (GREATEST(last_active_at, login_at) - login_at)) / 60))), 0)
           FROM usage_session
          WHERE app_source = :app AND emp_id = :e
            AND login_at::date BETWEEN :frm AND :to

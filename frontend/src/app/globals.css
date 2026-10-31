@@ -1,5 +1,10 @@
-/* ── Google Fonts — must be first @import ────────────────── */
-@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+/* ── Fonts ─────────────────────────────────────────────────
+   Loaded by next/font in app/layout.tsx, which downloads them at build time
+   and serves them from this origin. The @import that used to sit here cost
+   three serialised round trips to Google before the page could paint, and
+   made the dashboard unreadable whenever the mine's internet was down.
+   --font-ibm-plex-sans / -barlow-condensed / -ibm-plex-mono are defined there
+   on <html>, each already carrying a size-adjusted fallback. */
 
 @tailwind base;
 @tailwind components;
@@ -7,10 +12,6 @@
 
 /* ── CSS Variables ────────────────────────────────────────── */
 :root {
-  --font-ibm-plex-sans:    'IBM Plex Sans', sans-serif;
-  --font-barlow-condensed: 'Barlow Condensed', sans-serif;
-  --font-ibm-plex-mono:    'IBM Plex Mono', monospace;
-
   --navy:    #1a2744;
   --navy-2:  #0f1c35;
   --steel:   #2c4a7c;
@@ -546,4 +547,19 @@ html, body {
 @keyframes cardIn {
   from { opacity: 0; }
   to   { opacity: 1; }
+}
+
+
+/* ── A tab that changes should settle, not snap ──────────────────────────
+   Used by the EV page when scrolling moves between Equipment Info and Work
+   Analysis. Six pixels and 240ms: enough for the eye to register that the
+   page changed on purpose, short enough that nobody waits for it.
+   Honoured only where motion is welcome. */
+@keyframes ev-tab-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+.ev-tab-enter { animation: ev-tab-enter .24s ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+  .ev-tab-enter { animation: none; }
 }

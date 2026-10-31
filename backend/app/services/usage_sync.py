@@ -201,6 +201,88 @@ def _sync_page_views(db: Session, pg: Session, full: bool) -> int:
     return len(rows)
 
 
+# ── MINES' OWN TABLES, NOW THAT IT NO LONGER WRITES MySQL ───────────────────
+# Login moved to Postgres and writes minehub.mines_user_session. The Usage
+# page reads usage_session, which this module fills from MySQL -- so from the
+# moment of the cut the page stopped seeing Mines logins. 34 sessions and 154
+# page views had already fallen into that gap before it was noticed.
+#
+# The MySQL sources stay: digital_apps_* still carries history, and other
+# applications still write it. These two are additional, not a replacement.
+#
+# Both tables are in THIS database, so the copy is one INSERT ... SELECT with
+# no round trip through Python.
+
+
+def _sync_mines_sessions(db: Session, pg: Session, full: bool) -> int:
+    since = _since(pg, "mines_user_session", full)
+    res = pg.execute(text("""
+        INSERT INTO usage_session (
+            session_id, app_source, emp_id, emp_name, role, department,
+            login_at, last_active_at, logout_at, duration_minutes,
+            is_active, end_reason, ip_address, device_type, browser, os,
+            synced_at)
+        SELECT session_id, app_source, emp_id, emp_name, role, department,
+               login_at, last_active_at, logout_at, duration_minutes,
+               is_active, end_reason, ip_address, device_type, browser, os,
+               now()
+          FROM mines_user_session
+         WHERE last_active_at >= :since
+        ON CONFLICT (session_id) DO UPDATE SET
+            emp_name = EXCLUDED.emp_name, role = EXCLUDED.role,
+            department = EXCLUDED.department,
+            last_active_at = EXCLUDED.last_active_at,
+            logout_at = EXCLUDED.logout_at,
+            duration_minutes = EXCLUDED.duration_minutes,
+            is_active = EXCLUDED.is_active,
+            end_reason = EXCLUDED.end_reason,
+            ip_address = EXCLUDED.ip_address,
+            device_type = EXCLUDED.device_type,
+            browser = EXCLUDED.browser, os = EXCLUDED.os,
+            synced_at = now()
+    """), {"since": since})
+    high = pg.execute(text(
+        "SELECT MAX(last_active_at) FROM mines_user_session "
+        "WHERE last_active_at >= :since"), {"since": since}).scalar()
+    n = res.rowcount or 0
+    _mark(pg, "mines_user_session", high, n, None)
+    return n
+
+
+def _sync_mines_page_views(db: Session, pg: Session, full: bool) -> int:
+    """Copied under a NEGATED id, which is not a trick but a necessity.
+
+    usage_page_view keys on page_view_id, and it already holds MySQL's row
+    ids -- 4,262,923 to 5,225,029 today. mines_page_view has its own sequence
+    starting at 1. The two do not collide yet; they collide the day
+    mines_page_view reaches 4,262,923, and that collision would silently
+    overwrite a historical row with an unrelated one.
+
+    Negating keeps the two spaces disjoint for good -- MySQL's ids are always
+    positive -- and has the useful side effect that the sign says where a row
+    came from.
+    """
+    since = _since(pg, "mines_page_view", full)
+    res = pg.execute(text("""
+        INSERT INTO usage_page_view (
+            page_view_id, session_id, app_source, emp_id, page_path,
+            referrer_path, viewed_at, time_spent_seconds, synced_at)
+        SELECT -id, session_id, app_source, emp_id, page_path,
+               referrer_path, viewed_at, time_spent_seconds, now()
+          FROM mines_page_view
+         WHERE viewed_at >= :since
+        ON CONFLICT (page_view_id) DO UPDATE SET
+            time_spent_seconds = EXCLUDED.time_spent_seconds,
+            synced_at = now()
+    """), {"since": since})
+    high = pg.execute(text(
+        "SELECT MAX(viewed_at) FROM mines_page_view "
+        "WHERE viewed_at >= :since"), {"since": since}).scalar()
+    n = res.rowcount or 0
+    _mark(pg, "mines_page_view", high, n, None)
+    return n
+
+
 def run_once(db: Session, pg: Session, full: bool = False) -> dict:
     """One pass. Commits, and says what it carried.
 
@@ -215,9 +297,11 @@ def run_once(db: Session, pg: Session, full: bool = False) -> dict:
     full = bool(full or empty)
 
     for name, fn, key in (("digital_apps_user_sessions", _sync_sessions, "sessions"),
-                          ("digital_apps_page_views", _sync_page_views, "page_views")):
+                          ("digital_apps_page_views", _sync_page_views, "page_views"),
+                          ("mines_user_session", _sync_mines_sessions, "sessions"),
+                          ("mines_page_view", _sync_mines_page_views, "page_views")):
         try:
-            out[key] = fn(db, pg, full)
+            out[key] += fn(db, pg, full)
             pg.commit()
         except Exception as exc:                        # noqa: BLE001
             pg.rollback()

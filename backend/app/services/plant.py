@@ -13,17 +13,33 @@ from sqlalchemy import text
 def get_plant_performance(db: Session, from_date: date, to_date: date) -> dict:
 
     sql = text("""
+        -- ── DEDUPED, AND IT COSTS NOTHING TODAY ────────────────────────
+        -- The OData feed stores every confirmation TWICE, once with a
+        -- zero-padded confirmation number and once without: 0000909890 and
+        -- 909890, same order, same counter, same date, same yield. Summing
+        -- that feed raw gives 13,780 t for October against balcorpdb's
+        -- 7,195 -- the same production counted under two spellings.
+        --
+        -- balcorpdb carries only the unpadded form, so this DISTINCT changes
+        -- nothing here: 395 rows either way, 7,195 t either way, checked.
+        -- It is in so that pointing this query at the feed later cannot
+        -- silently double plant output. get_rehandling_daywise already
+        -- deduplicates the same table on the same key.
         SELECT
             PLANT,
             ROUND(SUM(CONFIRMED_YIELD), 2)     AS total,
             COUNT(DISTINCT POSTING_DATE)        AS days
-        FROM pp_prod_order_confirmation
-        WHERE POSTING_DATE BETWEEN :from_date AND :to_date
-          AND (
-              (PLANT = '1100' AND WORK_CENTER IN ('FURNACE1','FURNACE2','FURNACE3','FURNACE4','FURNACE5'))
-              OR
-              (PLANT = '1110' AND WORK_CENTER = 'FURNACE1')
-          )
+        FROM (
+            SELECT DISTINCT ORDER_NO, CONFIRM_COUNTER, POSTING_DATE,
+                   CONFIRMED_YIELD, PLANT, WORK_CENTER
+            FROM pp_prod_order_confirmation
+            WHERE POSTING_DATE BETWEEN :from_date AND :to_date
+              AND (
+                  (PLANT = '1100' AND WORK_CENTER IN ('FURNACE1','FURNACE2','FURNACE3','FURNACE4','FURNACE5'))
+                  OR
+                  (PLANT = '1110' AND WORK_CENTER = 'FURNACE1')
+              )
+        ) dedup
         GROUP BY PLANT
     """)
 

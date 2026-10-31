@@ -80,6 +80,18 @@ const ROLE_TONE: Record<string, Tone> = {
   PRIMARY: "emerald", RELIEF: "sky", STANDBY: "slate", TRAINEE: "amber",
 };
 
+/** A tipper has one driver per shift, and the shift is the thing that tells
+ *  them apart. The chip used to show only the role, so a machine crewed from
+ *  the mine's alert list drew three identical "primary" chips and the one fact
+ *  that distinguishes them — A, B or C — was nowhere on the screen. */
+const SHIFT_TONE: Record<string, Tone> = {
+  A: "gold", B: "sky", C: "navy",
+};
+
+function crewLabel(role: string, shift: string | null): string {
+  return shift ? `${shift} shift` : role.toLowerCase();
+}
+
 /** What the roster says somebody is doing, in the words people use. */
 function doing(state: string | null): string {
   switch (state) {
@@ -169,7 +181,11 @@ export default function MachineCover() {
     setBusy(true);
     try {
       await api.put(`/workforce/cover/${m.asset_id}/crew`, {
-        operators: crew.map((c) => ({ operator_id: c.operator_id, role: c.role })),
+        // shift travels with the person, not the request: a tipper has a
+        // different driver on A, B and C.
+        operators: crew.map((c) => ({
+          operator_id: c.operator_id, role: c.role, shift: c.shift,
+        })),
       });
       await load();
     } catch (e: unknown) {
@@ -418,7 +434,7 @@ export default function MachineCover() {
                         <div className="flex flex-wrap items-center gap-1.5">
                           {m.crew.map((c) => (
                             <span key={c.operator_id}
-                              title={`${c.role.toLowerCase()} · ${doing(c.state)}`
+                              title={`${crewLabel(c.role, c.shift)} · ${doing(c.state)}`
                                      + (c.cleared
                                           ? ` · assessed${c.level ? ` at level ${c.level}` : ""}`
                                           : " · NOT assessed on this machine")}
@@ -437,8 +453,11 @@ export default function MachineCover() {
                                   : c.level ? `L${c.level}`
                                   : "not assessed"}
                               </span>
-                              <Chip tone={ROLE_TONE[c.role] ?? "slate"} dot={false}>
-                                {c.role.toLowerCase()}
+                              <Chip tone={c.shift
+                                             ? (SHIFT_TONE[c.shift] ?? "slate")
+                                             : (ROLE_TONE[c.role] ?? "slate")}
+                                    dot={false}>
+                                {crewLabel(c.role, c.shift)}
                               </Chip>
                               <button type="button" disabled={busy}
                                 title={`Take ${c.person} off ${m.fleet_code}`}
@@ -516,7 +535,9 @@ export default function MachineCover() {
             <p className="text-[12px] text-txt-muted">
               {editingMachine.asset_type || "machine"}
               {editingMachine.registration_no ? ` · ${editingMachine.registration_no}` : ""}
-              {" — the first person chosen drives it, the rest cover."}
+              {" — the first person chosen drives it and the rest cover, "}
+              {"until you say otherwise: click a role to swap it, and set the "}
+              {"shift beside each name."}
             </p>
 
             {draft.length > 0 ? (
@@ -529,9 +550,43 @@ export default function MachineCover() {
                                 : "bg-rose-bg border-rose-ring text-rose"}`}>
                     {c.cleared && <ShieldCheck className="w-3 h-3" />}
                     {c.person}
-                    <Chip tone={ROLE_TONE[c.role] ?? "slate"} dot={false}>
-                      {c.role.toLowerCase()}
-                    </Chip>
+
+                    {/* WHICH SHIFT, AND WHETHER THEY DRIVE IT.
+                        Both used to be decided by the order people were
+                        clicked in — first primary, everyone after relief, shift
+                        never set at all — and could not be changed afterwards.
+                        A crew taken from the mine's alert list is one driver
+                        per shift, so both have to be sayable. */}
+                    <select
+                      aria-label={`Shift for ${c.person}`}
+                      value={c.shift ?? ""}
+                      onChange={(e) => setDraft(draft.map((x) =>
+                        x.operator_id === c.operator_id
+                          ? { ...x, shift: e.target.value || null } : x))}
+                      className="rounded-full bg-white/70 border border-current/20
+                                 px-1 py-0.5 text-[10.5px] font-semibold
+                                 focus:outline-none focus:ring-1 focus:ring-gold/50">
+                      <option value="">any shift</option>
+                      <option value="A">A shift</option>
+                      <option value="B">B shift</option>
+                      <option value="C">C shift</option>
+                    </select>
+
+                    <button type="button"
+                      title={c.role === "PRIMARY"
+                               ? `${c.person} drives it — click to make them cover`
+                               : `${c.person} covers — click to make them the driver`}
+                      onClick={() => setDraft(draft.map((x) =>
+                        x.operator_id === c.operator_id
+                          ? { ...x, role: x.role === "PRIMARY" ? "RELIEF" : "PRIMARY" }
+                          : x))}
+                      className="rounded-full focus:outline-none focus:ring-1
+                                 focus:ring-gold/50">
+                      <Chip tone={ROLE_TONE[c.role] ?? "slate"} dot={false}>
+                        {c.role.toLowerCase()}
+                      </Chip>
+                    </button>
+
                     <button type="button" title={`Take ${c.person} off`}
                       onClick={() => setDraft(draft.filter(
                         (x) => x.operator_id !== c.operator_id))}

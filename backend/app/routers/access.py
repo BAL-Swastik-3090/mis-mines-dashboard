@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.minehub_db import get_minehub_db
 from app.services import access as access_svc
-from app.services.auth import EMP_TBL
+from app.services.auth import EMP_TBL, _auth_db
 
 router = APIRouter(prefix="/api/access", tags=["Access"])
 
@@ -47,12 +47,23 @@ def _employee_details(db, emp_ids: list[str]) -> dict[str, dict]:
     hit = _name_cache.get(key)
     if hit and (time.monotonic() - hit[1]) < _NAME_TTL:
         return hit[0]
+    # EMP_TBL is sap_odata_api.sap_employee_details -- in POSTGRES. It is no
+    # longer a table in the MySQL session this function is handed, which is
+    # what broke Access Control: every /api/access/users returned 503 and the
+    # page showed "Database error" with nobody listed.
+    #
+    # Columns are aliased to lowercase because Postgres folds an unquoted
+    # EMPID to `empid`, so r["EMPID"] would raise even once the session is
+    # right.
     stmt = text(
-        f"SELECT EMPID, EMPNAME, EMPDEPT, EMPDESG FROM {EMP_TBL} WHERE EMPID IN :ids"
+        f"""SELECT EMPID AS empid, EMPNAME AS empname,
+                   EMPDEPT AS empdept, EMPDESG AS empdesg
+            FROM {EMP_TBL} WHERE EMPID IN :ids"""
     ).bindparams(bindparam("ids", expanding=True))
-    rows = db.execute(stmt, {"ids": emp_ids}).mappings().all()
-    out = {r["EMPID"]: {"name": r["EMPNAME"], "department": r["EMPDEPT"],
-                        "designation": r["EMPDESG"]} for r in rows}
+    with _auth_db() as s_:
+        rows = s_.execute(stmt, {"ids": emp_ids}).mappings().all()
+    out = {r["empid"]: {"name": r["empname"], "department": r["empdept"],
+                        "designation": r["empdesg"]} for r in rows}
     _name_cache.clear()          # one entry is enough; the key is the id set
     _name_cache[key] = (out, time.monotonic())
     return out
@@ -98,11 +109,8 @@ def _require(db, request: Request, code: str) -> None:
 
 
 # ------------------------------------------------------------------ catalogue
-@router.get("/permissions")
-def list_permissions(request: Request,
-                     db: Session = Depends(get_db),
-                     pg: Session = Depends(get_minehub_db)) -> list[dict]:
-    _require(db, request, "access.users.view")
+def _all_permissions(pg) -> list[dict]:
+    """Every permission in the catalogue. See the note on _roles_visible_to."""
     rows = pg.execute(text("""
         SELECT permission_id, code, module, name, description, is_sensitive, sort_order
         FROM permission ORDER BY sort_order, code
@@ -110,11 +118,16 @@ def list_permissions(request: Request,
     return [dict(r) for r in rows]
 
 
-# ---------------------------------------------------------------------- roles
-@router.get("/roles")
-def list_roles(request: Request, db: Session = Depends(get_db),
-               pg: Session = Depends(get_minehub_db)) -> list[dict]:
+@router.get("/permissions")
+def list_permissions(request: Request,
+                     db: Session = Depends(get_db),
+                     pg: Session = Depends(get_minehub_db)) -> list[dict]:
     _require(db, request, "access.users.view")
+    return _all_permissions(pg)
+
+
+# ---------------------------------------------------------------------- roles
+def _roles_visible_to(db, pg, actor: str) -> list[dict]:
     """The roles this person may work with.
 
     A role carrying the standing everything-grant is not listed for anybody
@@ -122,8 +135,18 @@ def list_roles(request: Request, db: Session = Depends(get_db),
     below refuse that — but offering a row that always refuses is a worse
     answer than not offering it, and the mine asked that the role not be
     visible at all.
+
+    A PLAIN FUNCTION, NOT THE ENDPOINT. /catalogue needs the same rows and
+    used to get them by calling the endpoint directly, which is how this
+    screen broke twice: an endpoint's parameters are a dependency-injection
+    contract, and calling one by hand binds whatever is passed, positionally,
+    with no check. A Postgres session landed in the `request` slot and the
+    Roles tab answered 500 for everybody. The note telling the next person to
+    "keep these in step" did not survive the next change, so the shared work
+    now lives somewhere that takes exactly what it needs and nothing
+    injectable.
     """
-    everything = access_svc.is_superadmin(db, _actor(request))
+    everything = access_svc.is_superadmin(db, actor)
     rows = pg.execute(text("""
         SELECT r.role_id, r.code, r.name, r.description, r.is_system, r.status,
                r.grants_everything,
@@ -138,6 +161,13 @@ def list_roles(request: Request, db: Session = Depends(get_db),
         ORDER BY r.is_system DESC, r.name
     """), {"all": everything}).mappings().all()
     return [dict(r) for r in rows]
+
+
+@router.get("/roles")
+def list_roles(request: Request, db: Session = Depends(get_db),
+               pg: Session = Depends(get_minehub_db)) -> list[dict]:
+    _require(db, request, "access.users.view")
+    return _roles_visible_to(db, pg, _actor(request))
 
 
 @router.post("/roles")
@@ -435,17 +465,71 @@ def search_employees(request: Request, q: str = Query(""), db: Session = Depends
     term = (q or "").strip()
     if len(term) < 2:
         return []
-    rows = db.execute(text(
-        f"""SELECT EMPID AS emp_id, EMPNAME AS name, EMPDEPT AS department,
-                   EMPDESG AS designation
-            FROM {EMP_TBL}
-            WHERE (EMPID LIKE :like OR EMPNAME LIKE :like)
-              AND (STATUS IS NULL OR STATUS <> 'Withdrawn')
-            ORDER BY EMPNAME LIMIT 25"""), {"like": f"%{term}%"}).mappings().all()
+    # ILIKE, not LIKE: MySQL's collation is case-insensitive and Postgres's
+    # is not, so a LIKE carried over unchanged would quietly match nothing
+    # typed in the wrong case and the picker would just look empty.
+    with _auth_db() as s_:
+        rows = s_.execute(text(
+            f"""SELECT EMPID AS emp_id, EMPNAME AS name, EMPDEPT AS department,
+                       EMPDESG AS designation
+                FROM {EMP_TBL}
+                WHERE (EMPID ILIKE :like OR EMPNAME ILIKE :like)
+                  AND (STATUS IS NULL OR STATUS <> 'Withdrawn')
+                ORDER BY EMPNAME LIMIT 25"""),
+            {"like": f"%{term}%"}).mappings().all()
     return [dict(r) for r in rows]
 
 
 # ---------------------------------------------------------------------- audit
+@router.get("/login-attempts")
+def login_attempts(request: Request,
+                   limit: int = Query(100, le=500),
+                   emp_id: str = Query(""),
+                   failed_only: bool = Query(False),
+                   db: Session = Depends(get_db),
+                   pg: Session = Depends(get_minehub_db)) -> list[dict]:
+    """Sign-in attempts, newest first. Optionally one person, or failures only.
+
+    Behind access.users.view, the same gate as the rest of Access Control.
+    This is the one place the reason for a refusal is visible: the login
+    endpoint tells everybody the same thing on purpose, so that it cannot be
+    used to find out which employee IDs exist.
+
+    Names are looked up for IDs that exist. One that does not resolve is left
+    as typed -- which is the interesting case, because it means somebody
+    entered something that is not an employee ID at all.
+    """
+    _require(db, request, "access.users.view")
+    where, params = ["1=1"], {"lim": limit}
+    if emp_id.strip():
+        where.append("empid = :e")
+        params["e"] = emp_id.strip()
+    if failed_only:
+        where.append("outcome <> 'OK'")
+
+    rows = pg.execute(text(f"""
+        SELECT login_attempt_id, occurred_at, empid, outcome,
+               ip_address, user_agent
+        FROM login_attempt
+        WHERE {' AND '.join(where)}
+        ORDER BY occurred_at DESC
+        LIMIT :lim
+    """), params).mappings().all()
+    out = [dict(r) for r in rows]
+
+    ids = {r["empid"] for r in out if r["empid"]}
+    if ids:
+        stmt = text(
+            f"SELECT EMPID AS empid, EMPNAME AS empname "
+            f"FROM {EMP_TBL} WHERE EMPID IN :ids"
+        ).bindparams(bindparam("ids", expanding=True))
+        with _auth_db() as s_:
+            names = {r[0]: r[1] for r in s_.execute(stmt, {"ids": list(ids)}).all()}
+        for r in out:
+            r["name"] = names.get(r["empid"])
+    return out
+
+
 @router.get("/audit")
 def access_audit(request: Request,
                  limit: int = Query(100, le=500),
@@ -474,8 +558,12 @@ def access_audit(request: Request,
     ids.discard("SYSTEM")
     names: dict[str, str] = {}
     if ids:
-        stmt = text(f"SELECT EMPID, EMPNAME FROM {EMP_TBL} WHERE EMPID IN :ids")             .bindparams(bindparam("ids", expanding=True))
-        names = {r[0]: r[1] for r in db.execute(stmt, {"ids": list(ids)}).all()}
+        stmt = text(
+            f"SELECT EMPID AS empid, EMPNAME AS empname "
+            f"FROM {EMP_TBL} WHERE EMPID IN :ids"
+        ).bindparams(bindparam("ids", expanding=True))
+        with _auth_db() as s_:
+            names = {r[0]: r[1] for r in s_.execute(stmt, {"ids": list(ids)}).all()}
 
     for r in out:
         r["actor_name"] = names.get(r["actor_emp_id"], r["actor_emp_id"])
@@ -493,12 +581,16 @@ def catalogue(request: Request, db: Session = Depends(get_db),
     middleware round trip again — session check included. One call is measurably
     faster than two against databases this far away.
 
-    It calls list_roles directly, so it has to carry what list_roles needs.
-    That is exactly how this broke once: list_roles gained a request and a db
-    when the superadmin role was hidden from other people, and this caller
-    kept passing one argument — so the Postgres session arrived where the
-    request should have been and the Roles tab answered 500. FastAPI does not
-    check internal calls. Keep these three in step.
+    It used to get them by calling the two endpoints directly, and that broke
+    this screen twice in the same way — most recently when /permissions gained
+    a request and a db for its own permission check and this caller kept
+    passing one argument, so the Postgres session arrived where the request
+    should have been and the Roles tab answered 500 for everybody. FastAPI
+    does not check internal calls; it binds what it is given.
+
+    Both now read from plain functions that take no injectable parameters, so
+    there is no slot for a dependency to land in by accident and the three
+    callers cannot drift apart again.
     """
-    return {"roles": list_roles(request, db, pg),
-            "permissions": list_permissions(pg)}
+    return {"roles": _roles_visible_to(db, pg, _actor(request)),
+            "permissions": _all_permissions(pg)}

@@ -43,11 +43,14 @@ permanently half-blank: SAP holds only moisture and Cr2O3 for it.
 from __future__ import annotations
 
 from collections import defaultdict
+from itertools import combinations
 from datetime import date, timedelta
 from typing import Any, Iterable
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
+from app.services.sap_source import (is_postgres as _is_postgres,
+                                     sap_one, sap_rows)
 
 # THE TWO DESTINATIONS, AND WHY EACH IS A PAIR.
 #
@@ -167,13 +170,21 @@ def _despatches(db: Session, customer: str, frm: date, to: date,
         # a 59,000-row table and away from an identically numbered batch in
         # another year.
         frm, to = frm - timedelta(days=BATCH_PAD_DAYS), to + timedelta(days=BATCH_PAD_DAYS)
+    # ── REGEXP IS MySQL's SPELLING, ~ IS POSTGRES'S ─────────────────────────
+    # Neither engine understands the other's operator, and there is no third
+    # spelling both accept -- SIMILAR TO is Postgres-only, and the pattern
+    # ("a letter, then six or more digits") cannot be written as a LIKE. So
+    # the operator is chosen from the session that is about to run the query,
+    # which is why this one builds its SQL inside the `with` rather than
+    # going through sap_rows().
+    _re = "~" if _is_postgres(db) else "REGEXP"
     sql = text(f"""
         SELECT BATCH AS batch, GATEINDATE AS d, COUNT(*) AS trips,
-               SUM(CAST(NETWEIGHT AS DECIMAL(14,3))) AS qty
+               SUM(CAST(NULLIF(TRIM(NETWEIGHT),'') AS DECIMAL(14,3))) AS qty
           FROM zsd_outbound_despatch
          WHERE CUSTOMERNO = :cust
            AND BATCH IS NOT NULL AND BATCH <> ''
-           AND BATCH REGEXP '{STACK_SHAPE}'
+           AND BATCH {_re} '{STACK_SHAPE}'
            {clause}
          GROUP BY BATCH, GATEINDATE
          ORDER BY GATEINDATE, BATCH
@@ -183,7 +194,7 @@ def _despatches(db: Session, customer: str, frm: date, to: date,
         sql = sql.bindparams(bindparam("batches", expanding=True))
         params["batches"] = batches
     params |= {"frm": frm, "to": to}
-    rows = db.execute(sql, params).fetchall()
+    rows = sap_rows(db, sql, params)
     return [
         {"batch": r.batch.strip(), "date": r.d, "trips": int(r.trips),
          "qty": round(float(r.qty or 0), 2)}
@@ -208,10 +219,10 @@ def _mine_lots(db: Session, batches: list[str]) -> dict[str, list[dict]]:
         bindparam("plants", expanding=True),
         bindparam("batches", expanding=True),
     )
-    rows = db.execute(sql, {
+    rows = sap_rows(db, sql, {
         "plants": list(MINE_PLANTS), "loc": MINE_STORAGE,
         "batches": batches,
-    }).fetchall()
+    })
     out: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         out[r.batch.strip()].append({
@@ -237,10 +248,10 @@ def _plant_lots(db: Session, plant: str,
            AND h.MOVEMENT_TYPE = :mvt AND h.BATCH IN :batches
          GROUP BY h.BATCH, h.LOT_NUMBER
     """).bindparams(bindparam("batches", expanding=True))
-    rows = db.execute(sql, {
+    rows = sap_rows(db, sql, {
         "plant": plant, "insp": PLANT_INSPECTION,
         "mvt": PLANT_MOVEMENT, "batches": batches,
-    }).fetchall()
+    })
     out: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         out[r.batch.strip()].append({
@@ -271,10 +282,91 @@ def _consign(lots: list[dict], by: tuple[str, ...]) -> list[dict]:
     return sorted(out, key=lambda g: g["first"])
 
 
-def _match_by_qty(groups: list[dict], qty: float) -> dict | None:
-    """The consignment whose tonnage is this day's. Ambiguity yields nothing."""
+def _merge_groups(members: tuple[dict, ...]) -> dict:
+    """Two or three assay groups read as the one consignment they were.
+
+    Weighted by tonnage, which is what _consign() already does within a group
+    -- so a combination is summarised the same way whether the lab filed it as
+    one group or several.
+    """
+    qty = round(sum(g["qty"] for g in members), 2)
+    return {
+        "qty": qty,
+        "trips": sum(g["trips"] for g in members),
+        "first": min(g["first"] for g in members),
+        "material": members[0]["material"],
+        **{p: _wavg([(g[p], g["qty"]) for g in members]) for p in PARAMS},
+    }
+
+
+def _match_by_qty(groups: list[dict], qty: float,
+                  trips: int | None = None) -> dict | None:
+    """The consignment this day's despatch was. Ambiguity still yields nothing.
+
+    Three attempts, in order, and every one of them refuses rather than
+    guesses. The rule this replaces demanded that ONE assay group equal the
+    whole day's tonnage, which is true for 56 of 64 October consignments and
+    wrong for three of the rest -- not because an assay was missing, but
+    because of how the lab happened to file it.
+
+    1. EXACTLY ONE GROUP WITHIN TOLERANCE -- unchanged, and the common case.
+
+    2. SEVERAL WITHIN TOLERANCE, ONE STRICTLY CLOSEST. QTY_TOL is 0.05 t,
+       which is tight against a 1,452 t consignment and far too loose against
+       an 11.9 t one: on 24 October a single-truck despatch of 11.91 t had two
+       candidates, 11.91 and 11.89, and the old rule called that ambiguous and
+       showed nothing. 11.91 matches to the tonne. Only a STRICT winner counts
+       -- two equally close groups are a real ambiguity and still return None.
+
+    3. A COMBINATION THAT ADDS UP EXACTLY. The lab sometimes files one
+       despatch as two groups because one truck assayed differently: 24 Oct
+       Jabamoyee is 190.17 t over 16 trucks, and the groups are 178.28 (15
+       lots) and 11.89 (1 lot). Those sum to 190.17 over 16 lots exactly.
+
+       BOTH the tonnage AND the truck count must agree, and the combination
+       must be unique. The truck count is what makes this safe: tonnage alone
+       could be assembled from groups that have nothing to do with each other,
+       while tonnage AND count agreeing exactly is a split, not a coincidence.
+       Two and three groups only -- beyond that it is not a lab split, and the
+       search would stop being cheap.
+
+    What does not change: a consignment the lab has not assayed, or one where
+    the answer is genuinely unclear, still renders blank. A borrowed figure is
+    worse than a blank, because a blank says so.
+    """
     hits = [g for g in groups if abs(g["qty"] - qty) < QTY_TOL]
-    return hits[0] if len(hits) == 1 else None
+    if len(hits) == 1:
+        return hits[0]
+    if len(hits) > 1:
+        hits.sort(key=lambda g: abs(g["qty"] - qty))
+        if abs(hits[0]["qty"] - qty) < abs(hits[1]["qty"] - qty):
+            return hits[0]
+        return None                       # equally close: a real ambiguity
+
+    if trips is None:
+        return None
+    for size in (2, 3):
+        if len(groups) < size:
+            break
+        found = [c for c in combinations(groups, size)
+                 if abs(sum(g["qty"] for g in c) - qty) < QTY_TOL
+                 and sum(g["trips"] for g in c) == trips]
+        if not found:
+            continue
+        # Same tie-break as above, for the same reason. 24 Oct Jabamoyee is
+        # 190.17 t over 16 trucks and TWO combinations fit the tolerance --
+        # 11.89 + 178.28 lands on 190.17 exactly, 11.91 + 178.28 on 190.19.
+        # Refusing both because there were two would be refusing an exact
+        # answer on account of a worse one sitting 0.02 t away.
+        found.sort(key=lambda c: abs(sum(g["qty"] for g in c) - qty))
+        if len(found) == 1:
+            return _merge_groups(found[0])
+        best = abs(sum(g["qty"] for g in found[0]) - qty)
+        second = abs(sum(g["qty"] for g in found[1]) - qty)
+        if best < second:
+            return _merge_groups(found[0])
+        return None                       # equally good: a real ambiguity
+    return None
 
 
 def _allocate(lots: list[dict], days: list[dict]) -> dict[int, list[dict]]:
@@ -346,7 +438,7 @@ def _destination_rows(db: Session, key: str, customer: str, plant_code: str,
             # G263004718 wore an assay recorded against 11.93 MT across a
             # 68-truck, 802.62 MT despatch. A borrowed figure is worse than a
             # blank, because a blank says so.
-            m = _match_by_qty(mine_groups, d["qty"])
+            m = _match_by_qty(mine_groups, d["qty"], d["trips"])
             lots = plant_for.get(i)
             p = _summarise(lots) if lots else None
             material = (m or p or {}).get("material")

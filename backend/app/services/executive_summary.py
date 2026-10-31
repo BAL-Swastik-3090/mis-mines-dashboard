@@ -58,6 +58,7 @@ from app.services.despatch_grade import (
 )
 from app.services.plant_output import _totals as _plant_totals, get_plant_output
 from app.services.sap_movement import PRODUCTION_QTY
+from app.services.sap_source import sap_session
 
 # The four rows of every grade table on the sheet, in its order.
 GRADES: tuple[tuple[str, str], ...] = (
@@ -142,7 +143,14 @@ COB_SLOC = "COBC"       # where the concentrate is inspected
 # allowed to stand in; without it the service could only see a monthly total
 # and could not tell a day SAP has not reached from a day the mine did not work.
 _PROD_QTY_SQL = text(f"""
-    SELECT PLANT, MATERIAL_NO, MATERIAL_DESC, POSTING_DATE,
+    -- ALIASED TO LOWERCASE. Postgres folds an unquoted PLANT to `plant` and
+    -- hands the row back under that name, so r.posting_date raises
+    -- AttributeError the moment this reads the feed. MySQL honours the alias
+    -- too, so one spelling works on both.
+    SELECT PLANT         AS plant,
+           MATERIAL_NO   AS material_no,
+           MATERIAL_DESC AS material_desc,
+           POSTING_DATE  AS posting_date,
            COALESCE(SUM(CASE WHEN POSTING_DATE = :rd
                              THEN ({PRODUCTION_QTY}) ELSE 0 END), 0) AS td_qty,
            COALESCE(SUM({PRODUCTION_QTY}), 0)                        AS mtd_qty
@@ -178,7 +186,15 @@ _ASSAY_SQL = text("""
            AND LOT_QUANTITY IS NOT NULL
     ) l
     JOIN (
-        SELECT LOT_NUMBER, MAX(CAST(NULLIF(RESULT,'') AS DECIMAL(16,6))) AS v
+        -- CAST, NOT NULLIF. RESULT is a DECIMAL column on both engines, so
+        -- NULLIF(RESULT,'') never meant what it looks like: MySQL coerces the
+        -- '' to 0 and the expression quietly becomes NULLIF(RESULT, 0),
+        -- discarding any genuine zero reading. Postgres will not coerce at all
+        -- and fails outright with `invalid input syntax for type numeric: ""`,
+        -- which is how this was found when the read moved to the feed.
+        -- Checked before changing it: there are no RESULT = 0 rows at ROM1 or
+        -- COBC, so this corrects the expression without moving any number.
+        SELECT LOT_NUMBER, MAX(CAST(RESULT AS DECIMAL(16,6))) AS v
           FROM pp_quality_inspection
          WHERE PLANT = :plant AND STORAGE_LOCATION = :sloc
            AND UPPER(SHORT_TEXT_INS_CHAR) = :char
@@ -199,10 +215,19 @@ def _r(v, places: int = 2) -> float | None:
 
 # -- Block 2 -----------------------------------------------------------------
 def _assay(db, plant: str, sloc: str, char: str, mf: date, rd: date) -> dict:
-    """{material: (td, mtd)} for one characteristic at one storage location."""
+    """{material: (td, mtd)} for one characteristic at one storage location.
+
+    Read from the SAP OData feed. This runs FOUR TIMES per Executive Summary
+    -- Cr2O3 and Cr/Fe, at the mine and at COB -- and against balcorpdb each
+    pass took about 700 ms, so these four queries alone were 2.8 of the page's
+    4.6 seconds. The feed holds 424,596 quality rows against MySQL's 313,324
+    and indexes the date, so it is both faster and more complete.
+    """
     out: dict[str, tuple[float | None, float | None]] = {}
-    for r in db.execute(_ASSAY_SQL, {"plant": plant, "sloc": sloc,
-                                     "char": char, "mf": mf, "rd": rd}):
+    with sap_session(db) as sap:
+        rows = sap.execute(_ASSAY_SQL, {"plant": plant, "sloc": sloc,
+                                        "char": char, "mf": mf, "rd": rd}).all()
+    for r in rows:
         out[str(r.material)[-8:]] = (
             float(r.td_num) / float(r.td_den) if r.td_den else None,
             float(r.mtd_num) / float(r.mtd_den) if r.mtd_den else None,
@@ -233,19 +258,24 @@ def _prod_qty(db: Session, mf: date, rd: date) -> _Qty:
     ore_days: set[date] = set()
     cob_days: set[date] = set()
     ob_days: set[date] = set()
-    for r in db.execute(_PROD_QTY_SQL, {"plant": MINE_PLANT, "cob_plant": COB_PLANT,
-                                        "mf": mf, "rd": rd}):
+    # pp_production, from the feed. balcorpdb has no index on POSTING_DATE and
+    # this is the one scan the whole page's tonnage comes from.
+    with sap_session(db) as sap:
+        qty_rows = sap.execute(_PROD_QTY_SQL,
+                               {"plant": MINE_PLANT, "cob_plant": COB_PLANT,
+                                "mf": mf, "rd": rd}).all()
+    for r in qty_rows:
         td, mtd = float(r.td_qty or 0), float(r.mtd_qty or 0)
-        day = r.POSTING_DATE
-        if str(r.PLANT) == COB_PLANT:
+        day = r.posting_date
+        if str(r.plant) == COB_PLANT:
             # COB is identified by description, not material number -- the mine
             # never asked SAP for a material split, and the plant also posts
             # tailings against this plant.
-            if str(r.MATERIAL_DESC or "") == COB_MATERIAL:
+            if str(r.material_desc or "") == COB_MATERIAL:
                 cob_qty = (cob_qty[0] + td, cob_qty[1] + mtd)
                 cob_days.add(day)
         else:
-            k = str(r.MATERIAL_NO)[-8:]
+            k = str(r.material_no)[-8:]
             prev = ore.get(k, (0.0, 0.0))
             ore[k] = (prev[0] + td, prev[1] + mtd)
             # PRESENCE, NOT A NON-ZERO VALUE. A day SAP has posted and that

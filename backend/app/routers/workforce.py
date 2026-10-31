@@ -595,14 +595,26 @@ def set_crew(asset_id: int, request: Request, body: dict = Body(...),
     # written, which is the mine's own answer to "several people, one machine":
     # one drives it, the others cover.
     raw = body.get("operators") or body.get("operator_ids") or []
-    wanted: dict[int, str] = {}
+    shift = (body.get("shift") or "").strip().upper() or None
+
+    # Role AND shift, per person. A tipper from the mine's alert list has a
+    # different driver on A, B and C, so the shift belongs to the person on the
+    # machine rather than to the request -- which is what it used to be, one
+    # value applied to everybody added in that call.
+    wanted: dict[int, dict] = {}
     for item in raw:
         if isinstance(item, dict):
-            wanted[int(item["operator_id"])] = (
-                str(item.get("role") or "PRIMARY").strip().upper() or "PRIMARY")
+            wanted[int(item["operator_id"])] = {
+                "role": str(item.get("role") or "PRIMARY").strip().upper() or "PRIMARY",
+                # Absent means "unchanged" for somebody already on the crew and
+                # "the request's shift" for somebody being added, so a caller
+                # that knows nothing about shifts cannot wipe one by omission.
+                "shift": (str(item["shift"]).strip().upper() or None)
+                         if item.get("shift") not in (None, "") else
+                         (None if "shift" in item else "__keep__"),
+            }
         else:
-            wanted[int(item)] = "PRIMARY"
-    shift = (body.get("shift") or "").strip().upper() or None
+            wanted[int(item)] = {"role": "PRIMARY", "shift": "__keep__"}
 
     machine = db.execute(text(
         "SELECT asset_id, fleet_code FROM asset WHERE asset_id = :a"),
@@ -610,8 +622,9 @@ def set_crew(asset_id: int, request: Request, body: dict = Body(...),
     if not machine:
         raise HTTPException(404, "No such machine.")
 
-    current = {r["operator_id"]: r["operator_assignment_id"] for r in db.execute(text("""
-        SELECT operator_id, operator_assignment_id FROM operator_assignment
+    current = {r["operator_id"]: dict(r) for r in db.execute(text("""
+        SELECT operator_id, operator_assignment_id, role, shift
+          FROM operator_assignment
          WHERE asset_id = :a AND status = 'ACTIVE'
     """), {"a": asset_id}).mappings()}
 
@@ -630,25 +643,53 @@ def set_crew(asset_id: int, request: Request, body: dict = Body(...),
         """), {"a": asset_id, "ids": removed})
 
     for operator_id in added:
+        want = wanted[operator_id]
         db.execute(text("""
             INSERT INTO operator_assignment
                    (operator_id, asset_id, shift, role, valid_from,
                     status, assigned_by, created_by)
             VALUES (:o, :a, :s, :r, CURRENT_DATE, 'ACTIVE', :by, :by)
-        """), {"o": operator_id, "a": asset_id, "s": shift,
+        """), {"o": operator_id, "a": asset_id,
+               "s": shift if want["shift"] == "__keep__" else want["shift"],
                # Never NULL. Passing one explicitly overrides the column's own
                # default, which is how this failed the first time it ran.
-               "r": wanted[operator_id] or "PRIMARY", "by": actor})
+               "r": want["role"] or "PRIMARY", "by": actor})
 
-    if added or removed:
+    # ── CHANGING WHAT SOMEBODY IS, NOT ONLY WHETHER THEY ARE ON IT ──────────
+    #
+    # This used to insert the added and end the removed, and nothing else. So
+    # moving a man from relief to primary -- the most ordinary edit this screen
+    # has -- was accepted by the form, sent by the browser, and silently
+    # dropped here, because he was on the crew before and after. The screen
+    # looked right until it was reloaded.
+    changed = []
+    for operator_id, want in wanted.items():
+        was = current.get(operator_id)
+        if not was:
+            continue
+        role_new = want["role"] or "PRIMARY"
+        shift_new = was["shift"] if want["shift"] == "__keep__" else want["shift"]
+        if role_new == (was["role"] or "") and shift_new == was["shift"]:
+            continue
+        db.execute(text("""
+            UPDATE operator_assignment
+               SET role = :r, shift = :s
+             WHERE operator_assignment_id = :id
+        """), {"r": role_new, "s": shift_new, "id": was["operator_assignment_id"]})
+        changed.append({"operator_id": operator_id,
+                        "from": {"role": was["role"], "shift": was["shift"]},
+                        "to": {"role": role_new, "shift": shift_new}})
+
+    if added or removed or changed:
         _event(db, request, "MACHINE_CREW_SET",
                payload={"asset_id": asset_id, "fleet_code": machine["fleet_code"],
-                        "added": added, "removed": removed,
+                        "added": added, "removed": removed, "changed": changed,
                         "crew_size": len(wanted), "shift": shift})
     db.commit()
 
     return {"ok": True, "asset_id": asset_id, "fleet_code": machine["fleet_code"],
-            "crew_size": len(wanted), "added": len(added), "removed": len(removed)}
+            "crew_size": len(wanted), "added": len(added), "removed": len(removed),
+            "changed": len(changed)}
 
 
 @router.get("/cover/export")

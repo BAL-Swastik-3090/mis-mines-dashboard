@@ -10,18 +10,27 @@
  * A timeout is still right; a timeout with no warning is not. Two minutes and
  * a button is the whole feature.
  *
- * WHEN IT APPEARS, and why eight minutes rather than twenty-eight.
+ * WHEN IT APPEARS, and why it moved from eight minutes back to twenty-six.
  *
- * This application's own rule is thirty minutes on last_active_at. But
- * something outside it sweeps the shared session table and closes sessions
- * about ten minutes after their last RECORDED activity — measured across every
- * application on the intranet, median just under twelve minutes. So the real
- * fuse is the shorter one, and a warning pegged to our own thirty would arrive
- * twenty minutes after the session had already gone.
+ * This application's rule is thirty minutes on last_active_at. Something
+ * outside it sweeps the shared session table and closes sessions about ten to
+ * twelve minutes after their last RECORDED activity, so this used to warn at
+ * eight and sign out at ten: if the sweeper was going to end the session
+ * anyway, better to end it ourselves and say why than to be bounced to a
+ * login screen with no explanation.
  *
- * Eight minutes of no interaction, then two minutes of countdown. If nobody
- * answers, this signs them out deliberately and says so — which is a better
- * ending than being bounced to a login screen by a sweeper with no explanation.
+ * That was the right trade while the row could go stale. It no longer can.
+ * AuthWrapper's heartbeat is pegged to the last interaction rather than to
+ * the last two minutes and no longer stops when the tab is hidden, so the row
+ * keeps moving for the full thirty minutes and the sweeper never sees a
+ * session old enough to close. The eight-minute fuse had become the thing
+ * signing people out: reading a report, or working in Excel with the
+ * dashboard behind it, was enough to lose the screen.
+ *
+ * So the warning is back where the policy says it belongs — twenty-six
+ * minutes of no interaction, then two minutes of countdown, which ends it at
+ * twenty-eight, just inside the server's thirty. The margin is deliberate: a
+ * warning that arrives after the session has already gone is worse than none.
  *
  * WHAT COUNTS AS BEING HERE. The same interactions the heartbeat watches:
  * clicking, typing, scrolling, pointing. Deliberately NOT mouse movement — a
@@ -38,7 +47,7 @@ import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
 
 /** How long without interaction before we ask. */
-const WARN_AFTER_MS = 8 * 60 * 1000;
+const WARN_AFTER_MS = 26 * 60 * 1000;
 /** How long they then have to answer. */
 const GRACE_SECONDS = 120;
 /** How often we check. Ten seconds is finer than the minute that matters. */

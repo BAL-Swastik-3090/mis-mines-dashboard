@@ -13,7 +13,26 @@ from app.config import get_settings
 from app.database import test_connection, idle_connection_reaper, engine, pool_status
 
 settings = get_settings()
+
+# ── THE SERVICE'S OWN LOG HAS TO REACH THE CONTAINER LOG ───────────────────
+# There was no logging configuration at all, so the root logger kept its
+# default of WARNING with no handler and every logger.info in this application
+# was discarded. "Database connected", the sync results, the clock check below
+# -- none of it ever appeared in `docker compose logs`, which is where anybody
+# diagnosing a problem at 7am is going to look. Only gunicorn's own output was
+# visible, which is why the service looked quiet rather than silent.
+#
+# Configured on this logger alone rather than through basicConfig, so gunicorn
+# and uvicorn keep their own handlers and nothing is logged twice.
 logger = logging.getLogger("mines_dashboard")
+if not logger.handlers:
+    _h = logging.StreamHandler(sys.stdout)
+    _h.setFormatter(logging.Formatter(
+        "[%(asctime)s %(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S%z"))
+    logger.addHandler(_h)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
 
 
 async def _daily_insights_digest():
@@ -98,9 +117,15 @@ async def _flush_activity():
     while True:
         await asyncio.sleep(auth_svc.FLUSH_SECONDS)
         try:
+            # No MySQL session: flush_touches opens the Postgres one the
+            # session table actually lives in.
             def go() -> int:
-                with SessionLocal() as db:
-                    return auth_svc.flush_touches(db)
+                # Retire what the idle rule has already expired, in the same
+                # pass. Without it is_active only ever means "never signed
+                # out", and anything that reads the flag -- the Usage page
+                # did -- reports stale sessions as people who are here now.
+                auth_svc.end_idle_sessions()
+                return auth_svc.flush_touches()
             n = await run_in_threadpool(go)
             if n:
                 logger.debug("activity flushed for %d sessions", n)
@@ -190,10 +215,103 @@ async def _fuel_mirror():
         await asyncio.sleep(fuel_sync.SYNC_SECONDS)
 
 
+# How far apart the two clocks may be before it is worth saying something.
+# Hosts drift by seconds against NTP; this is looking for whole hours.
+CLOCK_TOLERANCE = timedelta(minutes=5)
+
+
+def _check_clock_against_database() -> None:
+    """Confirm this process agrees with the database about what time it is.
+
+    THE CLOCK IS SET IN THE IMAGE, not here. backend/Dockerfile sets
+    TZ=Asia/Kolkata with tzdata installed, and docker-compose.yml states it
+    again so it can be overridden per host. That is the ordinary way to give a
+    container a timezone, and it is right from PID 1 -- no window during which
+    the process is on one clock and its data on another.
+
+    This function exists because that setting is one forgotten line away from
+    being absent on a new host, and the failure is silent: nothing errors, the
+    figures are simply wrong by the offset. It happened. The production
+    container ran UTC against databases at +05:30, so every open breakdown was
+    cut short by five and a half hours, date.today() returned yesterday until
+    05:30, and the 07:00 digest fired at 12:30.
+
+    So the agreement is verified against the database on every start and said
+    out loud either way. If they disagree the process clock is corrected rather
+    than left wrong -- a dashboard quietly reporting the wrong day is worse
+    than one that fixes itself and complains -- but that path is a fallback,
+    and the log says plainly that the image is misconfigured.
+
+    Correctness-critical code does not rely on any of this: services/breakdown.py
+    takes its "now" from the database directly, because that is the clock the
+    timestamps are on.
+    """
+    import os
+    import time as _time
+
+    from sqlalchemy import text
+    from app.database import SessionLocal
+
+    try:
+        with SessionLocal() as db:
+            db_now = db.execute(text("SELECT NOW()")).scalar()
+        if db_now is None:
+            logger.warning("Clock: database returned no time; skipping the check")
+            return
+
+        drift = datetime.now() - db_now
+        if abs(drift) <= CLOCK_TOLERANCE:
+            logger.info("Clock agrees with the database (%s, off by %+ds)",
+                        _time.tzname[0], int(drift.total_seconds()))
+            return
+
+        logger.error(
+            "CLOCK MISMATCH: this process says %s, the database says %s "
+            "(%+.1f hours). TZ is %s. The image should set TZ=Asia/Kolkata "
+            "-- see backend/Dockerfile. Correcting this process now.",
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            db_now.strftime("%Y-%m-%d %H:%M:%S"),
+            drift.total_seconds() / 3600.0,
+            os.environ.get("TZ", "(unset)"))
+
+        if not hasattr(_time, "tzset"):
+            logger.error("Clock: cannot correct on this platform (no tzset)")
+            return
+
+        with SessionLocal() as db:
+            offset = db.execute(
+                text("SELECT TIMEDIFF(NOW(), UTC_TIMESTAMP())")).scalar()
+        minutes = int(offset.total_seconds() // 60)
+        # POSIX writes the offset as what you ADD to local time to reach UTC,
+        # so +05:30 is "-5:30". The abbreviation must be at least three
+        # characters or glibc ignores the whole string without a word -- "DB"
+        # left the process on UTC and reported nothing at all.
+        sign = "-" if minutes >= 0 else "+"
+        hh, mm = divmod(abs(minutes), 60)
+        os.environ["TZ"] = f"DBT{sign}{hh}:{mm:02d}"
+        _time.tzset()
+
+        with SessionLocal() as db:
+            db_now = db.execute(text("SELECT NOW()")).scalar()
+        drift = datetime.now() - db_now
+        if abs(drift) <= CLOCK_TOLERANCE:
+            logger.warning("Clock corrected to %s; now agrees with the database",
+                           os.environ["TZ"])
+        else:
+            logger.error("Clock still %+.1f hours out after correction",
+                         drift.total_seconds() / 3600.0)
+    except Exception as exc:                                   # noqa: BLE001
+        # A dashboard that starts on an unverified clock beats one that does
+        # not start.
+        logger.warning("Clock: could not check against the database (%s)", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ── Startup — retry up to 5 times for transient errors (e.g. too many connections) ──
     db_status = {"status": "error"}
+    # (the clock is aligned once the connection below is known to work --
+    #  it needs the database to ask, so it cannot come before the retry loop)
     for attempt in range(1, 6):
         db_status = test_connection()
         if db_status["status"] == "connected":
@@ -204,6 +322,11 @@ async def lifespan(app: FastAPI):
     else:
         logger.critical(f"❌ Database connection failed after 5 attempts — aborting startup")
         sys.exit(1)
+
+    # Before any background task reads a clock: the digest scheduler below
+    # computes its next 07:00 from datetime.now(), and on a UTC process that
+    # is 12:30 at the mine.
+    _check_clock_against_database()
 
     # Write down who has been active, once a minute, from one place.
     #
@@ -330,6 +453,10 @@ _PERMISSION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 # A page is reachable with the matching dashboard permission.
 _PAGE_PERMISSION = {
     "mis": "dashboard.mis",
+    # AMIRA used to answer to dashboard.mis, which meant all 38 people who can
+    # read the MIS dashboard could also read the chromium balance. It has its
+    # own permission now (migration 082) so the two audiences can differ.
+    "amira": "dashboard.amira",
     "oee": "dashboard.oee",
     "intelligence": "dashboard.intelligence",
     "fuel-management": "dashboard.fuel",
@@ -358,19 +485,22 @@ def _check_auth(sid: str | None, path: str) -> tuple[dict | None, str | None, se
     perms = access_svc.peek_permissions(s["emp_id"]) if s else None
 
     if s is None or perms is None:
-        # Cold: ask the databases, and cache the answers for the next caller.
-        with SessionLocal() as db:
-            s = auth_svc.get_session(db, sid)
-            if not s:
-                return None, None, None
-            perms = access_svc.permissions_for(db, s["emp_id"])
-            if auth_svc.touch_due(sid):
-                auth_svc.touch(db, sid)
+        # Cold: ask the database, and cache the answers for the next caller.
+        #
+        # NO MySQL SESSION IS OPENED HERE ANY MORE. This runs on every single
+        # api request, and it used to check out a MySQL connection to pass to
+        # functions that now read Postgres and ignore it -- a connection from
+        # a pool of eight, taken on every request, for nothing.
+        s = auth_svc.get_session(None, sid)
+        if not s:
+            return None, None, None
+        perms = access_svc.permissions_for(None, s["emp_id"])
+        if auth_svc.touch_due(sid):
+            auth_svc.touch(None, sid)
     elif auth_svc.touch_due(sid):
         # Warm, but the activity timestamp is stale enough to be worth a write.
         # Without this an active user would idle out while still working.
-        with SessionLocal() as db:
-            auth_svc.touch(db, sid)
+        auth_svc.touch(None, sid)
 
     # Invite-only, checked on every request rather than only at login, so
     # revoking someone takes effect at once instead of when their session
@@ -426,6 +556,49 @@ async def require_auth(request: Request, call_next):
     return await call_next(request)
 
 
+# REGISTERED AFTER require_auth ON PURPOSE. Starlette runs the
+# LAST-registered http middleware OUTERMOST, so this has to come after
+# the auth gate to wrap it. Registered before it, require_auth's early
+# 401 returned from outside this one and went out bare -- which is how
+# /api/no-such-route came back with 0 of 5 headers while an
+# authenticated route had all 5.
+
+# ── SECURITY HEADERS ON THE API's OWN RESPONSES ─────────────────────────────
+# In production the host nginx routes /api/* STRAIGHT to this process on 8006,
+# bypassing the Next.js server entirely -- so the headers set in
+# frontend/next.config.ts never touch an API response. Without this, every
+# /api/* URL is still bare, and those are the ones that return the mine's data.
+#
+# No Content-Security-Policy here on purpose: CSP governs what a DOCUMENT may
+# load, and these responses are JSON. frame-options and nosniff still earn
+# their place -- an API response rendered directly in a tab is exactly where
+# MIME sniffing and framing tricks are used.
+#
+# Deliberately NOT also set in nginx; see the note in next.config.ts about two
+# CSP headers being enforced separately rather than merged.
+_SECURITY_HEADERS = {
+    "Strict-Transport-Security": "max-age=63072000; includeSubDomains",
+    "X-Frame-Options": "SAMEORIGIN",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+}
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Set on the way out, so error responses carry them too.
+
+    setdefault rather than assignment: if a route has already decided on one
+    of these -- a download endpoint relaxing X-Frame-Options, say -- it keeps
+    what it set rather than having it quietly overwritten here.
+    """
+    response = await call_next(request)
+    for name, value in _SECURITY_HEADERS.items():
+        response.headers.setdefault(name, value)
+    return response
+
+
 # ── Global exception handler (prevents raw tracebacks leaking) ──
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -470,6 +643,9 @@ from app.routers import data_health
 from app.routers import plant_output
 from app.routers import alerts as live_alerts
 from app.routers import usage
+from app.routers import ev_vehicle
+from app.routers import cost_plan
+from app.routers import costing
 from app.routers import production, stock, cob, plant, ob, despatch, equipment, dewatering, insights, live_tracking, fuel_management, fuel_control, ev_tracking, auth, oee, roles, minehub, access, operators, operations, workforce, productivity, comments
 app.include_router(production.router,      prefix="/api/production",    tags=["Production"])
 app.include_router(stock.router,           prefix="/api/stock",         tags=["Stock"])
@@ -516,3 +692,6 @@ app.include_router(plant_output.router)
 app.include_router(usage.router)
 app.include_router(live_alerts.router)
 app.include_router(access.router)
+app.include_router(ev_vehicle.router)      # self-prefixed: /api/ev
+app.include_router(cost_plan.router)       # self-prefixed: /api/cost-plan
+app.include_router(costing.router,       prefix="/api/costing", tags=["Product Costing"])

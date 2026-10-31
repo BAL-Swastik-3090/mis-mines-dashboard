@@ -79,16 +79,31 @@ _PROD_DAY = (
 )
 
 _YIELD_SQL = text("""
-    SELECT POSTING_DATE AS d,
-           PLANT        AS plant,
-           WORK_CENTER  AS work_center,
+    -- ── DEDUPED, AND IT COSTS NOTHING TODAY ────────────────────────
+    -- The OData feed stores every confirmation TWICE, once with a
+    -- zero-padded confirmation number and once without: 0000909890 and
+    -- 909890, same order, same counter, same date, same yield. Summing
+    -- that feed raw gives 13,780 t for October against balcorpdb's
+    -- 7,195 -- the same production counted under two spellings.
+    --
+    -- balcorpdb carries only the unpadded form, so this DISTINCT changes
+    -- nothing here: 395 rows either way, 7,195 t either way, checked.
+    -- It is in so that pointing this query at the feed later cannot
+    -- silently double plant output. get_rehandling_daywise already
+    -- deduplicates the same table on the same key.
+    SELECT d, plant, work_center,
            SUM(CONFIRMED_YIELD)                              AS yield_t,
            COUNT(CASE WHEN REVERSE_IND IS NULL THEN 1 END)   AS taps
-      FROM pp_prod_order_confirmation
-     WHERE POSTING_DATE BETWEEN :frm AND :to
-       AND WORK_CENTER LIKE 'FURNACE%'
-       AND PLANT IN :plants
-     GROUP BY POSTING_DATE, PLANT, WORK_CENTER
+      FROM (
+          SELECT DISTINCT ORDER_NO, CONFIRM_COUNTER, CONFIRMED_YIELD,
+                 REVERSE_IND,
+                 POSTING_DATE AS d, PLANT AS plant, WORK_CENTER AS work_center
+            FROM pp_prod_order_confirmation
+           WHERE POSTING_DATE BETWEEN :frm AND :to
+             AND WORK_CENTER LIKE 'FURNACE%'
+             AND PLANT IN :plants
+      ) dedup
+     GROUP BY d, plant, work_center
 """).bindparams(bindparam("plants", expanding=True))
 
 _ANALYSIS_SQL = text(f"""

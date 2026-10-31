@@ -13,13 +13,14 @@
  * from yourself.
  */
 import React, { useEffect, useMemo, useState } from "react";
-import { ShieldCheck, Users, KeyRound, History } from "lucide-react";
+import { ShieldCheck, Users, KeyRound, History, LogIn } from "lucide-react";
 import { useAuth } from "@/contexts/useAuth";
 import UsersPanel from "@/components/minehub/UsersPanel";
 import RolesPanel from "@/components/minehub/RolesPanel";
 import AuditPanel from "@/components/minehub/AuditPanel";
+import SignInAttemptsPanel from "@/components/minehub/SignInAttemptsPanel";
 
-type TabId = "users" | "roles" | "audit";
+type TabId = "users" | "roles" | "audit" | "attempts";
 
 const TABS: { id: TabId; label: string; icon: React.ElementType; hint: string }[] = [
   { id: "users", label: "People & Access", icon: Users,
@@ -28,6 +29,11 @@ const TABS: { id: TabId; label: string; icon: React.ElementType; hint: string }[
     hint: "Create roles and decide what each one carries" },
   { id: "audit", label: "Access History", icon: History,
     hint: "Every grant, change and revocation — append-only" },
+  // Separate from Access History on purpose: that tab answers "who changed
+  // somebody's access", this one answers "why could this person not get in".
+  // They are asked by the same people and are not the same question.
+  { id: "attempts", label: "Sign-in Attempts", icon: LogIn,
+    hint: "Every attempt and why it was refused — the password is never recorded" },
 ];
 
 export default function AccessControlSection() {
@@ -81,6 +87,7 @@ export default function AccessControlSection() {
       {tab === "users" && <UsersPanel />}
       {tab === "roles" && <RolesPanel />}
       {tab === "audit" && <AuditPanel />}
+      {tab === "attempts" && <SignInAttemptsPanel />}
     </div>
   );
 }

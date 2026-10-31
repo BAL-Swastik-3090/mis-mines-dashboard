@@ -8,6 +8,7 @@ Sources:
 """
 from datetime import date, timedelta
 from sqlalchemy.orm import Session
+from app.services.sap_source import sap_one, sap_rows
 from sqlalchemy import text
 
 # Feed is a goods ISSUE (261) and the outputs are RECEIPTS (101/531); both are
@@ -65,7 +66,7 @@ def _get_actuals(db: Session, from_date: date, to_date: date) -> dict:
         GROUP BY POSTING_DATE
         ORDER BY POSTING_DATE
     """)
-    rows = db.execute(sql, {"from_date": from_date, "to_date": to_date}).fetchall()
+    rows = sap_rows(db, sql, {"from_date": from_date, "to_date": to_date})
     return {r.dt: dict(r._mapping) for r in rows}
 
 
@@ -83,20 +84,20 @@ def _get_quality(db: Session, from_date: date, to_date: date) -> dict:
             ROUND(AVG(CASE WHEN MATERIAL_NO = :mat_lg   THEN RESULT END), 3) AS input_cr2o3,
             ROUND(AVG(CASE WHEN MATERIAL_NO = :mat_conc THEN RESULT END), 3) AS output_cr2o3
         FROM pp_quality_inspection
-        WHERE SHORT_TEXT_INS_CHAR = 'Cr2O3'
+        WHERE UPPER(SHORT_TEXT_INS_CHAR) = 'CR2O3'
           AND PLANT       = :plant
           AND MATERIAL_NO IN (:mat_lg, :mat_conc)
           AND QLT_START_DATE BETWEEN :from_date AND :to_date
         GROUP BY QLT_START_DATE
         ORDER BY QLT_START_DATE
     """)
-    rows = db.execute(sql, {
+    rows = sap_rows(db, sql, {
         "plant":     PLANT_COB,
         "mat_lg":    MAT_LG_ORE,
         "mat_conc":  MAT_CONCENTRATE,
         "from_date": from_date,
         "to_date":   to_date,
-    }).fetchall()
+    })
     return {r.dt: dict(r._mapping) for r in rows}
 
 

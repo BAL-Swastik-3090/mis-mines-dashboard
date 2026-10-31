@@ -11,7 +11,6 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.database import get_db
 from app.services import auth
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
@@ -54,15 +53,22 @@ def _set_cookie(response: Response, sid: str) -> None:
 
 
 @router.post("/login")
-def login(response: Response, request: Request, body: dict = Body(...),
-          db: Session = Depends(get_db)) -> dict:
+def login(response: Response, request: Request, body: dict = Body(...)) -> dict:
     empid = (body.get("empid") or "").strip()
     password = body.get("password") or ""
+    ip = _client_ip(request)
+    ua = request.headers.get("user-agent")
     if not empid or not password:
+        auth.record_login_attempt(empid, "INCOMPLETE", ip, ua)
         raise HTTPException(400, "Employee ID and password are required.")
 
-    emp = auth.authenticate(db, empid, password)
+    # The outcome is recorded; the MESSAGE is not. All three failures below
+    # read the same to the person trying, so this endpoint cannot be used to
+    # discover which employee IDs exist. Which check refused goes to
+    # login_attempt, where only an Access Manager can see it.
+    emp, why = auth.authenticate_detailed(None, empid, password)
     if not emp:
+        auth.record_login_attempt(empid, why, ip, ua)
         # Deliberately identical for an unknown EMPID, a wrong password and an
         # inactive account — otherwise this endpoint enumerates employee IDs.
         raise HTTPException(401, "Invalid Employee ID or Password")
@@ -72,55 +78,56 @@ def login(response: Response, request: Request, body: dict = Body(...),
     # was happening — people from Medical, Secretarial and an unauthorised
     # external auditor account had all signed in without being granted anything.
     from app.services import access as access_svc
-    if not access_svc.has_access(db, emp["emp_id"]):
+    if not access_svc.has_access(None, emp["emp_id"]):
+        # Credentials were right. Recorded separately from a bad password,
+        # because "we never invited them" and "they typed it wrong" are
+        # different problems with different fixes.
+        auth.record_login_attempt(empid, "NO_ACCESS", ip, ua)
         raise HTTPException(
             403,
             "You do not have access to the Mines Dashboard. "
             "Please contact Mr. Sudip Hajra (PPIC) to request access.",
         )
 
-    sid = auth.create_session(
-        db, emp,
-        _client_ip(request),
-        request.headers.get("user-agent"),
-    )
+    auth.record_login_attempt(empid, "OK", ip, ua)
+    sid = auth.create_session(None, emp, ip, ua)
     _set_cookie(response, sid)
     return {"status": "success", "user": emp}
 
 
 @router.get("/me")
-def me(request: Request, db: Session = Depends(get_db)) -> dict:
+def me(request: Request) -> dict:
     """The signed-in user. The frontend calls this on load to decide whether to
     show the app or the login screen — the server is the only authority."""
-    s = auth.get_session(db, request.cookies.get(COOKIE))
+    s = auth.get_session(None, request.cookies.get(COOKIE))
     if not s:
         raise HTTPException(401, "Not authenticated.")
-    return {"user": auth.employee(db, s["emp_id"])}
+    return {"user": auth.employee(None, s["emp_id"])}
 
 
 @router.post("/logout")
-def logout(response: Response, request: Request, db: Session = Depends(get_db)) -> dict:
+def logout(response: Response, request: Request) -> dict:
     sid = request.cookies.get(COOKIE)
     if sid:
-        auth.end_session(db, sid, "LOGOUT")
+        auth.end_session(None, sid, "LOGOUT")
     response.delete_cookie(COOKIE, path="/")
     return {"ok": True}
 
 
 @router.post("/track")
-def track(request: Request, body: dict = Body(...), db: Session = Depends(get_db)) -> dict:
+def track(request: Request, body: dict = Body(...)) -> dict:
     """Record a page view against the current session."""
     sid = request.cookies.get(COOKIE)
-    s = auth.get_session(db, sid)
+    s = auth.get_session(None, sid)
     if not s:
         raise HTTPException(401, "Not authenticated.")
-    auth.record_page_view(db, sid, s["emp_id"], body.get("path", "/"),
+    auth.record_page_view(None, sid, s["emp_id"], body.get("path", "/"),
                           body.get("time_spent"), body.get("referrer"))
     return {"ok": True}
 
 
 @router.post("/track-time")
-def track_time(request: Request, body: dict = Body(...), db: Session = Depends(get_db)) -> dict:
+def track_time(request: Request, body: dict = Body(...)) -> dict:
     """Record how long the user stayed on a page they have just left.
 
     Called on navigation and on the tab being hidden or closed, so it must be
@@ -128,19 +135,19 @@ def track_time(request: Request, body: dict = Body(...), db: Session = Depends(g
     does not wait for the answer.
     """
     sid = request.cookies.get(COOKIE)
-    s = auth.get_session(db, sid)
+    s = auth.get_session(None, sid)
     if not s:
         raise HTTPException(401, "Not authenticated.")
     try:
         seconds = int(body.get("time_spent") or 0)
     except (TypeError, ValueError):
         raise HTTPException(400, "time_spent must be a number of seconds.")
-    auth.record_time_spent(db, sid, body.get("path", "/"), seconds)
+    auth.record_time_spent(None, sid, body.get("path", "/"), seconds)
     return {"ok": True}
 
 
 @router.post("/heartbeat")
-def heartbeat(request: Request, db: Session = Depends(get_db)) -> dict:
+def heartbeat(request: Request) -> dict:
     """Keep a session alive while a dashboard is left open on a wall display."""
     sid = request.cookies.get(COOKIE)
     if not sid:
@@ -148,4 +155,4 @@ def heartbeat(request: Request, db: Session = Depends(get_db)) -> dict:
     # Written now, not noted for later. This is the only thing holding a
     # session open for somebody reading one screen, and until it wrote
     # directly no session in eleven days survived past thirty-one minutes.
-    return {"ok": True, "written": auth.touch_now(db, sid)}
+    return {"ok": True, "written": auth.touch_now(None, sid)}

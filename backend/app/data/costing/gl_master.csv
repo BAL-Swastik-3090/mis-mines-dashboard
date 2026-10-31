@@ -1,0 +1,141 @@
+gl_account,gl_description,costing_group,summary_line,bucket,include_in_costing,remark
+60202120,Sales Scrap,Not Required,,EXCLUDE,0,Not Required for Costing
+60201040,Interest from Others,Not Required,,EXCLUDE,0,Not Required for Costing
+60202130,Sundry Creditors Written Back,Not Required,,EXCLUDE,0,Not Required for Costing
+60202140,Liabilities & Prov. No Longer Required,Not Required,,EXCLUDE,0,Not Required for Costing
+70101010,RM Cons  Cr Ore,Feed Cost,Feed Cost,FEED,1,"Feeding in COB Plant, as per actual"
+70101020,Overburden Expenses,Overburden,Overburden,FORM,1,A separate entry form required for daily which we can directly link with SO/PO
+70101130,RM Handling Charges,Excavation Cost,Excavation Charges,MONTH_END,1,To be considered in Costing same as GL 70501010
+70101140,RM Cons Direct,Not Required,,EXCLUDE,0,Not Required for Costing
+70101180,Revn. P/L of RM Indigenous,Not Required,,EXCLUDE,0,Not Required for Costing
+70101190,PRD Cr Ore,Not Required,,EXCLUDE,0,Not Required for Costing
+70101300,Revn. P/L of Cr Ore/Conc/Lump/Dust,Feed Cost,Feed Cost,FEED,1,"Feeding in COB Plant, as per actual"
+70101310,P/L on Mat to Mat Trf  Cr Ore/Conc/Lump,Excavation Cost,,EXCLUDE,0,Not Required for Costing
+70101390,COGM COB Tailing,Not Required,,EXCLUDE,0,Not Required for Costing
+70301760,COGM Cr Ore,Excavation Cost,,EXCLUDE,0,Not Required for Costing
+70301770,COGM  Cr Ore Conc,Not Required,,EXCLUDE,0,Not Required for Costing
+70301780,COGM  Cr Ore Lump,Not Required,,EXCLUDE,0,Not Required for Costing
+70401031,Fuel Consumption Direct,Diesel,Diesel,DAILY,1,As per Actual
+70802010,Excavation Charges,Excavation Charges,Excavation Charges,FORM,1,A separate entry form required for daily which we can directly link with SO/PO
+70301330,P/L on M to M of Tailing,Excavation Cost,,EXCLUDE,0,Not Required for Costing
+70301340,COGM  Other Scrap,Excavation Cost,,EXCLUDE,0,Not Required for Costing
+70301350,COGS  Other Scrap,Excavation Cost,,EXCLUDE,0,Not Required for Costing
+70401010,Power,Electricity Cost,Electricity Cost,FORM,1,Location / Meter wise Power consumption form to be developed for daily entry from Electrical dept. - need to be discussed with Engineering Dept. and finalise
+70501010,Salary,Salary,Salary,MONTH_END,1,Distribute Cost on daily basis from monthly upload GL wise - Cost Center wise Cost as per planned cost
+70501020,Wages,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501030,House Rent Allowance,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501040,Conveyance Allowance,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501060,Fixed Conveyance Reimbursement,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501090,Special Allowance,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501165,Medical Allowance,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501170,Heat Allowance,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501210,Night Shift Allowance,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501230,Production Incentive Allowance,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501300,Educational Allowance,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501310,Washing Allowance,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501350,Other Deduction,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501360,Other Allowance,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501370,Performance Linked Pay,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501380,Overtime,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501390,Leave Salary,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501400,Leave Travel Assistance,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501410,Stipend,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501440,Notice Pay Positive,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501450,Bonus,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501710,Rest House Deductions,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501730,Variable DA,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501470,P.F Employer's Contribution,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501530,ESI Employer's Contribution,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501640,P.F DLI Administration Charges,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501460,Gratuity,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501550,Staff Welfare Expenses,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501570,Medical Expenses Reimbursement,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501012,MONTHLY VARIABLE PAY,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501580,Canteen Deductions,Salary,Salary,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501590,Pantry Expenses,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501630,P.F Administration Charges,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501670,Medical Expenses Others,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70501720,Fooding Expenses,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70801060,Lab Equiq Cons-Domestic,"Cons., Spares & Maintenance","Cons., Spares & Maintenance",MONTH_END,1,To be considered in Costing same as GL 70501010
+70806060,Shipping Freight,Others,Others,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812020,Grocery Expenses,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812390,Fuel Expenses,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70813030,Catering Expenses,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70701280,Interest to Others,Finance Charges,,MONTH_END,0,To be considered in Costing same as GL 70501010
+70702020,Bank Charges for Remittances,Finance Charges,,MONTH_END,0,To be considered in Costing same as GL 70501010
+70601010,Dep Of Tangible Assets on Org. Cost,Depreciation,Depreciation,MONTH_END,1,To be considered in Costing same as GL 70501010
+70601030,Dep Of Tangible Assets on Revn.,Depreciation,Depreciation,MONTH_END,1,To be considered in Costing same as GL 70501010
+70601020,Amortisation of Intangible Assets,Depreciation,Depreciation,MONTH_END,1,To be considered in Costing same as GL 70501010
+70401040,PRD  Fuel,Diesel,Diesel,DAILY,1,As per Actual
+70401060,Fuel Material Handling,Diesel,Diesel,DAILY,1,"As per Actual, Cost will be merged with Diesel Cost in Costing Summary. Only Cost Center ""1210025011-Admin. (Mines)"" to be considered under Overhead Cost"
+70401070,Fuel Recovery from vendor,Diesel,Diesel,DAILY,1,"As per Actual, Cost will be merged with Diesel Cost in Costing Summary"
+70801010,Consumable Cons Indigenous,"Cons., Spares & Maintenance","Cons., Spares & Maintenance",DAILY,1,As per Actual
+70801050,Chemicals Cons-Domestic,"Cons., Spares & Maintenance","Cons., Spares & Maintenance",DAILY,1,As per Actual
+70801070,Stores Mat Handling Charges,"Cons., Spares & Maintenance","Cons., Spares & Maintenance",DAILY,1,As per Actual
+70801090,PRD  Stores & Spares,"Cons., Spares & Maintenance","Cons., Spares & Maintenance",DAILY,1,As per Actual
+70801130,PRD  Stores & Spares Import,"Cons., Spares & Maintenance","Cons., Spares & Maintenance",DAILY,1,As per Actual
+70806160,Liquidated Damages,Overhead,,EXCLUDE,0,Not Required for Costing
+70802040,Office & House Upkeep Expenses,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70802070,Labour Charges,Labour,Labour,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812010,Rent,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812011,Equipment & Heavey Vehicle Hire Charges,Hire Charges,Hire Charges,MONTH_END,1,To be considered in Costing same as GL 70501010
+70807131,Orissa Road Tax,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70807150,Water Tax,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70807210,Rates and Taxes  Others,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70807240,Surface Rent,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812040,Insurance Charges,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70801030,Stores & Spares Cons Indigenous,"Cons., Spares & Maintenance","Cons., Spares & Maintenance",DAILY,1,As per Actual
+70801040,Stores & Spares Cons Imported,"Cons., Spares & Maintenance","Cons., Spares & Maintenance",DAILY,1,As per Actual
+70801080,Stores and Spares Cons Direct,"Cons., Spares & Maintenance","Cons., Spares & Maintenance",DAILY,1,As per Actual
+70803010,Repairs And Maintenance Plant & Machine,"Cons., Spares & Maintenance","Cons., Spares & Maintenance",DAILY,1,As per Actual
+70803030,Repairs And Maintenance Automobile,"Cons., Spares & Maintenance","Cons., Spares & Maintenance",DAILY,1,As per Actual
+70803040,Repairs And Maintenance IT Related,"Cons., Spares & Maintenance","Cons., Spares & Maintenance",DAILY,1,As per Actual
+70803020,Repairs And Maintenance Building,"Cons., Spares & Maintenance","Cons., Spares & Maintenance",DAILY,1,As per Actual
+70803050,Repairs And Maintenance Others,"Cons., Spares & Maintenance","Cons., Spares & Maintenance",DAILY,1,As per Actual
+70501680,Bus Hire Charges,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70804010,Employee Travelling Expenses Domestic,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70804020,Employee Travelling Expenses Foreign,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70804040,Vehicle Hire Charges  Executives,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70804080,Travelling Expenses Joining,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70804090,Others Travelling Expenses Domestic,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70804100,Other Travelling Expenses Foreign,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70804140,Vehicle Hire Charges  Hired Vehicles,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70804210,Directors' Travelling Expenses Domestic,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70808030,Charity & Donation,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70804060,Courier Expenses,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70804170,Mobile Telephone Expenses,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70804190,Telephone Reimbursement To Employees,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812270,Internet Expenses,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70805010,Professional & Consultancy Fees,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70805020,Retainership Fees,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70805030,Legal Fees,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812260,Research and Development Expenses,R&D,,EXCLUDE,0,Not Required for Costing
+70812070,Sampling & Analysis Charges,Sampling & Analysis,Sampling & Analysis,MONTH_END,1,To be considered in Costing same as GL 70501010
+70808010,CSR Expenses,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70808020,Site Development Expenses,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+60202030,Realised Profit/ Loss on Forex Fluctuat,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70810020,Fixed Assets Written Off,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70802050,Service Charges,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812340,SAP & Othr Licen,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70807221,PENALTY CHARGES,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812030,Puja Expenses,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812110,Stationery Consumption,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812130,Environmental Expenses,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812140,Advertisement,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812160,Cable TV Charges,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812170,Gifts to Others,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812180,Application Fees,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812210,Security Charges,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812220,Safety Expenses,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812230,Training and Seminar Expenses,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812250,Entertainment Expenses,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812290,Licence Fees and Expenses,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812300,Electricity Charges,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812310,Rounding Off Differences,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812350,Crockeries & Utensils,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812360,Revenue & Stamp Papers Expenses,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812370,Printing Charges,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812430,Misc Expenses,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70812433,Guest House Maintainance Exp,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70805120,Survey Fees,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010
+70806067,Radio Frequency Identification data sea,Overhead,Overhead,MONTH_END,1,To be considered in Costing same as GL 70501010

@@ -207,6 +207,82 @@ class ScannedIssue(RuntimeError):
     """
 
 
+# ── READING AN ISSUE THAT WAS PUBLISHED AS A PICTURE ────────────────────────
+#
+# IBM publishes most issues as text and some as a scan. Two of the eight on the
+# page right now are scans -- May 2026 and August 2026 -- and they are exactly
+# the two months missing from mineral_price. The collector found both, could
+# not read either, and recorded a skip in last_status that nobody reads, so the
+# screen went on showing July's rates with nothing anywhere saying why.
+#
+# A scanned issue is rendered and read with OCR. The text that comes out goes
+# through the SAME _asp_from_text, _period_of and _published_on as a text
+# issue, so there is one definition of what a chromite row looks like rather
+# than a second one that can drift.
+#
+# ACCURACY, CHECKED. Against the August 2026 issue, tesseract read all five
+# Odisha chromite figures exactly -- 21,433 / 10,683 / 24,306 / 28,462 /
+# 25,195 -- and the month and publication date with them. Every row still
+# passes the same jump check as a text row, so a misread digit that moved a
+# price more than JUMP is flagged rather than trusted.
+OCR_SCALE = 3          # ~300 dpi; below this the thousands separators blur
+
+
+def _unocr(txt: str) -> str:
+    """Undo what OCR does to the LABELS in this table. Never to the figures.
+
+    The figures come back exactly right. The labels do not, and a label here is
+    part of the primary key (mineral, grade, state, period) -- so a grade read
+    one character differently is not a small blemish, it is a NEW grade. The
+    row lands in the table, joins to nothing, and never reaches the screen,
+    which is the most expensive way for this to fail because everything looks
+    like it worked.
+
+    Three fixes, each taken from a real issue:
+
+      Cr2O3 -> Cr203, a capital O between two digits read as a zero.
+
+      'Below 40% Cr2O3 Fines' -- the comma dropped. Every month already on file
+      is written 'Cr2O3,Fines', so without this August would sit beside July as
+      a different grade.
+
+      'ODISHA > -' -- the diagonal stamp bleeding into the state line. A state
+      row is recognised as a line of capitals and nothing else, so those
+      trailing marks stopped Odisha being recognised at all and the whole block
+      was skipped. August failed exactly here, while May -- stamped differently
+      -- read cleanly.
+    """
+    out = re.sub(r"\bCr2[0O]3\b", "Cr2O3", txt, flags=re.I)
+    # the comma between the compound and the size
+    out = re.sub(r"(Cr2O3)\s+(Fines|Lumps)\b", r"\1,\2", out, flags=re.I)
+    # marks the stamp leaves at the end of a line; a real line here ends in a
+    # digit, a letter or a closing bracket
+    return "\n".join(re.sub(r"[^\w%)]+$", "", ln) for ln in out.splitlines())
+
+
+def _ocr_pages(content: bytes) -> list[str]:
+    """Page text from a scanned PDF, or [] if OCR is not installed."""
+    try:
+        import pypdfium2 as pdfium
+        import pytesseract
+    except ImportError:
+        return []
+
+    out: list[str] = []
+    pdf = pdfium.PdfDocument(io.BytesIO(content))
+    try:
+        for i in range(len(pdf)):
+            img = pdf[i].render(scale=OCR_SCALE).to_pil().convert("L")
+            # psm 6 -- "a single uniform block of text". The default tries to
+            # find columns and splits this table's grade and figure into
+            # separate blocks, which puts the price on its own line away from
+            # the grade it belongs to.
+            out.append(_unocr(pytesseract.image_to_string(img, config="--psm 6")))
+    finally:
+        pdf.close()
+    return out
+
+
 def parse_asp_pdf(content: bytes,
                   filename: str = "") -> tuple[date | None, date | None, list[dict]]:
     """Chromite rows for Odisha, with the period the issue covers.
@@ -226,9 +302,16 @@ def parse_asp_pdf(content: bytes,
 
     with pdfplumber.open(io.BytesIO(content)) as pdf:
         if not any((p.extract_text() or "").strip() for p in pdf.pages):
-            raise ScannedIssue(
-                f"{len(pdf.pages)} pages and no text at all — this issue was "
-                "published as a scan. Open the PDF to read it.")
+            # Published as a scan. Read it with OCR rather than skipping the
+            # month; the rows go through the same text parser as any issue.
+            pages = _ocr_pages(content)
+            if not any(p.strip() for p in pages):
+                raise ScannedIssue(
+                    f"{len(pdf.pages)} pages and no text at all — this issue "
+                    "was published as a scan and OCR is not available here.")
+            joined = "\n".join(pages)
+            return (_period_of(joined, filename), _published_on(joined),
+                    _asp_from_text(pages))
         for page in pdf.pages:
             txt = page.extract_text() or ""
             content_text.append(txt)
@@ -295,6 +378,24 @@ def parse_asp_pdf(content: bytes,
 # the figure has to be taken from the END of the line, not the first number.
 _TEXT_ROW = re.compile(r"^(.*?)\s+(\d[\d,]*)$")
 
+# THE PAGE HEADER IS SHAPED EXACTLY LIKE A GRADE ROW.
+#
+#     [see rules under MCDR, 2017 / Mineral (Auction) Rules, 2015 /
+#
+# ends in a number, so it reads as the grade "2017 / Mineral (Auction) Rules,"
+# priced at 2,015 -- and the header repeats on every page, while the state and
+# mineral set on an earlier page are still in hand. It would have been written
+# to mineral_price as a chromite grade for Odisha.
+#
+# This never showed on a text issue because pdfplumber breaks that sentence
+# across lines and no fragment ends in a figure; OCR reads it as one line,
+# which is how a parser that had been right for months met it for the first
+# time.
+_NOT_A_GRADE = re.compile(
+    r"rules\b|MCDR|concession|auction|gazette|notification|extract from|"
+    r"state wise|average sale price|published\s*date|page\s*\d|\bof\s+\d+\s*$",
+    re.I)
+
 
 def _asp_from_text(pages_text: list[str]) -> list[dict]:
     """The target state's chromite grades, read from the page text.
@@ -327,6 +428,9 @@ def _asp_from_text(pages_text: list[str]) -> list[dict]:
             # The watermark sits on its own line inside the block; it is not
             # a grade and carries no figure, but guard anyway.
             if not grade or grade.lower() in ("final report",):
+                continue
+            # Boilerplate that happens to end in a year. See _NOT_A_GRADE.
+            if _NOT_A_GRADE.search(grade):
                 continue
             out.append({"mineral": MINERAL, "grade": grade, "state": state,
                         "unit": unit or "t", "price": float(m.group(2).replace(",", ""))})

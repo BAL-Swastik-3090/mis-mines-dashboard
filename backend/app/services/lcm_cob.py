@@ -47,6 +47,7 @@ from __future__ import annotations
 from datetime import date
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from app.services.sap_source import sap_one, sap_rows
 
 from app.services import ibm_rates
 
@@ -162,7 +163,7 @@ def _actual_qty(db: Session, fd: date, td: date) -> dict:
         WHERE PLANT = :plant
           AND POSTING_DATE BETWEEN :fd AND :td
     """)
-    r = db.execute(sql, {"plant": PLANT_COB, "fd": fd, "td": td}).fetchone()
+    r = sap_one(db, sql, {"plant": PLANT_COB, "fd": fd, "td": td})
     return {
         "feed":        _f(r.feed),
         "concentrate": _f(r.concentrate),
@@ -189,15 +190,15 @@ def _actual_grades(db: Session, fd: date, td: date) -> dict:
             COUNT(*)                          AS lots
         FROM pp_quality_inspection
         WHERE PLANT               = :plant
-          AND SHORT_TEXT_INS_CHAR = 'Cr2O3'
+          AND UPPER(SHORT_TEXT_INS_CHAR) = 'CR2O3'
           AND MATERIAL_NO        IN (:mat_feed, :mat_conc)
           AND QLT_START_DATE BETWEEN :fd AND :td
         GROUP BY MATERIAL_NO
     """)
-    rows = db.execute(sql, {
+    rows = sap_rows(db, sql, {
         "plant": PLANT_COB, "mat_feed": MAT_LG_ORE, "mat_conc": MAT_CONCENTRATE,
         "fd": fd, "td": td,
-    }).fetchall()
+    })
 
     out = {"feed_grade": None, "conc_grade": None, "weighted": False, "lots": 0}
     for r in rows:
@@ -295,7 +296,16 @@ def get_cob_lcm(db: Session, from_date: date, to_date: date) -> dict:
     # it would count the recovery loss twice.
     lvl1         = [r for r in rows if r["level"] == 1 and r["loss_mt"] is not None]
     total_mt     = round(sum(r["loss_mt"] for r in lvl1), 1) if lvl1 else None
-    total_amount = round(sum(r["loss_amount"] for r in lvl1), 2) if lvl1 else None
+
+    # THE AMOUNT IS GUARDED ON THE AMOUNT, not on the tonnage. loss_amount is
+    # None whenever `rate` is -- there is no published IBM concentrate price
+    # for the month -- and that is independent of whether loss_mt is known.
+    # Summing lvl1 on the strength of loss_mt therefore added None to an int
+    # and took the whole COB LCM screen down with a 500, on every date range,
+    # the moment the rate was unavailable. A missing price should cost a dash,
+    # not the page.
+    priced       = [r for r in lvl1 if r["loss_amount"] is not None]
+    total_amount = round(sum(r["loss_amount"] for r in priced), 2) if priced else None
 
     # Share is on the rupee basis, one decimal — at two, independently rounded
     # shares drift past 100%. A period that matched plan has a zero total, making

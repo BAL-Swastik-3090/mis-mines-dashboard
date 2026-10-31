@@ -21,7 +21,9 @@ from __future__ import annotations
 import logging
 
 from fastapi import HTTPException
-from sqlalchemy import create_engine, text
+import time as _time
+
+from sqlalchemy import create_engine, event, exc as _exc, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
@@ -98,7 +100,12 @@ if settings.minehub_enabled:
         _choose_url(),
         pool_size=5,
         max_overflow=10,
-        pool_pre_ping=True,      # revalidate on checkout; survives a network blip
+        # Validated by hand below, and only when the connection has been
+        # sitting. pool_pre_ping=True costs a round trip on EVERY checkout:
+        # `SELECT 1` to minehub measured 112 ms from this host, which every
+        # API call on every page was paying to re-ask a question it had
+        # asked seconds earlier.
+        pool_pre_ping=False,
         pool_recycle=1800,
         echo=False,              # never echo: it would log every statement in full
         # Every session works inside the platform schema, so no query has to
@@ -111,10 +118,57 @@ if settings.minehub_enabled:
         # session returns to the pool — silently reverts it, and every later
         # query fails with "relation does not exist". As a connection option it
         # is part of the session itself and no rollback can undo it.
-        connect_args={"options": f"-csearch_path={settings.pg_schema},public"},
+        # ── WHY sap_odata_api IS ON THE PATH, AND WHY IT IS SECOND ──────
+        #
+        # SAP writes this database directly through an OData pipeline, into
+        # sap_odata_api. Its tables carry the SAP names and -- for everything
+        # but the quality feed -- the SAP column names, so a query written
+        # against balcorpdb resolves there unchanged once the schema is on the
+        # path. That is what makes this migration a change of session rather
+        # than a rewrite of forty queries.
+        #
+        # ORDER MATTERS AND minehub COMES FIRST. An unqualified name resolves
+        # against the first schema that has it. minehub is this platform's own
+        # data and must never be shadowed by a table SAP happens to name the
+        # same way. The reverse risk -- a stale local copy shadowing the live
+        # feed -- is why migration 090 drops the old mirror outright rather
+        # than leaving it in place unused.
+        connect_args={"options":
+                      f"-csearch_path={settings.pg_schema},sap_odata_api,public"},
     )
 
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+    # How long a connection may sit unused before it is worth validating.
+    PING_AFTER_IDLE = 20.0
+
+    @event.listens_for(engine, "checkin")
+    def _pg_stamp_checkin(dbapi_conn, conn_record):
+        conn_record.info["returned_at"] = _time.monotonic()
+
+    @event.listens_for(engine, "checkout")
+    def _pg_ping_if_stale(dbapi_conn, conn_record, conn_proxy):
+        """Pre-ping, but only for a connection old enough to have gone stale.
+
+        A connection reused within PING_AFTER_IDLE is handed over untouched; an
+        older one is validated exactly as pool_pre_ping would have, and a
+        failure raises DisconnectionError so the pool discards it and retries
+        the checkout with a fresh one. pool_recycle (1800 s) still bounds how
+        old anything in the pool can get.
+        """
+        returned = conn_record.info.get("returned_at")
+        if returned is not None and _time.monotonic() - returned < PING_AFTER_IDLE:
+            return
+        try:
+            cur = dbapi_conn.cursor()
+            try:
+                cur.execute("SELECT 1")
+                cur.fetchall()
+            finally:
+                cur.close()
+        except Exception as exc:                            # noqa: BLE001
+            raise _exc.DisconnectionError(
+                "stale pooled connection discarded") from exc
 else:
     logger.warning(
         "MineHub database is not configured (PG_HOST / PG_DATABASE / PG_USER). "

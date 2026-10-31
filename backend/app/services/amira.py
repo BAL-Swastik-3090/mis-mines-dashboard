@@ -57,6 +57,7 @@ from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from app.services.sap_source import sap_one, sap_rows
 
 from app.services.quality_e2e import get_quality_e2e
 
@@ -130,7 +131,7 @@ _ROM_SQL = text("""
            AND LOT_QUANTITY IS NOT NULL
     ) l
     LEFT JOIN (
-        SELECT LOT_NUMBER, MAX(CAST(NULLIF(RESULT,'') AS DECIMAL(16,6))) AS v
+        SELECT LOT_NUMBER, MAX(CAST(RESULT AS DECIMAL(16,6))) AS v
           FROM pp_quality_inspection
          WHERE PLANT = :plant AND STORAGE_LOCATION = :sloc
            AND QLT_START_DATE BETWEEN :frm AND :to
@@ -138,7 +139,7 @@ _ROM_SQL = text("""
          GROUP BY LOT_NUMBER
     ) c ON c.LOT_NUMBER = l.LOT_NUMBER
     LEFT JOIN (
-        SELECT LOT_NUMBER, MAX(CAST(NULLIF(RESULT,'') AS DECIMAL(16,6))) AS v
+        SELECT LOT_NUMBER, MAX(CAST(RESULT AS DECIMAL(16,6))) AS v
           FROM pp_quality_inspection
          WHERE PLANT = :plant AND STORAGE_LOCATION = :sloc
            AND QLT_START_DATE BETWEEN :frm AND :to
@@ -159,8 +160,8 @@ def _rom(db: Session, frm: date, to: date) -> dict[str, float | None]:
     three terms. Both fill in on their own the day the lab starts posting
     moisture against ROM lots; nothing here has to change.
     """
-    r = db.execute(_ROM_SQL, {"plant": ROM_PLANT, "sloc": ROM_STORAGE,
-                              "frm": frm, "to": to}).fetchone()
+    r = sap_one(db, _ROM_SQL, {"plant": ROM_PLANT, "sloc": ROM_STORAGE,
+                               "frm": frm, "to": to})
     if not r or not r.lots:
         return {}
     full = lambda n: n is not None and int(n) == int(r.lots)  # noqa: E731

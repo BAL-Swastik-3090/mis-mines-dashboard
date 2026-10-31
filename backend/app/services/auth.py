@@ -24,21 +24,58 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import contextlib
 import threading
 import secrets
 import time
+from typing import Iterator
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.orm import Session
 
-LOGIN_TBL = "intranet_user_login"
-EMP_TBL = "sap_employee_details"
+# ── WHERE EACH OF THESE NOW LIVES ───────────────────────────────────────────
+# All of them are in Postgres, which is why this module no longer uses the
+# MySQL session it is handed -- see _auth_db() below.
+#
+# balcorpdb.intranet_user_login is the intranet's credentials. It is QUALIFIED
+# because the balcorpdb schema is not on the connection's search_path and must
+# not be: putting it there would expose a whole mirrored database to every
+# unqualified name in the application.
+#
+# IT IS A MIRROR, AND MIRRORS GO STALE. When this was written its newest
+# password change was 23 October and the mirror itself had stopped on the
+# 26th. A password changed on the intranet after that will not open this
+# dashboard until the copy is refreshed -- which is what
+# scripts/import/refresh_login_copy.py exists to do, and why it should run on
+# a schedule rather than by hand.
+LOGIN_TBL = "balcorpdb.intranet_user_login"
+
+# The live SAP feed, not a copy: this one is written by the OData pipeline and
+# is more complete than the MySQL table it replaces.
+EMP_TBL = "sap_odata_api.sap_employee_details"
 log = logging.getLogger(__name__)
 
-# MySQL says 1213 for a deadlock and 1205 for a lock-wait timeout. Both mean
-# "somebody else had it, try again" rather than "this statement is wrong".
-_RETRYABLE = (1213, 1205)
+# "Somebody else had it, try again", rather than "this statement is wrong".
+# 40P01 deadlock_detected, 40001 serialization_failure, 55P03
+# lock_not_available. These replaced MySQL's 1213 and 1205 when login moved:
+# the numbers meant nothing to Postgres, so the retry loop below would never
+# have retried -- it would have looked like it was working and quietly given
+# up on the first contended flush.
+_RETRYABLE_SQLSTATE = ("40P01", "40001", "55P03")
+
+
+def _sqlstate(exc: BaseException) -> str | None:
+    """The SQLSTATE of a database error, wherever SQLAlchemy has wrapped it."""
+    for holder in (getattr(exc, "orig", None), exc):
+        code = getattr(holder, "sqlstate", None) or getattr(holder, "pgcode", None)
+        if isinstance(code, str):
+            return code
+    return None
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    return _sqlstate(exc) in _RETRYABLE_SQLSTATE
 
 # How long one of these writes may wait on a row lock before giving up.
 #
@@ -51,20 +88,70 @@ _RETRYABLE = (1213, 1205)
 _LOCK_WAIT_SECONDS = 2
 
 
-def _mysql_errno(exc: BaseException) -> int | None:
-    """The engine's own error number, wherever SQLAlchemy has wrapped it."""
-    orig = getattr(exc, "orig", None)
-    for holder in (orig, exc):
-        n = getattr(holder, "errno", None)
-        if isinstance(n, int):
-            return n
-        args = getattr(holder, "args", None)
-        if args and isinstance(args[0], int):
-            return args[0]
-    return None
+@contextlib.contextmanager
+def _auth_db() -> Iterator[Session]:
+    """The session the login tables live on. There is one, and it is Postgres.
+
+    Credentials, employee details, the two mines_* access tables and the two
+    mines_* session tables are all in Postgres. MySQL holds none of them, so
+    this takes no session from its caller and has nowhere to fall back to.
+
+    THE FALLBACK WAS REMOVED ON PURPOSE. An earlier version accepted the
+    caller's MySQL session and yielded it when Postgres was not configured.
+    That was never a safety net -- the tables do not exist in MySQL, so the
+    query failed anyway -- but it failed as "relation does not exist" from
+    inside a path that still looked dual-homed, which is the kind of error
+    somebody loses an afternoon to. Failing here, by name, is shorter.
+
+    It raises rather than returning None because login has no degraded mode.
+    """
+    from app.minehub_db import SessionLocal as PgSession
+    if PgSession is None:
+        raise RuntimeError(
+            "Login needs the MineHub Postgres database and it is not "
+            "configured (PG_HOST / PG_DATABASE / PG_USER). That is the only "
+            "database the login tables live in; MySQL no longer holds them.")
+    pg = PgSession()
+    try:
+        yield pg
+    finally:
+        try:
+            pg.close()
+        except Exception:                               # noqa: BLE001
+            pass
 
 
-def _best_effort(db: Session, what: str, run) -> bool:
+def _short_lock_wait(db: Session | None) -> bool:
+    """Ask for a short lock wait. Always False: there is nothing to restore.
+
+    This used to branch on the dialect. MySQL's innodb_lock_wait_timeout is a
+    SESSION setting that rides the pooled connection into whatever runs next,
+    so it had to be put back; Postgres's lock_timeout is set LOCAL and dies
+    with the transaction. Login is Postgres-only now, so the branch and the
+    restore path both go.
+    """
+    try:
+        # SET TAKES NO BIND PARAMETERS. Postgres parses SET before the
+        # parameter is ever bound, so "SET LOCAL lock_timeout = :s" is a
+        # syntax error at "$1" -- which this function CATCHES and logs, so the
+        # short lock wait would silently never have been applied. The value is
+        # an int defined in this module, so interpolating it is safe; there is
+        # no other way to write this statement.
+        db.execute(text(
+            f"SET LOCAL lock_timeout = '{int(_LOCK_WAIT_SECONDS) * 1000}ms'"))
+        return False
+    except Exception as exc:                            # noqa: BLE001
+        # Not fatal, and not worth failing over: without it the write simply
+        # has the server's patience instead of ours.
+        try:
+            db.rollback()
+        except Exception:                               # noqa: BLE001
+            pass
+        log.warning("could not shorten the lock wait: %s", str(exc)[:120])
+        return False
+
+
+def _best_effort(db: Session | None, what: str, run) -> bool:
     """Do a housekeeping write, or do not, but never take the request with it.
 
     THE CALLER IS SERVING A PAGE. These writes record that somebody is still
@@ -86,39 +173,13 @@ def _best_effort(db: Session, what: str, run) -> bool:
     Two seconds here, restored afterwards so the next caller on this pooled
     connection inherits the server's own setting rather than ours.
     """
-    restore = False
-    try:
-        db.execute(text("SET SESSION innodb_lock_wait_timeout = :s"),
-                   {"s": _LOCK_WAIT_SECONDS})
-        restore = True
-    except Exception as exc:                            # noqa: BLE001
-        # Not fatal, and not worth failing over: without it the write simply
-        # has the server's patience instead of ours.
-        db.rollback()
-        log.warning("could not shorten the lock wait: %s", str(exc)[:120])
-
-    try:
-        return _attempt(db, what, run)
-    finally:
-        if restore:
-            try:
-                db.execute(text(
-                    "SET SESSION innodb_lock_wait_timeout = "
-                    "@@GLOBAL.innodb_lock_wait_timeout"))
-                db.commit()
-            except Exception:                           # noqa: BLE001
-                # The connection is in an unknown state, so do not hand it back
-                # carrying our setting. Closing it costs one reconnect; leaving
-                # a 2-second lock timeout on a pooled connection costs a
-                # mysterious failure in an unrelated write later.
-                try:
-                    db.rollback()
-                    db.get_bind().dispose()
-                except Exception:                       # noqa: BLE001
-                    pass
+    # Nothing to restore: SET LOCAL dies with the transaction. The MySQL
+    # branch that had to hand innodb_lock_wait_timeout back went with the cut.
+    _short_lock_wait(db)
+    return _attempt(db, what, run)
 
 
-def _attempt(db: Session, what: str, run) -> bool:
+def _attempt(db: Session | None, what: str, run) -> bool:
     """The write itself, with the one retry. Split out so the lock-timeout
     handling above reads as the setup it is."""
     for attempt in (1, 2):
@@ -128,10 +189,9 @@ def _attempt(db: Session, what: str, run) -> bool:
             return True
         except (OperationalError, DBAPIError) as exc:
             db.rollback()
-            errno = _mysql_errno(exc)
-            if errno in _RETRYABLE and attempt == 1:
+            if _is_retryable(exc) and attempt == 1:
                 continue
-            log.warning("%s skipped (mysql errno %s): %s", what, errno,
+            log.warning("%s skipped (sqlstate %s): %s", what, _sqlstate(exc),
                         str(exc)[:160])
             return False
         except Exception as exc:                        # noqa: BLE001
@@ -142,8 +202,16 @@ def _attempt(db: Session, what: str, run) -> bool:
     return False
 
 
-SESS_TBL = "digital_apps_user_sessions"
-VIEW_TBL = "digital_apps_page_views"
+# Mines' OWN session tables (migration 092), not the shared intranet ones.
+# digital_apps_user_sessions is written by about twenty-five applications and
+# read from MySQL by all of them; a Mines session written to its Postgres
+# mirror would be invisible to every one of them, and would race the
+# usage_sync job that also writes that mirror. So Mines keeps its own.
+#
+# The cost, stated where it will be read: Mines sessions no longer appear in
+# the shared intranet session list.
+SESS_TBL = "mines_user_session"
+VIEW_TBL = "mines_page_view"
 ROLE_TBL = "mines_user_role"
 PAGE_TBL = "mines_role_page_access"
 
@@ -187,22 +255,23 @@ def _known_role(value: object) -> str | None:
     return name if name in ROLE_RANK else None
 
 
-def mines_role(db: Session, emp_id: str) -> str:
+def mines_role(db: Session | None, emp_id: str) -> str:
     """The Mines access role for an employee, defaulting to 'viewer'.
 
     Anyone with valid intranet credentials is a viewer without needing a row in
     mines_user_role — the table only records elevated access.
     """
     try:
-        r = db.execute(text(f"SELECT role FROM {ROLE_TBL} WHERE emp_id = :e"),
-                       {"e": emp_id}).scalar()
+        with _auth_db() as s_:
+            r = s_.execute(text(f"SELECT role FROM {ROLE_TBL} WHERE emp_id = :e"),
+                           {"e": emp_id}).scalar()
     except Exception:
         # The role table not existing must not lock everyone out of the app.
         return DEFAULT_ROLE
     return _known_role(r) or DEFAULT_ROLE
 
 
-def explicit_role(db: Session, emp_id: str) -> str | None:
+def explicit_role(db: Session | None, emp_id: str) -> str | None:
     """The role explicitly granted to an employee, or None if they have none.
 
     This is what makes the dashboard invite-only. mines_role() cannot answer it:
@@ -223,8 +292,9 @@ def explicit_role(db: Session, emp_id: str) -> str | None:
     costs privileges, not access.
     """
     try:
-        r = db.execute(text(f"SELECT role FROM {ROLE_TBL} WHERE emp_id = :e"),
-                       {"e": emp_id}).scalar()
+        with _auth_db() as s_:
+            r = s_.execute(text(f"SELECT role FROM {ROLE_TBL} WHERE emp_id = :e"),
+                           {"e": emp_id}).scalar()
     except Exception:
         return DEFAULT_ROLE
     if r is None or not str(r).strip():
@@ -232,7 +302,7 @@ def explicit_role(db: Session, emp_id: str) -> str | None:
     return _known_role(r) or DEFAULT_ROLE
 
 
-def has_role(db: Session, emp_id: str, minimum: str) -> bool:
+def has_role(db: Session | None, emp_id: str, minimum: str) -> bool:
     """True if the employee's role is at least `minimum`."""
     return ROLE_RANK.get(mines_role(db, emp_id), 0) >= ROLE_RANK.get(minimum, 99)
 
@@ -241,12 +311,14 @@ def has_role(db: Session, emp_id: str, minimum: str) -> bool:
 # The pages in the sidebar, and the API prefixes that feed each one. Access is
 # enforced on these prefixes rather than by hiding the sidebar entry — hiding a
 # menu item leaves the data reachable to anyone who knows the URL.
-PAGES: tuple[str, ...] = ("mis", "oee", "intelligence", "fuel-management", "ev-tracking")
+PAGES: tuple[str, ...] = ("mis", "oee", "intelligence", "amira",
+          "fuel-management", "ev-tracking")
 
 PAGE_LABELS = {
     "mis": "MIS Dashboard",
     "oee": "OEE / LCM",
     "intelligence": "Intelligence",
+    "amira": "AMIRA Accounting",
     "fuel-management": "Fuel Management",
     "ev-tracking": "Electric Vehicles Tracking",
 }
@@ -272,12 +344,35 @@ PREFIX_PAGE: tuple[tuple[str, str], ...] = (
     # keeping the entry-point paths together makes that easy to keep true.
     ("/api/desilting-plan", "mis"),
     ("/api/quality-e2e", "mis"),
-    ("/api/amira", "mis"),
+    # Its own page, not the MIS dashboard's. Reading the chromium balance is
+    # a narrower right than reading production figures, and this is the line
+    # the middleware enforces -- hiding the sidebar entry alone would leave
+    # the data one URL away.
+    #
+    # The incoming branch predates migration 082 and still mapped this to
+    # "mis". Taking it would have put the chromium balance back in front of
+    # all 38 MIS holders, which is the thing 082 was written to stop.
+    ("/api/amira", "amira"),
     ("/api/executive-summary", "mis"),
     # Ferrochrome output and its composite analysis, read-only over SAP.
     ("/api/plant-output", "mis"),
     ("/api/fuel-management", "fuel-management"),
+    # The uploaded SAP cost plan. Mapped to "mis" rather than a page id of its
+    # own because _PAGE_PERMISSION in main.py resolves the page to a permission
+    # and an unknown id resolves to None, which blocks everybody. Same reasoning
+    # as /api/amira above, and it matches the dashboard.mis gate the Cost Plan
+    # page carries on the front end.
+    ("/api/cost-plan", "mis"),
+    # The product cost sheet. A separate prefix from /api/cost-plan above and
+    # neither is a prefix of the other, so order between them does not matter.
+    # It needs an entry for the same reason everything here does: unmapped
+    # means unguarded.
+    ("/api/costing", "mis"),
     ("/api/ev-tracking", "ev-tracking"),
+    # Must stay BELOW /api/ev-tracking: the lookup takes the first match, and a
+    # bare /api/ev would otherwise shadow it. Unmapped, this upload endpoint was
+    # reachable by any signed-in user.
+    ("/api/ev", "ev-tracking"),
     ("/api/live-tracking", "mis"),
     ("/api/insights", "intelligence"),
     ("/api/oee", "oee"),
@@ -312,14 +407,15 @@ def invalidate_page_access() -> None:
     _PAGE_CACHE_AT = 0.0
 
 
-def _page_access_map(db: Session) -> dict[str, set[str]]:
+def _page_access_map(db: Session | None) -> dict[str, set[str]]:
     global _PAGE_CACHE, _PAGE_CACHE_AT
     now = time.monotonic()
     if _PAGE_CACHE and (now - _PAGE_CACHE_AT) < _PAGE_CACHE_TTL:
         return _PAGE_CACHE
     try:
-        rows = db.execute(text(
-            f"SELECT role, page, allowed FROM {PAGE_TBL}")).mappings().all()
+        with _auth_db() as s_:
+            rows = s_.execute(text(
+                f"SELECT role, page, allowed FROM {PAGE_TBL}")).mappings().all()
     except Exception:
         # The table not existing must not lock everyone out — fall back to the
         # pre-table behaviour, which is that every role sees every page.
@@ -334,38 +430,107 @@ def _page_access_map(db: Session) -> dict[str, set[str]]:
     return out
 
 
-def allowed_pages(db: Session, role: str) -> set[str]:
+def allowed_pages(db: Session | None, role: str) -> set[str]:
     return _page_access_map(db).get(role, set())
 
 
-def can_open_page(db: Session, role: str, page: str) -> bool:
+def can_open_page(db: Session | None, role: str, page: str) -> bool:
     return page in allowed_pages(db, role)
 
 
 # --------------------------------------------------------------- authentication
-def authenticate(db: Session, empid: str, password: str) -> dict | None:
-    """Validate EMPID + password against the intranet login table.
+def record_login_attempt(empid: str, outcome: str,
+                         ip: str | None = None, ua: str | None = None) -> None:
+    """Write down that somebody tried, and how it ended.
 
-    Returns the employee profile on success, None on bad credentials. Callers must
-    not distinguish the two failure modes to the user — an unknown EMPID and a
-    wrong password get the same message, so this endpoint can't be used to
-    enumerate employee IDs.
+    BEST EFFORT, ALWAYS. A sign-in must never fail because the audit write
+    did -- and it must never SUCCEED because of one either, which is why this
+    is called after the decision is made rather than as part of making it.
+
+    The password is not passed to this function, so it cannot be recorded by
+    accident. empid is capped: it is whatever was typed into the form, and the
+    useful cases are the ones where that is not an employee ID at all.
     """
-    row = db.execute(text(
-        f"SELECT EMPID, USER_PWD, STATUS FROM {LOGIN_TBL} WHERE EMPID = :e"),
-        {"e": empid}).mappings().first()
-    if not row or (row["STATUS"] or "").upper() != "A":
-        return None
-    if (row["USER_PWD"] or "").lower() != _sha1(password).lower():
-        return None
-    return employee(db, empid)
+    try:
+        with _auth_db() as s_:
+            s_.execute(text("""
+                INSERT INTO login_attempt (empid, outcome, ip_address, user_agent)
+                VALUES (:e, :o, :ip, :ua)
+            """), {"e": (empid or "")[:80], "o": outcome,
+                   "ip": (ip or None), "ua": (ua or "")[:300] or None})
+            s_.commit()
+    except Exception as exc:                            # noqa: BLE001
+        log.warning("could not record login attempt: %s", str(exc)[:160])
 
 
-def employee(db: Session, empid: str) -> dict:
+def authenticate_detailed(db: Session | None, empid: str,
+                          password: str) -> tuple[dict | None, str]:
+    """Validate EMPID + password, and say WHICH check refused.
+
+    Returns (profile, "OK") or (None, reason) where reason is UNKNOWN_ID,
+    INACTIVE or BAD_PASSWORD.
+
+    THE REASON IS FOR THE RECORD, NOT FOR THE PERSON. The login endpoint still
+    tells all three the same thing, because an endpoint that distinguishes
+    them can be used to discover which employee IDs exist. The distinction is
+    written to login_attempt and shown only to Access Managers -- which is the
+    difference between being discreet in public and being unhelpful to the
+    person who has to explain a refusal.
+
+    That was not a hypothetical. An auditor could not sign in; the stored
+    credential matched MySQL exactly, the grant was present, the role carried
+    eight permissions -- and there was no way to see what the server had
+    actually said when they tried.
+    """
+    # ALIASED TO LOWERCASE ON PURPOSE. Postgres folds an unquoted EMPID to
+    # `empid` and hands the row back under that name, so row["STATUS"] raises
+    # NoSuchColumnError -- every login failing with a 500 rather than a refusal.
+    # MySQL honours an alias too, so this one spelling reads on both.
+    with _auth_db() as s_:
+        # ── CASE-INSENSITIVE, AS MySQL WAS ──────────────────────────────
+        # `EMPID = :e` matched 'auditor5' against 'AUDITOR5' for years,
+        # because MySQL's default collation ignores case. Postgres's `=` does
+        # not, so the day login moved here every employee ID containing a
+        # LETTER stopped working unless it was typed in the stored case.
+        #
+        # Nobody noticed for two days because almost every ID is numeric --
+        # 3101, 2627 -- and digits have no case. The accounts that broke are
+        # the alphanumeric ones: AUDITOR1..AUDITOR10 and anything like them.
+        #
+        # UPPER() on both sides restores exactly the old behaviour. It costs
+        # the index on a 1,012-row table, which is not a cost.
+        row = s_.execute(text(
+            f"""SELECT EMPID AS empid, USER_PWD AS user_pwd, STATUS AS status
+                FROM {LOGIN_TBL} WHERE UPPER(EMPID) = UPPER(:e)"""),
+            {"e": empid}).mappings().first()
+    if not row:
+        return None, "UNKNOWN_ID"
+    if (row["status"] or "").upper() != "A":
+        return None, "INACTIVE"
+    if (row["user_pwd"] or "").lower() != _sha1(password).lower():
+        return None, "BAD_PASSWORD"
+    # THE STORED SPELLING, NOT THE TYPED ONE. Everything downstream -- the
+    # session row, the access grant, the audit trail -- keys on this, and
+    # user_access holds 'AUDITOR5'. Carrying 'auditor5' forward would
+    # authenticate the person and then fail to find what they may do.
+    return employee(db, str(row["empid"]).strip()), "OK"
+
+
+def authenticate(db: Session | None, empid: str, password: str) -> dict | None:
+    """The profile on success, None on any failure. Unchanged for callers."""
+    emp, _why = authenticate_detailed(db, empid, password)
+    return emp
+
+
+def employee(db: Session | None, empid: str) -> dict:
     """The employee profile shown in the UI, plus their Mines access role."""
-    e = db.execute(text(
-        f"""SELECT EMPID, EMPNAME, TITLE, EMPDESG, EMPDEPT, EMAILID, LOCATION, PLANT_CD, STATUS
-            FROM {EMP_TBL} WHERE EMPID = :e"""), {"e": empid}).mappings().first()
+    with _auth_db() as s_:
+        e = s_.execute(text(
+            f"""SELECT EMPID AS empid, EMPNAME AS empname, TITLE AS title,
+                       EMPDESG AS empdesg, EMPDEPT AS empdept, EMAILID AS emailid,
+                       LOCATION AS location, PLANT_CD AS plant_cd, STATUS AS status
+                FROM {EMP_TBL} WHERE UPPER(EMPID) = UPPER(:e)"""),
+            {"e": empid}).mappings().first()
     if not e:
         # A valid login with no HR record still gets in — as a viewer.
         from app.services import access as access_svc
@@ -377,21 +542,22 @@ def employee(db: Session, empid: str) -> dict:
                 "allowed_pages": [pg for pg, code in (
                     ("mis", "dashboard.mis"), ("oee", "dashboard.oee"),
                     ("intelligence", "dashboard.intelligence"),
+                    ("amira", "dashboard.amira"),
                     ("fuel-management", "dashboard.fuel"), ("ev-tracking", "dashboard.ev"),
                 ) if code in perms]}
     s = lambda v: (v or "").strip() or None  # noqa: E731
     from app.services import access as access_svc
-    _perms = sorted(access_svc.permissions_for(db, e["EMPID"]))
-    _roles = access_svc.roles_for(db, e["EMPID"])
+    _perms = sorted(access_svc.permissions_for(db, e["empid"]))
+    _roles = access_svc.roles_for(db, e["empid"])
     return {
-        "emp_id": e["EMPID"],
-        "name": s(e["EMPNAME"]) or empid,
-        "title": s(e["TITLE"]),
-        "designation": s(e["EMPDESG"]),
-        "department": s(e["EMPDEPT"]),
-        "email": s(e["EMAILID"]),
-        "location": s(e["LOCATION"]),
-        "plant": s(e["PLANT_CD"]),
+        "emp_id": e["empid"],
+        "name": s(e["empname"]) or empid,
+        "title": s(e["title"]),
+        "designation": s(e["empdesg"]),
+        "department": s(e["empdept"]),
+        "email": s(e["emailid"]),
+        "location": s(e["location"]),
+        "plant": s(e["plant_cd"]),
         # Roles are data now, so the UI is given the permissions themselves
         # rather than a role name to reason about.
         "roles": _roles,
@@ -405,6 +571,7 @@ def employee(db: Session, empid: str) -> dict:
         "allowed_pages": [pg for pg, code in (
             ("mis", "dashboard.mis"), ("oee", "dashboard.oee"),
             ("intelligence", "dashboard.intelligence"),
+            ("amira", "dashboard.amira"),
             ("fuel-management", "dashboard.fuel"), ("ev-tracking", "dashboard.ev"),
         ) if code in _perms],
     }
@@ -423,7 +590,7 @@ def _ua_parse(ua: str) -> tuple[str, str, str]:
     return browser, os_, device
 
 
-def create_session(db: Session, emp: dict, ip: str | None, ua: str | None) -> str:
+def create_session(db: Session | None, emp: dict, ip: str | None, ua: str | None) -> str:
     """Open a session row and return its id — the value of the session cookie.
 
     The id is 32 bytes from secrets.token_hex, so it is unguessable. It is the
@@ -431,16 +598,18 @@ def create_session(db: Session, emp: dict, ip: str | None, ua: str | None) -> st
     """
     sid = secrets.token_hex(32)          # 64 hex characters
     browser, os_, device = _ua_parse(ua or "")
-    db.execute(text(
-        f"""INSERT INTO {SESS_TBL}
-              (session_id, emp_id, emp_name, role, department, login_at, last_active_at,
-               is_active, app_source, ip_address, user_agent, device_type, browser, os)
-            VALUES (:sid,:eid,:nm,:role,:dept, NOW(), NOW(), 1, :app, :ip, :ua, :dev, :br, :os)"""),
-        {"sid": sid, "eid": emp["emp_id"], "nm": emp["name"],
-         "role": emp.get("designation"), "dept": emp.get("department"),
-         "app": APP_SOURCE, "ip": ip, "ua": (ua or "")[:500],
-         "dev": device, "br": browser, "os": os_})
-    db.commit()
+    # is_active is a real BOOLEAN in the Postgres table, not MySQL's TINYINT(1).
+    with _auth_db() as s_:
+        s_.execute(text(
+            f"""INSERT INTO {SESS_TBL}
+                  (session_id, emp_id, emp_name, role, department, login_at, last_active_at,
+                   is_active, app_source, ip_address, user_agent, device_type, browser, os)
+                VALUES (:sid,:eid,:nm,:role,:dept, NOW(), NOW(), TRUE, :app, :ip, :ua, :dev, :br, :os)"""),
+            {"sid": sid, "eid": emp["emp_id"], "nm": emp["name"],
+             "role": emp.get("designation"), "dept": emp.get("department"),
+             "app": APP_SOURCE, "ip": ip, "ua": (ua or "")[:500],
+             "dev": device, "br": browser, "os": os_})
+        s_.commit()
     return sid
 
 
@@ -469,6 +638,27 @@ _session_cache: dict[str, tuple[dict, float]] = {}
 # forty times in a minute should cost one entry and one write, not forty.
 _seen: dict[str, float] = {}
 _seen_lock = threading.Lock()
+
+# When each session last showed GENUINE activity — a request or a heartbeat
+# that actually arrived from that browser. Distinct from _seen, which is only
+# "noted since the last flush", and from last_active_at, which is what we
+# write.
+#
+# WHY THIS HAS TO EXIST. The policy is IDLE_MINUTES on real activity, but
+# something outside this application sweeps the shared session table and
+# closes rows about ten to twelve minutes after last_active_at. That means the
+# row must keep moving for the whole thirty minutes or somebody else ends the
+# session for us — and the browser cannot be relied on to do it. A hidden tab
+# has its timers throttled, and a frozen background page stops running them
+# altogether, so the heartbeat that was supposed to cover "working in Excel
+# with the dashboard behind it" is exactly the one the browser declines to
+# send. Measured here: a hidden tab sent nothing for three minutes.
+#
+# So the server keeps the row fresh on the browser's behalf, for as long as
+# its own rule says the session is alive, and stops the moment that rule says
+# it is not. The policy is unchanged; it is simply enforced somewhere that
+# cannot be put to sleep.
+_real_seen: dict[str, float] = {}
 
 # How often the flusher runs, and how long it may wait for the lock while it
 # does. It can be patient because no request is waiting on it — the opposite of
@@ -545,9 +735,12 @@ def forget_session(sid: str) -> None:
     _touch_next.pop(sid, None)
     with _seen_lock:
         _seen.pop(sid, None)
+        # Otherwise the keep-alive below would hold a signed-out session open
+        # for the rest of the window.
+        _real_seen.pop(sid, None)
 
 
-def get_session(db: Session, sid: str | None) -> dict | None:
+def get_session(db: Session | None, sid: str | None) -> dict | None:
     """The active, non-idle Mines session for a session id, or None.
 
     Filtering on app_source as well as the id means a session cookie minted by
@@ -560,12 +753,15 @@ def get_session(db: Session, sid: str | None) -> dict | None:
     if hit and (time.monotonic() - hit[1]) < _SESSION_TTL:
         return hit[0]
 
-    row = db.execute(text(
-        f"""SELECT session_id, emp_id, emp_name, role, department, last_active_at
-            FROM {SESS_TBL}
-            WHERE session_id = :sid AND is_active = 1 AND app_source = :app
-              AND last_active_at > (NOW() - INTERVAL {IDLE_MINUTES} MINUTE)"""),
-        {"sid": sid, "app": APP_SOURCE}).mappings().first()
+    # INTERVAL '30 minutes', not MySQL's INTERVAL 30 MINUTE -- the second is a
+    # syntax error in Postgres, and this runs on every single api request.
+    with _auth_db() as s_:
+        row = s_.execute(text(
+            f"""SELECT session_id, emp_id, emp_name, role, department, last_active_at
+                FROM {SESS_TBL}
+                WHERE session_id = :sid AND is_active AND app_source = :app
+                  AND last_active_at > (NOW() - INTERVAL '{IDLE_MINUTES} minutes')"""),
+            {"sid": sid, "app": APP_SOURCE}).mappings().first()
     if not row:
         _session_cache.pop(sid, None)
         return None
@@ -581,7 +777,7 @@ def get_session(db: Session, sid: str | None) -> dict | None:
     return out
 
 
-def touch(db: Session, sid: str) -> None:
+def touch(db: Session | None, sid: str) -> None:
     """Push the idle timeout out. Throttled by the caller — see main.py.
 
     Best-effort. This runs inside the auth middleware on every request, and it
@@ -618,9 +814,10 @@ def touch(db: Session, sid: str) -> None:
     """
     with _seen_lock:
         _seen[sid] = time.time()
+        _real_seen[sid] = time.monotonic()
 
 
-def touch_now(db: Session, sid: str) -> bool:
+def touch_now(db: Session | None, sid: str) -> bool:
     """Write this session's activity immediately, and say whether it landed.
 
     For the heartbeat, which is the only thing keeping a session alive while
@@ -635,12 +832,55 @@ def touch_now(db: Session, sid: str) -> bool:
     """
     with _seen_lock:
         _seen.pop(sid, None)        # written here; the flusher need not repeat it
-    return _best_effort(db, "heartbeat", lambda: db.execute(text(
-        f"UPDATE {SESS_TBL} SET last_active_at = NOW() "
-        f"WHERE session_id = :sid AND is_active = 1"), {"sid": sid}))
+        _real_seen[sid] = time.monotonic()
+    with _auth_db() as s_:
+        return _best_effort(s_, "heartbeat", lambda: s_.execute(text(
+            f"UPDATE {SESS_TBL} SET last_active_at = NOW() "
+            f"WHERE session_id = :sid AND is_active"), {"sid": sid}))
 
 
-def flush_touches(db: Session) -> int:
+def end_idle_sessions(db: Session | None = None) -> int:
+    """Close sessions the idle rule has already expired. Returns how many.
+
+    WHY THIS HAS TO EXIST. is_active does not mean "signed in" -- it means
+    nobody has written an end to this row. end_session() writes one on an
+    explicit sign-out, and that is the ONLY thing that does. Close the browser
+    tab and the row stays is_active for ever.
+
+    Nothing noticed because the login itself never trusted the flag alone:
+    get_session() also requires last_active_at within IDLE_MINUTES, so an
+    abandoned session stops working on time regardless. The flag was wrong and
+    the behaviour was right, which is the kind of wrong that survives a long
+    time.
+
+    It surfaced on the Usage page, which DID trust the flag: it reported eight
+    people as "here now" whose last request was 82 to 85 hours earlier. That
+    page now applies the same idle rule when it reads, but reading around a
+    wrong value is not the same as not writing one -- anything else that
+    believes is_active would be misled in turn.
+
+    logout_at is set to last_active_at rather than now(), so the duration is
+    the time the person was actually there, not the time until a sweeper
+    happened to run. end_reason says IDLE, which is true and distinguishes
+    these from a real sign-out in the reporting.
+    """
+    with _auth_db() as s_:
+        res = s_.execute(text(f"""
+            UPDATE {SESS_TBL}
+               SET is_active = FALSE,
+                   logout_at = last_active_at,
+                   end_reason = 'IDLE'
+             WHERE is_active
+               AND last_active_at < (now() - make_interval(mins => :idle))
+        """), {"idle": IDLE_MINUTES})
+        s_.commit()
+        n = int(res.rowcount or 0)
+    if n:
+        log.info("closed %d session(s) idle past %d minutes", n, IDLE_MINUTES)
+    return n
+
+
+def flush_touches(db: Session | None = None) -> int:
     """Write the activity noted since the last flush. One statement, patiently.
 
     Returns how many sessions were written, for the log.
@@ -655,61 +895,88 @@ def flush_touches(db: Session) -> int:
     too. Activity is never dropped because a write was unlucky; that is the
     whole bug this exists to fix.
     """
+    # KEEPING A LIVE SESSION LIVE, not just recording the ones that moved.
+    #
+    # This used to write only the sessions noted since the last pass, which is
+    # the same as saying "only the ones whose browser made a request". A user
+    # reading one screen, or working in another window with the dashboard
+    # behind it, makes no requests — and after ten to twelve minutes the
+    # external sweeper closed them for it. They were signed out while working,
+    # which is the whole complaint.
+    #
+    # Every session whose last GENUINE activity is still inside the
+    # application's own window is written on every pass, so the row never
+    # looks stale to the sweeper. A session whose real activity has aged past
+    # IDLE_MINUTES is dropped here and written no more: the row then goes
+    # stale on schedule and the session ends, exactly as the policy says. An
+    # unattended machine is still signed out; it is now measured from the last
+    # time a person touched it rather than from the last time their browser
+    # happened to poll.
+    cutoff = IDLE_MINUTES * 60
+    now = time.monotonic()
     with _seen_lock:
-        if not _seen:
-            return 0
-        sids = list(_seen)
+        for sid, seen_at in list(_real_seen.items()):
+            if now - seen_at >= cutoff:
+                _real_seen.pop(sid, None)
+        sids = sorted(set(_seen) | set(_real_seen))
         _seen.clear()
+        if not sids:
+            return 0
 
-    restore = False
+    # ── ON THE SESSION TABLE'S OWN DATABASE ─────────────────────────────────
+    # This is called from a background task holding a MySQL session, and
+    # mines_user_session is in Postgres. Run on the caller's session and every
+    # pass fails with 42P01 undefined_table -- which _best_effort-style
+    # logging reports once and then swallows, so the flush looks like it is
+    # running while writing nothing, and every active user idles out anyway.
+    # That is exactly the failure this whole mechanism exists to prevent.
+    with _auth_db() as db:
+        return _flush_on(db, sids)
+
+
+def _flush_on(db: Session | None, sids: list[str]) -> int:
+    """The flush itself, once the right database is in hand."""
     try:
-        db.execute(text("SET SESSION innodb_lock_wait_timeout = :s"),
-                   {"s": FLUSH_LOCK_WAIT})
-        restore = True
+        # lock_timeout is Postgres's name for it, and it takes milliseconds.
+        # SET LOCAL dies with this transaction, so there is nothing to hand
+        # back -- unlike the MySQL session setting it replaced, which had to be
+        # restored before the connection went into the pool.
+        # Interpolated, not bound: SET takes no parameters (see _short_lock_wait).
+        db.execute(text(
+            f"SET LOCAL lock_timeout = '{int(FLUSH_LOCK_WAIT) * 1000}ms'"))
     except Exception as exc:                            # noqa: BLE001
         db.rollback()
         log.warning("could not set the flush lock wait: %s", str(exc)[:120])
 
-    try:
-        for attempt in range(1, FLUSH_ATTEMPTS + 1):
-            try:
-                res = db.execute(text(
-                    f"UPDATE {SESS_TBL} SET last_active_at = NOW() "
-                    f"WHERE is_active = 1 AND session_id IN :sids"
-                ).bindparams(bindparam("sids", expanding=True)), {"sids": sids})
-                db.commit()
-                # Rows actually written, not sessions attempted. The bug this
-                # whole mechanism exists to fix was a write that reported
-                # success and changed nothing, so this must not be the count of
-                # what we hoped for. Fewer than asked is normal and correct:
-                # sessions closed since they were noted match nothing, and they
-                # should not be resurrected.
-                return int(res.rowcount or 0)
-            except (OperationalError, DBAPIError) as exc:
-                db.rollback()
-                errno = _mysql_errno(exc)
-                if errno in _RETRYABLE and attempt < FLUSH_ATTEMPTS:
-                    time.sleep(0.5 * attempt)
-                    continue
-                log.warning("activity flush failed for %d sessions "
-                            "(mysql errno %s) — will retry next pass",
-                            len(sids), errno)
-                break
-            except Exception as exc:                    # noqa: BLE001
-                db.rollback()
-                log.warning("activity flush failed: %s", str(exc)[:160])
-                break
-    finally:
-        if restore:
-            try:
-                db.execute(text("SET SESSION innodb_lock_wait_timeout = "
-                                "@@GLOBAL.innodb_lock_wait_timeout"))
-                db.commit()
-            except Exception:                           # noqa: BLE001
-                try:
-                    db.rollback()
-                except Exception:                       # noqa: BLE001
-                    pass
+    for attempt in range(1, FLUSH_ATTEMPTS + 1):
+        try:
+            res = db.execute(text(
+                f"UPDATE {SESS_TBL} SET last_active_at = NOW() "
+                f"WHERE is_active AND session_id IN :sids"
+            ).bindparams(bindparam("sids", expanding=True)), {"sids": sids})
+            db.commit()
+            # Rows actually written, not sessions attempted. The bug this
+            # whole mechanism exists to fix was a write that reported
+            # success and changed nothing, so this must not be the count of
+            # what we hoped for. Fewer than asked is normal and correct:
+            # sessions closed since they were noted match nothing, and they
+            # should not be resurrected.
+            return int(res.rowcount or 0)
+        except (OperationalError, DBAPIError) as exc:
+            db.rollback()
+            errno = _sqlstate(exc)
+            if _is_retryable(exc) and attempt < FLUSH_ATTEMPTS:
+                time.sleep(0.5 * attempt)
+                continue
+            log.warning("activity flush failed for %d sessions "
+                        "(sqlstate %s) — will retry next pass",
+                        len(sids), errno)
+            break
+        except Exception as exc:                    # noqa: BLE001
+            db.rollback()
+            log.warning("activity flush failed: %s", str(exc)[:160])
+            break
+
 
     # Put them back rather than losing the activity they represent.
     with _seen_lock:
@@ -718,7 +985,7 @@ def flush_touches(db: Session) -> int:
     return 0
 
 
-def end_session(db: Session, sid: str, reason: str = "LOGOUT") -> None:
+def end_session(db: Session | None, sid: str, reason: str = "LOGOUT") -> None:
     forget_session(sid)     # otherwise the cookie keeps working until the TTL
     # And drop any pending activity for it, so a flush a few seconds from now
     # does not write last_active_at onto a session somebody has just left. The
@@ -728,14 +995,15 @@ def end_session(db: Session, sid: str, reason: str = "LOGOUT") -> None:
     with _seen_lock:
         _seen.pop(sid, None)
     # duration_minutes is a generated column — the DB derives it from login/logout.
-    db.execute(text(
-        f"""UPDATE {SESS_TBL}
-            SET is_active = 0, logout_at = NOW(), end_reason = :r
-            WHERE session_id = :sid AND is_active = 1"""), {"sid": sid, "r": reason})
-    db.commit()
+    with _auth_db() as s_:
+        s_.execute(text(
+            f"""UPDATE {SESS_TBL}
+                SET is_active = FALSE, logout_at = NOW(), end_reason = :r
+                WHERE session_id = :sid AND is_active"""), {"sid": sid, "r": reason})
+        s_.commit()
 
 
-def record_time_spent(db: Session, sid: str, path: str, seconds: int) -> None:
+def record_time_spent(db: Session | None, sid: str, path: str, seconds: int) -> None:
     """Fill in how long the user stayed on a page they have just left.
 
     The view row is inserted on arrival, when the duration is not yet known, so
@@ -751,35 +1019,38 @@ def record_time_spent(db: Session, sid: str, path: str, seconds: int) -> None:
     seconds = min(int(seconds), 86_400)     # a tab left open for days is not "time spent"
 
     def go() -> None:
-        db.execute(text(
-            f"""UPDATE {VIEW_TBL}
-                SET time_spent_seconds = :ts
-                WHERE session_id = :sid AND page_path = :p AND app_source = :app
-                  AND time_spent_seconds IS NULL
-                ORDER BY viewed_at DESC LIMIT 1"""),
+        s_.execute(text(
+            f"""UPDATE {VIEW_TBL} SET time_spent_seconds = :ts
+                 WHERE id = (SELECT id FROM {VIEW_TBL}
+                              WHERE session_id = :sid AND page_path = :p
+                                AND app_source = :app
+                                AND time_spent_seconds IS NULL
+                              ORDER BY viewed_at DESC LIMIT 1)"""),
             {"ts": seconds, "sid": sid, "p": (path or "/")[:255], "app": APP_SOURCE})
-        db.execute(text(
+        s_.execute(text(
             f"UPDATE {SESS_TBL} SET last_active_at = NOW() "
-            f"WHERE session_id = :sid AND is_active = 1"), {"sid": sid})
+            f"WHERE session_id = :sid AND is_active"), {"sid": sid})
 
     # Usage reporting. Losing a page's dwell time to a lock race costs a row in
     # a report; failing the request costs the user their page.
-    _best_effort(db, "time spent", go)
+    with _auth_db() as s_:
+        _best_effort(s_, "time spent", go)
 
 
-def record_page_view(db: Session, sid: str, emp_id: str, path: str,
+def record_page_view(db: Session | None, sid: str, emp_id: str, path: str,
                      time_spent: int | None = None, referrer: str | None = None) -> None:
     def go() -> None:
-        db.execute(text(
+        s_.execute(text(
             f"""INSERT INTO {VIEW_TBL}
                   (session_id, emp_id, page_path, app_source, referrer_path,
                    viewed_at, time_spent_seconds)
                 VALUES (:sid,:eid,:p,:app,:ref, NOW(), :ts)"""),
             {"sid": sid, "eid": emp_id, "p": (path or "/")[:255], "app": APP_SOURCE,
              "ref": (referrer or None), "ts": time_spent})
-        db.execute(text(
+        s_.execute(text(
             f"UPDATE {SESS_TBL} SET last_active_at = NOW() "
-            f"WHERE session_id = :sid AND is_active = 1"), {"sid": sid})
+            f"WHERE session_id = :sid AND is_active"), {"sid": sid})
 
     # Same bargain as above: the page view is reporting, the page is the job.
-    _best_effort(db, "page view", go)
+    with _auth_db() as s_:
+        _best_effort(s_, "page view", go)

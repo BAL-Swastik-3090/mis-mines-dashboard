@@ -79,19 +79,36 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   // "Usage Viewer" would have been an Access Manager under another name.
   // access.users.view still opens it, so no administrator lost a screen.
   "usage": ["usage.view", "access.users.view"],
-  // GATED ON THE MIS DASHBOARD'S OWN PERMISSION, not one of its own.
-  // AMIRA is built from the despatch and plant-receipt figures that the MIS
-  // dashboard already shows; anyone who may read those may read the chromium
-  // balance drawn from them, and inventing dashboard.amira would mean seeding
-  // a row per role in mines_role_page_access before a single person could see
-  // the screen. Promote it to its own page permission when the mine wants the
-  // two audiences separated — the API prefix is already mapped in auth.py.
-  "amira": ["dashboard.mis"],
-  // Same gate as AMIRA and for the same reason: the summary shows nothing the
-  // MIS dashboard does not already show, it only shows it on one screen. A
-  // dashboard.executive permission would need a row seeded per role in
-  // mines_role_page_access before anyone could open it.
+  // ITS OWN PERMISSION, as the note here used to say it should be once the
+  // mine wanted the two audiences separated. It now does.
+  //
+  // Riding on dashboard.mis meant all 38 people who may read the MIS dashboard
+  // could also read what the contained chromium is worth from mine to plant.
+  // That is a narrower thing than production figures, and migration 082 gives
+  // it a permission of its own: the superadmins hold it automatically, and it
+  // is granted by name to anyone else the mine decides should have it.
+  //
+  // The sidebar is the convenience; the enforcement is on /api/amira in
+  // auth.py, which now maps to this page rather than to mis.
+  "amira": ["dashboard.amira"],
+  // The executive summary DOES ride on dashboard.mis, and that is right: it
+  // shows nothing the MIS dashboard does not already show, only on one screen.
+  // Unlike AMIRA there is no narrower audience to separate, so a permission of
+  // its own would be a row to seed per role for no gain.
   "executive-summary": ["dashboard.mis"],
+  // Gated on the MIS dashboard's own permission. Inventing
+  // dashboard.product-costing would mean seeding a row per role in
+  // mines_role_page_access before a single person could see the screen. The
+  // cost sheet reads the same ledger the MIS dashboard does; the plan import
+  // lives inside it, so one permission covers both.
+  //
+  // This was written when AMIRA was gated the same way and said "for the same
+  // reason AMIRA is". AMIRA has since been given a permission of its own, just
+  // above, because its audience turned out to be narrower. Costing may want
+  // the same treatment once the mine decides who should read it -- the figures
+  // here are a cost per tonne, which is not obviously something everyone who
+  // reads production figures should see.
+  "product-costing": ["dashboard.mis"],
 };
 
 /**
@@ -126,6 +143,7 @@ const LANDING_RANK: Record<AppPage, number> = {
   "market": 35,
   "fuel-management": 40,
   "ev-tracking": 50,
+  "product-costing": 55,
   // Before the registers: a machine, a person and a material all have to be
   // held against a department, so the department is the thing to see first.
   "organisation": 55,
