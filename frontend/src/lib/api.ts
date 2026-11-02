@@ -49,14 +49,24 @@ api.interceptors.response.use(
     // /auth/me is exempt: its 401 is the normal "not signed in" answer that
     // AuthWrapper asks for on load, and reacting to it would loop.
     const url = err?.config?.url ?? "";
+    // The server distinguishes three ways a session ends — access_revoked,
+    // session_superseded (the same ID signed in elsewhere) and session_idle —
+    // and writes the sentence for each. Only `revoked` is branched on here,
+    // because it alone arrives as a 403 and still means sign out.
     const revoked = err?.response?.data?.code === "access_revoked";
     const signedOut = (status === 401 && !url.includes("/auth/me")) || revoked;
     if (signedOut && typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT, {
         detail: {
-          message: revoked
+          // THE SERVER'S WORDS, ALWAYS. This used to compose its own sentence
+          // — "timed out after 30 minutes of inactivity" — from a number kept
+          // here, which went stale the moment the policy moved to 20, and
+          // which told a superseded user they had been idle. The reason and
+          // the figure both belong to IDLE_MINUTES on the server; the
+          // fallback below is for a network error with no response body.
+          message: msg
             ? String(msg)
-            : "Your session timed out after 30 minutes of inactivity. Please sign in again.",
+            : "Your session has ended. Please sign in again.",
         },
       }));
     }

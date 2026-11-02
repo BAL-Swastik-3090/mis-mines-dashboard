@@ -222,7 +222,15 @@ APP_SOURCE = "MINES"
 # A session expires after this many idle minutes. Kept short deliberately: the
 # dashboard is opened on shared and control-room machines, where an unattended
 # browser would otherwise stay signed in for the rest of the shift.
-IDLE_MINUTES = 30
+#
+# TWENTY IS THE POLICY FIGURE, set here and nowhere else. The cookie's max_age,
+# the interval get_session() reads with, the flush cutoff, end_idle_sessions()
+# and the Usage page's "who is on right now" all derive from this name, so the
+# policy is changed by changing this line. The one figure that does NOT derive
+# from it is the frontend's warning dialog, which cannot import Python —
+# SessionExpiryDialog.tsx warns four minutes before this, and the two have to
+# be moved together.
+IDLE_MINUTES = 20
 
 
 def _sha1(pw: str) -> str:
@@ -590,11 +598,79 @@ def _ua_parse(ua: str) -> tuple[str, str, str]:
     return browser, os_, device
 
 
+def supersede_other_sessions(emp_id: str, keep_sid: str) -> int:
+    """ONE SESSION PER EMPLOYEE. Close this person's other open sessions.
+
+    The security policy is that an employee ID is signed in in one place at a
+    time: the newest login wins and every earlier one is ended. Without it the
+    same credentials ran as many simultaneous sessions as anyone cared to open
+    — a shared control-room machine left signed in while the same ID is used
+    from a desk, and no way to tell the two apart in the audit trail.
+
+    end_reason = 'SUPERSEDED', not 'LOGOUT' and not 'IDLE'. The person did not
+    sign out and did not go away; they signed in somewhere else. Keeping that
+    distinct is the whole value of the column when somebody asks why a session
+    ended — and 'SUPERSEDED' rows appearing from an IP the employee does not
+    recognise are exactly the signal a shared password produces.
+
+    THE CACHE IS WHAT ACTUALLY ENDS THE SESSION, not the UPDATE. A validated
+    session is held in-process for _SESSION_TTL seconds, so closing the row
+    alone would leave the old cookie working until that lapsed. The ids come
+    back from RETURNING precisely so they can be evicted here.
+
+    AND THERE IS A BOUNDED GAP, which is better stated than discovered: the
+    API runs two gunicorn workers, each with its own cache. This evicts in the
+    worker that handled the login; the other one can still answer from its
+    cache until its copy ages out, so an old session can survive up to
+    _SESSION_TTL (15 s) in the other worker. Shortening that means sharing the
+    cache — Redis, or no cache at all — which costs every request a round trip
+    to a database 50 ms away to close a 15-second window on an event that
+    happens a few times a day. Recorded as a known limit instead.
+
+    Best effort by design: a login must not fail because this did. If it does
+    not land the user is signed in twice, which is the behaviour that existed
+    before this function — degraded, not broken.
+    """
+    try:
+        with _auth_db() as s_:
+            old = s_.execute(text(
+                f"""UPDATE {SESS_TBL}
+                       SET is_active = FALSE,
+                           logout_at = NOW(),
+                           end_reason = 'SUPERSEDED'
+                     WHERE emp_id = :eid
+                       AND app_source = :app
+                       AND is_active
+                       AND session_id <> :keep
+                 RETURNING session_id"""),
+                {"eid": emp_id, "app": APP_SOURCE, "keep": keep_sid}).scalars().all()
+            s_.commit()
+    except Exception as exc:                            # noqa: BLE001
+        log.warning("could not supersede earlier sessions for %s: %s",
+                    emp_id, str(exc)[:160])
+        return 0
+
+    for old_sid in old:
+        # Evict the cached validation, and drop any pending activity so the
+        # next flush cannot write last_active_at back onto a closed row.
+        forget_session(old_sid)
+        with _seen_lock:
+            _seen.pop(old_sid, None)
+    if old:
+        log.info("superseded %d earlier session(s) for %s", len(old), emp_id)
+    return len(old)
+
+
 def create_session(db: Session | None, emp: dict, ip: str | None, ua: str | None) -> str:
     """Open a session row and return its id — the value of the session cookie.
 
     The id is 32 bytes from secrets.token_hex, so it is unguessable. It is the
     only thing the browser holds; nothing about the user is encoded in it.
+
+    Any earlier session for this employee is closed once this one exists — see
+    supersede_other_sessions. In that order on purpose: closing first would
+    sign somebody out of a working session and then, if the INSERT failed,
+    leave them with nothing.
     """
     sid = secrets.token_hex(32)          # 64 hex characters
     browser, os_, device = _ua_parse(ua or "")
@@ -610,6 +686,9 @@ def create_session(db: Session | None, emp: dict, ip: str | None, ua: str | None
              "app": APP_SOURCE, "ip": ip, "ua": (ua or "")[:500],
              "dev": device, "br": browser, "os": os_})
         s_.commit()
+    # Excludes the row just written, so this can never close the session it
+    # was called to open.
+    supersede_other_sessions(emp["emp_id"], sid)
     return sid
 
 
@@ -647,7 +726,7 @@ _seen_lock = threading.Lock()
 # WHY THIS HAS TO EXIST. The policy is IDLE_MINUTES on real activity, but
 # something outside this application sweeps the shared session table and
 # closes rows about ten to twelve minutes after last_active_at. That means the
-# row must keep moving for the whole thirty minutes or somebody else ends the
+# row must keep moving for the whole idle window or somebody else ends the
 # session for us — and the browser cannot be relied on to do it. A hidden tab
 # has its timers throttled, and a frozen background page stops running them
 # altogether, so the heartbeat that was supposed to cover "working in Excel
@@ -701,17 +780,19 @@ def peek_session(sid: str | None) -> dict | None:
 def touch_due(sid: str, throttle_seconds: float = _TOUCH_AFTER_OK) -> bool:
     """Whether the session's activity timestamp is worth another write.
 
-    Every thirty seconds, to protect a thirty-MINUTE idle timeout — sixty
-    times more often than the policy it exists for. Each of those writes
+    Every thirty seconds, to protect an idle timeout measured in TENS OF
+    MINUTES — far more often than the policy it exists for. Each of those writes
     enters a race with ev_sync_digital_apps_crm, which runs every minute in
     the shared database and takes the same two indexes of this table in the
     opposite order, so the rate is not free: it is the rate at which we buy
     lottery tickets for a deadlock.
 
     Two minutes instead. The stored timestamp then lags real activity by at
-    most two minutes, so a session idles out somewhere between 28 and 30
-    minutes rather than at exactly 30 — which no policy written as "about half
-    an hour" can tell the difference between. Four times fewer writes, and
+    most two minutes, so on the twenty-minute policy a session idles out
+    somewhere between 18 and 20 minutes rather than at exactly 20. That lag is
+    why SessionExpiryDialog warns at 16 and ends at 18: the warning has to fire
+    before the EARLIEST moment the server could expire the row, not before the
+    latest. Four times fewer writes, and
     "who is online" reporting elsewhere in the shared table stays within two
     minutes of the truth.
 
@@ -753,8 +834,9 @@ def get_session(db: Session | None, sid: str | None) -> dict | None:
     if hit and (time.monotonic() - hit[1]) < _SESSION_TTL:
         return hit[0]
 
-    # INTERVAL '30 minutes', not MySQL's INTERVAL 30 MINUTE -- the second is a
+    # INTERVAL '20 minutes', not MySQL's INTERVAL 20 MINUTE -- the second is a
     # syntax error in Postgres, and this runs on every single api request.
+    # The number is interpolated from IDLE_MINUTES, never typed here.
     with _auth_db() as s_:
         row = s_.execute(text(
             f"""SELECT session_id, emp_id, emp_name, role, department, last_active_at
@@ -983,6 +1065,69 @@ def _flush_on(db: Session | None, sids: list[str]) -> int:
         for sid in sids:
             _seen.setdefault(sid, time.time())
     return 0
+
+
+def why_session_ended(sid: str | None) -> str | None:
+    """How a session that is no longer valid came to end, or None.
+
+    ONLY EVER CALLED ON THE 401 PATH, where a request has already been refused
+    and one more round trip costs nothing anybody is waiting on. It must not be
+    called on the hot path: that is get_session's job, and it answers from
+    cache.
+
+    This exists because of what the frontend said otherwise. Every rejected
+    request produced "your session timed out after inactivity" — which for a
+    superseded session is simply untrue, and untrue in the one direction that
+    matters. Somebody signed out because their employee ID was used to sign in
+    somewhere else is being shown the first symptom of a shared or stolen
+    password, and telling them they were idle buries it.
+    """
+    if not sid:
+        return None
+    try:
+        with _auth_db() as s_:
+            row = s_.execute(text(
+                f"""SELECT end_reason FROM {SESS_TBL}
+                     WHERE session_id = :sid AND app_source = :app"""),
+                {"sid": sid, "app": APP_SOURCE}).first()
+    except Exception as exc:                            # noqa: BLE001
+        log.warning("could not read end_reason: %s", str(exc)[:160])
+        return None
+    if not row:
+        return None
+    # A row still flagged active but refused by get_session was refused on the
+    # idle interval, which has not been written to end_reason yet — the sweeper
+    # gets to it on its next pass.
+    return (row[0] or "IDLE").upper()
+
+
+def denied_detail(sid: str | None) -> tuple[str, str | None]:
+    """The sentence to show somebody whose session was just refused, and a code.
+
+    ONE SOURCE FOR IT, because there are two ways to be refused and they used
+    to answer differently. The middleware guards everything under /api — but
+    not /api/auth/*, which is exempt, so track and track-time raise their own
+    401 and those reached the browser as a bare "Not authenticated.". The
+    frontend papered over that by composing its own sentence for every 401,
+    which is how it came to tell people they had been idle for thirty minutes
+    under a twenty-minute policy, superseded sessions included.
+
+    The minutes come from IDLE_MINUTES, so the figure on the screen cannot
+    drift from the figure being enforced.
+    """
+    # NO COOKIE AT ALL is not a session that ended — it is somebody who has not
+    # signed in yet, and it carries no code precisely so the login screen can
+    # tell the two apart and not show a first-time visitor a red banner.
+    if not sid:
+        return "Please sign in to continue.", None
+    if why_session_ended(sid) == "SUPERSEDED":
+        return ("Signed in elsewhere. This session was closed because your "
+                "Employee ID was used to sign in on another device. Only one "
+                "active session per user is permitted. If this was not you, "
+                "change your password and notify IT.",
+                "session_superseded")
+    return (f"Session timed out. You were inactive for {IDLE_MINUTES} minutes, "
+            "so this session was closed. Please sign in again.", "session_idle")
 
 
 def end_session(db: Session | None, sid: str, reason: str = "LOGOUT") -> None:

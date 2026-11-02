@@ -533,7 +533,23 @@ async def require_auth(request: Request, call_next):
         # it cannot stall every other in-flight request behind it.
         session, role_error, perms = await run_in_threadpool(_check_auth, sid, path)
         if not session:
-            return JSONResponse({"detail": "Not authenticated."}, status_code=401)
+            # WHY it is no longer valid, not just that it is not. One extra
+            # query, on a request that has already been refused — and it is
+            # the difference between telling somebody they were idle and
+            # telling them their ID was used to sign in somewhere else, which
+            # is the one thing here worth waking up for.
+            # THE SERVER WRITES THE SENTENCE, including the number of minutes.
+            # The browser used to compose "timed out after 30 minutes" from a
+            # constant of its own, which went stale the moment the policy moved
+            # to 20 — and a security control that announces the wrong figure is
+            # one nobody can audit from the screen. The extra query runs only
+            # on a request that has already been refused.
+            from app.services import auth as auth_svc_
+            detail, code = await run_in_threadpool(auth_svc_.denied_detail, sid)
+            body: dict = {"detail": detail}
+            if code:
+                body["code"] = code
+            return JSONResponse(body, status_code=401)
         if role_error:
             if role_error == "revoked":
                 detail = ("Your access to the Mines Dashboard has been removed. "

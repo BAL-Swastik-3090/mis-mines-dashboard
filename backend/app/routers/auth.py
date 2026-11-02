@@ -8,6 +8,7 @@ in digital_apps_user_sessions.
 from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -96,12 +97,29 @@ def login(response: Response, request: Request, body: dict = Body(...)) -> dict:
 
 
 @router.get("/me")
-def me(request: Request) -> dict:
+def me(request: Request):
     """The signed-in user. The frontend calls this on load to decide whether to
-    show the app or the login screen — the server is the only authority."""
-    s = auth.get_session(None, request.cookies.get(COOKIE))
+    show the app or the login screen — the server is the only authority.
+
+    IT SAYS WHY, NOT JUST NO. This used to answer a bare "Not authenticated."
+    for every refusal, which is what somebody saw on the login screen after
+    being idle for twenty minutes or after their ID signed in somewhere else —
+    two different events, one uninformative sentence, and no way to tell from
+    the screen that the second had happened at all.
+
+    The `code` is what separates a session that ENDED from somebody who has
+    simply not signed in yet. Only the former should raise a banner; a
+    first-time visitor gets the plain sentence and no code, so the login screen
+    stays quiet for them.
+    """
+    sid = request.cookies.get(COOKIE)
+    s = auth.get_session(None, sid)
     if not s:
-        raise HTTPException(401, "Not authenticated.")
+        detail, code = auth.denied_detail(sid)
+        body: dict = {"detail": detail}
+        if code:
+            body["code"] = code
+        return JSONResponse(body, status_code=401)
     return {"user": auth.employee(None, s["emp_id"])}
 
 
@@ -120,7 +138,8 @@ def track(request: Request, body: dict = Body(...)) -> dict:
     sid = request.cookies.get(COOKIE)
     s = auth.get_session(None, sid)
     if not s:
-        raise HTTPException(401, "Not authenticated.")
+        # Same sentence the middleware gives — see track_time below.
+        raise HTTPException(401, auth.denied_detail(sid)[0])
     auth.record_page_view(None, sid, s["emp_id"], body.get("path", "/"),
                           body.get("time_spent"), body.get("referrer"))
     return {"ok": True}
@@ -137,7 +156,12 @@ def track_time(request: Request, body: dict = Body(...)) -> dict:
     sid = request.cookies.get(COOKIE)
     s = auth.get_session(None, sid)
     if not s:
-        raise HTTPException(401, "Not authenticated.")
+        # Not a bare "Not authenticated." — this router is EXEMPT from the
+        # middleware, so whatever is written here is what the browser shows
+        # on the login screen. Same sentence the middleware gives, from the
+        # same place, so an idle timeout and a superseded session do not read
+        # differently depending on which call happened to notice first.
+        raise HTTPException(401, auth.denied_detail(sid)[0])
     try:
         seconds = int(body.get("time_spent") or 0)
     except (TypeError, ValueError):

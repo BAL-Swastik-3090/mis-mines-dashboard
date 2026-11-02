@@ -10,27 +10,34 @@
  * A timeout is still right; a timeout with no warning is not. Two minutes and
  * a button is the whole feature.
  *
- * WHEN IT APPEARS, and why it moved from eight minutes back to twenty-six.
+ * WHEN IT APPEARS, and why it is pegged four minutes inside the server.
  *
- * This application's rule is thirty minutes on last_active_at. Something
- * outside it sweeps the shared session table and closes sessions about ten to
- * twelve minutes after their last RECORDED activity, so this used to warn at
- * eight and sign out at ten: if the sweeper was going to end the session
- * anyway, better to end it ourselves and say why than to be bounced to a
- * login screen with no explanation.
+ * This application's rule is TWENTY minutes on last_active_at — the security
+ * policy figure, held in auth.IDLE_MINUTES. Something outside it sweeps the
+ * shared session table and closes sessions about ten to twelve minutes after
+ * their last RECORDED activity, so this used to warn at eight and sign out at
+ * ten: if the sweeper was going to end the session anyway, better to end it
+ * ourselves and say why than to be bounced to a login screen with no
+ * explanation.
  *
  * That was the right trade while the row could go stale. It no longer can.
  * AuthWrapper's heartbeat is pegged to the last interaction rather than to
  * the last two minutes and no longer stops when the tab is hidden, so the row
- * keeps moving for the full thirty minutes and the sweeper never sees a
- * session old enough to close. The eight-minute fuse had become the thing
- * signing people out: reading a report, or working in Excel with the
- * dashboard behind it, was enough to lose the screen.
+ * keeps moving for the whole window and the sweeper never sees a session old
+ * enough to close. The eight-minute fuse had become the thing signing people
+ * out: reading a report, or working in Excel with the dashboard behind it,
+ * was enough to lose the screen.
  *
- * So the warning is back where the policy says it belongs — twenty-six
- * minutes of no interaction, then two minutes of countdown, which ends it at
- * twenty-eight, just inside the server's thirty. The margin is deliberate: a
- * warning that arrives after the session has already gone is worse than none.
+ * So the warning sits where the policy says it belongs — sixteen minutes of
+ * no interaction, then two minutes of countdown, which ends it at eighteen,
+ * just inside the server's twenty. The margin is deliberate: a warning that
+ * arrives after the session has already gone is worse than none.
+ *
+ * THESE TWO NUMBERS MOVE TOGETHER. The server's figure is the policy; this
+ * one only has to land inside it with room for the countdown. A browser
+ * cannot import the Python constant, so if IDLE_MINUTES changes, WARN_AFTER_MS
+ * below has to change with it — four minutes earlier, which leaves two
+ * minutes of countdown and two of margin.
  *
  * WHAT COUNTS AS BEING HERE. The same interactions the heartbeat watches:
  * clicking, typing, scrolling, pointing. Deliberately NOT mouse movement — a
@@ -46,8 +53,9 @@ import { Clock, LogOut } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
 
-/** How long without interaction before we ask. */
-const WARN_AFTER_MS = 26 * 60 * 1000;
+/** How long without interaction before we ask. Four minutes inside the
+ *  server's IDLE_MINUTES: two for the countdown, two of margin. */
+const WARN_AFTER_MS = 16 * 60 * 1000;
 /** How long they then have to answer. */
 const GRACE_SECONDS = 120;
 /** How often we check. Ten seconds is finer than the minute that matters. */
