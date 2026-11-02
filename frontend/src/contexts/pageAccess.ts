@@ -65,6 +65,11 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   "market": ["market.view"],
   "organisation": ["org.view"],
   "weighbridge": ["wb.view"],
+  // THE SAME PERMISSION AS THE SCREEN ABOVE IT, deliberately. The two are one
+  // section split into what the application recorded and what SAP did; a
+  // separate code would have to be invented and seeded against every role
+  // before anybody could open the second half of a page they already hold.
+  "weighbridge-sap": ["wb.view"],
   // The gate is a different job from the weighbridge and a different
   // person: a security officer admits vehicles, a weighbridge operator
   // weighs loads. Gating the gate on wb.view would mean handing the
@@ -157,6 +162,9 @@ const LANDING_RANK: Record<AppPage, number> = {
   // run all shift by the person sitting at it.
   "gate": 66,
   "weighbridge": 68,
+  // Directly after, so somebody whose only permission is wb.view lands on the
+  // application's own report rather than the SAP comparison of it.
+  "weighbridge-sap": 69,
   "operations": 70,
   "workforce": 80,
   // Below the dashboards on purpose: it is open to everyone, so ranking it

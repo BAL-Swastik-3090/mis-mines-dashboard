@@ -631,6 +631,7 @@ from app.routers import attendance_corrections
 from app.routers import market
 from app.routers import organisation
 from app.routers import weighbridge
+from app.routers import weighbridge_sap
 from app.routers import fields
 from app.routers import checklists, operators_analytics
 from app.routers import prev_day_actual
@@ -670,6 +671,7 @@ app.include_router(attendance_corrections.router)
 app.include_router(market.router)
 app.include_router(organisation.router)
 app.include_router(weighbridge.router)
+app.include_router(weighbridge_sap.router)
 app.include_router(fields.router)
 app.include_router(attendance_router.router)
 app.include_router(checklists.router)

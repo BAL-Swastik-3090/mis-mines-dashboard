@@ -17,6 +17,7 @@ import WorkforceSection        from "@/components/sections/WorkforceSection";
 import MarketSection           from "@/components/sections/MarketSection";
 import OrganisationSection     from "@/components/sections/OrganisationSection";
 import WeighbridgeSection      from "@/components/sections/WeighbridgeSection";
+import WeighbridgeSapSection   from "@/components/sections/WeighbridgeSapSection";
 import GateSection             from "@/components/sections/GateSection";
 import WeatherForecastPage     from "@/components/sections/WeatherForecastPage";
 import CapacitySection         from "@/components/sections/CapacitySection";
@@ -115,6 +116,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           {page === "organisation"     && <OrganisationSection />}
           {page === "gate"             && <GateSection />}
           {page === "weighbridge"      && <WeighbridgeSection />}
+          {page === "weighbridge-sap"  && <WeighbridgeSapSection />}
           {page === "weather"          && <WeatherForecastPage />}
           {page === "capacity"         && <CapacitySection />}
           {page === "usage"            && <UsageSection />}

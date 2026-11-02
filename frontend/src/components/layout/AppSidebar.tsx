@@ -1,5 +1,6 @@
 "use client";
-import { Activity, BarChart3, Boxes, Database, CalendarRange, ChevronLeft, ChevronRight, Calculator, ClipboardCheck, ClipboardList, CloudSun, DoorOpen, ExternalLink, Gauge, LayoutDashboard, LineChart, Network, Radar, Scale, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
+import { useState } from "react";
+import { Activity, BarChart3, Boxes, Database, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, Calculator, ClipboardCheck, ClipboardList, CloudSun, DoorOpen, ExternalLink, Gauge, LayoutDashboard, LineChart, Network, Radar, Scale, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { canOpen } from "@/contexts/pageAccess";
 import { useSidebar }               from "@/contexts/useSidebar";
@@ -31,7 +32,17 @@ export type NavItem =
    *  signed in, which is right for something like a public notice and wrong
    *  for procurement. */
   | { kind: "link"; href: string; label: string; icon: React.ElementType;
-      need?: string };
+      need?: string }
+  /** A heading with pages under it. The heading is NOT a page of its own —
+   *  clicking it opens the first child — because a parent that is also a
+   *  destination gives the same label two meanings and leaves the reader
+   *  guessing which one a click will pick.
+   *
+   *  Children carry no icon. Indentation and the parent's icon already say
+   *  where they belong, and a second column of icons in a 200px rail turns a
+   *  short list into a pattern to decode. */
+  | { kind: "group"; id: string; label: string; icon: React.ElementType;
+      children: { id: AppPage; label: string }[] };
 
 const NAV_ITEMS: NavItem[] = [
   { kind: "page", id: "executive-summary", label: "Executive Summary",        icon: ClipboardCheck  },
@@ -98,9 +109,26 @@ const GATE_ITEM: NavItem =
   { kind: "page", id: "gate", label: "Gate", icon: DoorOpen };
 
 /* The weighbridge is somebody's whole shift, so it sits with the operational
-   screens rather than the registers. */
-const WEIGHBRIDGE_ITEM: NavItem =
-  { kind: "page", id: "weighbridge", label: "Weighbridge", icon: Scale };
+   screens rather than the registers.
+
+   TWO REPORTS OF THE SAME WEIGHINGS, from the two systems that recorded them.
+   "Report from Application" is this platform's own record — the screen the
+   operator fills all shift — and it is first because it is the one that is
+   live. "Report from SAP" is what reached SAP, which is the comparison, not
+   the source.
+
+   The id of the first child stays "weighbridge": roles are granted against
+   it, MainLayout switches on it, and it is persisted in every user's session.
+   Renaming it to match the new label would sign everybody out of the screen
+   they were on and cost every role its permission. Only what people read
+   changes. */
+const WEIGHBRIDGE_ITEM: NavItem = {
+  kind: "group", id: "weighbridge-group", label: "Weighbridge", icon: Scale,
+  children: [
+    { id: "weighbridge",     label: "Report from Application" },
+    { id: "weighbridge-sap", label: "Report from SAP" },
+  ],
+};
 
 /* Shift Control is daily work for a supervisor rather than administration, so it
    sits with the operational pages and behind its own permission — the board
@@ -178,6 +206,14 @@ export default function AppSidebar() {
   const user                   = useAuth((s) => s.user);
   const items                  = buildNav(user);
   const { data: health }       = useDataHealth();
+
+  /* Which groups the user has opened or shut by hand. A group with no entry
+     here follows the page: it is open when one of its children is the current
+     screen. Deliberately NOT persisted and NOT seeded — the default is derived
+     rather than stored, so a group can never be left shut over the very page
+     the user is looking at. */
+  const [openGroups, setOpenGroups] =
+    useState<Record<string, boolean>>({});
 
   /* DELIBERATELY QUIET. This was a red pip, and red in a navigation rail reads
      as "this screen is broken, go there now" to every user who passes it —
@@ -296,6 +332,73 @@ export default function AppSidebar() {
               >
                 {inner(false)}
               </a>
+            );
+          }
+
+          /* A heading with pages under it. */
+          if (item.kind === "group") {
+            const activeChild = item.children.find((c) => c.id === page);
+            const isOpen = openGroups[item.id] ?? Boolean(activeChild);
+            return (
+              <div key={item.id}>
+                <button
+                  onClick={() => {
+                    /* COLLAPSED RAIL HAS NOWHERE TO PUT THE CHILDREN, so the
+                       heading navigates instead of expanding — to the child
+                       already open, or the first one. Toggling a list that
+                       cannot be drawn would make the click do nothing. */
+                    if (collapsed) {
+                      setPage(activeChild?.id ?? item.children[0].id);
+                      return;
+                    }
+                    setOpenGroups((g) => ({ ...g, [item.id]: !isOpen }));
+                  }}
+                  title={collapsed ? label : undefined}
+                  aria-expanded={collapsed ? undefined : isOpen}
+                  className={`${ITEM_BASE} ${activeChild
+                    ? "bg-white/10 text-white"
+                    : "text-white/55 hover:text-white/90 hover:bg-white/5"}`}
+                >
+                  {inner(Boolean(activeChild))}
+                  {!collapsed && (
+                    <ChevronDown
+                      size={13}
+                      className={`shrink-0 ml-auto opacity-45 transition-transform
+                                  ${isOpen ? "" : "-rotate-90"}`}
+                    />
+                  )}
+                </button>
+
+                {!collapsed && isOpen && item.children.map((child) => {
+                  const on = page === child.id;
+                  return (
+                    <button
+                      key={child.id}
+                      onClick={() => setPage(child.id)}
+                      className={`${ITEM_BASE} !pl-[38px] !py-1.5 ${on
+                        ? "text-white"
+                        : "text-white/45 hover:text-white/80 hover:bg-white/5"}`}
+                    >
+                      {/* The rail's active marker is a bar at the very left
+                          edge. On a child that would point at the group, so
+                          the child marks itself where it actually begins. */}
+                      <span className={`shrink-0 h-1 w-1 rounded-full
+                        ${on ? "bg-[#f5a623]" : "bg-white/25"}`} />
+                      <span className="text-[11.5px] font-semibold tracking-wide
+                                       leading-tight truncate font-condensed text-left">
+                        {child.label}
+                      </span>
+                      {dotTone(child.id) && (
+                        <span
+                          title={dotTitle(child.id)}
+                          className={`ml-auto h-1.5 w-1.5 rounded-full shrink-0
+                                      ${dotTone(child.id)}`}
+                        />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
             );
           }
 
