@@ -164,7 +164,41 @@ export default function PlantOutputTable() {
     return m;
   }, [rows]);
 
-  const t = q.data?.totals?.[plant];
+  /* The footer totals THE ROWS ON SCREEN, not the period.
+   *
+   * It used to read `totals[plant]` straight off the response, which the
+   * backend keys by plant alone — so choosing a furnace filtered the table and
+   * left the footer standing on all five, claiming 8,984 t under an F1 column
+   * that adds up to a fifth of it. Weighted here, from `rows`, so the two can
+   * never disagree whatever the filters are set to.
+   *
+   * Weighted and rounded exactly as the backend does (yield to 2, each average
+   * to 3, coverage to 1), so an unfiltered table still shows the same figures
+   * it always has. */
+  const t = useMemo<Totals | undefined>(() => {
+    if (!rows.length) return undefined;
+    const yield_t = Math.round(rows.reduce((s, r) => s + r.yield_t, 0) * 100) / 100;
+    const out: Totals = {
+      furnace_days: rows.length,
+      taps: rows.reduce((s, r) => s + r.taps, 0),
+      yield_t,
+    };
+    for (const p of PARAMS) {
+      let num = 0, den = 0;
+      for (const r of rows) {
+        const v = r[p];
+        if (v != null && r.yield_t > 0) { num += v * r.yield_t; den += r.yield_t; }
+      }
+      out[p] = den ? Math.round((num / den) * 1000) / 1000 : null;
+      // How much of the tonnage the average actually covers — Carbon and
+      // Sulphur are assayed on roughly half the furnace-days, and Jabamoyee
+      // files no composite at all.
+      out[`${p}_covered_pct`] = yield_t
+        ? Math.round(den / yield_t * 1000) / 10
+        : 0;
+    }
+    return out;
+  }, [rows]);
 
   return (
     <section className="space-y-2">

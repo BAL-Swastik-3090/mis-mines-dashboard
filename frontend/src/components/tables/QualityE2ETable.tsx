@@ -331,7 +331,49 @@ export default function QualityE2ETable() {
   const flaggedQty = flagged.reduce((n, r) => n + (r.mines.qty || 0), 0);
   const totalQty = all.reduce((n, r) => n + (r.mines.qty || 0), 0);
 
-  const t = q.data?.totals?.[dest];
+  /* The footer totals THE ROWS ON SCREEN, not the destination.
+   *
+   * It used to read `totals[dest]` straight off the response, which the
+   * backend keys by destination alone — so the stack and grade selects, the
+   * out-of-tolerance toggle and the search box all filtered the table and left
+   * the footer standing on the whole plant. Filter to one stack and the WTD
+   * AVG underneath it still described every consignment of the month.
+   *
+   * Weighted and rounded exactly as the backend's `_totals` does (quantities
+   * to 2, each average to 2, variance as plant − mines on the rounded pair),
+   * so an unfiltered table shows the figures it always has. */
+  const t = useMemo<Totals | undefined>(() => {
+    if (!rows.length) return undefined;
+    const sum = (f: (r: Row) => number) =>
+      Math.round(rows.reduce((n, r) => n + f(r), 0) * 100) / 100;
+    const wavg = (side: "mines" | "plant", p: Param): number | null => {
+      let num = 0, den = 0;
+      for (const r of rows) {
+        const v = r[side][p];
+        if (v == null) continue;
+        num += v * r[side].qty;
+        den += r[side].qty;
+      }
+      return den ? Math.round((num / den) * 100) / 100 : null;
+    };
+    const out: Totals = {
+      trips: rows.reduce((n, r) => n + r.mines.trips, 0),
+      mines_qty: sum((r) => r.mines.qty),
+      plant_qty: sum((r) => r.plant.qty),
+    };
+    for (const side of ["mines", "plant"] as const) {
+      for (const p of PARAMS) out[`${side}_${p}`] = wavg(side, p);
+    }
+    for (const p of PARAMS) {
+      const a = out[`mines_${p}`], b = out[`plant_${p}`];
+      out[`var_${p}`] = a == null || b == null
+        ? null
+        : Math.round((b - a) * 100) / 100;
+    }
+    out.var_qty = Math.round(
+      ((out.plant_qty as number) - out.mines_qty) * 100) / 100;
+    return out;
+  }, [rows]);
 
   /**
    * The reading of this period's own figures, not a paragraph about

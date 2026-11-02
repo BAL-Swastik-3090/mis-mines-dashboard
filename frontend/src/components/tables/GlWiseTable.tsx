@@ -32,6 +32,12 @@ export default function GlWiseTable({ period }: { period: string }) {
     });
   }, [data, query, showExcluded]);
 
+  /* Only the search earns the extra line. Unticking "Show excluded GLs" also
+     narrows the table, but then the subtotal would be the "In the cost sheet"
+     line restated word for word, and a footer that says the same number twice
+     is worse than one that says it once. */
+  const filtering = query.trim() !== "";
+
   if (isLoading) {
     return <div className="bg-white border border-[#d0d9e8] rounded h-[420px] animate-pulse" />;
   }
@@ -45,6 +51,22 @@ export default function GlWiseTable({ period }: { period: string }) {
 
   const inc = data.totals.included;
   const exc = data.totals.excluded;
+
+  /* What the rows on screen add up to — null when nothing is filtered, since
+     then it would only repeat the two lines below it. Computed from `rows`,
+     so it answers "what does this search come to" without touching the
+     month's control total. */
+  const shown = filtering
+    ? rows.reduce(
+      (a, r) => ({
+        rows: a.rows + 1,
+        total: a.total + r.total,
+        mines: a.mines + r.mines,
+        cob: a.cob + r.cob,
+      }),
+      { rows: 0, total: 0, mines: 0, cob: 0 },
+    )
+    : null;
 
   // Every GL at nil means there are no postings for this month, not that
   // 121 GLs each happened to cost nothing. A page of dashes looks broken;
@@ -120,16 +142,50 @@ export default function GlWiseTable({ period }: { period: string }) {
               </tr>
             )}
           </tbody>
+          {/* THESE TWO LINES ARE THE MONTH'S CONTROL TOTAL AND DO NOT FOLLOW
+              THE FILTERS, which is why they now say so.
+              They are a reconciliation — does the cost sheet tie to the
+              ledger, and is anything material sitting outside it — so they are
+              a split by bucket, not a sum of what is on screen. Made to follow
+              the filters they would be worse than useless: unticking "Show
+              excluded GLs" would send the second line to nil and hide the one
+              figure this sheet is read for, and a search for "power" would
+              print that GL's cost under the words "In the cost sheet". The sum
+              of the rows actually shown is a different question, and gets its
+              own line below when there is a filter on. */}
           <tfoot className="sticky bottom-0">
-            <tr className="border-t-2 border-[#d0d9e8] bg-bg-soft font-semibold text-txt-primary">
-              <td className="py-2 pl-4" colSpan={3}>In the cost sheet</td>
+            {shown && (
+              <tr className="border-t-2 border-[#d0d9e8] bg-accent/5 font-semibold text-navy">
+                <td className="py-2 pl-4" colSpan={3}>
+                  Shown
+                  <span className="font-normal text-txt-muted">
+                    {" "}— {shown.rows} of {inc.rows + exc.rows} GLs
+                  </span>
+                </td>
+                <Td>{formatIndian(shown.total)}</Td>
+                <Td>{formatIndian(shown.mines)}</Td>
+                <td className="py-2 pr-6 text-right tabular-nums">
+                  {formatIndian(shown.cob)}
+                </td>
+                <td />
+              </tr>
+            )}
+            <tr className={`bg-bg-soft font-semibold text-txt-primary
+              ${shown ? "border-t border-[#eef2f8]" : "border-t-2 border-[#d0d9e8]"}`}>
+              <td className="py-2 pl-4" colSpan={3}>
+                In the cost sheet
+                <span className="font-normal text-txt-light"> · whole month</span>
+              </td>
               <Td>{formatIndian(inc.total)}</Td>
               <Td>{formatIndian(inc.mines)}</Td>
               <td className="py-2 pr-6 text-right tabular-nums">{formatIndian(inc.cob)}</td>
               <td />
             </tr>
             <tr className="border-t border-[#eef2f8] bg-bg-soft text-txt-muted">
-              <td className="py-2 pl-4" colSpan={3}>Outside the cost sheet</td>
+              <td className="py-2 pl-4" colSpan={3}>
+                Outside the cost sheet
+                <span className="text-txt-light"> · whole month</span>
+              </td>
               <Td>{formatIndian(exc.total)}</Td>
               <Td>{formatIndian(exc.mines)}</Td>
               <td className="py-2 pr-6 text-right tabular-nums">{formatIndian(exc.cob)}</td>
