@@ -188,35 +188,56 @@ export default function QualityTrendCharts({ from, to }: {
     enabled: Boolean(from && to),
   });
 
+  /* The four charts are siblings in a grid rather than children of one Card,
+     so without this they arrive on the page as four unexplained panels. The
+     heading is rendered in the loading state too — a title that appears only
+     once the request lands makes the whole block jump. */
+  const Section = ({ children }: { children: React.ReactNode }) => (
+    <section className="space-y-2.5">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-steel"><FlaskConical size={14} /></span>
+        <h3 className="font-condensed font-bold text-[13px] text-navy
+                       tracking-widest uppercase">
+          Despatch Quality Trend — Mines to Plant
+        </h3>
+      </div>
+      {children}
+    </section>
+  );
+
   if (isLoading || !data) {
     return (
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 xl:gap-4">
-        {[0, 1, 2, 3].map((i) => (
-          <div key={i} className="bg-white rounded-lg border border-border
-                                  shadow-sm p-4">
-            <div className="h-[280px] bg-bg-section animate-pulse rounded" />
-          </div>
-        ))}
-      </div>
+      <Section>
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 xl:gap-4">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="bg-white rounded-lg border border-border
+                                    shadow-sm p-4">
+              <div className="h-[280px] bg-bg-section animate-pulse rounded" />
+            </div>
+          ))}
+        </div>
+      </Section>
     );
   }
 
   const dests = data.destinations ?? [];
 
   return (
-    <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 xl:gap-4">
-      {/* Cr₂O₃ for both plants, then Cr:Fe for both — the two readings of one
-          consignment sit side by side, which is how they are argued about. */}
-      {PARAMS.map((p) =>
-        dests.map((d) => (
-          <Chart
-            key={`${p.key}-${d.key}`}
-            param={p}
-            destLabel={d.label}
-            rows={data.rows.filter((r) => r.destination === d.key)}
-          />
-        )),
-      )}
-    </div>
+    <Section>
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 xl:gap-4">
+        {/* Cr₂O₃ for both plants, then Cr:Fe for both — the two readings of one
+            consignment sit side by side, which is how they are argued about. */}
+        {PARAMS.map((p) =>
+          dests.map((d) => (
+            <Chart
+              key={`${p.key}-${d.key}`}
+              param={p}
+              destLabel={d.label}
+              rows={data.rows.filter((r) => r.destination === d.key)}
+            />
+          )),
+        )}
+      </div>
+    </Section>
   );
 }

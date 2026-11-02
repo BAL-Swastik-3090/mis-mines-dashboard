@@ -50,7 +50,7 @@ from sqlalchemy.orm import Session
 # SAP plant codes. 1100 smelts on five furnaces, 1110 on one.
 PLANTS: tuple[tuple[str, str], ...] = (
     ("1100", "Balasore"),
-    ("1110", "Jabamoyee"),
+    ("1110", "Sukinda"),
 )
 PLANT_LABEL = dict(PLANTS)
 

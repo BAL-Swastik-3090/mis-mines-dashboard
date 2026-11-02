@@ -38,6 +38,7 @@ import {
 } from "lucide-react";
 import api from "@/lib/api";
 import QualityTrendCharts from "@/components/charts/QualityTrendCharts";
+import PlantOutputTrendChart from "@/components/charts/PlantOutputTrendChart";
 import { formatIndian } from "@/lib/utils";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import type {
@@ -626,6 +627,133 @@ function PlantBlock({ statusTill, tdLabel, mtdLabel, td, mtd, tdTotal, mtdTotal 
   );
 }
 
+/* ── Block 5a · despatch against plan, before the grade detail ─────────────
+   THE QUESTION ASKED FIRST. The two blocks below this one report Balasore and
+   Sukinda grade by grade, which answers "what shipped" but leaves the reader
+   adding two tonnages in their head to find out whether the mine is on plan at
+   all. This says it in one line, then lets them see which destination carried
+   it.
+
+   SUMMED FROM THE TWO CUSTOMERS, not read from a third figure. The plan table
+   does carry Tot_* columns, but mines_despatch_plan defines Tot_ = Bal_ + Suk_
+   and April through October bear that out exactly, so there is nothing to gain
+   from a second source that can drift. BAL and JABAMOYEE are the only mines
+   customers there are — despatch_grade.MINES_CUSTOMERS is that pair and
+   nothing else — so their sum is the whole of despatch, not most of it.
+
+   ACHIEVEMENT IS TAKEN ON THE TOTALS, never averaged across the two: Balasore
+   ships roughly seven tonnes for every one of Sukinda's, so a mean of the two
+   percentages would let the smaller destination move the headline far more
+   than its tonnage earns. Same rule the grade tables already use on their
+   weighted-average row, and the same rounding as the backend's _pct, so the
+   per-destination figures here match the blocks below to the digit.
+
+   A MONTH WITH NO PLAN IS NOT A PLAN OF ZERO. June 2026 has no rows in
+   mines_despatch_plan at all; the backend sends plan null for such a month and
+   the total stays null rather than becoming 0, so the cell prints a dash and
+   Ach % stays blank instead of reporting a miss against a target nobody set. */
+function DespatchSummaryBlock({ statusTill, tdLabel, mtdLabel, td, mtd }: {
+  statusTill: string; tdLabel: string; mtdLabel: string;
+  td: Record<string, ExecWeightedTotal>; mtd: Record<string, ExecWeightedTotal>;
+}) {
+  /* null + null stays null; null + a figure is that figure. The distinction
+     matters because 0 and "not planned" print differently and mean different
+     things to whoever is chasing the shortfall. */
+  const add = (a?: number | null, b?: number | null) =>
+    a == null && b == null ? null : (a ?? 0) + (b ?? 0);
+
+  const col = (src: Record<string, ExecWeightedTotal>, k: string) => {
+    const v = src?.[k];
+    return { qty: v?.qty ?? null, plan: v?.plan ?? null, ach: v?.ach_pct ?? null };
+  };
+  const total = (src: Record<string, ExecWeightedTotal>) => {
+    const qty = add(src?.BAL?.qty, src?.JABAMOYEE?.qty);
+    const plan = add(src?.BAL?.plan, src?.JABAMOYEE?.plan);
+    /* Matches backend production._pct exactly — same guard, same 1 dp. */
+    const ach = qty == null || plan == null || plan === 0
+      ? null : Math.round((qty / plan) * 1000) / 10;
+    return { qty, plan, ach };
+  };
+
+  const cols = (src: Record<string, ExecWeightedTotal>) =>
+    [total(src), col(src, "BAL"), col(src, "JABAMOYEE")];
+  const half = [
+    { tint: "", cells: cols(td) },
+    { tint: MTD_BG, cells: cols(mtd) },
+  ];
+
+  /* The headline column is set apart by weight rather than a rule of its own:
+     it is the same arithmetic as the two beside it, not a different kind of
+     number. */
+  const HEAD = ["Total Despatch", "Balasore", "Sukinda"];
+
+  /* Flattened to one list of cells with the gap as an entry of its own. The
+     obvious nesting would need a Fragment per half, and React is not imported
+     here as a value — only as a type. */
+  type Cell = { qty: number | null; plan: number | null; ach: number | null };
+  const line: ({ gap: true } | { gap?: false; tint: string; first: boolean; c: Cell })[] =
+    half.flatMap((h, hi) => [
+      ...(hi === 1 ? [{ gap: true as const }] : []),
+      ...h.cells.map((c, ci) => ({ tint: h.tint, first: ci === 0, c })),
+    ]);
+
+  const row = (
+    label: string,
+    pick: (c: Cell) => React.ReactNode,
+    strongRow = false,
+  ) => (
+    <tr className="hover:bg-bg-light">
+      <td className={`${TD} ${strongRow ? "font-bold text-navy" : "text-txt-secondary"}`}>
+        {label}
+      </td>
+      {line.map((x, i) =>
+        x.gap ? (
+          <td key={i} className={GAP} aria-hidden />
+        ) : (
+          <td key={i}
+              className={`${TD} text-right whitespace-nowrap ${x.tint} ${
+                x.first ? "border-l-2 border-border" : ""}`}>
+            {pick(x.c)}
+          </td>
+        ),
+      )}
+    </tr>
+  );
+
+  return (
+    <Card icon={<Truck size={14} />} title="Total Despatch" sub={statusTill}>
+      <table className="w-full text-[12px] tabular-nums border-collapse">
+        <thead>
+          <tr className={THEAD}>
+            <th className={`${TH} text-left min-w-[130px]`} rowSpan={2} />
+            <th className={`${TH} text-center border-l-2 border-border text-steel`}
+                colSpan={3}>{tdLabel}</th>
+            <th className={GAP} rowSpan={2} aria-hidden />
+            <th className={`${TH} text-center border-l-2 border-border text-steel ${MTD_BG}`}
+                colSpan={3}>{mtdLabel}</th>
+          </tr>
+          <tr className={THEAD}>
+            {half.map((h, hi) =>
+              HEAD.map((t, ti) => (
+                <th key={`${hi}-${ti}`}
+                    className={`${TH} text-right ${h.tint} ${
+                      ti === 0 ? "border-l-2 border-border text-navy" : ""}`}>
+                  {t}
+                </th>
+              )),
+            )}
+          </tr>
+        </thead>
+        <tbody>
+          {row("Plan (MT)", (c) => <N v={c.plan} />)}
+          {row("Despatch (MT)", (c) => <N v={c.qty} strong />, true)}
+          {row("Ach %", (c) => <Ach v={c.ach} strong />)}
+        </tbody>
+      </table>
+    </Card>
+  );
+}
+
 /* ── page ──────────────────────────────────────────────────────────────── */
 const DEST = [
   { key: "BAL",       label: "Despatch from Mines to Balasore" },
@@ -804,6 +932,12 @@ export default function ExecutiveSummarySection() {
           <ExcavationBlock statusTill={statusTill}
             td={d.td.excavation ?? []} mtd={d.mtd.excavation ?? []} />
 
+          {/* Despatch as one figure against plan, before the two destination
+              blocks break it down. */}
+          <DespatchSummaryBlock statusTill={statusTill}
+            tdLabel={tdLabel} mtdLabel={mtdLabel}
+            td={d.td.despatch_total} mtd={d.mtd.despatch_total} />
+
           {DEST.map((x, i) => (
             <GradeTable key={x.key}
               icon={i === 0 ? <Truck size={14} /> : <Send size={14} />}
@@ -824,6 +958,11 @@ export default function ExecutiveSummarySection() {
               dashboard filter, so the lines cover exactly the days the tables
               above them cover. */}
           <QualityTrendCharts from={d.mtd_from} to={d.report_day} />
+
+          {/* And then what the ore became. Production and assay on one pair of
+              axes, because a quality dip on a full day and the same dip on a
+              40-tonne day are not the same event. */}
+          <PlantOutputTrendChart from={d.mtd_from} to={d.report_day} />
 
           {/* What a reader must know before quoting anything off this page. */}
           <div className="rounded-lg border border-[#ffe082] bg-[#fff8e1] px-4 py-3 space-y-1.5">
