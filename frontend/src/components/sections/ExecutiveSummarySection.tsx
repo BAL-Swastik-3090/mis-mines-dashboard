@@ -37,6 +37,7 @@ import {
   Layers,
 } from "lucide-react";
 import api from "@/lib/api";
+import QualityTrendCharts from "@/components/charts/QualityTrendCharts";
 import { formatIndian } from "@/lib/utils";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import type {
@@ -815,6 +816,14 @@ export default function ExecutiveSummarySection() {
           <PlantBlock statusTill={statusTill} tdLabel={tdLabel} mtdLabel={mtdLabel}
             td={d.td.plant} mtd={d.mtd.plant}
             tdTotal={d.td.plant_total} mtdTotal={d.mtd.plant_total} />
+
+          {/* THE TWO ASSAYS OF ONE CONSIGNMENT, day by day. Everything above
+              reports a month as a single weighted figure; these say whether
+              the mine and the plant have been reading the same ore all month
+              or drifting apart. Given the report's OWN window rather than the
+              dashboard filter, so the lines cover exactly the days the tables
+              above them cover. */}
+          <QualityTrendCharts from={d.mtd_from} to={d.report_day} />
 
           {/* What a reader must know before quoting anything off this page. */}
           <div className="rounded-lg border border-[#ffe082] bg-[#fff8e1] px-4 py-3 space-y-1.5">
