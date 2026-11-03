@@ -323,7 +323,7 @@ export default function WeighbridgeSapSection() {
                       <input
                         value={q}
                         onChange={(e) => setQ(e.target.value)}
-                        placeholder="Vehicle, transporter, ticket, face…"
+                        placeholder="Vehicle, transporter, transaction ID, face…"
                         className="pl-7 pr-2 py-1.5 w-56 border border-border rounded
                                    text-[11.5px] text-navy placeholder:text-txt-light"
                       />
@@ -368,7 +368,13 @@ export default function WeighbridgeSapSection() {
                         <th className={`${TH} text-right`}>Gross (t)</th>
                         <th className={`${TH} text-right`}>Net (t)</th>
                         <th className={`${TH} text-left`}>Weighed at</th>
-                        <th className={`${TH} text-left`}>Ticket</th>
+                        {/* SAP's own name for it. "Ticket" is what the
+                            weighbridge operator calls the slip; the number in
+                            this column is the transaction SAP recorded, and
+                            the two are only the same thing when SAP kept the
+                            weighment — which the gaps in this sequence show it
+                            does not always do. */}
+                        <th className={`${TH} text-left`}>Transaction ID</th>
                       </tr>
                     </thead>
                     <tbody>
