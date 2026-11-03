@@ -33,6 +33,7 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from app.services import breakdown as bd
+from app.services import equipment_plan as eqp
 from app.services.sap_source import sap_session
 
 PLANT           = "1200"
@@ -361,6 +362,43 @@ def _material_split(ore: float, ob: float, other: float) -> dict:
     }
 
 
+# ── The ORE / OB column: what the mine PLANNED, not what moved ───────────────
+# The column states this month's assignment from minehub.oee_equip_exc_plan --
+# the same plan the LCM divides its loss hours by -- so the two sections can
+# never disagree about which machine is an ore machine.
+#
+# WHY NOT THE MEASURED SPLIT, WHICH IS WHAT THIS COLUMN USED TO SHOW. Measured,
+# the column went blank on any day the machine moved nothing, which is most
+# single days: six of ten rows read a dash on 3 November while every one of
+# them had a plan. The plan is a fact about the month and does not evaporate on
+# an idle day. The measured split is still computed and still exported -- it
+# moves to the cell's tooltip, where it is read AGAINST the plan, which is
+# exactly where a deviation becomes visible.
+#
+# THREE OUTCOMES, AND THEY ARE NOT THE SAME:
+#     entered   this month's plan names the machine
+#     carried   no row this month; the latest earlier month is used and NAMED
+#     blank     never assigned in any month -- genuinely nothing to show
+# A machine the plan never names prints a dash, because inventing ORE or OB for
+# it would be a guess, and the LCM is excluding its hours for the same reason.
+PLAN_ENTERED, PLAN_CARRIED = "entered", "carried"
+
+
+def _plan_fields(plan: dict | None, carried: dict[str, str], name: str) -> dict:
+    """This machine's planned material, and where that answer came from."""
+    if plan is None:                      # minehub unreachable -- say nothing
+        return {"plan_material": None, "plan_source": None, "plan_from": None}
+    material = plan["assignments"].get(name)
+    if material is None:
+        return {"plan_material": None, "plan_source": None, "plan_from": None}
+    frm = carried.get(name)
+    return {
+        "plan_material": material,
+        "plan_source": PLAN_CARRIED if frm else PLAN_ENTERED,
+        "plan_from": frm,
+    }
+
+
 # ── Which excavators the mine counts as new ──────────────────────────────────
 # Named by the mine on 26 October 2026, not derived. Being hired is NOT the
 # test — TATA-350(1), SANY-2 and TATA-210 are hired and belong with the old
@@ -414,6 +452,14 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
     shift_by   = _shift_by_machine(db, from_date, to_date)
     bd_by, pm_by = _sap_hours(db, from_date, to_date)
     first_by   = _first_seen_by_machine(db)
+
+    # Resolved on the month the range STARTS in. The plan has no grain finer
+    # than a month by the mine's own decision, so a range crossing a boundary
+    # is answered by one month rather than by a blend of two -- the same rule
+    # the LCM applies, stated in _resolve_plan() there.
+    plan       = eqp.resolve_detached(from_date)
+    carried    = ({c["equipment_name"]: c["from_month"] for c in plan["carried"]}
+                  if plan else {})
 
     machines = []
     absent: list[str] = []
@@ -518,7 +564,11 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
             "ore_cum":        round(ore_cum, 2),
             "ob_cum":         round(ob_cum, 2),
             "other_cum":      round(other_cum, 2),
+            # What the machine MOVED. Still exported, and still the tooltip,
+            # but no longer what the ORE / OB column prints.
             **_material_split(ore_cum, ob_cum, other_cum),
+            # What the mine PLANNED it to move. This is the column.
+            **_plan_fields(plan, carried, ex["name"]),
             "utilisation":    _utilisation(running, god_hours, bd_hrs),
             "ideal_cum":      round(ideal_cum, 2),
             "availability":   round(availability, 2),
@@ -582,6 +632,15 @@ def _roll_up(machines: list[dict], absent: list[str]) -> dict:
         **_material_split(sum(m["ore_cum"]   for m in machines),
                           sum(m["ob_cum"]    for m in machines),
                           sum(m["other_cum"] for m in machines)),
+        # THE OVERALL ROW COUNTS MACHINES, IT DOES NOT AVERAGE THEM. A plan is
+        # a label per machine, so there is no weighted mean of ORE and OB to
+        # take; what the row can honestly say is how the group was split, and
+        # how many of it the plan does not cover.
+        "plan_ore":        sum(1 for m in machines if m.get("plan_material") == "ORE"),
+        "plan_ob":         sum(1 for m in machines if m.get("plan_material") == "OB"),
+        "plan_unplanned":  sum(1 for m in machines if not m.get("plan_material")),
+        "plan_carried":    sum(1 for m in machines
+                               if m.get("plan_source") == PLAN_CARRIED),
         # WEIGHTED, NOT AVERAGED. Averaging ten machines' percentages would let
         # a machine that ran two shifts count as much as one that ran the month
         # — the same reason Availability and Performance are summed first.
