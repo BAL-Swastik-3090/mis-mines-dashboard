@@ -15,7 +15,13 @@ import api, { AUTH_EXPIRED_EVENT } from "@/lib/api";
 const BEAT_EVERY_MS = 2 * 60 * 1000;
 
 export default function AuthWrapper({ children }: { children: React.ReactNode }) {
+  /* Two ways the reason reaches this screen, and both are needed:
+     - the event, for a session that ended while the tab was open;
+     - the store, for a RELOAD after it ended, where there is no live request
+       to carry the message and /auth/me is the only thing that knows. Without
+       the second, refreshing the page replaced the explanation with silence. */
   const [notice, setNotice] = useState<string | null>(null);
+  const loadNotice = useAuth((s) => s.notice);
   const { setPage } = useAppPage();
   const page = useAppPage((s) => s.page);
   const user = useAuth((s) => s.user);
@@ -225,7 +231,10 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
   }
 
   if (!user) {
-    return <LoginScreen onLoginSuccess={handleLoginSuccess} notice={notice} />;
+    // The live event wins over the stored one: if a session ended just now,
+    // that is more current than whatever the last /auth/me reported.
+    return <LoginScreen onLoginSuccess={handleLoginSuccess}
+                        notice={notice ?? loadNotice} />;
   }
 
   return (

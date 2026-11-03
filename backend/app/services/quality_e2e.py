@@ -70,7 +70,7 @@ DESTINATIONS: tuple[tuple[str, str, str], ...] = (
     ("BAL",        "BAL",        "1100"),
     ("JABAMOYEE",  "JABAMOYEE",  "1110"),
 )
-DEST_LABEL = {"BAL": "Balasore", "JABAMOYEE": "Jabamoyee"}
+DEST_LABEL = {"BAL": "Balasore", "JABAMOYEE": "Sukinda"}
 
 # Mine-side inspection lots. 1200 is the mine, 1210 the COB plant; DY01 is the
 # despatch yard, which is what separates a despatch assay from any other.

@@ -34,6 +34,11 @@ interface AuthStore {
   user: AuthUser | null;
   /** false until the first /auth/me call settles — distinguishes "checking" from "signed out". */
   checked: boolean;
+  /** Why the last session ENDED, in the server's words, or null. Set only when
+   *  the server sent a code — so an idle timeout or a supersede fills it, and
+   *  somebody who simply has not signed in yet does not. */
+  notice: string | null;
+  clearNotice: () => void;
   setUser: (u: AuthUser | null) => void;
   /** Ask the server who we are. The session cookie is httpOnly, so this is the
    *  only way to know — the browser cannot read it. */
@@ -48,28 +53,42 @@ interface AuthStore {
 export const useAuth = create<AuthStore>()((set, get) => ({
   user: null,
   checked: false,
+  notice: null,
 
-  setUser: (user) => set({ user, checked: true }),
+  setUser: (user) => set({ user, checked: true, notice: null }),
 
   refresh: async () => {
     try {
       const res = await api.get("/auth/me");
       const user = (res.data?.user ?? null) as AuthUser | null;
-      set({ user, checked: true });
+      set({ user, checked: true, notice: null });
       return user;
-    } catch {
-      // 401 is the normal signed-out path, not an error worth surfacing.
-      set({ user: null, checked: true });
+    } catch (err: unknown) {
+      // A 401 here is usually the ordinary signed-out path and says nothing
+      // worth showing. But it is ALSO what a reload lands on after a session
+      // was closed, and that case has a reason the person needs: they were
+      // idle, or their ID signed in somewhere else. The server sends a `code`
+      // only for the second kind, which is how the two are told apart — a
+      // first-time visitor must not be met with a red banner.
+      const e = err as { response?: { data?: { detail?: string; code?: string } } };
+      const d = e?.response?.data;
+      set({
+        user: null, checked: true,
+        notice: d?.code ? (d.detail ?? null) : null,
+      });
       return null;
     }
   },
+
+  clearNotice: () => set({ notice: null }),
 
   logout: async () => {
     try {
       await api.post("/auth/logout");
     } finally {
       // Clear locally even if the call failed — the cookie may already be gone.
-      set({ user: null, checked: true });
+      // No notice: signing out deliberately is not an event to explain back.
+      set({ user: null, checked: true, notice: null });
     }
   },
 

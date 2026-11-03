@@ -61,7 +61,20 @@ function fuzzyScore(label: string, q: string): number | null {
 }
 
 export default function CommandPalette() {
-  const items = useVisibleNav();
+  const nav = useVisibleNav();
+
+  /* GROUPS ARE FLATTENED INTO THEIR CHILDREN, never offered themselves. A
+     group heading is not a page — its id is not an AppPage at all — so
+     selecting one would set the router to something nothing renders and leave
+     the reader on a blank screen. Each child is offered under its full name,
+     "Weighbridge · Report from SAP", so searching either half finds it. */
+  const items = useMemo(() => nav.flatMap((it): NavItem[] =>
+    it.kind === "group"
+      ? it.children.map((c) => ({
+          kind: "page" as const, id: c.id,
+          label: `${it.label} · ${c.label}`, icon: it.icon,
+        }))
+      : [it]), [nav]);
   const setPage = useAppPage((s) => s.setPage);
   const [open, setOpen] = useState(false);
   const [help, setHelp] = useState(false);

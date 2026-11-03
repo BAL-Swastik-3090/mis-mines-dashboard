@@ -516,7 +516,14 @@ export default function ActivityMatrix({ rows, days, narrowed: narrowedAbove }: 
                 </td>
                 <td className="sticky left-[190px] z-10 bg-bg-light border-t border-r border-border" />
                 {days.map((d) => {
-                  const n = rows.filter((r) => r.on_date === d && r.state !== "NOT_CLOCKED").length;
+                  /* Counted over the people the search has left, like the
+                     summary above it — `rows` would hold the whole workforce
+                     under a body showing six names. Over `filtered` rather
+                     than `shown`, because the page is a window on the answer,
+                     not part of the question. */
+                  const n = filtered.filter(
+                    (p) => (p.cells.get(d)?.state ?? "NOT_CLOCKED") !== "NOT_CLOCKED",
+                  ).length;
                   return (
                     <td key={d} className={`border-t border-border text-center text-[11px]
                                             font-bold tabular-nums py-1.5
