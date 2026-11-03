@@ -3,6 +3,9 @@ import { useState } from "react";
 import { Activity, Layers, Info, Factory, Download, Check } from "lucide-react";
 import FormulaModal from "@/components/sections/FormulaModal";
 import LCMSection from "@/components/sections/LCMSection";
+import EquipmentPlanModal from "@/components/sections/EquipmentPlanModal";
+import { useLCM } from "@/hooks/useLCM";
+import { useEntryDialog } from "@/contexts/useEntryDialog";
 import LCMCobSection from "@/components/sections/LCMCobSection";
 import KamLossTreeSection from "@/components/sections/KamLossTreeSection";
 import { useDateFilter }  from "@/contexts/useDateFilter";
@@ -136,9 +139,14 @@ const EXPORT_HEADINGS = [
   "Ideal CuM", "Actual CuM", "Availability %", "Performance %",
   "Quality %", "OEE %", "Utilisation %",
   "Ideal Capacity (CuM/hr)", "Ownership", "Breakdown Source", "Deviation % of Shift",
+  // PLAN FIRST, THEN WHAT ACTUALLY MOVED, because the sheet is sorted on the
+  // plan and read against the measurement. "Plan Source" says whether the
+  // month was entered or carried forward — a filter the mine needs, and one
+  // that is invisible if the two are collapsed into a single column.
+  "Planned Material", "Plan Source", "Plan From",
   // Shares as their own columns, not "ORE 83%" in one cell: a spreadsheet is
   // sorted and filtered, and a label glued to a number defeats both.
-  "Material", "Ore CuM", "OB CuM", "Other CuM", "Ore %", "OB %", "Other %",
+  "Material Moved", "Ore CuM", "OB CuM", "Other CuM", "Ore %", "OB %", "Other %",
 ];
 
 /** Numbers go out as numbers, rounded the way the screen rounds them.
@@ -156,6 +164,7 @@ function exportRows(machines: OEEMachineRow[], fleet: OEEFleet | undefined): unk
     n1(m.ideal_cap), m.hired ? "Hired" : "Owned",
     m.bd_source === "sap" ? "SAP" : "Shift log",
     m.deviation_pct ?? "",
+    m.plan_material ?? "", m.plan_source ?? "", m.plan_from ?? "",
     m.material ?? "", n1(m.ore_cum), n1(m.ob_cum), n1(m.other_cum),
     m.ore_pct ?? "", m.ob_pct ?? "", m.other_pct ?? "",
   ]);
@@ -170,6 +179,7 @@ function exportRows(machines: OEEMachineRow[], fleet: OEEFleet | undefined): unk
       n1(fleet.actual_cum), n2(fleet.availability),
       n2(fleet.performance), n2(fleet.quality), n2(fleet.oee), fleet.utilisation ?? "",
       "", "", "", fleet.deviation_pct ?? "",
+      `${fleet.plan_ore} ore / ${fleet.plan_ob} OB`, "", "",
       fleet.material ?? "", n1(fleet.ore_cum), n1(fleet.ob_cum), n1(fleet.other_cum),
       fleet.ore_pct ?? "", fleet.ob_pct ?? "", fleet.other_pct ?? "",
     ]);
@@ -177,36 +187,106 @@ function exportRows(machines: OEEMachineRow[], fleet: OEEFleet | undefined): unk
   return rows;
 }
 
-/** What the machine was moving, as a share of its own CuM.
+/** THE MONTH'S PLAN: what the mine assigned this machine to dig.
+ *
+ *  NOT WHAT IT ACTUALLY MOVED. That is the tooltip, and the two are meant to
+ *  be read against each other — a machine planned ORE whose tooltip says OB
+ *  is the deviation the mine explains. The column itself states the plan,
+ *  because the plan is a fact about the month: it does not disappear on a day
+ *  the machine stood idle, which is what the measured split did on six of ten
+ *  rows the moment anyone looked at a single day.
  *
  *  COLOUR CARRIES THE CLASS, NOT THE QUALITY. Ore is not "good" and overburden
- *  "bad" — stripping waste is the job on some benches — so these are three
- *  neutral hues that tell the classes apart, never the red/amber/green used by
- *  the percentage columns, which a reader scans for trouble.
+ *  "bad" — stripping waste is the job on some benches — so these are neutral
+ *  hues that tell the classes apart, never the red/amber/green used by the
+ *  percentage columns, which a reader scans for trouble.
  *
- *  MIXED when no class reaches 60%. TATA-490 ran 57% ore against 32% OB; naming
- *  it an ore machine would hide a third of its work. */
-function MaterialTag({ m }: {
-  m: { material: string | null; material_pct: number | null;
+ *  CARRIED FORWARD IS MARKED, NOT HIDDEN. A plan taken from an earlier month
+ *  is dimmed and carries a dot; the tooltip names the month. Somebody has to
+ *  be able to see that this month was never entered.
+ *
+ *  A DASH MEANS NEVER ASSIGNED, in any month — not "idle". Nothing is guessed
+ *  for it, and the LCM is leaving its hours out for the same reason. */
+const PLAN_TONE: Record<string, string> = {
+  ORE: "bg-[#e8f0fe] text-[#1a4a8f]",
+  OB:  "bg-[#f3ece3] text-[#7a5a2e]",
+};
+
+function monthLabel(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso + (iso.length === 10 ? "T00:00:00" : ""));
+  return Number.isNaN(d.getTime())
+    ? iso
+    : d.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+}
+
+function PlanTag({ m }: {
+  m: { plan_material: string | null; plan_source: string | null;
+       plan_from: string | null;
+       material: string | null; material_pct: number | null;
        ore_pct: number | null; ob_pct: number | null; other_pct: number | null };
 }) {
-  if (!m.material) return <span className="text-txt-light/60">—</span>;
-  const tone: Record<string, string> = {
-    ORE:   "bg-[#e8f0fe] text-[#1a4a8f]",
-    OB:    "bg-[#f3ece3] text-[#7a5a2e]",
-    OTHER: "bg-[#eceff1] text-[#4a5a63]",
-    MIXED: "bg-[#f3e8f5] text-[#6a3a74]",
-  };
-  return (
-    <span
-      className="inline-flex items-center gap-1"
-      title={`Ore ${m.ore_pct ?? 0}% · OB ${m.ob_pct ?? 0}% · Other ${m.other_pct ?? 0}%`}
-    >
-      <span className={`px-1.5 py-px rounded-sm text-[9px] font-bold tracking-wide ${tone[m.material] ?? tone.OTHER}`}>
-        {m.material}
+  // What the machine actually moved, always in the tooltip so the plan can be
+  // checked against it. "no movement logged" rather than 0% — the machine was
+  // not measured, which is not the same as having dug nothing.
+  const moved = m.material
+    ? `Moved: ore ${m.ore_pct ?? 0}% · OB ${m.ob_pct ?? 0}% · other ${m.other_pct ?? 0}%`
+    : "Moved: no movement logged in this period";
+
+  if (!m.plan_material) {
+    return (
+      <span className="text-txt-light/60"
+            title={`No excavation plan has ever been entered for this machine. ${moved}`}>
+        —
       </span>
-      {m.material_pct != null && (
-        <span className="text-[10px] text-txt-light font-mono">{m.material_pct}%</span>
+    );
+  }
+
+  const carried = m.plan_source === "carried";
+  const title = carried
+    ? `Planned ${m.plan_material} — carried forward from ${monthLabel(m.plan_from)}; `
+      + `this month's plan has not been entered. ${moved}`
+    : `Planned ${m.plan_material} for this month. ${moved}`;
+
+  return (
+    <span className="inline-flex items-center gap-1" title={title}>
+      <span
+        className={`px-1.5 py-px rounded-sm text-[9px] font-bold tracking-wide
+                    ${PLAN_TONE[m.plan_material]} ${carried ? "opacity-60" : ""}`}
+      >
+        {m.plan_material}
+      </span>
+      {carried && (
+        <span className="text-[10px] text-amber-600 font-bold leading-none"
+              aria-label="carried forward">•</span>
+      )}
+    </span>
+  );
+}
+
+/** The OVERALL row counts machines rather than averaging them: a plan is a
+ *  label per machine, so there is no weighted mean of ORE and OB to take. */
+function PlanTotals({ f }: {
+  f: { plan_ore: number; plan_ob: number;
+       plan_unplanned: number; plan_carried: number };
+}) {
+  if (!f.plan_ore && !f.plan_ob) {
+    return <span className="text-txt-light/60">—</span>;
+  }
+  const notes = [
+    f.plan_carried   ? `${f.plan_carried} carried forward from an earlier month` : "",
+    f.plan_unplanned ? `${f.plan_unplanned} never assigned, excluded from the LCM` : "",
+  ].filter(Boolean);
+  return (
+    <span className="inline-flex items-center gap-1.5"
+          title={notes.length ? notes.join("; ") : "Every machine assigned this month"}>
+      <span className="text-[10px] font-mono text-txt-light">
+        {f.plan_ore} ore · {f.plan_ob} OB
+      </span>
+      {!!f.plan_unplanned && (
+        <span className="text-[10px] font-mono text-amber-600">
+          +{f.plan_unplanned} unplanned
+        </span>
       )}
     </span>
   );
@@ -259,7 +339,7 @@ function OEETable({ title, slug, machines, fleet, loading, from, to }: {
                 // of the three so it lands beside Ideal, which is the number
                 // it is read against — Performance is Actual ÷ Ideal, and the
                 // two were separated by the material tag.
-                "Ore / OB", "Ideal CuM", "Actual CuM",
+                "Ore / OB (Plan)", "Ideal CuM", "Actual CuM",
                 "Availability %", "Performance %", "Quality %", "OEE %", "Utilisation %",
               ].map((h) => (
                 <th
@@ -358,7 +438,7 @@ function OEETable({ title, slug, machines, fleet, loading, from, to }: {
                       job the machine was doing. The share is of that machine's
                       own CuM, and the title carries the full three-way split. */}
                   <td className="px-3 py-2.5 whitespace-nowrap">
-                    <MaterialTag m={m} />
+                    <PlanTag m={m} />
                   </td>
                   {/* Ideal CuM */}
                   <td className="px-3 py-2.5 text-txt-light">{fmt1(m.ideal_cum)}</td>
@@ -409,7 +489,7 @@ function OEETable({ title, slug, machines, fleet, loading, from, to }: {
                     <div className="text-[9px] font-normal text-txt-light">{fleet.deviation_pct}% of shift</div>
                   )}
                 </td>
-                <td className="px-3 py-3"><MaterialTag m={fleet} /></td>
+                <td className="px-3 py-3"><PlanTotals f={fleet} /></td>
                 <td className="px-3 py-3 text-txt-secondary">{fmt1(fleet.ideal_cum)}</td>
                 <td className="px-3 py-3 text-navy">{fmt1(fleet.actual_cum)}</td>
                 <td className={`px-3 py-3 ${pctColor(fleet.availability, 85, 70)}`}>{fmt2(fleet.availability)}</td>
@@ -453,6 +533,12 @@ function OEETable({ title, slug, machines, fleet, loading, from, to }: {
         <p className="text-[9px] font-mono text-success/70 leading-tight">
           <span className="font-semibold text-success/60">EXCAVATION · </span>SAP
         </p>
+        {/* Says outright that the ORE / OB column is the plan, not a
+            measurement — the one column on this table whose source is the
+            mine's own entry rather than a system of record. */}
+        <p className="text-[9px] font-mono text-success/70 leading-tight">
+          <span className="font-semibold text-success/60">ORE / OB · </span>EQUIPMENT EXCAVATION PLAN
+        </p>
       </div>
     </div>
   );
@@ -468,6 +554,17 @@ export default function OEESection() {
   const oldMachines         = machines.filter((m) => m.generation !== "new");
   const newMachines         = machines.filter((m) => m.generation === "new");
   const tippers             = useTipperOEE();
+
+  /* Same query key as LCMSection's, so this reads the cached response rather
+     than fetching a second time. The heading and the matrix underneath it are
+     then the same object by construction and cannot drift apart. */
+  const lcmPlan = useLCM().data?.plan;
+  const hiredNames = new Set(machines.filter((m) => m.hired).map((m) => m.machine));
+  const lcmHasHired = !!lcmPlan &&
+    [...lcmPlan.ore, ...lcmPlan.ob].some((n) => hiredNames.has(n));
+
+  const entryDialog = useEntryDialog((s) => s.which);
+  const closeEntryDialog = useEntryDialog((s) => s.close);
   const [showFormulae, setShowFormulae] = useState(false);
   const { label: dateRange, periodLabel } = useDateFilter();
   const qc = useQueryClient();
@@ -622,13 +719,35 @@ export default function OEESection() {
         <h2 className="font-condensed font-extrabold text-[15px] tracking-widest uppercase text-navy">
           LCM — Lost Cost Matrix
         </h2>
+        {/* Was hardcoded "Own Equipment" and stopped being true the moment the
+            mine could assign a hired machine to a bucket. Read from the plan
+            against the fleet rather than asserted. */}
         <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-[#f3e5f5] text-[#6a1b9a] border-[#ce93d8] tracking-widest uppercase font-mono">
-          Own Equipment
+          {lcmHasHired ? "Own + Hired" : "Own Equipment"}
         </span>
+        {/* THE MACHINE SPLIT IS THE MINE'S OWN PLAN NOW, not a line of markup.
+            It was written out by hand here, which meant the heading and the
+            calculation could disagree without anyone noticing -- and once the
+            mine can change the split monthly, they would. */}
         <span className="ml-auto text-[10px] font-mono text-txt-muted hidden sm:inline">
-          Ore · 470(7), 470(2)&nbsp;&nbsp;|&nbsp;&nbsp;OB · 370(5), 370(4), 220(8)
+          {lcmPlan
+            ? <>Ore · {lcmPlan.ore.join(", ") || "—"}&nbsp;&nbsp;|&nbsp;&nbsp;OB · {lcmPlan.ob.join(", ") || "—"}</>
+            : "—"}
         </span>
       </div>
+
+      {/* The excavation plan belongs to this page: it is what decides the
+          machine split in the matrix below, so it is entered from here. */}
+      <EquipmentPlanModal
+        open={entryDialog === "equipment-plan"}
+        onClose={closeEntryDialog}
+        onSaved={async () => {
+          /* ["oee"] is the prefix of the LCM and KAM-tree keys as well as
+             the OEE table's own, so one invalidation refetches every figure
+             the plan can move. */
+          await qc.invalidateQueries({ queryKey: ["oee"] });
+        }}
+      />
 
       <LCMSection />
 

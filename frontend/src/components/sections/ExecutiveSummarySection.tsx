@@ -483,10 +483,19 @@ function ExcavationBlock({ statusTill, td, mtd }: {
         <N v={r?.actual} strong />
       </td>
       <td className={`${TD} text-right whitespace-nowrap ${tint}`}>
+        {/* THE TWO BLANKS MEAN DIFFERENT THINGS. De-silting has no plan table
+            anywhere, so its blank is permanent and nobody should be chased for
+            it. Overburden has one — a blank there means this month has not
+            been entered yet, which somebody can fix. Saying "no plan" for both
+            without distinguishing them sends people looking for a figure that
+            does not exist, or lets a missing one sit unnoticed. */}
         {r?.no_plan
           ? <span className="text-[9px] uppercase tracking-wide text-txt-light"
-                  title="No de-silting plan is held in any system — the MIS dashboard shows this blank too">
-              no plan
+                  title={r.key === "desilt"
+                    ? "No de-silting plan is held in any system — the MIS dashboard shows this blank too"
+                    : "No excavation plan has been entered for this month yet — "
+                      + "it is loaded into mines_daily_excavation_plan"}>
+              {r.key === "desilt" ? "no plan" : "not planned"}
             </span>
           : <span className={`font-bold ${pctTone(r?.pct)}`}>
               {r?.pct == null ? "—" : `${r.pct.toFixed(1)}%`}
@@ -628,131 +637,108 @@ function PlantBlock({ statusTill, tdLabel, mtdLabel, td, mtd, tdTotal, mtdTotal 
 }
 
 /* ── Block 5a · despatch against plan, before the grade detail ─────────────
-   THE QUESTION ASKED FIRST. The two blocks below this one report Balasore and
-   Sukinda grade by grade, which answers "what shipped" but leaves the reader
-   adding two tonnages in their head to find out whether the mine is on plan at
-   all. This says it in one line, then lets them see which destination carried
-   it.
+   THE SAME TABLE AS THE TWO BELOW IT, carrying the two destinations added
+   together. Those report Balasore and Sukinda grade by grade; this one answers
+   the same questions of despatch as a whole, in the same shape, so the screen
+   can be read straight down one pair of columns instead of changing form
+   halfway.
 
-   SUMMED FROM THE TWO CUSTOMERS, not read from a third figure. The plan table
-   does carry Tot_* columns, but mines_despatch_plan defines Tot_ = Bal_ + Suk_
-   and April through October bear that out exactly, so there is nothing to gain
-   from a second source that can drift. BAL and JABAMOYEE are the only mines
-   customers there are — despatch_grade.MINES_CUSTOMERS is that pair and
-   nothing else — so their sum is the whole of despatch, not most of it.
+   MERGED IN THE BROWSER, FROM THE ROWS ALREADY ON IT. Nothing new is fetched
+   and no second derivation exists to drift: every figure here is built from
+   the two blocks below, which is why a reader can always add them up and get
+   this. BAL and JABAMOYEE are the only mines customers there are
+   (despatch_grade.MINES_CUSTOMERS is that pair), so their sum is the whole of
+   despatch rather than most of it.
 
-   ACHIEVEMENT IS TAKEN ON THE TOTALS, never averaged across the two: Balasore
-   ships roughly seven tonnes for every one of Sukinda's, so a mean of the two
-   percentages would let the smaller destination move the headline far more
-   than its tonnage earns. Same rule the grade tables already use on their
-   weighted-average row, and the same rounding as the backend's _pct, so the
-   per-destination figures here match the blocks below to the digit.
+   EACH COLUMN COMBINED THE WAY ITS OWN KIND COMBINES. Tonnage and plan add;
+   the assays do not. Cr/Fe and Cr2O3 are averaged across the two destinations
+   weighted by the tonnage each sent, because 3,400 MT to Sukinda at 43.29 and
+   22,677 MT to Balasore at 44.66 is not a 43.98 month. Achievement is taken
+   once on the combined plan and tonnage, never averaged across the two — the
+   same rule the Weighted Avg row of every other block already uses.
 
    A MONTH WITH NO PLAN IS NOT A PLAN OF ZERO. June 2026 has no rows in
-   mines_despatch_plan at all; the backend sends plan null for such a month and
-   the total stays null rather than becoming 0, so the cell prints a dash and
-   Ach % stays blank instead of reporting a miss against a target nobody set. */
-function DespatchSummaryBlock({ statusTill, tdLabel, mtdLabel, td, mtd }: {
-  statusTill: string; tdLabel: string; mtdLabel: string;
-  td: Record<string, ExecWeightedTotal>; mtd: Record<string, ExecWeightedTotal>;
-}) {
-  /* null + null stays null; null + a figure is that figure. The distinction
-     matters because 0 and "not planned" print differently and mean different
-     things to whoever is chasing the shortfall. */
-  const add = (a?: number | null, b?: number | null) =>
-    a == null && b == null ? null : (a ?? 0) + (b ?? 0);
+   mines_despatch_plan at all; where both destinations are silent the cell
+   stays null and prints a dash, rather than reporting a miss against a target
+   nobody set. */
 
-  const col = (src: Record<string, ExecWeightedTotal>, k: string) => {
-    const v = src?.[k];
-    return { qty: v?.qty ?? null, plan: v?.plan ?? null, ach: v?.ach_pct ?? null };
-  };
-  const total = (src: Record<string, ExecWeightedTotal>) => {
-    const qty = add(src?.BAL?.qty, src?.JABAMOYEE?.qty);
-    const plan = add(src?.BAL?.plan, src?.JABAMOYEE?.plan);
-    /* Matches backend production._pct exactly — same guard, same 1 dp. */
-    const ach = qty == null || plan == null || plan === 0
-      ? null : Math.round((qty / plan) * 1000) / 10;
-    return { qty, plan, ach };
-  };
-
-  const cols = (src: Record<string, ExecWeightedTotal>) =>
-    [total(src), col(src, "BAL"), col(src, "JABAMOYEE")];
-  const half = [
-    { tint: "", cells: cols(td) },
-    { tint: MTD_BG, cells: cols(mtd) },
-  ];
-
-  /* The headline column is set apart by weight rather than a rule of its own:
-     it is the same arithmetic as the two beside it, not a different kind of
-     number. */
-  const HEAD = ["Total Despatch", "Balasore", "Sukinda"];
-
-  /* Flattened to one list of cells with the gap as an entry of its own. The
-     obvious nesting would need a Fragment per half, and React is not imported
-     here as a value — only as a type. */
-  type Cell = { qty: number | null; plan: number | null; ach: number | null };
-  const line: ({ gap: true } | { gap?: false; tint: string; first: boolean; c: Cell })[] =
-    half.flatMap((h, hi) => [
-      ...(hi === 1 ? [{ gap: true as const }] : []),
-      ...h.cells.map((c, ci) => ({ tint: h.tint, first: ci === 0, c })),
-    ]);
-
-  const row = (
-    label: string,
-    pick: (c: Cell) => React.ReactNode,
-    strongRow = false,
-  ) => (
-    <tr className="hover:bg-bg-light">
-      <td className={`${TD} ${strongRow ? "font-bold text-navy" : "text-txt-secondary"}`}>
-        {label}
-      </td>
-      {line.map((x, i) =>
-        x.gap ? (
-          <td key={i} className={GAP} aria-hidden />
-        ) : (
-          <td key={i}
-              className={`${TD} text-right whitespace-nowrap ${x.tint} ${
-                x.first ? "border-l-2 border-border" : ""}`}>
-            {pick(x.c)}
-          </td>
-        ),
-      )}
-    </tr>
-  );
-
-  return (
-    <Card icon={<Truck size={14} />} title="Total Despatch" sub={statusTill}>
-      <table className="w-full text-[12px] tabular-nums border-collapse">
-        <thead>
-          <tr className={THEAD}>
-            <th className={`${TH} text-left min-w-[130px]`} rowSpan={2} />
-            <th className={`${TH} text-center border-l-2 border-border text-steel`}
-                colSpan={3}>{tdLabel}</th>
-            <th className={GAP} rowSpan={2} aria-hidden />
-            <th className={`${TH} text-center border-l-2 border-border text-steel ${MTD_BG}`}
-                colSpan={3}>{mtdLabel}</th>
-          </tr>
-          <tr className={THEAD}>
-            {half.map((h, hi) =>
-              HEAD.map((t, ti) => (
-                <th key={`${hi}-${ti}`}
-                    className={`${TH} text-right ${h.tint} ${
-                      ti === 0 ? "border-l-2 border-border text-navy" : ""}`}>
-                  {t}
-                </th>
-              )),
-            )}
-          </tr>
-        </thead>
-        <tbody>
-          {row("Plan (MT)", (c) => <N v={c.plan} />)}
-          {row("Despatch (MT)", (c) => <N v={c.qty} strong />, true)}
-          {row("Ach %", (c) => <Ach v={c.ach} strong />)}
-        </tbody>
-      </table>
-    </Card>
-  );
+/** Sum that keeps "nothing was reported" distinct from "zero was reported". */
+function addOrNull(vals: (number | null | undefined)[]): number | null {
+  const present = vals.filter((v): v is number => v != null);
+  return present.length ? present.reduce((a, b) => a + b, 0) : null;
 }
+
+/** Tonnage-weighted mean across the destinations, or null if none assayed. */
+function wavgBy(parts: ExecGradeRow[], key: "cr2o3" | "crfe"): number | null {
+  let num = 0, den = 0;
+  for (const r of parts) {
+    const v = r[key], q = r.qty;
+    if (v != null && q != null && q > 0) { num += v * q; den += q; }
+  }
+  return den ? Math.round((num / den) * 1000) / 1000 : null;
+}
+
+const r2 = (v: number | null) => (v == null ? null : Math.round(v * 100) / 100);
+/** Matches backend production._pct exactly: same guard, same single decimal. */
+const pct = (actual: number | null, plan: number | null) =>
+  actual == null || plan == null || plan === 0
+    ? null : Math.round((actual / plan) * 1000) / 10;
+
+function mergeDespatch(byDest: Record<string, ExecGradeRow[]> | undefined): {
+  rows: ExecGradeRow[]; total: ExecWeightedTotal;
+} {
+  const lists = Object.values(byDest ?? {}).map((l) => l ?? []);
+  /* Keyed by grade and merged, never zipped by index: a grade one destination
+     shipped and the other did not — "Not yet assayed" is the live case —
+     would otherwise land on the wrong line. */
+  const keys: string[] = [];
+  const labels: Record<string, string> = {};
+  for (const l of lists) for (const r of l) {
+    if (!keys.includes(r.grade)) keys.push(r.grade);
+    if (!labels[r.grade]) labels[r.grade] = r.label;
+  }
+
+  const rows: ExecGradeRow[] = keys.map((k) => {
+    const parts = lists.flatMap((l) => l.filter((r) => r.grade === k));
+    const qty = r2(addOrNull(parts.map((r) => r.qty)));
+    const plan = r2(addOrNull(parts.map((r) => r.plan)));
+    const est = addOrNull(parts.map((r) => r.estimated_qty));
+    /* The share's denominator is GRADED tonnage, the same denominator each
+       row used, so this agrees with its own lines instead of being a third
+       kind of average. */
+    const graded = parts.reduce(
+      (s, r) => s + (r.cr2o3 != null ? (r.qty ?? 0) : 0), 0);
+    return {
+      grade: k, label: labels[k] ?? k,
+      qty, plan, ach_pct: pct(qty, plan),
+      crfe: wavgBy(parts, "crfe"), cr2o3: wavgBy(parts, "cr2o3"),
+      estimated_qty: r2(est),
+      estimated_pct: graded && est ? Math.round((est / graded) * 1000) / 10 : null,
+      manual_qty: r2(addOrNull(parts.map((r) => r.manual_qty))),
+    };
+  });
+
+  /* The Weighted Avg row, built from the merged rows by the same rule the
+     backend's _totals uses — plan summed from the rows and achievement taken
+     once on the totals, so a grade planned at 100 MT and missed counts for
+     its tonnage rather than equally with one planned at 20,000. */
+  const all = lists.flat();
+  const qty = r2(addOrNull(all.map((r) => r.qty)));
+  const plan = r2(addOrNull(all.map((r) => r.plan)));
+  const est = addOrNull(all.map((r) => r.estimated_qty));
+  const graded = all.reduce((s, r) => s + (r.cr2o3 != null ? (r.qty ?? 0) : 0), 0);
+  return {
+    rows,
+    total: {
+      qty, plan, ach_pct: pct(qty, plan),
+      crfe: wavgBy(all, "crfe"), cr2o3: wavgBy(all, "cr2o3"), cr: null,
+      estimated_qty: r2(est),
+      estimated_pct: graded && est ? Math.round((est / graded) * 1000) / 10 : null,
+      manual_qty: r2(addOrNull(all.map((r) => r.manual_qty))),
+    },
+  };
+}
+
 
 /* ── page ──────────────────────────────────────────────────────────────── */
 const DEST = [
@@ -932,11 +918,20 @@ export default function ExecutiveSummarySection() {
           <ExcavationBlock statusTill={statusTill}
             td={d.td.excavation ?? []} mtd={d.mtd.excavation ?? []} />
 
-          {/* Despatch as one figure against plan, before the two destination
-              blocks break it down. */}
-          <DespatchSummaryBlock statusTill={statusTill}
-            tdLabel={tdLabel} mtdLabel={mtdLabel}
-            td={d.td.despatch_total} mtd={d.mtd.despatch_total} />
+          {/* Despatch as a whole, before the two destination blocks break it
+              down. Rendered by the SAME component they are, so the three
+              cannot drift apart in shape. */}
+          {(() => {
+            const a = mergeDespatch(d.td.despatch);
+            const b = mergeDespatch(d.mtd.despatch);
+            return (
+              <GradeTable icon={<Truck size={14} />} title="Total Despatch"
+                sub={statusTill} qtyLabel="Despatch (MT)" showPlan
+                tdLabel={tdLabel} mtdLabel={mtdLabel}
+                td={a.rows} mtd={b.rows}
+                tdTotal={a.total} mtdTotal={b.total} />
+            );
+          })()}
 
           {DEST.map((x, i) => (
             <GradeTable key={x.key}

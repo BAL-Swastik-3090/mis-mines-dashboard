@@ -516,3 +516,48 @@ def _totals(rows: list[dict]) -> dict:
         out[f"var_{p}"] = None if a is None or b is None else round(b - a, 2)
     out["var_qty"] = round(out["plant_qty"] - out["mines_qty"], 2)
     return out
+
+
+def mine_assay_by_consignment(
+    db: Session, frm: date, to: date,
+) -> dict[tuple[str, date, str], dict]:
+    """The mine's despatch assay, per consignment, for every destination.
+
+    EXPORTED SO THE EXECUTIVE SUMMARY READS THE SAME SPLIT THIS SCREEN SHOWS.
+    It used to key the assay by (PO, BATCH) with no date at all, which averaged
+    every lot ever filed under a stack and printed that against a single day's
+    tonnage. A stack ships over several days and each day assays differently --
+    J263004646 is 1.870 on 29 October, 2.072 on the 30th and 1.573 on the 31st
+    -- so the figure for a past day kept moving as later trucks were assayed.
+    Two screens disagreed, and neither of them held still.
+
+    Only the mine half is read. The plant lots, the allocation and the variance
+    are this screen's business and cost a second large query, so a caller that
+    wants nothing but "what did the mine assay for this consignment" does not
+    pay for them.
+
+    The key is (destination, despatch date, batch) because all three are needed:
+    one stack ships to both plants on the same day under one batch number, and
+    the two consignments genuinely assay differently.
+
+    A consignment the lab has not filed, or one whose quantity does not identify
+    a group, is ABSENT from the result rather than carrying a borrowed figure.
+    The caller renders it blank -- see _match_by_qty on why a blank is the
+    honest answer.
+    """
+    out: dict[tuple[str, date, str], dict] = {}
+    for key, customer, _plant in DESTINATIONS:
+        days = _despatches(db, customer, frm, to)
+        batches = sorted({d["batch"] for d in days})
+        mine = _mine_lots(db, batches)
+        groups = {b: _consign(mine.get(b, []), PARAMS) for b in batches}
+        for d in days:
+            m = _match_by_qty(groups.get(d["batch"], []), d["qty"], d["trips"])
+            if m is None:
+                continue
+            out[(key, d["date"], d["batch"])] = {
+                "qty": m["qty"], "trips": m["trips"],
+                "material": m["material"],
+                **{p: m[p] for p in PARAMS},
+            }
+    return out

@@ -59,11 +59,23 @@ function Shimmer({ w = "w-20", h = "h-5" }: { w?: string; h?: string }) {
   return <div className={`${h} ${w} bg-bg-section animate-pulse rounded`} />;
 }
 
+/** "October 2026" from "2026-10-01". The plan's grain is a month, so a plan is
+ *  always named by its month rather than by the date it is stored under. */
+const PLAN_MONTHS = ["January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December"];
+function monthName(iso: string | null | undefined): string {
+  if (!iso) return "an earlier month";
+  const [y, m] = iso.split("-");
+  const i = Number(m) - 1;
+  return PLAN_MONTHS[i] ? `${PLAN_MONTHS[i]} ${y}` : iso;
+}
+
 export default function LCMSection() {
   const { data, isLoading, isError, error } = useLCM();
   const b = data?.basis;
   const t = data?.totals;
   const c = data?.coverage;
+  const p = data?.plan;
   const cost = data?.costing;
   // Default is the reporting sequence the server returns (Sl order); the toggle
   // re-sorts by share client-side without touching that order server-side.
@@ -90,6 +102,86 @@ export default function LCMSection() {
 
   return (
     <div className="space-y-4">
+
+      {/* ── Where the ORE/OB split came from ───────────────────────────────
+          The machine split is the mine's own monthly plan now, not a list in
+          the code, so the page has to say which month's plan it is using and
+          name anything the plan does not cover. Four states, deliberately
+          distinguished: an empty plan table and an unreachable one are not the
+          same fact, and reporting both as "no plan" would hide a database
+          outage behind a data-entry message. */}
+      {!isLoading && p && p.status !== "entered" && (
+        <div className={[
+          "p-3 rounded-lg border border-l-[3px] flex items-start gap-2.5",
+          p.status === "unavailable"
+            ? "bg-[#fdecea] border-[#f5c6cb] border-l-[#c62828]"
+            : "bg-[#fff8e1] border-[#ffe082] border-l-[#c8960c]",
+        ].join(" ")}>
+          <AlertTriangle size={15} className={
+            (p.status === "unavailable" ? "text-[#c62828]" : "text-[#c8960c]")
+            + " shrink-0 mt-[1px]"} />
+          <div className="text-[11.5px] text-txt-secondary leading-relaxed">
+            {p.status === "carried" && (
+              <>
+                <span className="font-bold text-navy">
+                  {monthName(p.month)} has no equipment excavation plan — the{" "}
+                  {monthName(p.carried_from)} plan is being used.
+                </span>{" "}
+                {p.carried.length} machine{p.carried.length === 1 ? "" : "s"} carried
+                forward. Enter this month&rsquo;s plan from the header menu to replace it.
+              </>
+            )}
+            {p.status === "none" && (
+              <>
+                <span className="font-bold text-navy">
+                  No equipment excavation plan has been entered.
+                </span>{" "}
+                Until the mine assigns each excavator to ore or overburden, no
+                machine&rsquo;s hours can be attributed, and every figure below is
+                empty rather than wrong.
+              </>
+            )}
+            {p.status === "unavailable" && (
+              <>
+                <span className="font-bold text-navy">
+                  The equipment excavation plan could not be read.
+                </span>{" "}
+                The machine split below is the application&rsquo;s built-in default,
+                not the mine&rsquo;s own answer — it may not be what was planned for
+                this month. This is a connection fault, not a missing entry.
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Machines whose hours reached neither bucket. SEPARATE from the banner
+          above because it is true of an ENTERED month too: a machine added to
+          the fleet after the plan was saved has no assignment and nothing to
+          carry forward. Each factor is Deviation / its own hour total, so the
+          Planned Loss column still foots and nothing else on the page shows
+          this — which is exactly why it is stated here with its hours. */}
+      {!isLoading && p && p.excluded.length > 0 && (
+        <div className="p-3 rounded-lg bg-[#fff8e1] border border-[#ffe082] border-l-[3px] border-l-[#c8960c] flex items-start gap-2.5">
+          <AlertTriangle size={15} className="text-[#c8960c] shrink-0 mt-[1px]" />
+          <div className="text-[11.5px] text-txt-secondary leading-relaxed">
+            <span className="font-bold text-navy">
+              {fmt(b?.hours_excluded, 2)} hrs left out — {p.excluded.join(", ")}
+              {p.excluded.length === 1 ? " has" : " have"} no ore/OB assignment.
+            </span>{" "}
+            Those hours are in neither multiplying factor, so every loss head below
+            is raised in proportion and the controllable share of the rupee value
+            moves with it. The total loss value is unaffected — it is fixed by the
+            deviation. Assign {p.excluded.length === 1 ? "it" : "them"} in Equipment
+            Excavation Plan to bring the hours in.
+            {p.no_spec.length > 0 && (
+              <> {p.no_spec.join(", ")} {p.no_spec.length === 1 ? "is" : "are"} assigned
+              but not in the OEE fleet list, so no hours can be found for{" "}
+              {p.no_spec.length === 1 ? "it" : "them"} at all.</>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Shift-log coverage warning — a thin period understates every hour figure */}
       {!isLoading && c && (oreThin || obThin) && (
@@ -180,6 +272,26 @@ export default function LCMSection() {
             <span className="font-semibold text-success/60">LOSS HOURS · </span>IMOS shift log · SAP (breakdown, PM)
           </p>
         </div>
+        {/* THE LINE TO READ BEFORE THE RUPEE FIGURE. Both factors are sound only
+            if every fleet machine's hours reached a bucket; below 100% says how
+            many did not. */}
+        {!isLoading && b && (
+          <div className="px-3 py-1.5 border-t border-border-light/40">
+            <p className="text-[9.5px] font-mono leading-tight">
+              <span className="font-semibold text-txt-muted">LOSS HOURS COVERED · </span>
+              <span className={(b.hours_coverage_pct ?? 100) >= 99.95
+                ? "text-success font-semibold" : "text-[#c8960c] font-bold"}>
+                {fmt(b.hours_counted, 2)} of {fmt(b.hours_fleet, 2)} fleet hrs
+                {b.hours_coverage_pct != null && ` · ${fmt(b.hours_coverage_pct, 1)}%`}
+              </span>
+              {(b.hours_coverage_pct ?? 100) < 99.95 && (
+                <span className="text-txt-light">
+                  {" "}— the shortfall is hours on machines with no ore/OB assignment
+                </span>
+              )}
+            </p>
+          </div>
+        )}
       </div>
 
       {/* A loss column exists in the entry form but has no controllability /

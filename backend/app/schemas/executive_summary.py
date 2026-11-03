@@ -74,10 +74,17 @@ class PlantRow(BaseModel):
 class ExcavationRow(BaseModel):
     """Overburden or De-Silting, plan against actual, in CuM.
 
-    `plan` and `pct` are None on De-Silting because no plan table exists for it
-    — see _excavation() in services/executive_summary.py. `no_plan` says that
-    is by nature rather than a figure that has not arrived yet, so the screen
-    can explain the blank instead of leaving the reader to guess.
+    `no_plan` marks a blank the screen can explain instead of leaving the
+    reader to guess, and it now covers both rows for two different reasons:
+
+      desilt  permanently — no de-silting plan table exists anywhere
+      ob      this month has not been entered into
+              mines_daily_excavation_plan yet, which somebody can fix
+
+    The second used to report a plan of 0 instead. Through 1-3 November 2026,
+    before the month was loaded, the screen showed 0 CuM planned against 966
+    CuM moved — which reads as a plan nobody kept rather than a plan nobody
+    wrote. A month with no plan is not a plan of nought.
     """
     key:     str                       # 'ob' | 'desilt'
     label:   str
