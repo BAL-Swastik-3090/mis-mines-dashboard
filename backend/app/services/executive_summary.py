@@ -57,6 +57,7 @@ from app.services.despatch_grade import (
     _Acc, _band_of, _despatch_rows, _quality,
 )
 from app.services.plant_output import _totals as _plant_totals, get_plant_output
+from app.services.quality_e2e import mine_assay_by_consignment
 from app.services.sap_movement import PRODUCTION_QTY
 from app.services.sap_source import sap_session
 
@@ -440,22 +441,35 @@ def _despatch_plan(db: Session, mf: date,
 def _despatch_both(db: Session, mf: date, rd: date) -> dict[str, dict[str, list[dict]]]:
     """Despatch by grade and receiving plant, for TD and MTD, from one fetch.
 
-    Uses despatch_grade's own helpers -- the same trip filter, the same PO+BATCH
-    assay match, the same band boundaries -- so this table and the Grade-wise
-    Despatch section cannot disagree. What is added is the split by customer
-    WITH the assay: that service keeps per-customer tonnage but weights Cr2O3
-    across a customer's whole despatch, and the sheet wants it per grade within
-    each plant.
+    Uses despatch_grade's own helpers -- the same trip filter, the same band
+    boundaries -- and takes the assay itself from the End-to-End Quality
+    service, so this table and that screen cannot disagree. What is added is the
+    split by customer WITH the assay: despatch_grade keeps per-customer tonnage
+    but weights Cr2O3 across a customer's whole despatch, and the sheet wants it
+    per grade within each plant.
 
-    TRIPS AND ASSAYS ARE FETCHED ONCE, for the MTD window, and TD is the subset
-    whose gate date is the report day. _quality() is the expensive half -- it is
-    scoped by PO, not by date, because an assay can be raised days after the
-    truck leaves -- so running it twice doubled the cost of the block for no new
-    information.
+    THE ASSAY IS KEYED BY CONSIGNMENT -- destination, despatch date and batch --
+    NOT BY (PO, BATCH). The old key had no date in it, so a stack that shipped
+    over several days wore one blended figure on every one of them, and that
+    figure moved each time a later truck was assayed: 29 October read 1.92 on
+    the day, 1.99 the next morning and 1.97 after that, without a single
+    29 October truck changing. 62% of October's tonnage shipped on multi-day
+    stacks, so this was the ordinary case rather than an edge.
+
+    NO ASSAY MEANS NO FIGURE. The tier-2 fallback that borrowed the PO's average
+    from other batches is gone. Tonnage the lab has not filed for sits in the
+    Unassayed row and fills in by itself, which is what the quality screen has
+    always done -- a borrowed figure printed beside measured ones is
+    indistinguishable from a lab result.
+
+    TRIPS ARE FETCHED ONCE, for the MTD window, and TD is the subset whose gate
+    date is the report day.
     """
     trips = _despatch_rows(db, mf, rd)
     pos = sorted({t.po for t in trips if t.po})
-    by_batch, by_po, _mat, _mat_po, po_is_cob = _quality(db, pos)
+    # _quality() is still read, but only for which POs are COB concentrate.
+    *_unused, po_is_cob = _quality(db, pos)
+    assay = mine_assay_by_consignment(db, mf, rd)
 
     def fresh() -> dict[str, dict[str, _Acc]]:
         a = {c: {k: _Acc() for k, *_ in GRADE_BANDS} for c in MINES_CUSTOMERS}
@@ -468,27 +482,18 @@ def _despatch_both(db: Session, mf: date, rd: date) -> dict[str, dict[str, list[
     for t in trips:
         if t.customer not in acc["mtd"]:
             continue
-        q = by_batch.get((t.po, t.batch))
-        est = False
-        if q is None or q["cr"] is None:
-            # TIER 2 -- the grade is the PO's average across its OTHER batches,
-            # not a test of this consignment. Kept, because it is the best
-            # statement available and dropping it would empty tonnage out of the
-            # grade rows on exactly the recent days this screen is read; marked,
-            # because a borrowed figure printed beside measured ones is
-            # indistinguishable from a lab result. Same rule, same tiers and the
-            # same helpers as Grade-wise Despatch.
-            q = by_po.get(t.po)
-            est = q is not None and q["cr"] is not None
-        if q is None or q["cr"] is None:
-            q, est = None, False
-        cr = q["cr"] if q else None
-        fe = q["fe"] if q else None
+        # THE CONSIGNMENT, not the stack: this destination, this gate date,
+        # this batch. Absent means the lab has not filed, or the quantity does
+        # not identify one group on the batch -- either way the trip carries no
+        # assay and lands in the Unassayed row.
+        q = assay.get((t.customer, t.dt, (t.batch or "").strip()))
+        cr = q["cr2o3"] if q else None
+        fe = q["cr_fe"] if q else None
         band = COB_KEY if (po_is_cob.get(t.po, False) and cr is not None) else _band_of(cr)
         wt = float(t.wt or 0)
-        acc["mtd"][t.customer][band].add(wt, cr, fe, est)
+        acc["mtd"][t.customer][band].add(wt, cr, fe)
         if t.dt == rd:
-            acc["td"][t.customer][band].add(wt, cr, fe, est)
+            acc["td"][t.customer][band].add(wt, cr, fe)
 
     plan = _despatch_plan(db, mf, rd)
 
@@ -893,10 +898,20 @@ def _excavation(db: Session, mf: date, rd: date,
     # production query above uses. These two tables are small — the plan is one
     # row per shift x location x face, de-silting one row per day — so this is
     # two cheap reads, not the full scans pp_production forces.
+    # NO COALESCE ON THE SUM, AND A COUNT BESIDE IT. A month nobody has entered
+    # a plan for is not a plan of nought, and wrapping the sum in COALESCE(..,0)
+    # made it one: through 1-3 November, before the month was loaded, this
+    # reported a plan of 0 CuM against 966 CuM moved. The same rule the despatch
+    # plan already follows, and the de-silting row below it.
+    #
+    # The count is what separates the two cases the sum cannot: no rows at all
+    # (nobody planned) from rows that genuinely plan zero overburden that day.
     plan = db.execute(text("""
-        SELECT COALESCE(SUM(CASE WHEN Prod_date = :rd
-                   THEN CAST(NULLIF(OB_QTY_Cum,'') AS DECIMAL(16,3)) END), 0) AS td_plan,
-               COALESCE(SUM(CAST(NULLIF(OB_QTY_Cum,'') AS DECIMAL(16,3))), 0) AS mtd_plan
+        SELECT SUM(CASE WHEN Prod_date = :rd
+                   THEN CAST(NULLIF(OB_QTY_Cum,'') AS DECIMAL(16,3)) END) AS td_plan,
+               SUM(CAST(NULLIF(OB_QTY_Cum,'') AS DECIMAL(16,3)))          AS mtd_plan,
+               COUNT(CASE WHEN Prod_date = :rd THEN 1 END)                AS td_n,
+               COUNT(*)                                                   AS mtd_n
         FROM mines_daily_excavation_plan
         WHERE Prod_date BETWEEN :mf AND :rd
     """), {"mf": mf, "rd": rd}).fetchone()
@@ -932,13 +947,18 @@ def _excavation(db: Session, mf: date, rd: date,
     silt_td = (silt_td_sap or 0.0) + s_td or None
     silt_mtd = (silt_mtd_sap or 0.0) + s_mtd or None
 
-    def rows(ob_act: float, ob_plan: float, silt_act: float | None,
+    def rows(ob_act: float, ob_plan: float | None, silt_act: float | None,
              silt_plan_qty: float | None, manual: float = 0.0,
              silt_manual: float = 0.0) -> list[dict]:
         return [
+            # no_plan here means "this month was never entered", which is a
+            # temporary state somebody can fix -- unlike de-silting below,
+            # where no plan table exists at all. The screen says which.
             {"key": "ob", "label": "Overburden", "unit": "CuM",
-             "plan": _r(ob_plan), "actual": _r(ob_act),
+             "plan": _r(ob_plan) if ob_plan is not None else None,
+             "actual": _r(ob_act),
              "pct": prod_svc._pct(ob_act, ob_plan),
+             "no_plan": ob_plan is None,
              "source": _source(ob_act - manual, manual),
              "manual_qty": _r(manual) or None},
             # get_desilt_actual reports nothing rather than nought when there
@@ -963,10 +983,21 @@ def _excavation(db: Session, mf: date, rd: date,
              "manual_qty": _r(silt_manual) or None},
         ]
 
+    def ob_plan(total, n) -> float | None:
+        """None when nothing was planned for the window at all.
+
+        A window WITH plan rows whose overburden sums to nothing is a real
+        plan of zero — the ore faces carry OB_QTY_Cum = '0' — and must keep
+        reading as 0, not as "no plan". Only the absence of rows is unknown.
+        """
+        if not n:
+            return None
+        return _f(total) or 0.0
+
     return {
-        "td":  rows(ob_td,  _f(plan.td_plan)  or 0.0, silt_td,
+        "td":  rows(ob_td,  ob_plan(plan.td_plan, plan.td_n), silt_td,
                     sp_td,  e_td,  s_td),
-        "mtd": rows(ob_mtd, _f(plan.mtd_plan) or 0.0, silt_mtd,
+        "mtd": rows(ob_mtd, ob_plan(plan.mtd_plan, plan.mtd_n), silt_mtd,
                     sp_mtd, e_mtd, s_mtd),
     }
 
