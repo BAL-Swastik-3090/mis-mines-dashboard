@@ -32,6 +32,14 @@ class OEEMachineRow(BaseModel):
     ore_pct:      Optional[float] = None
     ob_pct:       Optional[float] = None
     other_pct:    Optional[float] = None
+    # THE ORE / OB COLUMN: the month's assignment from the Equipment Excavation
+    # Plan, not what the machine moved (that is `material` above). Declared
+    # here because response_model filters the response against this schema --
+    # a field the service returns and this class does not name is dropped
+    # before it reaches the browser, with no error anywhere to say so.
+    plan_material: Optional[str] = None   # ORE | OB
+    plan_source:   Optional[str] = None   # entered | carried
+    plan_from:     Optional[str] = None   # the month a carried value came from
     # running_hours / (god - breakdown), capped at 100 — the MIS Equipment
     # section's formula with the shift log in place of the GPS feed.
     utilisation:  Optional[float] = None
@@ -66,6 +74,12 @@ class OEEFleet(BaseModel):
     ore_pct:      Optional[float] = None
     ob_pct:       Optional[float] = None
     other_pct:    Optional[float] = None
+    # How the group's plan split. Counts, not an average: a plan is a label per
+    # machine, so there is no weighted mean of ORE and OB to take.
+    plan_ore:       int = 0
+    plan_ob:        int = 0
+    plan_unplanned: int = 0
+    plan_carried:   int = 0
     # running_hours / (god - breakdown), capped at 100 — the MIS Equipment
     # section's formula with the shift log in place of the GPS feed.
     utilisation:  Optional[float] = None
