@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.services import auth
+from app.services import jwt_auth
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
@@ -42,9 +43,40 @@ def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 
-def _set_cookie(response: Response, sid: str) -> None:
+def _sid(request: Request) -> str | None:
+    """The session id out of a VERIFIED cookie, or None.
+
+    Signature and expiry are both checked here, so nothing downstream ever
+    sees an id that did not arrive inside a token this server signed.
+    """
+    return jwt_auth.read(request.cookies.get(COOKIE))[0]
+
+
+def _denied(request: Request) -> tuple[str, str | None]:
+    """The sentence for somebody whose cookie was just refused, and a code.
+
+    An EXPIRED token still names its session, and that row is the only thing
+    that knows whether the person went idle or was signed out because their ID
+    was used elsewhere. Recovering the id for the message does not authenticate
+    anything — the signature is still verified, only the expiry is waived — and
+    it is the difference between two sentences that matter differently.
+    """
+    raw = request.cookies.get(COOKIE)
+    sid, status = jwt_auth.read(raw)
+    if status == "expired":
+        sid = jwt_auth.sid_unverified(raw)
+    return auth.denied_detail(sid)
+
+
+def _set_cookie(response: Response, sid: str, emp_id: str) -> None:
+    """Put a freshly signed JWT in the cookie.
+
+    The cookie holds a TOKEN, not the session id itself. The id is inside it,
+    signed, so a browser cannot present an id it was never given — and the
+    row behind that id still decides whether it is allowed.
+    """
     response.set_cookie(
-        COOKIE, sid,
+        COOKIE, jwt_auth.issue(sid, emp_id, auth.IDLE_MINUTES),
         httponly=True,
         samesite="lax",
         secure=COOKIE_SECURE,
@@ -92,7 +124,7 @@ def login(response: Response, request: Request, body: dict = Body(...)) -> dict:
 
     auth.record_login_attempt(empid, "OK", ip, ua)
     sid = auth.create_session(None, emp, ip, ua)
-    _set_cookie(response, sid)
+    _set_cookie(response, sid, emp["emp_id"])
     return {"status": "success", "user": emp}
 
 
@@ -112,10 +144,10 @@ def me(request: Request):
     first-time visitor gets the plain sentence and no code, so the login screen
     stays quiet for them.
     """
-    sid = request.cookies.get(COOKIE)
+    sid = _sid(request)
     s = auth.get_session(None, sid)
     if not s:
-        detail, code = auth.denied_detail(sid)
+        detail, code = _denied(request)
         body: dict = {"detail": detail}
         if code:
             body["code"] = code
@@ -125,7 +157,7 @@ def me(request: Request):
 
 @router.post("/logout")
 def logout(response: Response, request: Request) -> dict:
-    sid = request.cookies.get(COOKIE)
+    sid = _sid(request)
     if sid:
         auth.end_session(None, sid, "LOGOUT")
     response.delete_cookie(COOKIE, path="/")
@@ -135,11 +167,11 @@ def logout(response: Response, request: Request) -> dict:
 @router.post("/track")
 def track(request: Request, body: dict = Body(...)) -> dict:
     """Record a page view against the current session."""
-    sid = request.cookies.get(COOKIE)
+    sid = _sid(request)
     s = auth.get_session(None, sid)
     if not s:
         # Same sentence the middleware gives — see track_time below.
-        raise HTTPException(401, auth.denied_detail(sid)[0])
+        raise HTTPException(401, _denied(request)[0])
     auth.record_page_view(None, sid, s["emp_id"], body.get("path", "/"),
                           body.get("time_spent"), body.get("referrer"))
     return {"ok": True}
@@ -153,7 +185,7 @@ def track_time(request: Request, body: dict = Body(...)) -> dict:
     cheap and must never block the page — the browser sends it with keepalive and
     does not wait for the answer.
     """
-    sid = request.cookies.get(COOKIE)
+    sid = _sid(request)
     s = auth.get_session(None, sid)
     if not s:
         # Not a bare "Not authenticated." — this router is EXEMPT from the
@@ -161,7 +193,7 @@ def track_time(request: Request, body: dict = Body(...)) -> dict:
         # on the login screen. Same sentence the middleware gives, from the
         # same place, so an idle timeout and a superseded session do not read
         # differently depending on which call happened to notice first.
-        raise HTTPException(401, auth.denied_detail(sid)[0])
+        raise HTTPException(401, _denied(request)[0])
     try:
         seconds = int(body.get("time_spent") or 0)
     except (TypeError, ValueError):
@@ -173,7 +205,7 @@ def track_time(request: Request, body: dict = Body(...)) -> dict:
 @router.post("/heartbeat")
 def heartbeat(request: Request) -> dict:
     """Keep a session alive while a dashboard is left open on a wall display."""
-    sid = request.cookies.get(COOKIE)
+    sid = _sid(request)
     if not sid:
         return {"ok": True, "written": False}
     # Written now, not noted for later. This is the only thing holding a

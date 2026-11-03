@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     # Application
     app_env: str = Field(default="development")
     secret_key: str = Field(default="change-this-secret")
+    # Signs the session cookie (HS256). At least 32 characters, from the
+    # environment — services/jwt_auth refuses to start in production on a
+    # missing or placeholder value, because a guessable signing key means
+    # anybody can mint a cookie for any employee ID. Falls back to secret_key
+    # when that has been set to something real.
+    jwt_secret: str = Field(default="")
     allowed_origins: str = Field(default="http://localhost:3000")
 
     # MineHub platform database (PostgreSQL).

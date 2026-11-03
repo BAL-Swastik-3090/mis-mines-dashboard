@@ -528,7 +528,14 @@ def _check_auth(sid: str | None, path: str) -> tuple[dict | None, str | None, se
 async def require_auth(request: Request, call_next):
     path = request.url.path
     if path.startswith("/api") and not any(path.startswith(e) for e in _AUTH_EXEMPT):
-        sid = request.cookies.get("mines_session")
+        from app.services import jwt_auth
+        raw_cookie = request.cookies.get("mines_session")
+        # SIGNATURE FIRST, DATABASE SECOND. Verifying the token costs no round
+        # trip and throws out anything forged, truncated or expired before a
+        # connection is opened. What survives is an id this server signed —
+        # which still proves nothing about whether the session is allowed, so
+        # the row is checked below exactly as before.
+        sid, _tok_status = jwt_auth.read(raw_cookie)
         # The check is blocking DB I/O over the WAN. Run it off the event loop so
         # it cannot stall every other in-flight request behind it.
         session, role_error, perms = await run_in_threadpool(_check_auth, sid, path)
@@ -545,7 +552,11 @@ async def require_auth(request: Request, call_next):
             # one nobody can audit from the screen. The extra query runs only
             # on a request that has already been refused.
             from app.services import auth as auth_svc_
-            detail, code = await run_in_threadpool(auth_svc_.denied_detail, sid)
+            # An expired token still names its session, and only that row can
+            # say whether this was an idle timeout or an ID used elsewhere.
+            # Signature still verified; expiry waived for the message alone.
+            msg_sid = sid or jwt_auth.sid_unverified(raw_cookie)
+            detail, code = await run_in_threadpool(auth_svc_.denied_detail, msg_sid)
             body: dict = {"detail": detail}
             if code:
                 body["code"] = code
@@ -569,7 +580,36 @@ async def require_auth(request: Request, call_next):
         # Routers that make finer distinctions than a path prefix can read these
         # rather than asking the database a question already answered here.
         request.state.permissions = perms or set()
+
+        # SLIDING EXPIRY. The cookie used to be minted once at login with a
+        # fixed max-age and never touched again, so the browser dropped it
+        # that many minutes after LOGIN however hard somebody was working —
+        # the idle policy was always meant to run from last activity, and the
+        # cookie never did. Re-minted past half its life, which an active
+        # session always reaches and an idle one never does.
+        if jwt_auth.needs_refresh(raw_cookie, auth_minutes()):
+            response = await call_next(request)
+            _refresh_cookie(response, sid, session["emp_id"])
+            return response
     return await call_next(request)
+
+
+def auth_minutes() -> int:
+    from app.services import auth as auth_svc_
+    return auth_svc_.IDLE_MINUTES
+
+
+def _refresh_cookie(response, sid: str, emp_id: str) -> None:
+    """Re-set the session cookie with a newly signed token."""
+    from app.config import get_settings
+    from app.services import auth as auth_svc_
+    from app.services import jwt_auth as jwt_
+    response.set_cookie(
+        "mines_session", jwt_.issue(sid, emp_id, auth_svc_.IDLE_MINUTES),
+        httponly=True, samesite="lax",
+        secure=get_settings().app_env.lower() == "production",
+        max_age=auth_svc_.IDLE_MINUTES * 60, path="/",
+    )
 
 
 # REGISTERED AFTER require_auth ON PURPOSE. Starlette runs the
