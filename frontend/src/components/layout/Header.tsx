@@ -1,6 +1,6 @@
 "use client";
 import { format } from "date-fns";
-import { RefreshCw, MoreVertical, PencilLine, Boxes, Droplets } from "lucide-react";
+import { RefreshCw, MoreVertical, PencilLine, Boxes, Droplets, Pickaxe } from "lucide-react";
 import AlertsBell from "./AlertsBell";
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -206,13 +206,21 @@ function ActionsMenu() {
             // the other two: what the user is doing is entering a plan, and
             // the dialog is where they find out it wants a spreadsheet.
             ["desilting-plan", "Enter Desilting Plan", Droplets],
+            // Not "Enter" like the three above, because this is not a figure
+            // being entered -- it is which machine digs what for the month,
+            // and the word the mine uses for it is the plan.
+            ["equipment-plan", "Equipment Excavation Plan", Pickaxe],
           ] as const).map(([which, label, Icon]) => (
             <button
               key={which}
               role="menuitem"
               onClick={() => {
                 setOpen(false);
-                setPage("mis");
+                // Each dialog is owned by the section holding the figures it
+                // needs, so opening one also goes to that section. The
+                // excavation plan belongs to OEE/LCM, which it feeds; the
+                // other three to the MIS dashboard.
+                setPage(which === "equipment-plan" ? "oee" : "mis");
                 openDialog(which);
               }}
               className="w-full flex items-center gap-2 px-3 py-2 text-left text-[12px] font-semibold text-txt-secondary hover:bg-bg-section hover:text-navy transition-colors"

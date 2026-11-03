@@ -183,9 +183,10 @@ export interface ExecPlantRow {
 
 /** One column of the report — TD or MTD. Despatch is keyed by CUSTOMERNO. */
 /** Overburden or De-Silting, plan against actual, in CuM.
- *  `plan` and `pct` are null on De-Silting because no plan table exists for it
- *  anywhere — `no_plan` marks that as permanent rather than not-yet-arrived,
- *  so the screen can explain the blank instead of printing a bare dash. */
+ *  `no_plan` marks a blank the screen can explain instead of printing a bare
+ *  dash, for two different reasons depending on the row: de-silting has no
+ *  plan table anywhere (permanent), while overburden simply has no plan
+ *  entered for this month yet (someone can fix it). */
 export interface ExecExcavationRow {
   key:     "ob" | "desilt";
   label:   string;
@@ -921,6 +922,15 @@ export interface OEEMachineRow {
   ore_pct:      number | null;
   ob_pct:       number | null;
   other_pct:    number | null;
+  /** THE ORE / OB COLUMN. What the mine assigned this machine to for the
+   *  month, from the Equipment Excavation Plan — not what it actually moved,
+   *  which is the `material` fields above and is now the tooltip. null means
+   *  the plan has never named this machine, in any month. */
+  plan_material: "ORE" | "OB" | null;
+  /** "entered" = this month's own plan; "carried" = the latest earlier month,
+   *  named in plan_from. */
+  plan_source:   "entered" | "carried" | null;
+  plan_from:     string | null;
   /** running_hours / (god − breakdown), capped at 100 — the MIS Equipment
    *  section's formula with the shift log in place of the GPS feed. */
   utilisation:  number | null;
@@ -955,6 +965,12 @@ export interface OEEFleet {
   ore_pct:      number | null;
   ob_pct:       number | null;
   other_pct:    number | null;
+  /** How the group's plan split. Counts, not an average — a plan is a label
+   *  per machine, so there is no weighted mean of ORE and OB to take. */
+  plan_ore:       number;
+  plan_ob:        number;
+  plan_unplanned: number;
+  plan_carried:   number;
   /** running_hours / (god − breakdown), capped at 100 — the MIS Equipment
    *  section's formula with the shift log in place of the GPS feed. */
   utilisation:  number | null;
@@ -1082,6 +1098,37 @@ export interface LCMBasis {
   ob_factor:             number;   // CuM per hour
   ore_machines:          string[];
   ob_machines:           string[];
+  /** Ore hours + OB hours, against the fleet's own total for the period.
+   *  Equal means no machine is missing from the plan. Anything less says how
+   *  much is unaccounted for — and it is the only visible symptom there is,
+   *  because the Planned Loss column foots to the Deviation either way. */
+  hours_counted:         number;
+  hours_excluded:        number;
+  hours_fleet:           number;
+  hours_coverage_pct:    number | null;
+}
+
+/** Where the month's ORE/OB split came from. */
+export interface LCMPlan {
+  /** entered = the mine assigned every machine for this month.
+   *  carried = some or all came from an earlier month, named in carried_from.
+   *  none = the table is readable and empty.
+   *  unavailable = minehub could not be read; these are built-in defaults. */
+  status:        "entered" | "carried" | "none" | "unavailable";
+  month:         string;
+  ore:           string[];
+  ob:            string[];
+  /** Machines whose hours reach neither bucket. */
+  excluded:      string[];
+  /** Assigned, but absent from the OEE fleet list, so unmatchable to hours. */
+  no_spec:       string[];
+  /** Never assigned in any month. */
+  unassigned:    string[];
+  carried:       { equipment_name: string; material_type: string; from_month: string }[];
+  carried_from:  string | null;
+  month_entered: boolean;
+  /** The period crosses a month boundary; the plan has no finer grain. */
+  spans_months:  boolean;
 }
 
 export interface LCMCoverage {
@@ -1111,6 +1158,7 @@ export interface LCMResponse {
   from_date: string;
   to_date:   string;
   basis:     LCMBasis;
+  plan:      LCMPlan;
   costing:   LCMCosting;
   coverage:  LCMCoverage;
   rows:      LCMRow[];

@@ -31,22 +31,102 @@ from app.services.sap_source import sap_one
 
 from app.services import breakdown as bd
 from app.services import ibm_rates
+from app.services import equipment_plan as eqp
+from app.services.oee import EXCAVATORS as _FLEET_SPEC
 
 # Actuals are net of SAP reversal documents. Without this the ore deviation
 # was UNDERSTATED — Aug 2026 read 8,366 MT / Rs 13.75 Cr instead of
 # 11,806 MT / Rs 19.41 Cr, because reversals inflated the actual.
 from app.services.sap_movement import PRODUCTION_QTY
 
-# ── Machine groups (own equipment only) ───────────────────────────────────────
-ORE_MACHINES = [
-    {"name": "TATA-470(7)", "code": "470-7", "sap_eq": "000000000000700086"},
-    {"name": "TATA-470(2)", "code": "470-2", "sap_eq": "000000000000700042"},
-]
-OB_MACHINES = [
-    {"name": "TATA-370(5)", "code": "370-5", "sap_eq": "000000000000700064"},
-    {"name": "TATA-370(4)", "code": "370-4", "sap_eq": "000000000000700053"},
-    {"name": "TATA-220(8)", "code": "220-8", "sap_eq": "000000000000700090"},
-]
+# ── Machine groups ───────────────────────────────────────────────────────────
+# WHICH MACHINE DIGS WHAT IS NO LONGER WRITTEN HERE. The mine assigns each
+# excavator to ORE or OB at the start of the month through "Equipment
+# Excavation Plan", and services/equipment_plan.py resolves the month. These
+# two lists are only what the page falls back to when that plan cannot be READ
+# -- minehub is reached over the VPN and is not always up -- and when they are
+# used the response says so, so a stale default is never mistaken for the
+# mine's own answer.
+DEFAULT_ORE = ("TATA-470(7)", "TATA-470(2)")
+DEFAULT_OB  = ("TATA-370(5)", "TATA-370(4)", "TATA-220(8)")
+
+# How each machine is found in the two systems that hold its hours: `code` and
+# `name` for the IMOS shift log, `sap_eq` for breakdown and PM. Taken from the
+# OEE section's own fleet list rather than copied, so the two sections cannot
+# describe the same machine differently. A machine in the equipment master with
+# no entry here cannot be matched to any hours at all -- that is reported, not
+# silently dropped.
+_SPEC = {m["name"]: {"name": m["name"], "code": m["code"],
+                     "sap_eq": m["sap_eq"]} for m in _FLEET_SPEC}
+
+
+def _specs(names) -> list[dict]:
+    return [_SPEC[n] for n in names if n in _SPEC]
+
+
+#: What the machine split is, and how confident the page may be about it.
+PLAN_ENTERED, PLAN_CARRIED = "entered", "carried"
+PLAN_NONE, PLAN_UNAVAILABLE = "none", "unavailable"
+
+
+def _resolve_plan(fd: date, td: date) -> dict:
+    """This period's ORE/OB split, with its provenance attached.
+
+    FOUR OUTCOMES, AND THE PAGE MUST BE ABLE TO TELL THEM APART:
+
+        entered      the mine assigned every machine for this month
+        carried      some or all came from an earlier month, which is named
+        none         the plan table is reachable and empty -- the mine has
+                     never assigned these machines
+        unavailable  minehub could not be read, so these are the built-in
+                     defaults and nobody should take them as the mine's answer
+
+    The last two look identical if both are reported as "no plan", and they
+    are not the same thing at all: one is a mine that has not entered a plan,
+    the other is a database nobody could reach.
+    """
+    plan = eqp.resolve_detached(fd)
+    if plan is None:
+        return {
+            "status": PLAN_UNAVAILABLE,
+            "month": fd.replace(day=1).isoformat(),
+            "ore": list(DEFAULT_ORE), "ob": list(DEFAULT_OB),
+            "excluded": [], "no_spec": [], "unassigned": [],
+            "carried": [], "carried_from": None, "month_entered": False,
+            "spans_months": fd.replace(day=1) != td.replace(day=1),
+        }
+
+    # A machine the mine assigned that the OEE fleet list does not describe
+    # cannot be matched to any hours in either system, so it is excluded --
+    # BY NAME, into the coverage line, never quietly.
+    no_spec = sorted(n for n in plan["assignments"] if n not in _SPEC)
+    ore = [n for n in plan["ore"] if n in _SPEC]
+    ob  = [n for n in plan["ob"]  if n in _SPEC]
+
+    if not ore and not ob:
+        status = PLAN_NONE
+    elif plan["carried"]:
+        status = PLAN_CARRIED
+    else:
+        status = PLAN_ENTERED
+
+    return {
+        "status": status,
+        "month": plan["month"],
+        "ore": ore, "ob": ob,
+        # Everything whose hours reach neither bucket: never assigned, or
+        # assigned but unmatchable.
+        "excluded": sorted(set(plan["unassigned"]) | set(no_spec)),
+        "no_spec": no_spec,
+        "unassigned": plan["unassigned"],
+        "carried": plan["carried"],
+        "carried_from": plan["carried_from"],
+        "month_entered": plan["month_entered"],
+        # The plan has no grain finer than a month, by the mine's decision, so
+        # a range crossing a month boundary is resolved on the month it starts
+        # in. Said rather than assumed.
+        "spans_months": fd.replace(day=1) != td.replace(day=1),
+    }
 
 # Plan / actual sources — identical to the Production and OB sections so the
 # LCM denominators always agree with what those pages already display.
@@ -300,6 +380,11 @@ def _shift_hours(db: Session, machines: list[dict], fd: date, td: date,
     `columns` comes from discover_loss_heads(), so a newly added loss column is
     summed here without this function changing.
     """
+    # An empty group is a real state now that the groups come from a plan --
+    # a month where every machine was put on ore leaves the OB group empty.
+    # Without this the WHERE clause would be built as "AND ()".
+    if not machines:
+        return {c: 0.0 for c in columns} | {"_rows": 0, "_days": 0}
     sums = ", ".join(
         f"SUM(COALESCE(CAST(NULLIF(`{c}`,'') AS DECIMAL(14,2)),0)) AS s_{c}" for c in columns
     )
@@ -332,6 +417,7 @@ def _sap_breakdown(db: Session, machines: list[dict], fd: date, td: date) -> flo
     that began last month and is still running counts the part that falls in
     this one.
     """
+    machines = [m for m in machines if m.get("sap_eq")]
     if not machines:
         return 0.0
     ph = ", ".join(f":e{i}" for i in range(len(machines)))
@@ -347,6 +433,11 @@ def _sap_breakdown(db: Session, machines: list[dict], fd: date, td: date) -> flo
 def _sap_pm(db: Session, machines: list[dict], fd: date, td: date) -> float:
     """SAP BA03 order hours. WORK_HOURS is the only usable duration column —
     DATEDIFF(completion, start) is 0 because orders open and close same-day."""
+    # Only own machines are in SAP at all; a hired one carries sap_eq = NULL,
+    # and an empty list would build "IN ()" and fail to parse.
+    machines = [m for m in machines if m.get("sap_eq")]
+    if not machines:
+        return 0.0
     ph = ", ".join(f":e{i}" for i in range(len(machines)))
     params: dict = {"fd": fd, "td": td, "plant": PLANT, "wc": WORK_CENTRE}
     for i, m in enumerate(machines):
@@ -358,6 +449,47 @@ def _sap_pm(db: Session, machines: list[dict], fd: date, td: date) -> float:
           AND EQUIPMENT_NO IN ({ph}) AND BASIC_START_DATE BETWEEN :fd AND :td
     """), params).fetchone()
     return _n(row.hrs) if row else 0.0
+
+
+def _downtime(db: Session, machines: list[dict], fd: date, td: date
+              ) -> tuple[float, float]:
+    """Breakdown and preventive-maintenance hours for a group — from whichever
+    system actually recorded them.
+
+    THE SOURCE IS A PROPERTY OF THE MACHINE, NOT OF THE HEAD. Own equipment is
+    a Balasore asset with a SAP equipment number, and its downtime is an M2
+    notification and a BA03 order. A hired machine is not an asset of ours, so
+    SAP has never heard of it; its downtime is written into the shift log's
+    own `breakdown` and `maintenance` columns. This is the rule the OEE table
+    has always applied -- it prints SAP or SHIFT LOG against each row's BD Hrs
+    -- and the mine confirmed it for the LCM on 2026-11-03.
+
+    This replaces reading both heads from SAP for everybody, which returned a
+    flat 0.00 for every hired machine. That was harmless only while the LCM
+    covered own equipment alone; the moment the mine can assign a hired
+    machine to ore or OB, it would have brought the machine's other heads in
+    and silently dropped its breakdown -- in October, 114.70 hrs of breakdown
+    and 17.90 of maintenance across the five hired excavators.
+
+    THE TWO FIGURES ARE STILL NOT THE SAME MEASUREMENT, and nothing here
+    pretends otherwise. SAP counts from notification open to close, including
+    unmanned nights; the shift log counts downtime inside a manned shift. On
+    TATA-470(7) that is 604.88 hours against 752.00. They are added into one
+    head because each machine has exactly one of them, so no machine is ever
+    counted on both bases -- not because the bases agree.
+    """
+    own   = [m for m in machines if m.get("sap_eq")]
+    hired = [m for m in machines if not m.get("sap_eq")]
+
+    bd = _sap_breakdown(db, own, fd, td)
+    pm = _sap_pm(db, own, fd, td)
+
+    if hired:
+        cols = list(SAP_SOURCED)                    # breakdown, maintenance
+        log = _shift_hours(db, hired, fd, td, cols)
+        bd += log.get("breakdown", 0.0)
+        pm += log.get("maintenance", 0.0)
+    return bd, pm
 
 
 def _plan_actual(db: Session, fd: date, td: date) -> dict:
@@ -702,13 +834,20 @@ def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
     heads      = discover_loss_heads(db)
     shift_cols = [h["column"] for h in heads if h["column"] not in SAP_SOURCED]
 
-    ore_shift = _shift_hours(db, ORE_MACHINES, from_date, to_date, shift_cols)
-    ob_shift  = _shift_hours(db, OB_MACHINES,  from_date, to_date, shift_cols)
+    # ── WHICH MACHINE DUG WHAT, THIS MONTH ──────────────────────────────────
+    # The month is taken from from_date. A range inside one month -- which is
+    # what the page sends, MTD -- resolves to that month's plan; a range that
+    # straddles a month boundary uses the month it STARTS in, and says so, as
+    # the plan has no finer grain than a month by the mine's own decision.
+    plan = _resolve_plan(from_date, to_date)
+    ore_machines = _specs(plan["ore"])
+    ob_machines  = _specs(plan["ob"])
 
-    ore_bd = _sap_breakdown(db, ORE_MACHINES, from_date, to_date)
-    ob_bd  = _sap_breakdown(db, OB_MACHINES,  from_date, to_date)
-    ore_pm = _sap_pm(db, ORE_MACHINES, from_date, to_date)
-    ob_pm  = _sap_pm(db, OB_MACHINES,  from_date, to_date)
+    ore_shift = _shift_hours(db, ore_machines, from_date, to_date, shift_cols)
+    ob_shift  = _shift_hours(db, ob_machines,  from_date, to_date, shift_cols)
+
+    ore_bd, ore_pm = _downtime(db, ore_machines, from_date, to_date)
+    ob_bd,  ob_pm  = _downtime(db, ob_machines,  from_date, to_date)
 
     def hours(source: str) -> tuple[float, float]:
         if source == "SAP_BD": return ore_bd, ob_bd
@@ -723,6 +862,30 @@ def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
 
     tot_ore_hrs = sum(r[2] for r in raw)
     tot_ob_hrs  = sum(r[3] for r in raw)
+
+    # ── THE COVERAGE GUARD ──────────────────────────────────────────────────
+    # Hours belonging to a fleet machine that reached NEITHER bucket, because
+    # it has never been assigned or because nothing in the OEE fleet list says
+    # how to find its hours.
+    #
+    # WHY THIS LINE EXISTS AT ALL. Each factor is Deviation / its own hour
+    # total, so the Planned Loss column foots to the Deviation whatever the
+    # hours are -- a machine missing from the plan does not break the total and
+    # leaves no symptom on the page. What it does instead is shrink the
+    # denominator, which lifts every head in proportion and moves the
+    # controllable / non-controllable split of the rupee value. 200 OB hours
+    # missing takes the factor from 5.5627 to 6.2584 CuM/hr and overstates
+    # every OB head by 12.5%, with nothing on screen to say so. This number is
+    # the thing to read before the rupee figure.
+    excluded = _specs(plan["excluded"])
+    if excluded:
+        ex_shift = _shift_hours(db, excluded, from_date, to_date, shift_cols)
+        ex_bd, ex_pm = _downtime(db, excluded, from_date, to_date)
+        ex_hrs = sum(ex_shift.get(c, 0.0) for c in shift_cols) + ex_bd + ex_pm
+    else:
+        ex_hrs = 0.0
+    counted_hrs = tot_ore_hrs + tot_ob_hrs
+    fleet_hrs   = counted_hrs + ex_hrs
 
     ore_factor = (ore_dev / tot_ore_hrs) if tot_ore_hrs > 0 else 0.0
     ob_factor  = (ob_dev  / tot_ob_hrs)  if tot_ob_hrs  > 0 else 0.0
@@ -803,9 +966,22 @@ def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
             "total_ob_loss_hours":  round(tot_ob_hrs, 2),
             "ore_factor": round(ore_factor, 4),
             "ob_factor":  round(ob_factor, 4),
-            "ore_machines": [m["name"] for m in ORE_MACHINES],
-            "ob_machines":  [m["name"] for m in OB_MACHINES],
+            "ore_machines": [m["name"] for m in ore_machines],
+            "ob_machines":  [m["name"] for m in ob_machines],
+            # Ore hours + OB hours against the fleet's own total. Equal means
+            # no machine is missing and both factors are sound; anything less
+            # says exactly how much is unaccounted for. See the note above
+            # tot_ore_hrs for why a percentage is the only visible symptom.
+            "hours_counted":  round(counted_hrs, 2),
+            "hours_excluded": round(ex_hrs, 2),
+            "hours_fleet":    round(fleet_hrs, 2),
+            "hours_coverage_pct":
+                round(counted_hrs / fleet_hrs * 100, 1) if fleet_hrs > 0 else None,
         },
+        # How the machine split above was arrived at, and everything the page
+        # must say about it: the month it came from, machines carried forward
+        # from an earlier month, and any left out entirely.
+        "plan": plan,
         # Grade-wise plan feeding the weighted IBM rate. ore_plan is carried
         # alongside grade_plan_total so a mismatch between ORE_QTY and
         # HG+MG+LG is visible rather than silently absorbed — it does not

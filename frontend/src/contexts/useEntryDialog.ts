@@ -14,7 +14,7 @@ import { create } from "zustand";
  * would render on top of the first with the first still mounted behind it. One
  * field makes that unrepresentable.
  */
-export type EntryDialog = "prev-day" | "mines-stock" | "desilting-plan";
+export type EntryDialog = "prev-day" | "mines-stock" | "desilting-plan" | "equipment-plan";
 
 interface EntryDialogStore {
   which: EntryDialog | null;
