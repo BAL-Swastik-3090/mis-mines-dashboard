@@ -133,8 +133,16 @@ if settings.minehub_enabled:
         # same way. The reverse risk -- a stale local copy shadowing the live
         # feed -- is why migration 090 drops the old mirror outright rather
         # than leaving it in place unused.
-        connect_args={"options":
-                      f"-csearch_path={settings.pg_schema},sap_odata_api,public"},
+        #
+        # application_name is set for the same reason the login is no longer
+        # `postgres` (migration 095): a count of corpappdb's 55 open sessions
+        # could not say which were this dashboard's, because 49 of them named
+        # no application at all. Named, they are one `SELECT application_name`
+        # away in pg_stat_activity.
+        connect_args={
+            "options": f"-csearch_path={settings.pg_schema},sap_odata_api,public",
+            "application_name": "mines_dashboard",
+        },
     )
 
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

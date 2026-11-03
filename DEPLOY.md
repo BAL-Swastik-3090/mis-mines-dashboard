@@ -636,13 +636,24 @@ For reference, the block that was added:
 PG_HOST=192.168.10.27
 PG_PORT=5432
 PG_DATABASE=corpappdb
-PG_USER=postgres
+PG_USER=mines_app
 PG_PASSWORD=<held by IT, not in this repo>
 PG_SCHEMA=minehub
 PG_SSLMODE=prefer
 ```
 
 Then `docker compose up -d backend` to pick it up.
+
+**On `PG_USER`.** This was `postgres` — the superuser — until 2026-11-03.
+Migration 095 creates `mines_app`, which can read and write `minehub` and read
+`sap_odata_api`, `balcorpdb` and `public`, and nothing else. It is not a
+superuser, owns no object, and cannot create a database or write SAP's feed.
+Its password is set directly on the server, never in a migration or this repo.
+The precedent is `pems_sync`, which PEMS has used the same way.
+
+Migrations are still applied by hand as `postgres` or another DBA role;
+`mines_app` holds CREATE on `minehub` so it *can* run one, and default
+privileges are set in both directions so neither side strands the other.
 
 **A decision goes with it:** those settings point at the same database the
 development machine uses. One schema shared between dev and production means a
