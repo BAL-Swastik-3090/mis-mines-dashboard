@@ -44,6 +44,20 @@ python minehub/check_migrations.py
 It names every table that is live but undeclared. Partitions of a declared
 parent are not counted.
 
+**Run it from a branch with the full migration set.** It compares the live
+database against `minehub/migrations/` as that branch has it, so a branch six
+files behind reports 136 undeclared tables and looks broken. That number is
+the branch, not the database. Rebase or merge first, then read the result.
+
+**And beware a checker that is lying to you.** A harness that builds a
+migration into a scratch schema has to prove the scratch schema actually
+gained something before it compares anything. These migrations use unqualified
+table names, so rewriting a `minehub.` prefix does not redirect them —
+`SET LOCAL search_path` does. Get that wrong and the statements run against
+the live schema, do nothing because they are `IF NOT EXISTS`, and the
+comparison then passes judgement on an empty scratch schema and returns a
+confident PASS that means nothing. Assert the table count went up first.
+
 ## Related
 
 - Migrations are applied by hand by a DBA role, not by the application. The
