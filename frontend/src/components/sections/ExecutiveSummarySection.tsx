@@ -283,7 +283,8 @@ function StockBlock({ d }: { d: ExecutiveSummaryResponse }) {
 
 /* ── Blocks 2-4 · a grade table, TD beside MTD ─────────────────────────── */
 function GradeTable({ icon, title, sub, qtyLabel, tdLabel, mtdLabel,
-                     td, mtd, tdTotal, mtdTotal, showPlan = false }: {
+                     td, mtd, tdTotal, mtdTotal, showPlan = false,
+                     qtyDp = 2 }: {
   icon: React.ReactNode; title: string; sub: string; qtyLabel: string;
   /* The heading says WHICH day and WHICH span, not just "Today". The page is
      read a day or two in arrears — the mine files in arrears — so "Today" on a
@@ -296,6 +297,14 @@ function GradeTable({ icon, title, sub, qtyLabel, tdLabel, mtdLabel,
      show the two extra columns. A row whose plan is null still prints a dash
      there: no plan was written for that grade, which is not a plan of zero. */
   showPlan?: boolean;
+  /* Decimal places for the TONNAGE columns only — Plan and the quantity, in
+     the body and in the footer. Production is booked in whole tonnes and the
+     mine reads it that way, so the production tables pass 0. Despatch keeps
+     the default: a part tonne off a weighbridge is a real quantity somebody
+     is invoiced for. The assay columns beside them are untouched either way —
+     Cr/Fe and Cr2O3 are measurements, not quantities, and rounding those
+     would change what they say. */
+  qtyDp?: number;
 }) {
   /* Rows are keyed by grade and merged across the two periods, never zipped by
      index: a grade present in MTD but not TD — "Not yet assayed" is the live
@@ -355,11 +364,11 @@ function GradeTable({ icon, title, sub, qtyLabel, tdLabel, mtdLabel,
                 </td>
                 {showPlan && (
                   <td className={`${TD} text-right border-l border-border-light text-txt-light`}>
-                    <N v={a?.plan} />
+                    <N v={a?.plan} dp={qtyDp} />
                   </td>
                 )}
                 <td className={`${TD} text-right whitespace-nowrap ${showPlan ? "" : "border-l border-border-light"}`}>
-                  <N v={a?.qty} strong />
+                  <N v={a?.qty} dp={qtyDp} strong />
                 </td>
                 {showPlan && <td className={`${TD} text-right`}><Ach v={a?.ach_pct} /></td>}
                 <td className={`${TD} text-right`}><N v={a?.crfe} /></td>
@@ -369,11 +378,11 @@ function GradeTable({ icon, title, sub, qtyLabel, tdLabel, mtdLabel,
                 <td className={GAP} aria-hidden />
                 {showPlan && (
                   <td className={`${TD} text-right border-l border-border text-txt-light ${MTD_BG}`}>
-                    <N v={b?.plan} />
+                    <N v={b?.plan} dp={qtyDp} />
                   </td>
                 )}
                 <td className={`${TD} text-right whitespace-nowrap ${MTD_BG} ${showPlan ? "" : "border-l border-border"}`}>
-                  <N v={b?.qty} strong />
+                  <N v={b?.qty} dp={qtyDp} strong />
                 </td>
                 {showPlan && <td className={`${TD} text-right ${MTD_BG}`}><Ach v={b?.ach_pct} /></td>}
                 <td className={`${TD} text-right ${MTD_BG}`}><N v={b?.crfe} /></td>
@@ -391,11 +400,11 @@ function GradeTable({ icon, title, sub, qtyLabel, tdLabel, mtdLabel,
             </td>
             {showPlan && (
               <td className={`${TD} text-right border-l border-border-light text-txt-secondary`}>
-                <N v={tdTotal?.plan} />
+                <N v={tdTotal?.plan} dp={qtyDp} />
               </td>
             )}
             <td className={`${TD} text-right whitespace-nowrap ${showPlan ? "" : "border-l border-border-light"}`}>
-              <N v={tdTotal?.qty} strong />
+              <N v={tdTotal?.qty} dp={qtyDp} strong />
             </td>
             {showPlan && <td className={`${TD} text-right`}><Ach v={tdTotal?.ach_pct} strong /></td>}
             <td className={`${TD} text-right`}><N v={tdTotal?.crfe} strong /></td>
@@ -405,11 +414,11 @@ function GradeTable({ icon, title, sub, qtyLabel, tdLabel, mtdLabel,
             <td className={GAP} aria-hidden />
             {showPlan && (
               <td className={`${TD} text-right border-l border-border text-txt-secondary`}>
-                <N v={mtdTotal?.plan} />
+                <N v={mtdTotal?.plan} dp={qtyDp} />
               </td>
             )}
             <td className={`${TD} text-right whitespace-nowrap ${showPlan ? "" : "border-l border-border"}`}>
-              <N v={mtdTotal?.qty} strong />
+              <N v={mtdTotal?.qty} dp={qtyDp} strong />
             </td>
             {showPlan && <td className={`${TD} text-right`}><Ach v={mtdTotal?.ach_pct} strong /></td>}
             <td className={`${TD} text-right`}><N v={mtdTotal?.crfe} strong /></td>
@@ -461,6 +470,30 @@ function Ach({ v, strong = false }: { v?: number | null; strong?: boolean }) {
    its card with a blank target too. The cell says "no plan" rather than a bare
    dash, because a dash on this page means "not reported yet" and would have
    somebody chasing the mine for a figure that does not exist. */
+/* THREE REASONS A CELL IS BLANK, AND THEY ARE NOT THE SAME. Saying "no plan"
+   for all of them either sends somebody looking for a figure that cannot
+   exist, or lets a missing one sit unnoticed. Each key says which it is. */
+function blankWhy(key: string): string {
+  if (key === "desilt")
+    return "No de-silting plan is held in any system — the MIS dashboard "
+         + "shows this blank too";
+  if (key.startsWith("shift_"))
+    return "No shifting plan has been uploaded for this month — load it "
+         + 'from the header menu, "Enter Shifting Plan"';
+  return "No excavation plan has been entered for this month yet — "
+       + "it is loaded into mines_daily_excavation_plan";
+}
+
+/* The chip tells the three groups apart at a glance: overburden is the waste
+   the ore sits under, de-silting is water management, and the three shifting
+   rows are material moved around the mine rather than out of it. One hue per
+   group, none of them the red/amber/green the Ach % column uses. */
+function activityChip(key: string): string {
+  if (key === "ob") return "bg-[#f3ece3] text-[#7a5a2e]";
+  if (key === "desilt") return "bg-[#e0f2f1] text-[#00695c]";
+  return "bg-[#ede7f6] text-[#4527a0]";
+}
+
 function ExcavationBlock({ statusTill, td, mtd }: {
   statusTill: string; td: ExecExcavationRow[]; mtd: ExecExcavationRow[];
 }) {
@@ -476,11 +509,13 @@ function ExcavationBlock({ statusTill, td, mtd }: {
 
   const cells = (r: ExecExcavationRow | undefined, tint: string) => (
     <>
+      {/* Overburden in CuM and de-silting in CuM are excavation output, read
+          the same way as the tonnes above — whole units. */}
       <td className={`${TD} text-right border-l border-border-light ${tint}`}>
-        <N v={r?.plan} />
+        <N v={r?.plan} dp={0} />
       </td>
       <td className={`${TD} text-right whitespace-nowrap ${tint}`}>
-        <N v={r?.actual} strong />
+        <N v={r?.actual} dp={0} strong />
       </td>
       <td className={`${TD} text-right whitespace-nowrap ${tint}`}>
         {/* THE TWO BLANKS MEAN DIFFERENT THINGS. De-silting has no plan table
@@ -491,10 +526,7 @@ function ExcavationBlock({ statusTill, td, mtd }: {
             does not exist, or lets a missing one sit unnoticed. */}
         {r?.no_plan
           ? <span className="text-[9px] uppercase tracking-wide text-txt-light"
-                  title={r.key === "desilt"
-                    ? "No de-silting plan is held in any system — the MIS dashboard shows this blank too"
-                    : "No excavation plan has been entered for this month yet — "
-                      + "it is loaded into mines_daily_excavation_plan"}>
+                  title={blankWhy(r.key)}>
               {r.key === "desilt" ? "no plan" : "not planned"}
             </span>
           : <span className={`font-bold ${pctTone(r?.pct)}`}>
@@ -505,7 +537,8 @@ function ExcavationBlock({ statusTill, td, mtd }: {
   );
 
   return (
-    <Card icon={<Mountain size={14} />} title="Overburden & De-Silting"
+    <Card icon={<Mountain size={14} />}
+          title="Overburden, De-Silting & Shifting"
           sub={statusTill}>
       <table className="w-full text-[12px] font-mono border-collapse">
         <thead>
@@ -535,9 +568,7 @@ function ExcavationBlock({ statusTill, td, mtd }: {
             return (
               <tr key={k} className="hover:bg-bg-light">
                 <td className={TD}>
-                  <span className={`px-1.5 py-0.5 rounded-sm text-[10px] font-bold tracking-wide ${
-                    k === "ob" ? "bg-[#f3ece3] text-[#7a5a2e]"
-                               : "bg-[#e0f2f1] text-[#00695c]"}`}>
+                  <span className={`px-1.5 py-0.5 rounded-sm text-[10px] font-bold tracking-wide ${activityChip(k)}`}>
                     {a?.label ?? b?.label ?? k}
                   </span>
                 </td>
@@ -557,6 +588,13 @@ function ExcavationBlock({ statusTill, td, mtd }: {
         {"   "}<span className="font-semibold">DE-SILTING ACTUAL · </span>IMOS
         day-wise excavation, variant 4, with the mine&apos;s own figure standing
         in for days IMOS has not filed.
+        {/* The three shifting rows have no feed behind them at all — both
+            halves are the mine's own, which is worth saying plainly rather
+            than letting them sit in a card whose other rows come from SAP. */}
+        {"   "}<span className="font-semibold">SHIFTING PLAN · </span>uploaded
+        month by month from the mine&apos;s sheet
+        {"   "}<span className="font-semibold">SHIFTING ACTUAL · </span>entered
+        by the mine, day by day — neither figure comes from a feed.
       </p>
     </Card>
   );
@@ -599,10 +637,10 @@ function PlantBlock({ statusTill, tdLabel, mtdLabel, td, mtd, tdTotal, mtdTotal 
             return (
               <tr key={n} className="hover:bg-bg-light">
                 <td className={`${TD} font-condensed font-bold text-[11px] text-navy`}>{n}</td>
-                <td className={`${TD} text-right border-l border-border-light`}><N v={a?.qty} strong /></td>
+                <td className={`${TD} text-right border-l border-border-light`}><N v={a?.qty} dp={0} strong /></td>
                 <td className={`${TD} text-right`}><N v={a?.cr} /></td>
                 <td className={GAP} aria-hidden />
-                <td className={`${TD} text-right border-l border-border ${MTD_BG}`}><N v={b?.qty} strong /></td>
+                <td className={`${TD} text-right border-l border-border ${MTD_BG}`}><N v={b?.qty} dp={0} strong /></td>
                 <td className={`${TD} text-right ${MTD_BG}`}>
                   <N v={b?.cr} />
                   {/* An average over part of the output is a different claim
@@ -621,12 +659,12 @@ function PlantBlock({ statusTill, tdLabel, mtdLabel, td, mtd, tdTotal, mtdTotal 
               Total
             </td>
             <td className={`${TD} text-right border-l border-border-light whitespace-nowrap`}>
-              <N v={tdTotal?.qty} strong />
+              <N v={tdTotal?.qty} dp={0} strong />
             </td>
             <td className={`${TD} text-right`}><N v={tdTotal?.cr} strong /></td>
             <td className={GAP} aria-hidden />
             <td className={`${TD} text-right border-l border-border whitespace-nowrap`}>
-              <N v={mtdTotal?.qty} strong />
+              <N v={mtdTotal?.qty} dp={0} strong />
             </td>
             <td className={`${TD} text-right`}><N v={mtdTotal?.cr} strong /></td>
           </tr>
@@ -898,7 +936,7 @@ export default function ExecutiveSummarySection() {
           <StockBlock d={d} />
 
           <GradeTable icon={<Pickaxe size={14} />} title="Mines Production"
-            sub={statusTill} qtyLabel="Production (MT)" showPlan
+            sub={statusTill} qtyLabel="Production (MT)" showPlan qtyDp={0}
             tdLabel={tdLabel} mtdLabel={mtdLabel}
             td={d.td.production} mtd={d.mtd.production}
             tdTotal={d.td.production_total} mtdTotal={d.mtd.production_total} />
@@ -907,7 +945,7 @@ export default function ExecutiveSummarySection() {
               it is beneficiated at plant 1210 against its own plan, and a
               tonne of it answers a different question from a tonne of ROM. */}
           <GradeTable icon={<Layers size={14} />} title="COB Production"
-            sub={statusTill} qtyLabel="Production (MT)" showPlan
+            sub={statusTill} qtyLabel="Production (MT)" showPlan qtyDp={0}
             tdLabel={tdLabel} mtdLabel={mtdLabel}
             td={d.td.cob ?? []} mtd={d.mtd.cob ?? []}
             tdTotal={d.td.cob_total} mtdTotal={d.mtd.cob_total} />

@@ -4,6 +4,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { TrendingUp } from "lucide-react";
 import { useEntryDialog } from "@/contexts/useEntryDialog";
 import DesiltingPlanModal from "@/components/sections/DesiltingPlanModal";
+import ShiftingActualModal from "@/components/sections/ShiftingActualModal";
+import ShiftingPlanModal   from "@/components/sections/ShiftingPlanModal";
 import ProductionKpiStrip from "@/components/kpi/ProductionKpiStrip";
 import ProductionCharts   from "@/components/charts/ProductionCharts";
 import GradeChart         from "@/components/charts/GradeChart";
@@ -34,6 +36,13 @@ export default function ProductionSection() {
     ]);
   }, [qc]);
 
+  /* One prefix covers the plan, the actual and their history: the plan
+     screen and the actual screen read each other's data, so a save on either
+     must refresh both. */
+  const afterShifting = useCallback(async () => {
+    await qc.invalidateQueries({ queryKey: ["shifting"] });
+  }, [qc]);
+
   return (
     <section className="space-y-4">
 
@@ -41,6 +50,21 @@ export default function ProductionSection() {
         open={dialog === "desilting-plan"}
         onClose={closeDialog}
         onSaved={afterSave}
+      />
+
+      {/* Shifting lives on this section for the same reason the de-silting
+          plan does: it is the mine's own day-wise movement figure, entered
+          here and read here. Both dialogs invalidate the same key, so the
+          actual screen sees a freshly uploaded plan without a reload. */}
+      <ShiftingActualModal
+        open={dialog === "shifting-actual"}
+        onClose={closeDialog}
+        onSaved={afterShifting}
+      />
+      <ShiftingPlanModal
+        open={dialog === "shifting-plan"}
+        onClose={closeDialog}
+        onSaved={afterShifting}
       />
 
       {/* Section title */}
