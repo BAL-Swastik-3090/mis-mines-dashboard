@@ -48,7 +48,16 @@ COMMENT ON ROLE mines_app IS
     'read-only on sap_odata_api, balcorpdb and public. Not a superuser, owns '
     'nothing. See migration 095.';
 
-GRANT CONNECT ON DATABASE corpappdb TO mines_app;
+-- Whichever database this is run against, not the one it was written for.
+-- Named literally, this line was the reason the whole migration set could not
+-- be replayed anywhere else: a rebuild on the development server in November
+-- 2026 applied 96 of 100 files and stopped here, on `database "corpappdb"
+-- does not exist`, taking 097 down with it for want of the role this creates.
+DO $$
+BEGIN
+    EXECUTE format('GRANT CONNECT ON DATABASE %I TO mines_app', current_database());
+END
+$$;
 
 -- ── minehub: the schema this application owns the contents of ───────────────
 GRANT USAGE, CREATE ON SCHEMA minehub TO mines_app;
@@ -61,50 +70,85 @@ GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA minehub TO mines_app;
 -- Tables a DBA adds to minehub later must reach this role too, or the next
 -- migration applied as postgres leaves the application unable to read its own
 -- new table. Both owners that create objects here are covered.
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA minehub
-    GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
-    ON TABLES TO mines_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE bal_dba IN SCHEMA minehub
-    GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
-    ON TABLES TO mines_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA minehub
-    GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO mines_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE bal_dba IN SCHEMA minehub
-    GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO mines_app;
+--
+-- EVERY ROLE BELOW IS CHECKED FOR FIRST. The estate roles -- bal_dba, the
+-- rp_* reporting roles, pems_sync -- exist on corpappdb and on nothing else.
+-- Named unconditionally, this file could be replayed only against the one
+-- server it was written on, which was found the first time the migration set
+-- was replayed from nothing: 096 of 100 applied, and this one stopped on
+-- `role "rp_minehub_ro" does not exist`. A grant to a role that is not there
+-- is not an error to raise, it is a grant with nothing to make.
+DO $$
+DECLARE owner_role text;
+BEGIN
+    FOREACH owner_role IN ARRAY ARRAY['postgres', 'bal_dba'] LOOP
+        CONTINUE WHEN NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = owner_role);
+        EXECUTE format(
+            'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA minehub '
+            'GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER '
+            'ON TABLES TO mines_app', owner_role);
+        EXECUTE format(
+            'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA minehub '
+            'GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO mines_app', owner_role);
+    END LOOP;
+END
+$$;
 
 -- ...and the reverse. Anything mines_app creates in minehub keeps the same
 -- audience the rest of the schema has, so reporting does not develop holes.
-ALTER DEFAULT PRIVILEGES FOR ROLE mines_app IN SCHEMA minehub
-    GRANT SELECT ON TABLES TO rp_all_ro, rp_minehub_ro;
-ALTER DEFAULT PRIVILEGES FOR ROLE mines_app IN SCHEMA minehub
-    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO rp_all_rw;
-ALTER DEFAULT PRIVILEGES FOR ROLE mines_app IN SCHEMA minehub
-    GRANT SELECT, INSERT, UPDATE ON TABLES TO pems_sync;
-ALTER DEFAULT PRIVILEGES FOR ROLE mines_app IN SCHEMA minehub
-    GRANT SELECT ON SEQUENCES TO rp_all_ro, rp_minehub_ro;
-ALTER DEFAULT PRIVILEGES FOR ROLE mines_app IN SCHEMA minehub
-    GRANT USAGE, SELECT ON SEQUENCES TO rp_all_rw;
+DO $$
+DECLARE
+    audience text;
+    grants   text[][] := ARRAY[
+        ['rp_all_ro',     'SELECT',                            'SELECT'],
+        ['rp_minehub_ro', 'SELECT',                            'SELECT'],
+        ['rp_all_rw',     'SELECT, INSERT, UPDATE, DELETE',    'USAGE, SELECT'],
+        ['pems_sync',     'SELECT, INSERT, UPDATE',            'SELECT']
+    ];
+    row_no int;
+BEGIN
+    FOR row_no IN 1 .. array_length(grants, 1) LOOP
+        audience := grants[row_no][1];
+        CONTINUE WHEN NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = audience);
+        EXECUTE format(
+            'ALTER DEFAULT PRIVILEGES FOR ROLE mines_app IN SCHEMA minehub '
+            'GRANT %s ON TABLES TO %I', grants[row_no][2], audience);
+        EXECUTE format(
+            'ALTER DEFAULT PRIVILEGES FOR ROLE mines_app IN SCHEMA minehub '
+            'GRANT %s ON SEQUENCES TO %I', grants[row_no][3], audience);
+    END LOOP;
+END
+$$;
 
--- ── sap_odata_api: SAP's feed. Read only -- the pipeline writes it ──────────
-GRANT USAGE ON SCHEMA sap_odata_api TO mines_app;
-GRANT SELECT ON ALL TABLES IN SCHEMA sap_odata_api TO mines_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA sap_odata_api
-    GRANT SELECT ON TABLES TO mines_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE bal_dba IN SCHEMA sap_odata_api
-    GRANT SELECT ON TABLES TO mines_app;
+-- ── the three read-only schemas ─────────────────────────────────────────────
+--   sap_odata_api  SAP's feed -- the pipeline writes it, this role never does
+--   balcorpdb      intranet_user_login, for authentication
+--   public         two views
+--
+-- A schema that is not present is skipped rather than raising: a rebuild
+-- stands minehub up first and the others arrive with their own platforms.
+DO $$
+DECLARE
+    sch        text;
+    owner_role text;
+BEGIN
+    FOREACH sch IN ARRAY ARRAY['sap_odata_api', 'balcorpdb', 'public'] LOOP
+        CONTINUE WHEN NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = sch);
 
--- ── balcorpdb: intranet_user_login, for authentication. Read only ───────────
-GRANT USAGE ON SCHEMA balcorpdb TO mines_app;
-GRANT SELECT ON ALL TABLES IN SCHEMA balcorpdb TO mines_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA balcorpdb
-    GRANT SELECT ON TABLES TO mines_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE bal_dba IN SCHEMA balcorpdb
-    GRANT SELECT ON TABLES TO mines_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE bal_balcorpdb IN SCHEMA balcorpdb
-    GRANT SELECT ON TABLES TO mines_app;
+        EXECUTE format('GRANT USAGE ON SCHEMA %I TO mines_app', sch);
+        EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA %I TO mines_app', sch);
 
--- ── public: two views live here ─────────────────────────────────────────────
-GRANT USAGE ON SCHEMA public TO mines_app;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO mines_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
-    GRANT SELECT ON TABLES TO mines_app;
+        FOREACH owner_role IN ARRAY ARRAY['postgres', 'bal_dba', 'bal_balcorpdb'] LOOP
+            CONTINUE WHEN NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = owner_role);
+            -- bal_balcorpdb owns objects in balcorpdb and in no other schema.
+            -- Looping it across all three granted five default privileges
+            -- that would never fire, which a comparison against the deployed
+            -- version caught: inert, but a difference nobody asked for.
+            CONTINUE WHEN owner_role = 'bal_balcorpdb' AND sch <> 'balcorpdb';
+            EXECUTE format(
+                'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I '
+                'GRANT SELECT ON TABLES TO mines_app', owner_role, sch);
+        END LOOP;
+    END LOOP;
+END
+$$;

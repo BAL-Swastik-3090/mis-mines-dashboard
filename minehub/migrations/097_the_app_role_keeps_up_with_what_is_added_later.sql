@@ -39,57 +39,63 @@ GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA minehub TO mines_app;
 GRANT EXECUTE ON ALL FUNCTIONS  IN SCHEMA minehub TO mines_app;
 GRANT EXECUTE ON ALL PROCEDURES IN SCHEMA minehub TO mines_app;
 
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA minehub
-    GRANT EXECUTE ON FUNCTIONS TO mines_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE bal_dba IN SCHEMA minehub
-    GRANT EXECUTE ON FUNCTIONS TO mines_app;
+-- ── everything below is conditional on the role or schema being there ───────
+-- The estate roles exist on corpappdb and nowhere else, and a rebuild stands
+-- minehub up before the other schemas arrive. Named unconditionally, this
+-- file could only ever be replayed against the server it was written on --
+-- see the note in 095, which failed the same way the first time the set was
+-- replayed from nothing.
+DO $$
+DECLARE
+    sch        text;
+    owner_role text;
+    audience   text;
+BEGIN
+    -- Functions a DBA adds to minehub later must stay callable.
+    FOREACH owner_role IN ARRAY ARRAY['postgres', 'bal_dba'] LOOP
+        CONTINUE WHEN NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = owner_role);
+        EXECUTE format(
+            'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA minehub '
+            'GRANT EXECUTE ON FUNCTIONS TO mines_app', owner_role);
+    END LOOP;
 
--- ...and the reverse, as 095 did for tables and sequences: a function this
--- role creates keeps the audience the rest of the schema has.
-ALTER DEFAULT PRIVILEGES FOR ROLE mines_app IN SCHEMA minehub
-    GRANT EXECUTE ON FUNCTIONS TO rp_all_ro, rp_all_rw, rp_minehub_ro;
+    -- ...and a function this role creates keeps the audience the rest of the
+    -- schema has, exactly as 095 arranged for tables and sequences.
+    FOREACH audience IN ARRAY ARRAY['rp_all_ro', 'rp_all_rw', 'rp_minehub_ro'] LOOP
+        CONTINUE WHEN NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = audience);
+        EXECUTE format(
+            'ALTER DEFAULT PRIVILEGES FOR ROLE mines_app IN SCHEMA minehub '
+            'GRANT EXECUTE ON FUNCTIONS TO %I', audience);
+    END LOOP;
 
--- ── sap_odata_api: read, and only read ──────────────────────────────────────
-GRANT USAGE ON SCHEMA sap_odata_api TO mines_app;
-GRANT SELECT ON ALL TABLES    IN SCHEMA sap_odata_api TO mines_app;
-GRANT SELECT ON ALL SEQUENCES IN SCHEMA sap_odata_api TO mines_app;
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA sap_odata_api TO mines_app;
+    -- The read-only schemas: sequences and functions, now and in future.
+    FOREACH sch IN ARRAY ARRAY['sap_odata_api', 'balcorpdb', 'public'] LOOP
+        CONTINUE WHEN NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = sch);
 
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA sap_odata_api
-    GRANT SELECT ON SEQUENCES TO mines_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE bal_dba IN SCHEMA sap_odata_api
-    GRANT SELECT ON SEQUENCES TO mines_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA sap_odata_api
-    GRANT EXECUTE ON FUNCTIONS TO mines_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE bal_dba IN SCHEMA sap_odata_api
-    GRANT EXECUTE ON FUNCTIONS TO mines_app;
+        EXECUTE format('GRANT USAGE ON SCHEMA %I TO mines_app', sch);
+        EXECUTE format('GRANT SELECT ON ALL TABLES    IN SCHEMA %I TO mines_app', sch);
+        EXECUTE format('GRANT SELECT ON ALL SEQUENCES IN SCHEMA %I TO mines_app', sch);
 
--- ── balcorpdb: intranet_user_login, for authentication. Read only ───────────
-GRANT USAGE ON SCHEMA balcorpdb TO mines_app;
-GRANT SELECT ON ALL TABLES    IN SCHEMA balcorpdb TO mines_app;
-GRANT SELECT ON ALL SEQUENCES IN SCHEMA balcorpdb TO mines_app;
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA balcorpdb TO mines_app;
+        -- NOT public. pg_stat_statements_reset lives there, and an
+        -- application has no business clearing the server's statement
+        -- statistics. Nothing in this application calls into that schema.
+        IF sch <> 'public' THEN
+            EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA %I TO mines_app', sch);
+        END IF;
 
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA balcorpdb
-    GRANT SELECT ON SEQUENCES TO mines_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE bal_dba IN SCHEMA balcorpdb
-    GRANT SELECT ON SEQUENCES TO mines_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE bal_balcorpdb IN SCHEMA balcorpdb
-    GRANT SELECT ON SEQUENCES TO mines_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA balcorpdb
-    GRANT EXECUTE ON FUNCTIONS TO mines_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE bal_dba IN SCHEMA balcorpdb
-    GRANT EXECUTE ON FUNCTIONS TO mines_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE bal_balcorpdb IN SCHEMA balcorpdb
-    GRANT EXECUTE ON FUNCTIONS TO mines_app;
-
--- ── public: two views live here ─────────────────────────────────────────────
-GRANT USAGE ON SCHEMA public TO mines_app;
-GRANT SELECT ON ALL TABLES    IN SCHEMA public TO mines_app;
-GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO mines_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
-    GRANT SELECT ON SEQUENCES TO mines_app;
-
--- NOT granted in public: EXECUTE ON ALL FUNCTIONS. pg_stat_statements_reset
--- lives here, and an application has no business clearing the server's
--- statement statistics. The application calls nothing in this schema.
+        FOREACH owner_role IN ARRAY ARRAY['postgres', 'bal_dba', 'bal_balcorpdb'] LOOP
+            CONTINUE WHEN NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = owner_role);
+            -- bal_balcorpdb owns objects in balcorpdb only; see 095.
+            CONTINUE WHEN owner_role = 'bal_balcorpdb' AND sch <> 'balcorpdb';
+            EXECUTE format(
+                'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I '
+                'GRANT SELECT ON SEQUENCES TO mines_app', owner_role, sch);
+            IF sch <> 'public' THEN
+                EXECUTE format(
+                    'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I '
+                    'GRANT EXECUTE ON FUNCTIONS TO mines_app', owner_role, sch);
+            END IF;
+        END LOOP;
+    END LOOP;
+END
+$$;
