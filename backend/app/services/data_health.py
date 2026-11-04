@@ -186,10 +186,16 @@ FEEDS: tuple[Feed, ...] = (
          MYSQL, "mines_cobp_sample_analysis", "Prod_date", ENTRY,
          "Feed, concentrate and tailings grades from the COB plant's own lab "
          "sheet."),
+    # MOVED OFF MySQL. `mines_dewatering_daily_data` stopped receiving rows on
+    # 15 October 2026; the Enter Daily Dewatering Data form now writes
+    # minehub.dewatering_daily_data, and the Dewatering section reads it. Left
+    # pointed at the old table this probe reported the feed weeks late while
+    # the screen beside it showed the current day -- the precise failure the
+    # docstring above warns about.
     Feed("dewatering", "Dewatering",
          ("mis", "intelligence"),
-         MYSQL, "mines_dewatering_daily_data", "date", ENTRY,
-         "Pump readings filed per area."),
+         MINEHUB, "dewatering_daily_data", "data_date", ENTRY,
+         "One row per day from the dewatering entry form."),
 
     # -- Telematics, automatic -----------------------------------------------
     Feed("telematics_man", "Telematics - MAN tippers",
