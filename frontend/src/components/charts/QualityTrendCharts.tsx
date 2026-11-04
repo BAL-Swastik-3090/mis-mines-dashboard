@@ -165,7 +165,13 @@ function Chart({ rows, destLabel, param }: {
           No consignments to {destLabel} in this period.
         </div>
       ) : (
-        <ReactECharts option={option} style={{ height: 260, width: "100%" }} notMerge />
+        /* CANVAS, SAID OUT LOUD, as every other chart here says it. It is
+           ECharts' default, but the HTML export depends on it twice over —
+           it waits for the canvas pixels to stop moving, then photographs
+           the canvas — and both of those fail silently, not loudly, against
+           an SVG renderer. */
+        <ReactECharts option={option} style={{ height: 260, width: "100%" }}
+                      opts={{ renderer: "canvas" }} notMerge />
       )}
     </div>
   );
