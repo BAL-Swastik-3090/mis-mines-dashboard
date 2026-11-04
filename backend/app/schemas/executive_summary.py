@@ -80,13 +80,19 @@ class ExcavationRow(BaseModel):
       desilt  permanently — no de-silting plan table exists anywhere
       ob      this month has not been entered into
               mines_daily_excavation_plan yet, which somebody can fix
+      shift_* no shifting plan has been uploaded for the month, which
+              somebody can fix through "Enter Shifting Plan"
 
     The second used to report a plan of 0 instead. Through 1-3 November 2026,
     before the month was loaded, the screen showed 0 CuM planned against 966
     CuM moved — which reads as a plan nobody kept rather than a plan nobody
     wrote. A month with no plan is not a plan of nought.
     """
-    key:     str                       # 'ob' | 'desilt'
+    #: 'ob' | 'desilt' | 'shift_lg' | 'shift_tailings' | 'shift_rehandling'.
+    #: A plain string rather than an enum: the three shifting rows are
+    #: dropped entirely when minehub cannot be read, and the screen keys
+    #: off whatever arrives.
+    key:     str
     label:   str
     unit:    str = "CuM"
     plan:    Optional[float] = None

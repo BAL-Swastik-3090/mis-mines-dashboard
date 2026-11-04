@@ -50,6 +50,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.services import desilting_plan as desilt_svc
+from app.services import shifting as shifting_svc
 from app.services import production as prod_svc
 from app.services import stock as stock_svc
 from app.services.despatch_grade import (
@@ -949,7 +950,7 @@ def _excavation(db: Session, mf: date, rd: date,
 
     def rows(ob_act: float, ob_plan: float | None, silt_act: float | None,
              silt_plan_qty: float | None, manual: float = 0.0,
-             silt_manual: float = 0.0) -> list[dict]:
+             silt_manual: float = 0.0, which: str = "mtd") -> list[dict]:
         return [
             # no_plan here means "this month was never entered", which is a
             # temporary state somebody can fix -- unlike de-silting below,
@@ -981,7 +982,56 @@ def _excavation(db: Session, mf: date, rd: date,
              # same three-way label the production rows carry.
              "source": _source((silt_act or 0.0) - silt_manual, silt_manual),
              "manual_qty": _r(silt_manual) or None},
-        ]
+        ] + shifting_rows(which)
+
+    # ── LG / Tailings / Rehandling, from the mine's own two tables ──────
+    # minehub.shifting_plan and minehub.shifting_actual, uploaded and typed
+    # through "Enter Shifting Plan" and "Enter Shifting Actual". They sit in
+    # this card rather than a card of their own because they are the same
+    # statement as the two rows above: material moved against a target, in
+    # CuM, on the same two periods.
+    #
+    # POSTGRES IS NOT ALWAYS REACHABLE from here, and the three rows are
+    # dropped entirely when it is not. Showing them as zero would report a
+    # mine that moved nothing; showing a dash would have somebody chase a
+    # figure that exists. Absent rows say the least untrue thing, and the
+    # footnote names where they come from.
+    shift = shifting_svc.totals_detached(mf, rd, rd)
+
+    def shifting_rows(which: str) -> list[dict]:
+        if not shift:
+            return []
+        out = []
+        for code in shifting_svc.MATERIALS:
+            v = shift[code]
+            plan = v[f"{which}_plan"]
+            act = v[f"{which}_actual"]
+            # Nothing entered and nothing planned is not a row worth a line of
+            # dashes, but a plan with no actual IS -- that is the day somebody
+            # has not filed yet, and it should be visible.
+            if plan is None and act is None:
+                out.append({"key": f"shift_{code.lower()}",
+                            "label": shifting_svc.LABELS[code], "unit": "CuM",
+                            "plan": None, "actual": None, "pct": None,
+                            "no_plan": True, "source": SRC_MANUAL,
+                            "manual_qty": None})
+                continue
+            out.append({
+                "key": f"shift_{code.lower()}",
+                "label": shifting_svc.LABELS[code],
+                "unit": "CuM",
+                "plan": _r(plan) if plan is not None else None,
+                "actual": _r(act) if act is not None else None,
+                # BOTH HALVES OR NO PERCENTAGE, the rule this card already
+                # applies to de-silting: a plan with no actual yet is not 0%.
+                "pct": (prod_svc._pct(act, plan)
+                        if (plan and act is not None) else None),
+                "no_plan": plan is None,
+                # Always the mine's own entry -- there is no feed for these.
+                "source": SRC_MANUAL,
+                "manual_qty": _r(act) if act is not None else None,
+            })
+        return out
 
     def ob_plan(total, n) -> float | None:
         """None when nothing was planned for the window at all.
@@ -996,9 +1046,9 @@ def _excavation(db: Session, mf: date, rd: date,
 
     return {
         "td":  rows(ob_td,  ob_plan(plan.td_plan, plan.td_n), silt_td,
-                    sp_td,  e_td,  s_td),
+                    sp_td,  e_td,  s_td, "td"),
         "mtd": rows(ob_mtd, ob_plan(plan.mtd_plan, plan.mtd_n), silt_mtd,
-                    sp_mtd, e_mtd, s_mtd),
+                    sp_mtd, e_mtd, s_mtd, "mtd"),
     }
 
 

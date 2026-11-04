@@ -470,6 +470,30 @@ function Ach({ v, strong = false }: { v?: number | null; strong?: boolean }) {
    its card with a blank target too. The cell says "no plan" rather than a bare
    dash, because a dash on this page means "not reported yet" and would have
    somebody chasing the mine for a figure that does not exist. */
+/* THREE REASONS A CELL IS BLANK, AND THEY ARE NOT THE SAME. Saying "no plan"
+   for all of them either sends somebody looking for a figure that cannot
+   exist, or lets a missing one sit unnoticed. Each key says which it is. */
+function blankWhy(key: string): string {
+  if (key === "desilt")
+    return "No de-silting plan is held in any system — the MIS dashboard "
+         + "shows this blank too";
+  if (key.startsWith("shift_"))
+    return "No shifting plan has been uploaded for this month — load it "
+         + 'from the header menu, "Enter Shifting Plan"';
+  return "No excavation plan has been entered for this month yet — "
+       + "it is loaded into mines_daily_excavation_plan";
+}
+
+/* The chip tells the three groups apart at a glance: overburden is the waste
+   the ore sits under, de-silting is water management, and the three shifting
+   rows are material moved around the mine rather than out of it. One hue per
+   group, none of them the red/amber/green the Ach % column uses. */
+function activityChip(key: string): string {
+  if (key === "ob") return "bg-[#f3ece3] text-[#7a5a2e]";
+  if (key === "desilt") return "bg-[#e0f2f1] text-[#00695c]";
+  return "bg-[#ede7f6] text-[#4527a0]";
+}
+
 function ExcavationBlock({ statusTill, td, mtd }: {
   statusTill: string; td: ExecExcavationRow[]; mtd: ExecExcavationRow[];
 }) {
@@ -502,10 +526,7 @@ function ExcavationBlock({ statusTill, td, mtd }: {
             does not exist, or lets a missing one sit unnoticed. */}
         {r?.no_plan
           ? <span className="text-[9px] uppercase tracking-wide text-txt-light"
-                  title={r.key === "desilt"
-                    ? "No de-silting plan is held in any system — the MIS dashboard shows this blank too"
-                    : "No excavation plan has been entered for this month yet — "
-                      + "it is loaded into mines_daily_excavation_plan"}>
+                  title={blankWhy(r.key)}>
               {r.key === "desilt" ? "no plan" : "not planned"}
             </span>
           : <span className={`font-bold ${pctTone(r?.pct)}`}>
@@ -516,7 +537,8 @@ function ExcavationBlock({ statusTill, td, mtd }: {
   );
 
   return (
-    <Card icon={<Mountain size={14} />} title="Overburden & De-Silting"
+    <Card icon={<Mountain size={14} />}
+          title="Overburden, De-Silting & Shifting"
           sub={statusTill}>
       <table className="w-full text-[12px] font-mono border-collapse">
         <thead>
@@ -546,9 +568,7 @@ function ExcavationBlock({ statusTill, td, mtd }: {
             return (
               <tr key={k} className="hover:bg-bg-light">
                 <td className={TD}>
-                  <span className={`px-1.5 py-0.5 rounded-sm text-[10px] font-bold tracking-wide ${
-                    k === "ob" ? "bg-[#f3ece3] text-[#7a5a2e]"
-                               : "bg-[#e0f2f1] text-[#00695c]"}`}>
+                  <span className={`px-1.5 py-0.5 rounded-sm text-[10px] font-bold tracking-wide ${activityChip(k)}`}>
                     {a?.label ?? b?.label ?? k}
                   </span>
                 </td>
@@ -568,6 +588,13 @@ function ExcavationBlock({ statusTill, td, mtd }: {
         {"   "}<span className="font-semibold">DE-SILTING ACTUAL · </span>IMOS
         day-wise excavation, variant 4, with the mine&apos;s own figure standing
         in for days IMOS has not filed.
+        {/* The three shifting rows have no feed behind them at all — both
+            halves are the mine's own, which is worth saying plainly rather
+            than letting them sit in a card whose other rows come from SAP. */}
+        {"   "}<span className="font-semibold">SHIFTING PLAN · </span>uploaded
+        month by month from the mine&apos;s sheet
+        {"   "}<span className="font-semibold">SHIFTING ACTUAL · </span>entered
+        by the mine, day by day — neither figure comes from a feed.
       </p>
     </Card>
   );
