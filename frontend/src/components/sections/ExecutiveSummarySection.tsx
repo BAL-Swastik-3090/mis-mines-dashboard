@@ -298,12 +298,14 @@ function GradeTable({ icon, title, sub, qtyLabel, tdLabel, mtdLabel,
      there: no plan was written for that grade, which is not a plan of zero. */
   showPlan?: boolean;
   /* Decimal places for the TONNAGE columns only — Plan and the quantity, in
-     the body and in the footer. Production is booked in whole tonnes and the
-     mine reads it that way, so the production tables pass 0. Despatch keeps
-     the default: a part tonne off a weighbridge is a real quantity somebody
-     is invoiced for. The assay columns beside them are untouched either way —
-     Cr/Fe and Cr2O3 are measurements, not quantities, and rounding those
-     would change what they say. */
+     the body and in the footer. Every tonnage table on this page passes 0:
+     the mine books and reads whole tonnes, and a column of 1,177.84 /
+     2,121.72 spends three characters a row saying nothing. The default of 2
+     remains for any table added later that genuinely needs the fraction.
+
+     THE ASSAY COLUMNS ARE UNTOUCHED either way — Cr/Fe and Cr2O3 are
+     measurements, not quantities, and rounding those would change what they
+     say rather than how they are printed. */
   qtyDp?: number;
 }) {
   /* Rows are keyed by grade and merged across the two periods, never zipped by
@@ -494,8 +496,14 @@ function activityChip(key: string): string {
   return "bg-[#ede7f6] text-[#4527a0]";
 }
 
-function ExcavationBlock({ statusTill, td, mtd }: {
-  statusTill: string; td: ExecExcavationRow[]; mtd: ExecExcavationRow[];
+function ExcavationBlock({ statusTill, tdLabel, mtdLabel, td, mtd }: {
+  /* THE SAME DATED HEADINGS THE OTHER CARDS CARRY. This card said "TD ·
+     Today" and "MTD · Month to Date" while the tables above and below it
+     named the actual days. The page is read a day or two in arrears — the
+     mine files in arrears — so "Today" over a column holding the 3rd, opened
+     on the 5th, is simply wrong, and wrong differently from its neighbours. */
+  statusTill: string; tdLabel: string; mtdLabel: string;
+  td: ExecExcavationRow[]; mtd: ExecExcavationRow[];
 }) {
   const keys: string[] = [];
   for (const r of [...td, ...mtd]) if (!keys.includes(r.key)) keys.push(r.key);
@@ -546,11 +554,11 @@ function ExcavationBlock({ statusTill, td, mtd }: {
             <th className={`${TH} text-left min-w-[130px]`} rowSpan={2}>Activity</th>
             <th className={`${TH} text-center border-l border-border text-steel`}
                 colSpan={3}>
-              TD · Today
+              {tdLabel}
             </th>
             <th className={`${TH} text-center border-l-2 border-border text-steel ${MTD_BG}`}
                 colSpan={3}>
-              MTD · Month to Date
+              {mtdLabel}
             </th>
           </tr>
           <tr className={THEAD}>
@@ -954,6 +962,7 @@ export default function ExecutiveSummarySection() {
               are one shift's work at the same faces, and the OB figure is the
               first thing asked for after the ore figure. */}
           <ExcavationBlock statusTill={statusTill}
+            tdLabel={tdLabel} mtdLabel={mtdLabel}
             td={d.td.excavation ?? []} mtd={d.mtd.excavation ?? []} />
 
           {/* Despatch as a whole, before the two destination blocks break it
@@ -964,7 +973,7 @@ export default function ExecutiveSummarySection() {
             const b = mergeDespatch(d.mtd.despatch);
             return (
               <GradeTable icon={<Truck size={14} />} title="Total Despatch"
-                sub={statusTill} qtyLabel="Despatch (MT)" showPlan
+                sub={statusTill} qtyLabel="Despatch (MT)" showPlan qtyDp={0}
                 tdLabel={tdLabel} mtdLabel={mtdLabel}
                 td={a.rows} mtd={b.rows}
                 tdTotal={a.total} mtdTotal={b.total} />
@@ -974,7 +983,7 @@ export default function ExecutiveSummarySection() {
           {DEST.map((x, i) => (
             <GradeTable key={x.key}
               icon={i === 0 ? <Truck size={14} /> : <Send size={14} />}
-              title={x.label} sub={statusTill} qtyLabel="Despatch (MT)" showPlan
+              title={x.label} sub={statusTill} qtyLabel="Despatch (MT)" showPlan qtyDp={0}
               tdLabel={tdLabel} mtdLabel={mtdLabel}
               td={d.td.despatch[x.key] ?? []} mtd={d.mtd.despatch[x.key] ?? []}
               tdTotal={d.td.despatch_total[x.key]} mtdTotal={d.mtd.despatch_total[x.key]} />
