@@ -222,11 +222,11 @@ export default function LCMSection() {
               <table className="w-full text-[11.5px] font-mono">
                 <tbody className="divide-y divide-border-light/50">
                   <tr><td className="py-1 text-txt-secondary">Plan Ore (IMOS)</td>
-                      <td className="py-1 text-right font-semibold text-navy">{fmt(b?.ore_plan, 2)} MT</td></tr>
+                      <td className="py-1 text-right font-semibold text-navy">{f0(b?.ore_plan)} MT</td></tr>
                   <tr><td className="py-1 text-txt-secondary">Actual Ore (SAP)</td>
-                      <td className="py-1 text-right font-semibold text-navy">{fmt(b?.ore_actual, 2)} MT</td></tr>
+                      <td className="py-1 text-right font-semibold text-navy">{f0(b?.ore_actual)} MT</td></tr>
                   <tr><td className="py-1 text-txt-secondary font-semibold">Ore Deviation</td>
-                      <td className="py-1 text-right font-bold text-[#c62828]">{fmt(b?.ore_deviation, 2)} MT</td></tr>
+                      <td className="py-1 text-right font-bold text-[#c62828]">{f0(b?.ore_deviation)} MT</td></tr>
                   <tr><td className="py-1 text-txt-secondary">Total Ore Loss Hour</td>
                       <td className="py-1 text-right text-navy">{fmt(b?.total_ore_loss_hours, 2)} hrs</td></tr>
                   <tr><td className="py-1 text-txt-secondary font-semibold">Ore Multiplying Factor</td>
@@ -249,11 +249,11 @@ export default function LCMSection() {
               <table className="w-full text-[11.5px] font-mono">
                 <tbody className="divide-y divide-border-light/50">
                   <tr><td className="py-1 text-txt-secondary">Plan OB (IMOS)</td>
-                      <td className="py-1 text-right font-semibold text-navy">{fmt(b?.ob_plan, 2)} CuM</td></tr>
+                      <td className="py-1 text-right font-semibold text-navy">{f0(b?.ob_plan)} CuM</td></tr>
                   <tr><td className="py-1 text-txt-secondary">Actual OB (SAP)</td>
-                      <td className="py-1 text-right font-semibold text-navy">{fmt(b?.ob_actual, 2)} CuM</td></tr>
+                      <td className="py-1 text-right font-semibold text-navy">{f0(b?.ob_actual)} CuM</td></tr>
                   <tr><td className="py-1 text-txt-secondary font-semibold">OB Deviation</td>
-                      <td className="py-1 text-right font-bold text-[#c62828]">{fmt(b?.ob_deviation, 2)} CuM</td></tr>
+                      <td className="py-1 text-right font-bold text-[#c62828]">{f0(b?.ob_deviation)} CuM</td></tr>
                   <tr><td className="py-1 text-txt-secondary">Total OB Loss Hour</td>
                       <td className="py-1 text-right text-navy">{fmt(b?.total_ob_loss_hours, 2)} hrs</td></tr>
                   <tr><td className="py-1 text-txt-secondary font-semibold">OB Multiplying Factor</td>
@@ -376,7 +376,7 @@ export default function LCMSection() {
                 {cost.breakdown.map((g) => (
                   <tr key={g.grade} className={g.qty === 0 ? "opacity-45" : ""}>
                     <td className="px-3 py-2 font-condensed font-bold text-[12px] text-navy">{g.grade}</td>
-                    <td className="px-3 py-2 text-right text-navy">{fmt(g.qty, 2)}</td>
+                    <td className="px-3 py-2 text-right text-navy">{f0(g.qty)}</td>
                     <td className={`px-3 py-2 text-right font-semibold ${g.rate == null ? "text-[#c62828]" : "text-[#ad1457]"}`}>
                       {g.rate == null ? "not set" : rs(g.rate)}
                     </td>
@@ -387,7 +387,7 @@ export default function LCMSection() {
               <tfoot>
                 <tr className="bg-navy text-white font-bold">
                   <td className="px-3 py-2.5 font-condensed tracking-widest uppercase text-[11px]">Weighted</td>
-                  <td className="px-3 py-2.5 text-right">{fmt(cost.grade_plan_total, 2)}</td>
+                  <td className="px-3 py-2.5 text-right">{f0(cost.grade_plan_total)}</td>
                   <td className="px-3 py-2.5 text-right">{cost.weighted_rate == null ? "—" : rs(cost.weighted_rate)}</td>
                   {/* This is the true total of the column above — the value of the
                       whole planned ore. The LOST slice of it is the tile below. */}
@@ -405,7 +405,7 @@ export default function LCMSection() {
             <div className="px-3 py-2 border-t border-border-light/40 bg-[#fff8e1]/60">
               <p className="text-[9.5px] font-mono text-[#8d6e00] leading-tight">
                 Grade split totals {fmt(cost.grade_plan_total, 2)} MT against an ore plan of{" "}
-                {fmt(cost.ore_plan, 2)} MT — the grade columns are not fully entered for this
+                {f0(cost.ore_plan)} MT — the grade columns are not fully entered for this
                 period. The weighted rate is a ratio so it is unaffected, but the mix shown
                 above reflects only the graded portion.
               </p>
