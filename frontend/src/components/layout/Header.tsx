@@ -1,6 +1,6 @@
 "use client";
 import { format } from "date-fns";
-import { RefreshCw, MoreVertical, PencilLine, Boxes, Droplets, Pickaxe } from "lucide-react";
+import { RefreshCw, MoreVertical, PencilLine, Boxes, Droplets, Pickaxe, Shuffle } from "lucide-react";
 import AlertsBell from "./AlertsBell";
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -210,6 +210,11 @@ function ActionsMenu() {
             // being entered -- it is which machine digs what for the month,
             // and the word the mine uses for it is the plan.
             ["equipment-plan", "Equipment Excavation Plan", Pickaxe],
+            // The day's three movements, typed against the plan beside them.
+            ["shifting-actual", "Enter Shifting Actual", PencilLine],
+            // And the plan those are read against: an upload, a month at a
+            // time, re-uploaded whenever the month's plan changes.
+            ["shifting-plan", "Enter Shifting Plan", Shuffle],
           ] as const).map(([which, label, Icon]) => (
             <button
               key={which}
