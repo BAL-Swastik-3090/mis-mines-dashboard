@@ -621,9 +621,16 @@ export default function OEESection() {
             renders whether or not the label does, so it never disappears while
             the section is loading. */}
         <div className="flex items-center gap-2">
-          {!isLoading && apiTo && (
+          {/* THE DAY THE ANSWER COVERS, NOT THE DAY THAT WAS ASKED FOR. The
+              server cuts the window back to the last day that has ENDED, so
+              a filter running to today — or to month end, as the default
+              "this month" does — is answered for an earlier day. Labelling
+              this with the filter's own end date would put "till 30 Nov"
+              over four days of figures. Falls back to the filter only while
+              the first response is still in flight. */}
+          {!isLoading && (data?.to_date ?? apiTo) && (
             <span className="text-[10px] font-mono text-txt-muted">
-              MTD till {tillLabel(apiTo)}
+              MTD till {tillLabel(data?.to_date ?? apiTo)}
             </span>
           )}
 

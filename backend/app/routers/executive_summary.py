@@ -14,7 +14,7 @@ nothing the MIS dashboard does not already show, it only shows it on one screen.
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -22,30 +22,22 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.schemas.executive_summary import ExecutiveSummaryResponse
 from app.services.executive_summary import get_executive_summary
+# THE RULE LIVES IN ONE MODULE NOW. It was written out here and again in
+# prevDay.ts and nowhere at all in the OEE and LCM endpoints, which is how
+# the Lost Cost Matrix came to divide a four-day plan by three days of shift
+# log. Both copies that were here are gone; this is the same arithmetic.
+from app.services.report_window import report_day as _report_day_rule
+from app.services.report_window import stock_as_on as _stock_as_on_rule
 
 router = APIRouter(prefix="/api/executive-summary", tags=["Executive Summary"])
 
 
 def _report_day(to_date: date, today: date) -> date:
-    """The last day that has ENDED, never later than the filter's end.
-
-    Mirrors reportDay() in frontend/src/lib/prevDay.ts. The filter's end is used
-    as-is when it is already in the past — a range ending 30 September reports on
-    the 30th, not the 29th — and only a range running to today or beyond falls
-    back to yesterday, because today has not finished.
-    """
-    yesterday = today - timedelta(days=1)
-    return to_date if to_date < yesterday else yesterday
+    return _report_day_rule(to_date, today)
 
 
 def _stock_as_on(report_day: date, today: date) -> date:
-    """The snapshot that shows where report_day left the mine: the NEXT morning.
-
-    The stock form is filled at the start of a day and dated that day, so the
-    position resulting from the 8th's work is the snapshot dated the 9th. Never
-    past today — there is no tomorrow to have filed anything.
-    """
-    return min(report_day + timedelta(days=1), today)
+    return _stock_as_on_rule(report_day, today)
 
 
 @router.get("", response_model=ExecutiveSummaryResponse)
