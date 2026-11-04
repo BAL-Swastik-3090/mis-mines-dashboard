@@ -1,6 +1,6 @@
 "use client";
 import { format } from "date-fns";
-import { RefreshCw, MoreVertical, PencilLine, Boxes, Droplets, Pickaxe, Shuffle } from "lucide-react";
+import { RefreshCw, MoreVertical, PencilLine, Boxes, Droplets, Pickaxe, Shuffle, Droplet } from "lucide-react";
 import AlertsBell from "./AlertsBell";
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -215,6 +215,9 @@ function ActionsMenu() {
             // And the plan those are read against: an upload, a month at a
             // time, re-uploaded whenever the month's plan changes.
             ["shifting-plan", "Enter Shifting Plan", Shuffle],
+            // One day of the dewatering sheet: twenty-one figures
+            // typed, six computed from them.
+            ["dewatering-entry", "Enter Daily Dewatering Data", Droplet],
           ] as const).map(([which, label, Icon]) => (
             <button
               key={which}

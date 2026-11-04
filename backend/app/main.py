@@ -694,6 +694,7 @@ from app.routers import prev_day_actual
 from app.routers import stock_entry
 from app.routers import desilting_plan
 from app.routers import shifting
+from app.routers import dewatering_entry
 from app.routers import equipment_plan
 from app.routers import quality_e2e
 from app.routers import amira
@@ -745,6 +746,7 @@ app.include_router(prev_day_actual.router)
 app.include_router(stock_entry.router)
 app.include_router(desilting_plan.router)
 app.include_router(shifting.router)
+app.include_router(dewatering_entry.router)
 app.include_router(equipment_plan.router)
 app.include_router(quality_e2e.router)
 app.include_router(amira.router)
