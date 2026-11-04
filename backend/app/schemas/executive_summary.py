@@ -4,7 +4,7 @@ KEEP EVERY FIELD DECLARED. FastAPI's response_model drops any key the model does
 not name, silently and with no error — the field simply never reaches the screen,
 which then renders an empty column and looks like a data problem.
 """
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 
 from app.schemas.stock import StockPosition
@@ -123,6 +123,74 @@ class PeriodBlock(BaseModel):
     excavation:       list[ExcavationRow] = []
 
 
+class DewateringLine(BaseModel):
+    """One measure of the dewatering block, for one period."""
+    key:    str
+    label:  str
+    uom:    str
+    dp:     int = 0
+    plan:   Optional[float] = None
+    actual: Optional[float] = None
+    pct:    Optional[float] = None
+    #: No plan exists for this measure and none ever will — inflow is seepage
+    #: and weather. Different from a plan nobody has filed yet.
+    no_plan: bool = False
+    #: The two columns are not a plan and an actual: opening and closing stock
+    #: share a row, and a percentage of one against the other means nothing.
+    no_pct:  bool = False
+
+
+class DewateringPeriod(BaseModel):
+    rows: list[DewateringLine] = []
+    date: Optional[str] = None          # the day column
+    entered: Optional[bool] = None      # was that day filed at all
+    from_: Optional[str] = Field(None, alias="from")
+    to: Optional[str] = None
+
+    model_config = {"populate_by_name": True}
+
+
+class DewateringKpi(BaseModel):
+    disposal_actual:  Optional[float] = None
+    disposal_plan:    Optional[float] = None
+    disposal_pct:     Optional[float] = None
+    pump_actual_hr:   Optional[float] = None
+    pump_plan_hr:     Optional[float] = None
+    pump_pct:         Optional[float] = None
+    avg_pump_hr:      Optional[float] = None
+    avg_plan_hr:      Optional[float] = None
+    #: Hours a day the pumps must run merely to match the water arriving.
+    offset_hr:        Optional[float] = None
+    opening_stock:    Optional[float] = None
+    closing_stock:    Optional[float] = None
+    stock_change_pct: Optional[float] = None
+    net_drawdown:     Optional[float] = None
+    days_to_clear:    Optional[float] = None
+    completeness_pct: Optional[float] = None
+
+
+class DewateringBlock(BaseModel):
+    """Dewatering, on its own window.
+
+    THE DAYS ENTERED ARE NOT THE DAYS ASKED FOR, which is the whole reason
+    this block reports both. `entered` of `window_days` days carry figures;
+    everything else here covers those days only, and `gap_from`..`gap_to`
+    names the stretch that does not.
+    """
+    available:   bool = True
+    entered:     int = 0
+    window_days: int = 0
+    data_to:     Optional[str] = None
+    gap_from:    Optional[str] = None
+    gap_to:      Optional[str] = None
+    td:   Optional[DewateringPeriod] = None
+    mtd:  Optional[DewateringPeriod] = None
+    kpi:  Optional[DewateringKpi] = None
+    #: 'ok' | 'watch' | 'critical' — how complete the data is, not how well
+    #: the mine pumped.
+    status: str = "critical"
+
+
 class ExecutiveSummaryResponse(BaseModel):
     # Two as-on dates, a day apart on purpose: stock is counted at the start of
     # a day, performance is a completed day. See the service for why.
@@ -132,3 +200,7 @@ class ExecutiveSummaryResponse(BaseModel):
     stock: StockPosition
     td:    PeriodBlock
     mtd:   PeriodBlock
+    # KEEP DECLARED — response_model drops any key this class does not name,
+    # silently. None means the platform database could not be read, which is
+    # not the same as a mine that pumped nothing.
+    dewatering: Optional[DewateringBlock] = None

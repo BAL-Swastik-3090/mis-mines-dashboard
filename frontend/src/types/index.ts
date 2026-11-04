@@ -214,6 +214,67 @@ export interface ExecPeriodBlock {
   excavation:       ExecExcavationRow[];
 }
 
+/** One measure of the dewatering block, for one period. */
+export interface ExecDewateringLine {
+  key:    "disposal" | "pump_hr" | "inflow" | "stock";
+  label:  string;
+  uom:    string;
+  dp:     number;
+  plan:   number | null;
+  actual: number | null;
+  pct:    number | null;
+  /** No plan exists for this measure and none ever will — inflow is seepage
+   *  and weather. Different from a plan nobody has filed yet. */
+  no_plan: boolean;
+  /** The two columns are not a plan and an actual: opening and closing stock
+   *  share a row, and a percentage of one against the other means nothing. */
+  no_pct:  boolean;
+}
+
+export interface ExecDewateringPeriod {
+  rows: ExecDewateringLine[];
+  date?: string | null;        // the day column
+  entered?: boolean | null;    // was that day filed at all
+  from?: string | null;
+  to?:   string | null;
+}
+
+export interface ExecDewateringKpi {
+  disposal_actual:  number | null;
+  disposal_plan:    number | null;
+  disposal_pct:     number | null;
+  pump_actual_hr:   number | null;
+  pump_plan_hr:     number | null;
+  pump_pct:         number | null;
+  avg_pump_hr:      number | null;
+  avg_plan_hr:      number | null;
+  /** Hours a day the pumps must run merely to match the water arriving. */
+  offset_hr:        number | null;
+  opening_stock:    number | null;
+  closing_stock:    number | null;
+  stock_change_pct: number | null;
+  net_drawdown:     number | null;
+  days_to_clear:    number | null;
+  completeness_pct: number | null;
+}
+
+/** Dewatering, on its own window. THE DAYS ENTERED ARE NOT THE DAYS ASKED
+ *  FOR: `entered` of `window_days` carry figures, every total here covers
+ *  those days only, and gap_from..gap_to names the stretch that does not. */
+export interface ExecDewateringBlock {
+  available:   boolean;
+  entered:     number;
+  window_days: number;
+  data_to:     string | null;
+  gap_from:    string | null;
+  gap_to:      string | null;
+  td:   ExecDewateringPeriod | null;
+  mtd:  ExecDewateringPeriod | null;
+  kpi:  ExecDewateringKpi | null;
+  /** How complete the data is, not how well the mine pumped. */
+  status: "ok" | "watch" | "critical";
+}
+
 export interface ExecutiveSummaryResponse {
   /** Two as-on dates, a day apart on purpose: stock is counted at the start of
    *  a day, performance is a completed day. */
@@ -223,6 +284,9 @@ export interface ExecutiveSummaryResponse {
   stock: StockPositionResponse;
   td:    ExecPeriodBlock;
   mtd:   ExecPeriodBlock;
+  /** null means the platform database could not be read — not that nothing
+   *  was pumped. */
+  dewatering?: ExecDewateringBlock | null;
 }
 
 // ── Production API Responses ─────────────────────────────────
