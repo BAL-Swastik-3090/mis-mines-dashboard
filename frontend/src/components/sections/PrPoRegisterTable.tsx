@@ -4,6 +4,7 @@ import {
   Search, X, SlidersHorizontal, ArrowUp, ArrowDown, ChevronsUpDown, Check,
 } from "lucide-react";
 import type { PrPoRow } from "@/types";
+import { Filter } from "lucide-react";
 import type { PrPoFilter } from "@/hooks/usePrPo";
 
 /* The priority action register.
@@ -68,8 +69,13 @@ function shortDate(v: string | null | undefined): string {
     { day: "2-digit", month: "short", year: "2-digit" });
 }
 
+/* A header filter needs to know what text to match a row against. Columns
+   that are a number, a date or a coloured badge are left out: filtering a
+   money column by substring is a trap, and the toolbar already carries the
+   range and status filters those columns would want. */
 type Col = {
   key: string;
+  filterOn?: (r: PrPoRow) => string;
   head: string;
   group: string;
   sort?: string;
@@ -90,28 +96,42 @@ export const COLUMNS: Col[] = [
         {r.stage_age_days === null ? "—" : `${r.stage_age_days}d`} · {RAG_WORD[r.rag] ?? "—"}
       </span>) },
   { key: "stage", head: "Stage", group: "Status", sort: "stage", core: true, width: "w-44",
+    filterOn: (r) => r.stage_label ?? "",
     render: (r) => (
       <span className={`inline-block whitespace-nowrap rounded-md px-2 py-0.5 text-[11px] font-medium ring-1 ${STAGE_TONE[r.stage] ?? STAGE_TONE.UNASSIGNED}`}>
         {r.stage_label}
       </span>) },
   { key: "next_action", head: "Next action", group: "Status", core: true, width: "w-52",
+    filterOn: (r) => r.next_action ?? "",
     render: (r) => <span className="text-[13px]">{txt(r.next_action)}</span> },
   { key: "pending_with", head: "Pending with", group: "Status", sort: "pending_with", core: true, width: "w-44",
+    filterOn: (r) => r.pending_with ?? "",
     render: (r) => <span className="text-[13px]">{txt(r.pending_with)}</span> },
 
   { key: "requested_by", head: "Requested by", group: "Requester", core: true, width: "w-36",
+    filterOn: (r) => `${r.requisitioner ?? ""} ${r.created_by ?? ""}`,
     render: (r) => <span className="text-[13px]">{txt(r.requisitioner || r.created_by)}</span> },
   { key: "cost_center", head: "Cost centre", group: "Requester", width: "w-28",
+    filterOn: (r) => r.cost_center ?? "",
     render: (r) => <span className="text-[13px] tabular-nums">{txt(r.cost_center)}</span> },
   { key: "plant", head: "Plant", group: "Requester", width: "w-20",
+    filterOn: (r) => r.plant ?? "",
     render: (r) => <span className="text-[13px] tabular-nums">{txt(r.plant)}</span> },
 
+  /* THE DEPARTMENT IS A TOOLTIP, NOT A SECOND LINE. "Spares parts,
+     Planning & Contract Management" under every row of the same buyer is
+     the same sentence repeated forty times down a column, and it pushed
+     every row to two lines to say nothing new. The purchasing group code
+     goes there instead: four characters, different per buyer, and the key
+     anybody cross-referencing SAP actually needs. */
   { key: "buyer", head: "Buyer", group: "SCM", sort: "buyer_name", core: true, width: "w-40",
+    filterOn: (r) => `${r.buyer_name ?? ""} ${r.purchasing_group ?? ""}`,
     render: (r) => r.buyer_name ? (
-      <div className="leading-tight">
-        <div className="text-[13px]">{r.buyer_name}</div>
-        {r.buyer_department && (
-          <div className="truncate text-[11px] text-slate-500">{r.buyer_department}</div>)}
+      <div className="leading-tight"
+           title={[r.buyer_name, r.buyer_department].filter(Boolean).join(" — ")}>
+        <div className="truncate text-[13px]">{r.buyer_name}</div>
+        {r.purchasing_group && (
+          <div className="text-[11px] tabular-nums text-slate-400">{r.purchasing_group}</div>)}
       </div>) : <Dash /> },
   { key: "pr_dates", head: "PR / released", group: "SCM", sort: "release_date", width: "w-32",
     render: (r) => (
@@ -122,6 +142,7 @@ export const COLUMNS: Col[] = [
   { key: "pr_age", head: "PR age", group: "SCM", sort: "pr_age_days", align: "right", width: "w-20",
     render: (r) => <span className="text-[13px] tabular-nums">{r.pr_age_days === null ? <Dash /> : `${r.pr_age_days}d`}</span> },
   { key: "material", head: "Material group", group: "SCM", width: "w-40",
+    filterOn: (r) => r.material_group ?? "",
     render: (r) => <span className="text-[12px]">{txt(r.material_group)}</span> },
   { key: "qty", head: "Qty", group: "SCM", align: "right", width: "w-24",
     render: (r) => <span className="text-[13px] tabular-nums">
@@ -146,12 +167,14 @@ export const COLUMNS: Col[] = [
       </div>) : <Dash /> },
 
   { key: "po", head: "PO", group: "Order", sort: "po_date", core: true, width: "w-36",
+    filterOn: (r) => r.po_no ?? "",
     render: (r) => r.po_no ? (
       <div className="leading-tight">
         <div className="text-[13px] font-medium tabular-nums">{r.po_no}</div>
         <div className="text-[11px] text-slate-500">{shortDate(r.po_date)}</div>
       </div>) : <Dash /> },
   { key: "vendor", head: "Vendor", group: "Order", sort: "vendor", width: "w-48",
+    filterOn: (r) => r.vendor ?? "",
     render: (r) => <span className="text-[13px]">{txt(r.vendor)}</span> },
   { key: "po_value", head: "PO value", group: "Order", sort: "po_value", align: "right", core: true, width: "w-28",
     render: (r) => <span className="text-[13px] tabular-nums" title={exact(r.po_value)}>{crore(r.po_value)}</span> },
@@ -184,6 +207,7 @@ export const COLUMNS: Col[] = [
       <span className="text-[11px] text-slate-500" title={r.payment_terms_desc ?? ""}>terms not stated</span>
     ) : <Dash /> },
   { key: "terms", head: "Payment terms", group: "Payment", width: "w-44",
+    filterOn: (r) => r.payment_terms_desc ?? "",
     render: (r) => <span className="text-[12px]">{txt(r.payment_terms_desc)}</span> },
 ];
 
@@ -205,10 +229,27 @@ export default function PrPoRegisterTable({
 }: Props) {
   const [typed, setTyped] = useState(filter.q ?? "");
   const [picker, setPicker] = useState(false);
+  /* HEADER FILTERS ARE CLIENT-SIDE ON PURPOSE. The server has already cut
+     the population to at most 500 rows; sending another request per
+     keystroke to narrow what is on screen would be slower and would make
+     the row count flicker while somebody types. The toolbar filters, which
+     change which rows exist at all, stay on the server. */
+  const [colFilter, setColFilter] = useState<Record<string, string>>({});
+  const [filterRow, setFilterRow] = useState(false);
   const [hidden, setHidden] = useState<Set<string>>(
     () => new Set(COLUMNS.filter((c) => !c.core).map((c) => c.key)));
 
   const cols = useMemo(() => COLUMNS.filter((c) => !hidden.has(c.key)), [hidden]);
+
+  const shown = useMemo(() => {
+    const active = Object.entries(colFilter)
+      .filter(([, v]) => v.trim())
+      .map(([k, v]) => [COLUMNS.find((c) => c.key === k), v.trim().toLowerCase()] as const)
+      .filter((p): p is readonly [Col, string] => Boolean(p[0]?.filterOn));
+    if (!active.length) return rows;
+    return rows.filter((r) =>
+      active.every(([c, v]) => c.filterOn!(r).toLowerCase().includes(v)));
+  }, [rows, colFilter]);
   const active = Boolean(filter.q || filter.stage || filter.rag || filter.owner
                          || filter.buyer || filter.from || filter.to);
 
@@ -315,8 +356,16 @@ export default function PrPoRegisterTable({
           )}
         </div>
 
-        {active && (
-          <button onClick={() => { setTyped(""); onClear(); }}
+        <button onClick={() => setFilterRow((f) => !f)}
+          className={`flex items-center gap-1 rounded-md border px-2 py-1 text-[12px]
+            ${filterRow || Object.values(colFilter).some((v) => v.trim())
+              ? "border-slate-900 bg-slate-900 text-white dark:border-white dark:bg-white dark:text-slate-900"
+              : "border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"}`}>
+          <Filter className="h-3.5 w-3.5" /> Column filters
+        </button>
+
+        {(active || Object.values(colFilter).some((v) => v.trim())) && (
+          <button onClick={() => { setTyped(""); setColFilter({}); onClear(); }}
             className="flex items-center gap-1 rounded-md bg-slate-200 px-2 py-1 text-[12px]
                        dark:bg-slate-700">
             <X className="h-3 w-3" /> Clear
@@ -324,7 +373,10 @@ export default function PrPoRegisterTable({
         )}
 
         <span className="ml-auto text-xs tabular-nums text-slate-500">
-          {loading ? "loading…" : `${total.toLocaleString("en-IN")} items`}
+          {loading ? "loading…"
+            : shown.length === rows.length
+              ? `${total.toLocaleString("en-IN")} items`
+              : `${shown.length.toLocaleString("en-IN")} of ${total.toLocaleString("en-IN")}`}
           {truncated && " · first 500"}
         </span>
       </div>
@@ -351,9 +403,33 @@ export default function PrPoRegisterTable({
                 </th>
               ))}
             </tr>
+            {filterRow && (
+              <tr className="bg-white dark:bg-slate-900">
+                <th className="sticky left-0 z-10 bg-white px-2 py-1 dark:bg-slate-900">
+                  <span className="text-[10px] font-normal normal-case text-slate-400">
+                    use the search box above
+                  </span>
+                </th>
+                {cols.map((c) => (
+                  <th key={c.key} className="px-2 py-1">
+                    {c.filterOn ? (
+                      <input
+                        value={colFilter[c.key] ?? ""}
+                        onChange={(e) => setColFilter((f) => ({ ...f, [c.key]: e.target.value }))}
+                        placeholder="filter…"
+                        aria-label={`Filter by ${c.head}`}
+                        className="w-full rounded border border-slate-200 px-1.5 py-0.5 text-[11px]
+                                   font-normal normal-case tracking-normal
+                                   placeholder:text-slate-300 focus:border-slate-500 focus:outline-none
+                                   dark:border-slate-700 dark:bg-slate-950" />
+                    ) : null}
+                  </th>
+                ))}
+              </tr>
+            )}
           </thead>
           <tbody>
-            {rows.map((r, i) => (
+            {shown.map((r, i) => (
               <tr key={`${r.pr_number}-${r.pr_item}`}
                   className={`group border-t border-slate-100 align-top dark:border-slate-800
                     ${i % 2 ? "bg-slate-50/40 dark:bg-slate-900/40" : ""}
@@ -377,7 +453,7 @@ export default function PrPoRegisterTable({
                 ))}
               </tr>
             ))}
-            {!rows.length && !loading && (
+            {!shown.length && !loading && (
               <tr><td colSpan={cols.length + 1} className="px-3 py-10 text-center text-sm text-slate-500">
                 Nothing matches these filters.
               </td></tr>

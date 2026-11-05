@@ -72,7 +72,7 @@ def _window(from_date: date | None, as_on: date | None) -> tuple[date, date]:
 
 
 def _load(db: Session, from_date: date | None,
-          as_on: date | None) -> tuple[list[dict], date]:
+          as_on: date | None) -> tuple[list[dict], date, date]:
     frm, on = _window(from_date, as_on)
     rows = svc.register(db, on, frm, MINES_PLANTS)
     for r in rows:
@@ -89,7 +89,7 @@ def _load(db: Session, from_date: date | None,
     severity = {"red": 0, "amber": 1, "green": 2, "unknown": 3}
     rows.sort(key=lambda r: (severity.get(r["rag"], 3),
                              -(r["stage_age_days"] or 0)))
-    return rows, on
+    return rows, on, frm
 
 
 @router.get("/summary")
@@ -104,8 +104,10 @@ def summary(request: Request,
     will one day disagree with it.
     """
     _guard(db, request)
-    rows, on = _load(db, from_date, as_on)
-    return summ.summarise(rows, on)
+    rows, on, frm = _load(db, from_date, as_on)
+    out = summ.summarise(rows, on)
+    out["window"] = {"from": frm, "to": on}
+    return out
 
 
 # What the table may be sorted by. A allow-list rather than a free field:
@@ -118,17 +120,29 @@ SORTABLE = {
 }
 
 
-def _sort_key(field: str):
-    """None sorts last in both directions.
+def _apply_sort(rows: list[dict[str, Any]], field: str,
+                descending: bool) -> list[dict[str, Any]]:
+    """Sort by `field`, with missing values last in BOTH directions.
 
-    A missing value is not a small one. Sorted ascending by due date, rows
-    with no due date would otherwise lead the table and read as the most
-    urgent thing on it.
+    The obvious one-liner -- sorted(key=lambda r: (r[f] is None, r[f] or ""),
+    reverse=desc) -- gets this wrong, and did: `reverse` flips the None flag
+    too, so descending put every empty row at the top and the table looked
+    like it had not sorted at all. A missing value is not a small one, and
+    it is not a large one either; it is absent, and it belongs at the end
+    whichever way the column is pointing. So the rows are partitioned first
+    and only the ones that have a value are ordered.
+
+    Mixed types within a column (a date beside a string, which the SAP
+    extracts can produce) would raise on comparison, so that falls back to
+    comparing as text rather than returning a 500 for a sort click.
     """
-    def key(r: dict[str, Any]):
-        v = r.get(field)
-        return (v is None, v if v is not None else "")
-    return key
+    have = [r for r in rows if r.get(field) is not None]
+    missing = [r for r in rows if r.get(field) is None]
+    try:
+        have.sort(key=lambda r: r[field], reverse=descending)
+    except TypeError:
+        have.sort(key=lambda r: str(r[field]), reverse=descending)
+    return have + missing
 
 
 @router.get("/register")
@@ -147,7 +161,7 @@ def register(request: Request,
              db: Session = Depends(get_minehub_db)) -> dict[str, Any]:
     """The register, filtered the way a summary card filters it."""
     _guard(db, request)
-    rows, on = _load(db, from_date, as_on)
+    rows, on, frm = _load(db, from_date, as_on)
 
     if to_date:
         # Released on or before this date. The pair reads as "released
@@ -177,9 +191,14 @@ def register(request: Request,
                       "pending_with", "material", "cost_center"))]
 
     if sort in SORTABLE:
-        rows = sorted(rows, key=_sort_key(sort), reverse=(dir == "desc"))
+        rows = _apply_sort(rows, sort, dir == "desc")
 
     return {"as_on": on, "total": len(rows),
+            # The window actually covered, not the one requested: with no
+            # dates given the server picks them, and a screen that says
+            # "last year" where it could say the two dates is making the
+            # reader guess what they are looking at.
+            "window": {"from": frm, "to": to_date or on},
             "rows": rows[:limit], "truncated": len(rows) > limit,
             "buyers": sorted({r["buyer_name"] for r in rows if r.get("buyer_name")})}
 

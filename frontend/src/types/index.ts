@@ -2110,6 +2110,7 @@ export interface PrPoApprovalLoad {
 }
 
 export interface PrPoSummaryResponse {
+  window: PrPoWindow;
   ageing: PrPoAgeBand[];
   payment_profile: { bands: PrPoDueBand[]; basis: string };
   buyer_workload: PrPoBuyerLoad[];
@@ -2123,8 +2124,11 @@ export interface PrPoSummaryResponse {
   targets_provisional: boolean;
 }
 
+export interface PrPoWindow { from: string; to: string }
+
 export interface PrPoRegisterResponse {
   as_on: string;
+  window: PrPoWindow;
   total: number;
   rows: PrPoRow[];
   truncated: boolean;

@@ -33,6 +33,14 @@ function crore(v: number | null | undefined): string {
 }
 const exact = (v: number | null | undefined) =>
   v === null || v === undefined ? "" : `₹ ${Math.round(v).toLocaleString("en-IN")}`;
+/* "06 Nov 25" -- unambiguous across date conventions and readable in a
+   header, where an ISO string reads as a serial number. */
+function span(v: string | null | undefined): string {
+  if (!v) return "—";
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? String(v)
+    : d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit" });
+}
 const num = (v: number | null | undefined) =>
   v === null || v === undefined ? "—" : v.toLocaleString("en-IN");
 
@@ -120,8 +128,22 @@ export default function PrPoSection() {
             Procurement progress and daily action review · Kaliapani
           </p>
         </div>
-        <p className="text-xs text-slate-500">
-          {s && `${num(s.totals.pr_items)} PR items · ${s.totals.pr_numbers} PRs · ${s.totals.po_numbers} POs · released in the last year · as on ${String(s.as_on)}`}
+        {/* THE WINDOW, IN DATES. "released in the last year" made the
+            reader work out what they were looking at, and stopped being
+            true the moment the date filter was touched. The server reports
+            the window it actually covered and this prints it. */}
+        <p className="text-right text-xs text-slate-500">
+          {s && (
+            <>
+              <span className="tabular-nums">{num(s.totals.pr_items)}</span> PR items ·{" "}
+              <span className="tabular-nums">{s.totals.pr_numbers}</span> PRs ·{" "}
+              <span className="tabular-nums">{s.totals.po_numbers}</span> POs
+              <br />
+              released <span className="tabular-nums">{span(register.data?.window?.from ?? s.window?.from)}</span>
+              {" – "}<span className="tabular-nums">{span(register.data?.window?.to ?? s.window?.to)}</span>
+              {" · as on "}<span className="tabular-nums">{span(String(s.as_on))}</span>
+            </>
+          )}
         </p>
       </header>
 
