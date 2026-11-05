@@ -2056,6 +2056,7 @@ export interface PrPoRow {
   stage_age_days: number | null;
   pr_age_days: number | null;
   pending_with: string | null;
+  next_action: string | null;
   rag: string;
   nfa_id: string | null;
   nfa_status: string | null;
@@ -2072,12 +2073,20 @@ export interface PrPoRow {
   outstanding: number | null;
 }
 
+export interface PrPoStageBucket {
+  stage: string; label: string; count: number; red: number; oldest_days: number | null;
+}
+
+export interface PrPoOwnerBucket {
+  owner: string; count: number; red: number; oldest_days: number | null;
+}
+
 export interface PrPoSummaryResponse {
   as_on: string;
   totals: { pr_items: number; pr_numbers: number; po_numbers: number; invoices: number };
   cards: PrPoCard[];
-  by_stage: { stage: string; label: string; count: number; red: number; oldest_days: number | null }[];
-  by_owner: { owner: string; count: number; red: number; oldest_days: number | null }[];
+  by_stage: PrPoStageBucket[];
+  by_owner: PrPoOwnerBucket[];
   targets_provisional: boolean;
 }
 

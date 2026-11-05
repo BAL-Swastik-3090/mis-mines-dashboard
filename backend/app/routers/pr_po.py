@@ -35,7 +35,12 @@ MINES_PLANTS = ["1200", "1210"]
 # 27,000 rows across the estate and nobody opens a dashboard to scroll it.
 DEFAULT_WINDOW_DAYS = 365
 
-VIEW_PERMISSION = "mines.prpo.view"
+# Either opens this module. mines.prpo.view is the precise code and is not
+# granted to anyone yet; link.prpo.view already gates the other team's PR/PO
+# Status link, so the audience that may already look at Mines procurement can
+# use this from day one. See the matching note in pageAccess.ts -- the screen
+# and the endpoint must agree, or the page appears and then refuses to load.
+VIEW_PERMISSIONS = ("mines.prpo.view", "link.prpo.view")
 
 
 def _actor(request: Request) -> str:
@@ -46,16 +51,11 @@ def _guard(db: Session, request: Request) -> None:
     """Commercial information -- quotation values, vendor pricing, payment
     positions -- is not for every holder of a dashboard login.
 
-    SUPERADMIN PASSES WHILE THE CODE IS UNGRANTED. `mines.prpo.view` is new
-    and the permission map is maintained in the registry, not here, so on the
-    day this ships nobody holds it -- including the person who has to grant
-    it. Requiring it outright would deliver a module no one could open, and
-    the first thing anybody would do about that is take the check out. This
-    keeps the check and leaves one door, which closes on its own as soon as
-    the code is granted to the roles that should have it.
+    Either code opens it, and superadmin passes regardless -- see
+    VIEW_PERMISSIONS above for why the new code alone would lock everyone out.
     """
     emp = _actor(request)
-    if access_svc.has_permission(db, emp, VIEW_PERMISSION):
+    if any(access_svc.has_permission(db, emp, code) for code in VIEW_PERMISSIONS):
         return
     if access_svc.is_superadmin(db, emp):
         return
@@ -77,6 +77,18 @@ def _load(db: Session, from_date: date | None,
     rows = svc.register(db, on, frm, MINES_PLANTS)
     for r in rows:
         r["rag"] = summ.rag(r["stage"], r["stage_age_days"])
+
+    # WORST FIRST, NOT NEWEST FIRST. Sorted by release date the first screen
+    # was entirely items released today -- every row reading "0d, on track"
+    # while 1,695 of the 2,191 sat past their target further down. A meeting
+    # view that opens on the healthiest rows is worse than no view: it
+    # answers "is anything wrong?" with "no" by accident of ordering.
+    #
+    # Overdue first, then oldest in stage. An unknown age sorts last rather
+    # than first: it is not evidence of a problem, only of a missing date.
+    severity = {"red": 0, "amber": 1, "green": 2, "unknown": 3}
+    rows.sort(key=lambda r: (severity.get(r["rag"], 3),
+                             -(r["stage_age_days"] or 0)))
     return rows, on
 
 

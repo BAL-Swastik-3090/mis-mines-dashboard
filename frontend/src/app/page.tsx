@@ -9,7 +9,6 @@ import ObSection           from "@/components/sections/ObSection";
 import CobSection          from "@/components/sections/CobSection";
 import EquipmentSection    from "@/components/sections/EquipmentSection";
 import DewateringSection   from "@/components/sections/DewateringSection";
-import PrPoSection        from "@/components/sections/PrPoSection";
 
 // scroll-mt accounts for fixed header (71px) + section tab bar (44px) + breathing room
 const S = "scroll-mt-[120px]";
@@ -59,10 +58,6 @@ export default function HomePage() {
 
       <section id="dewatering" className={S}>
         <DewateringSection />
-      </section>
-
-      <section id="pr-po" className={S}>
-        <PrPoSection />
       </section>
 
     </div>

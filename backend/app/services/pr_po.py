@@ -237,6 +237,26 @@ def derive_stage(r: dict[str, Any]) -> tuple[str, date | None]:
     return "UNASSIGNED", _as_date(r.get("pr_release_date"))
 
 
+# What the person holding this case has to DO. The requirements ask every
+# open case to answer "what action is required next", and a stage name is not
+# an action: "NFA under approval" tells a buyer nothing, "Approve the NFA"
+# tells the approver exactly what is wanted.
+NEXT_ACTION: dict[str, str] = {
+    "UNASSIGNED":   "Assign a buyer",
+    "ASSIGNED":     "Issue the RFQ",
+    "RFQ_ISSUED":   "Chase vendors for quotations",
+    "QUOTES_IN":    "Start technical evaluation",
+    "EVALUATION":   "Complete evaluation and raise the NFA",
+    "NFA_PENDING":  "Approve or return the NFA",
+    "NFA_APPROVED": "Create the PO",
+    "PO_CREATED":   "Release the PO",
+    "PO_RELEASED":  "Chase delivery",
+    "RECEIVED":     "Obtain and pass the invoice",
+    "INVOICED":     "Release payment",
+    "PAID":         "Confirm closure",
+}
+
+
 def pending_owner(r: dict[str, Any], stage: str) -> str | None:
     """Who the case is sitting WITH -- not who was assigned to it.
 
@@ -295,6 +315,7 @@ def shape(r: dict[str, Any], as_on: date) -> dict[str, Any]:
         "stage_age_days": _age(since, as_on),
         "pr_age_days": _age(r.get("pr_release_date"), as_on),
         "pending_with": pending_owner(r, stage),
+        "next_action": NEXT_ACTION.get(stage),
 
         "rfq_count": r.get("rfq_count"),
         "rfq_vendors": r.get("rfq_vendors"),

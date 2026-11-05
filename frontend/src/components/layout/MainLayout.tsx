@@ -21,6 +21,7 @@ import WeighbridgeSapSection   from "@/components/sections/WeighbridgeSapSection
 import GateSection             from "@/components/sections/GateSection";
 import WeatherForecastPage     from "@/components/sections/WeatherForecastPage";
 import CapacitySection         from "@/components/sections/CapacitySection";
+import PrPoSection             from "@/components/sections/PrPoSection";
 import AccessControlSection    from "@/components/sections/AccessControlSection";
 import UsageSection            from "@/components/sections/UsageSection";
 import { useAppPage }          from "@/contexts/useAppPage";
@@ -119,6 +120,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           {page === "weighbridge-sap"  && <WeighbridgeSapSection />}
           {page === "weather"          && <WeatherForecastPage />}
           {page === "capacity"         && <CapacitySection />}
+          {page === "pr-po"            && <PrPoSection />}
           {page === "usage"            && <UsageSection />}
           {page === "data-health"      && <DataHealthSection />}
             </>

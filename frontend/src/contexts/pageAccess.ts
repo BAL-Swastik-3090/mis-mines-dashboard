@@ -57,6 +57,20 @@ const OPEN_PAGES: ReadonlySet<AppPage> = new Set<AppPage>([
  *  the machine register to do their own work, which is how a permission
  *  becomes meaningless. Each tab inside still states what it needs. */
 export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
+  // Procurement carries quotation values, vendor pricing and payment
+  // positions. Not every holder of a dashboard login should see those, so
+  // the page is gated the same way the endpoints behind it are.
+  //
+  // TWO CODES, AND THE SECOND IS WHY ANYONE CAN OPEN IT TODAY.
+  // mines.prpo.view is the precise one and nobody holds it yet -- it is new,
+  // and the map that grants it is maintained in the registry, not here.
+  // Listed alone it would ship a page invisible to everybody including the
+  // person who has to grant it, and the first thing anyone would do about
+  // that is take the check out. link.prpo.view already gates the other
+  // team's PR/PO Status link, so the people who may already look at Mines
+  // procurement can open this too, which is the right audience on day one.
+  // Granting mines.prpo.view later narrows it without touching this file.
+  "pr-po": ["mines.prpo.view", "link.prpo.view"],
   "minehub": ["platform.registry.browse"],
   "manpower": ["platform.operators.view"],
   "operations": ["ops.shift.view"],
@@ -134,6 +148,10 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
  * the people who have no dashboard are usually there to use one.
  */
 const LANDING_RANK: Record<AppPage, number> = {
+  // Below Product Costing and beside the external PR/PO Status link it
+  // complements: costing says what a tonne cost, this says what is still
+  // sitting unordered, unapproved or unpaid behind it.
+  "pr-po": 62,
   // Above MIS, where the mine asked for it: the one-screen management view
   // comes before the operational detail it summarises.
   "executive-summary": 5,

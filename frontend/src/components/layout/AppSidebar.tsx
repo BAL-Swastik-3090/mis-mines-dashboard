@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { Activity, BarChart3, Boxes, Database, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, Calculator, ClipboardCheck, ClipboardList, CloudSun, DoorOpen, ExternalLink, Gauge, LayoutDashboard, LineChart, Network, Radar, Scale, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
+import { Activity, BarChart3, Boxes, Database, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, Calculator, ClipboardCheck, ClipboardList, CloudSun, DoorOpen, ExternalLink, Gauge, LayoutDashboard, LineChart, Network, Radar, Receipt, Scale, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { canOpen } from "@/contexts/pageAccess";
 import { useSidebar }               from "@/contexts/useSidebar";
@@ -58,6 +58,12 @@ const NAV_ITEMS: NavItem[] = [
   // Procurement, built by another IT team. Every role that existed before this
   // permission was added already holds it, so nobody lost a shortcut they were
   // using; the roles that should not see it simply are not given it.
+  // A DIFFERENT THING FROM THE LINK BELOW IT, and named so they cannot be
+  // confused. "PR/PO Status" is the other team's application and leaves this
+  // one; "PR to Payment" is a page of this dashboard, following a released
+  // requisition through RFQ, evaluation, NFA, PO, receipt, invoice and
+  // payment, with the stage derived from whatever evidence exists.
+  { kind: "page", id: "pr-po",           label: "PR to Payment",              icon: Receipt         },
   { kind: "link", href: PRPO_URL,        label: "PR/PO Status",               icon: ClipboardList,
     need: "link.prpo.view" },
 ];
