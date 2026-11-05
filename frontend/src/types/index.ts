@@ -2053,6 +2053,16 @@ export interface PrPoRow {
   stage: string;
   stage_label: string;
   stage_since: string | null;
+  pr_date: string | null;
+  quantity: number | null;
+  unit: string | null;
+  cost_center: string | null;
+  material_group: string | null;
+  rfq_count: number | null;
+  rfq_vendors: number | null;
+  rfq_issued_at: string | null;
+  quotation_count: number | null;
+  nfa_status_text?: string | null;
   stage_age_days: number | null;
   pr_age_days: number | null;
   pending_with: string | null;
@@ -2118,4 +2128,5 @@ export interface PrPoRegisterResponse {
   total: number;
   rows: PrPoRow[];
   truncated: boolean;
+  buyers: string[];
 }

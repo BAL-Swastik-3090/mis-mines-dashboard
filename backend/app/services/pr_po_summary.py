@@ -71,7 +71,13 @@ def _money_once(rows: list[dict], field: str) -> float:
     total = 0.0
     for r in rows:
         amount = r.get(field) or 0
-        if not amount:
+        # POSITIVES ONLY. A negative balance means more has been paid than
+        # invoiced -- an advance against a PO not yet billed. That is money
+        # the company has already handed over, not money it owes, and
+        # netting it off understates what is payable. The count beside this
+        # figure has always used `> 0`; the amount now agrees with it.
+        # Advances belong in their own line once Finance defines one.
+        if amount <= 0:
             continue
         po = r.get("po_no")
         if po:

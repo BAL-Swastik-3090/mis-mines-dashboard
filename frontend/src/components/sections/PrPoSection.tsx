@@ -1,9 +1,10 @@
 "use client";
 import { useState } from "react";
-import { ClipboardList, AlertTriangle, Search, X, Megaphone } from "lucide-react";
-import { usePrPoSummary, usePrPoRegister } from "@/hooks/usePrPo";
+import { ClipboardList, AlertTriangle, Megaphone } from "lucide-react";
+import { usePrPoSummary, usePrPoRegister, type PrPoFilter } from "@/hooks/usePrPo";
+import PrPoRegisterTable from "@/components/sections/PrPoRegisterTable";
 import type {
-  PrPoRow, PrPoStageBucket, PrPoOwnerBucket, PrPoAgeBand, PrPoDueBand,
+  PrPoStageBucket, PrPoOwnerBucket, PrPoAgeBand, PrPoDueBand,
   PrPoBuyerLoad, PrPoApprovalLoad,
 } from "@/types";
 
@@ -71,14 +72,17 @@ const PANEL_H3 = "text-sm font-semibold";
 function Dash() { return <span className="text-slate-400">—</span>; }
 
 export default function PrPoSection() {
-  const [stage, setStage] = useState<string | undefined>();
-  const [owner, setOwner] = useState<string | undefined>();
-  const [onlyOverdue, setOnlyOverdue] = useState(false);
-  const [typed, setTyped] = useState("");
-  const [q, setQ] = useState("");
+  const [filter, setFilter] = useState<PrPoFilter>({});
+  const patch = (p: Partial<PrPoFilter>) => setFilter((f) => ({ ...f, ...p }));
+  const clear = () => setFilter({});
 
-  const summary  = usePrPoSummary();
-  const register = usePrPoRegister({ stage, owner, q, rag: onlyOverdue ? "red" : undefined });
+  const summary  = usePrPoSummary({ from: filter.from });
+  const register = usePrPoRegister(filter);
+
+  const stage = filter.stage;
+  const owner = filter.owner;
+  const setStage = (v: string | undefined) => patch({ stage: v, owner: undefined, rag: undefined });
+  const setOwner = (v: string | undefined) => patch({ owner: v, stage: undefined, rag: undefined });
 
   if (summary.isError) {
     const status = (summary.error as { response?: { status?: number } })?.response?.status;
@@ -99,14 +103,8 @@ export default function PrPoSection() {
   const stagePeak = Math.max(1, ...(s?.by_stage ?? []).map((b) => b.count));
   const agePeak   = Math.max(1, ...(s?.ageing ?? []).map((a) => a.count));
   const duePeak   = Math.max(1, ...(s?.payment_profile?.bands ?? []).map((d) => d.amount));
-  const filtering = Boolean(stage || owner || q || onlyOverdue);
 
-  const clear = () => { setStage(undefined); setOwner(undefined);
-                        setOnlyOverdue(false); setQ(""); setTyped(""); };
-  const pickStage = (code: string) => {
-    setOwner(undefined); setOnlyOverdue(false);
-    setStage(stage === code ? undefined : code);
-  };
+  const pickStage = (code: string) => setStage(stage === code ? undefined : code);
 
   const card = (k: string) => s?.cards.find((c) => c.key === k);
   const overduePayable = (s?.payment_profile?.bands ?? []).find((b) => b.band === "Overdue");
@@ -134,7 +132,7 @@ export default function PrPoSection() {
           <div className="text-xs font-medium">Open PR items</div>
         </div>
 
-        <button onClick={() => { clear(); setOnlyOverdue(true); }}
+        <button onClick={() => setFilter({ rag: "red" })}
           className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-left hover:border-rose-400
                      dark:border-rose-900 dark:bg-rose-950/40">
           <div className="text-2xl font-semibold tabular-nums text-rose-900 dark:text-rose-200">
@@ -231,8 +229,7 @@ export default function PrPoSection() {
               return (
                 <li key={o.owner}>
                   <button
-                    onClick={() => { setStage(undefined); setOnlyOverdue(false);
-                                     setOwner(active ? undefined : o.owner); }}
+                    onClick={() => setOwner(active ? undefined : o.owner)}
                     title={`${o.owner} — oldest ${o.oldest_days ?? "?"} days`}
                     className={`flex w-full items-center justify-between gap-2 rounded px-2 py-1 text-left text-xs
                       ${active ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
@@ -353,117 +350,17 @@ export default function PrPoSection() {
         </section>
       </div>
 
-      {/* ── the register ──────────────────────────────────────────────── */}
-      <section className="space-y-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <h3 className={PANEL_H3}>Priority action register</h3>
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-2 top-1.5 h-4 w-4 text-slate-400" />
-            <input id="pr-po-search" value={typed}
-              onChange={(e) => setTyped(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") setQ(typed); }}
-              onBlur={() => setQ(typed)}
-              placeholder="PR, PO, vendor, description…"
-              className="w-60 rounded border border-slate-300 py-1 pl-8 pr-2 text-sm
-                         dark:border-slate-700 dark:bg-slate-900" />
-          </div>
-          <label className="flex items-center gap-1.5 text-xs">
-            <input type="checkbox" checked={onlyOverdue}
-                   onChange={(e) => setOnlyOverdue(e.target.checked)} />
-            Overdue only
-          </label>
-          {filtering && (
-            <button onClick={clear}
-              className="flex items-center gap-1 rounded bg-slate-200 px-2 py-1 text-xs dark:bg-slate-700">
-              <X className="h-3 w-3" /> Clear
-            </button>
-          )}
-          <span className="ml-auto text-xs text-slate-500">
-            {register.isFetching ? "loading…" : `${num(register.data?.total)} items`}
-            {register.data?.truncated && " · first 500"}
-          </span>
-        </div>
+      <PrPoRegisterTable
+        rows={register.data?.rows ?? []}
+        total={register.data?.total ?? 0}
+        truncated={Boolean(register.data?.truncated)}
+        loading={register.isFetching}
+        buyers={register.data?.buyers ?? []}
+        filter={filter}
+        onFilter={patch}
+        onClear={clear}
+      />
 
-        <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
-          <table className="w-full min-w-[1080px] text-sm">
-            <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wide
-                              text-slate-500 dark:bg-slate-800">
-              <tr>
-                <th className="px-3 py-2">Age</th>
-                <th className="px-3 py-2">PR / item &amp; requirement</th>
-                <th className="px-3 py-2">Requested by</th>
-                <th className="px-3 py-2">Buyer</th>
-                <th className="px-3 py-2">Stage</th>
-                <th className="px-3 py-2">Pending with</th>
-                <th className="px-3 py-2">Next action</th>
-                <th className="px-3 py-2 text-right">PO / payment</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r: PrPoRow) => (
-                <tr key={`${r.pr_number}-${r.pr_item}`}
-                    className="border-t border-slate-100 align-top dark:border-slate-800">
-                  <td className="whitespace-nowrap px-3 py-2">
-                    <span className={`rounded px-1.5 py-0.5 text-xs ring-1 ${RAG_STYLE[r.rag] ?? RAG_STYLE.unknown}`}>
-                      {r.stage_age_days === null ? "—" : `${r.stage_age_days}d`} · {RAG_WORD[r.rag] ?? "—"}
-                    </span>
-                  </td>
-                  <td className="max-w-[20rem] px-3 py-2">
-                    <div className="font-medium">
-                      {r.pr_number}<span className="text-slate-400">/{r.pr_item}</span>
-                    </div>
-                    <div className="truncate text-xs text-slate-600 dark:text-slate-400"
-                         title={r.description ?? ""}>
-                      {r.description || <Dash />}
-                    </div>
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2">
-                    {r.requisitioner || r.created_by || <Dash />}
-                  </td>
-                  <td className="max-w-[10rem] truncate px-3 py-2" title={r.buyer_department ?? ""}>
-                    {r.buyer_name || <Dash />}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2">{r.stage_label}</td>
-                  <td className="max-w-[12rem] truncate px-3 py-2" title={r.pending_with ?? ""}>
-                    {r.pending_with || <Dash />}
-                  </td>
-                  <td className="px-3 py-2">{r.next_action || <Dash />}</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-right">
-                    {r.po_no ? (
-                      <>
-                        <div className="font-medium">{r.po_no}</div>
-                        <div className="text-xs tabular-nums text-slate-500" title={exact(r.po_value)}>
-                          {crore(r.po_value)}
-                        </div>
-                        {!!r.outstanding && r.outstanding > 0 && (
-                          <div className={`text-xs tabular-nums ${
-                            r.overdue_payable ? "text-rose-600 dark:text-rose-400" : "text-slate-500"}`}
-                            title={exact(r.outstanding)}>
-                            {crore(r.outstanding)} {r.overdue_payable ? "overdue" : "due"}
-                          </div>
-                        )}
-                      </>
-                    ) : <Dash />}
-                  </td>
-                </tr>
-              ))}
-              {!rows.length && !register.isFetching && (
-                <tr><td colSpan={8} className="px-3 py-8 text-center text-slate-500">
-                  Nothing matches this filter.
-                </td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {s?.targets_provisional && (
-          <p className="text-xs text-slate-500">
-            Stage targets are provisional pending SCM agreement, so
-            &ldquo;overdue&rdquo; is measured against a working assumption rather
-            than an agreed service level.
-          </p>
-        )}
-      </section>
     </div>
   );
 }

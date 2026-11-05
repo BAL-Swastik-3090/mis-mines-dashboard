@@ -108,39 +108,80 @@ def summary(request: Request,
     return summ.summarise(rows, on)
 
 
+# What the table may be sorted by. A allow-list rather than a free field:
+# the sort key reaches a dict lookup, and an unchecked one is a way to probe
+# for fields the response does not otherwise show.
+SORTABLE = {
+    "stage_age_days", "pr_age_days", "release_date", "pr_date", "pr_number",
+    "po_value", "outstanding", "overdue_payable", "due_date", "buyer_name",
+    "pending_with", "stage", "vendor", "po_date", "po_delivery_date",
+}
+
+
+def _sort_key(field: str):
+    """None sorts last in both directions.
+
+    A missing value is not a small one. Sorted ascending by due date, rows
+    with no due date would otherwise lead the table and read as the most
+    urgent thing on it.
+    """
+    def key(r: dict[str, Any]):
+        v = r.get(field)
+        return (v is None, v if v is not None else "")
+    return key
+
+
 @router.get("/register")
 def register(request: Request,
              from_date: date | None = Query(default=None),
+             to_date: date | None = Query(default=None),
              as_on: date | None = Query(default=None),
              stage: str | None = Query(default=None),
              rag: str | None = Query(default=None),
              owner: str | None = Query(default=None),
+             buyer: str | None = Query(default=None),
              q: str | None = Query(default=None, max_length=80),
+             sort: str | None = Query(default=None),
+             dir: str = Query(default="desc", pattern="^(asc|desc)$"),
              limit: int = Query(default=500, ge=1, le=5000),
              db: Session = Depends(get_minehub_db)) -> dict[str, Any]:
     """The register, filtered the way a summary card filters it."""
     _guard(db, request)
     rows, on = _load(db, from_date, as_on)
 
+    if to_date:
+        # Released on or before this date. The pair reads as "released
+        # between", which is the question a date filter is asked here --
+        # not "touched between", which would move rows in and out of the
+        # table as SAP syncs and make the count unrepeatable.
+        rows = [r for r in rows
+                if r.get("release_date") and r["release_date"] <= to_date]
     if stage:
         wanted = {s.strip().upper() for s in stage.split(",")}
-        # The evaluation card covers two stages: one name, both populations.
         if "EVALUATION" in wanted:
             wanted.add("QUOTES_IN")
         rows = [r for r in rows if r["stage"] in wanted]
     if rag:
-        rows = [r for r in rows if r["rag"] == rag.lower()]
+        wanted_rag = {x.strip().lower() for x in rag.split(",")}
+        rows = [r for r in rows if r["rag"] in wanted_rag]
     if owner:
         rows = [r for r in rows if (r.get("pending_with") or "") == owner]
+    if buyer:
+        rows = [r for r in rows if (r.get("buyer_name") or "") == buyer]
     if q:
         needle = q.strip().lower()
         rows = [r for r in rows if any(
             needle in str(r.get(f) or "").lower()
-            for f in ("pr_number", "po_no", "description", "vendor",
-                      "nfa_id", "created_by", "requisitioner"))]
+            for f in ("pr_number", "po_no", "description", "vendor", "nfa_id",
+                      "created_by", "requisitioner", "buyer_name",
+                      "pending_with", "material", "cost_center"))]
+
+    if sort in SORTABLE:
+        rows = sorted(rows, key=_sort_key(sort), reverse=(dir == "desc"))
 
     return {"as_on": on, "total": len(rows),
-            "rows": rows[:limit], "truncated": len(rows) > limit}
+            "rows": rows[:limit], "truncated": len(rows) > limit,
+            "buyers": sorted({r["buyer_name"] for r in rows if r.get("buyer_name")})}
 
 
 @router.get("/case/{pr_number}")
