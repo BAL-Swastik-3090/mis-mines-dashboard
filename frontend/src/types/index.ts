@@ -2029,3 +2029,61 @@ export interface CostGlDetailResponse {
   summary_line: string | null;
   rows:         CostGlRow[];
 }
+
+/* ── PR to Payment ──────────────────────────────────────────────────────── */
+
+export interface PrPoCard {
+  key: string;
+  label: string;
+  count: number;
+  amount?: number | null;
+  tone: string;
+  filter?: { stage?: string; rag?: string; delivery?: string; payment?: string };
+}
+
+export interface PrPoRow {
+  pr_number: string;
+  pr_item: string;
+  description: string | null;
+  release_date: string | null;
+  requisitioner: string | null;
+  created_by: string | null;
+  plant: string | null;
+  purchasing_group: string | null;
+  stage: string;
+  stage_label: string;
+  stage_since: string | null;
+  stage_age_days: number | null;
+  pr_age_days: number | null;
+  pending_with: string | null;
+  rag: string;
+  nfa_id: string | null;
+  nfa_status: string | null;
+  nfa_approver: string | null;
+  nfa_pending_days: number | null;
+  po_no: string | null;
+  po_date: string | null;
+  vendor: string | null;
+  po_value: number | null;
+  po_delivery_date: string | null;
+  delivery_complete: boolean;
+  invoiced_value: number | null;
+  paid_amount: number | null;
+  outstanding: number | null;
+}
+
+export interface PrPoSummaryResponse {
+  as_on: string;
+  totals: { pr_items: number; pr_numbers: number; po_numbers: number; invoices: number };
+  cards: PrPoCard[];
+  by_stage: { stage: string; label: string; count: number; red: number; oldest_days: number | null }[];
+  by_owner: { owner: string; count: number; red: number; oldest_days: number | null }[];
+  targets_provisional: boolean;
+}
+
+export interface PrPoRegisterResponse {
+  as_on: string;
+  total: number;
+  rows: PrPoRow[];
+  truncated: boolean;
+}
