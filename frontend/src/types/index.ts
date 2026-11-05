@@ -2057,6 +2057,13 @@ export interface PrPoRow {
   pr_age_days: number | null;
   pending_with: string | null;
   next_action: string | null;
+  buyer_name: string | null;
+  buyer_department: string | null;
+  approver_name: string | null;
+  payment_terms_desc: string | null;
+  due_date: string | null;
+  overdue_payable: number | null;
+  terms_parsed: boolean;
   rag: string;
   nfa_id: string | null;
   nfa_status: string | null;
@@ -2081,7 +2088,23 @@ export interface PrPoOwnerBucket {
   owner: string; count: number; red: number; oldest_days: number | null;
 }
 
+export interface PrPoAgeBand { band: string; count: number; red: number }
+export interface PrPoDueBand  { band: string; amount: number; count: number }
+export interface PrPoBuyerLoad {
+  buyer: string; department: string | null;
+  open_items: number; past_target: number; median_age_days: number | null;
+}
+export interface PrPoApprovalLoad {
+  approver: string; department: string | null;
+  pending: number; overdue: number; oldest_days: number | null;
+}
+
 export interface PrPoSummaryResponse {
+  ageing: PrPoAgeBand[];
+  payment_profile: { bands: PrPoDueBand[]; basis: string };
+  buyer_workload: PrPoBuyerLoad[];
+  approval_bottlenecks: PrPoApprovalLoad[];
+  review_first: string[];
   as_on: string;
   totals: { pr_items: number; pr_numbers: number; po_numbers: number; invoices: number };
   cards: PrPoCard[];

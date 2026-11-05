@@ -21,7 +21,8 @@ invoice reads INVOICED rather than falling back to "PO issued".
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+import re
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
@@ -66,6 +67,7 @@ po AS (
            min(p.vendor_name)                  AS vendor_name,
            min(p.vendor)                       AS vendor_code,
            min(p.zterm)                        AS payment_terms,
+           min(p.zterm_desc)                   AS payment_terms_desc,
            sum(COALESCE(p.net_order_value, 0)) AS po_value,
            min(p.currency)                     AS po_currency,
            min(p.po_release_date)              AS po_release_date,
@@ -136,10 +138,31 @@ tech AS (
     SELECT t.pr_number, count(*) AS tech_submissions
       FROM scm.scm_quot_technical_eval_submission t
      GROUP BY t.pr_number
+),
+-- The buyer behind the purchasing group code. P26 means nothing to anyone
+-- outside SCM; Nitesh Kumar is who the meeting asks about. 'BLOCKED' is the
+-- portal's word for a retired code and is treated as no name at all.
+buyer AS (
+    SELECT g.purchasing_group,
+           NULLIF(TRIM(g.purchasing_name), '')    AS buyer_name,
+           NULLIF(TRIM(g.department), '')         AS buyer_department,
+           NULLIF(TRIM(g.e_mail), '')             AS buyer_email
+      FROM scm.scm_pur_group g
+     WHERE COALESCE(TRIM(g.purchasing_name), '') NOT IN ('', 'BLOCKED')
+),
+-- An approver is recorded as an email address. The meeting uses names.
+approver AS (
+    SELECT lower(TRIM(e.emailid)) AS emailid,
+           min(TRIM(e.empname))   AS approver_name,
+           min(TRIM(e.empdept))   AS approver_dept
+      FROM sap_odata_api.sap_employee_details e
+     WHERE COALESCE(TRIM(e.emailid), '') <> ''
+     GROUP BY 1
 )
 SELECT pr.*,
        po.po_no, po.po_item_count, po.po_date, po.vendor_name, po.vendor_code,
-       po.payment_terms, po.po_value, po.po_currency, po.po_release_date,
+       po.payment_terms, po.payment_terms_desc, po.po_value, po.po_currency,
+       po.po_release_date,
        po.release_state, po.po_delivery_date, po.gr_qty, po.po_qty,
        po.goods_receipt_date, po.delivery_complete,
        hist.gr_value, hist.last_gr_date,
@@ -153,7 +176,9 @@ SELECT pr.*,
        nfa_step.approval_level AS nfa_level,
        nfa_step.approver_email AS nfa_approver,
        nfa_step.pending_since  AS nfa_pending_since,
-       tech.tech_submissions
+       tech.tech_submissions,
+       buyer.buyer_name, buyer.buyer_department, buyer.buyer_email,
+       approver.approver_name, approver.approver_dept
   FROM pr
   LEFT JOIN po       ON po.pr_no = pr.pr_number AND po.pr_item = pr.pr_item
   LEFT JOIN hist     ON hist.po_number = COALESCE(po.po_no, pr.pr_po_no)
@@ -163,6 +188,8 @@ SELECT pr.*,
   LEFT JOIN nfa      ON nfa.pr_number  = pr.pr_number
   LEFT JOIN nfa_step ON nfa_step.pr_number = pr.pr_number
   LEFT JOIN tech     ON tech.pr_number = pr.pr_number
+  LEFT JOIN buyer    ON buyer.purchasing_group = TRIM(pr.purchasing_group)
+  LEFT JOIN approver ON approver.emailid = lower(TRIM(nfa_step.approver_email))
  ORDER BY pr.pr_release_date DESC, pr.pr_number, pr.pr_item
 """
 
@@ -257,6 +284,31 @@ NEXT_ACTION: dict[str, str] = {
 }
 
 
+_CREDIT_DAYS = re.compile(r"(\d{1,3})\s*day", re.IGNORECASE)
+
+
+def credit_days(term_desc: str | None) -> int | None:
+    """Credit days stated by the payment term, or None when it does not say.
+
+    SAP's own due_payment column is empty throughout this plant, so a due
+    date has to come from the term text: 'FT-100%-15day', '100% payment
+    within 15 days'. Where the term states a number this reads it; where it
+    says 'AS PER THE NOTE' or '100% advance against PI' it returns None and
+    the item is reported as terms-not-parsed rather than assumed due today.
+
+    Guessing zero here would turn every unparsed term into overdue payable,
+    which is the one number Finance will check first.
+    """
+    if not term_desc:
+        return None
+    m = _CREDIT_DAYS.search(term_desc)
+    if m:
+        return int(m.group(1))
+    if "advance" in term_desc.lower():
+        return 0          # payable before despatch; due the moment invoiced
+    return None
+
+
 def pending_owner(r: dict[str, Any], stage: str) -> str | None:
     """Who the case is sitting WITH -- not who was assigned to it.
 
@@ -264,16 +316,21 @@ def pending_owner(r: dict[str, Any], stage: str) -> str | None:
     purpose: a PR assigned to a buyer but waiting on an approver is pending
     with the approver, and reporting the buyer there hides the queue.
     """
-    if stage == "NFA_PENDING" and r.get("nfa_approver"):
-        return r["nfa_approver"]
+    if stage == "NFA_PENDING":
+        # The approver by name where the employee master knows the address,
+        # the address itself otherwise -- never nothing, because "pending
+        # with nobody" is the answer that stops a case being chased.
+        return r.get("approver_name") or r.get("nfa_approver")
     if stage in {"RFQ_ISSUED", "QUOTES_IN"}:
         return r.get("vendor_name") or "Vendor"
     if stage in {"RECEIVED", "INVOICED"}:
         return "Accounts"
     if stage == "UNASSIGNED":
         return "SCM lead"
+    # P26 means nothing outside SCM. Fall back to the code only when the
+    # purchasing group has no name against it.
     pg = (r.get("purchasing_group") or "").strip()
-    return f"Buyer {pg}" if pg else None
+    return r.get("buyer_name") or (f"Buyer {pg}" if pg else None)
 
 
 def shape(r: dict[str, Any], as_on: date) -> dict[str, Any]:
@@ -289,6 +346,18 @@ def shape(r: dict[str, Any], as_on: date) -> dict[str, Any]:
     outstanding = None
     if invoiced is not None:
         outstanding = round(invoiced - (paid or 0.0), 2)
+
+    # WHEN THE MONEY IS DUE, where the term says so. Measured from the last
+    # invoice posting, because that is the event the credit period runs from.
+    days = credit_days(r.get("payment_terms_desc"))
+    inv_date = _as_date(r.get("last_invoice_date"))
+    due_date = inv_date + timedelta(days=days) if (inv_date and days is not None) else None
+    overdue_payable = None
+    if outstanding and outstanding > 0:
+        if due_date is not None:
+            overdue_payable = outstanding if due_date < as_on else 0.0
+        # due_date None means the term did not state a period. The balance is
+        # outstanding but its due date is unknown, and unknown is not overdue.
 
     return {
         "pr_number": r["pr_number"],
@@ -346,12 +415,21 @@ def shape(r: dict[str, Any], as_on: date) -> dict[str, Any]:
         "po_qty": float(r["po_qty"]) if r.get("po_qty") is not None else None,
         "last_gr_date": _as_date(r.get("last_gr_date")),
 
+        "buyer_name": r.get("buyer_name"),
+        "buyer_department": r.get("buyer_department"),
+        "approver_name": r.get("approver_name"),
+        "approver_dept": r.get("approver_dept"),
+        "payment_terms_desc": r.get("payment_terms_desc"),
+
         "invoiced_value": invoiced,
         "invoice_docs": r.get("invoice_docs"),
         "last_invoice_date": _as_date(r.get("last_invoice_date")),
         "paid_amount": paid,
         "last_payment_date": _as_date(r.get("last_payment_date")),
         "outstanding": outstanding,
+        "due_date": due_date,
+        "overdue_payable": overdue_payable,
+        "terms_parsed": days is not None,
     }
 
 

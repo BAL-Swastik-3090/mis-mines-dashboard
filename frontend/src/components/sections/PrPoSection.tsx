@@ -1,40 +1,42 @@
 "use client";
 import { useState } from "react";
-import { ClipboardList, AlertTriangle, Search, X, ChevronRight } from "lucide-react";
+import { ClipboardList, AlertTriangle, Search, X, Megaphone } from "lucide-react";
 import { usePrPoSummary, usePrPoRegister } from "@/hooks/usePrPo";
-import type { PrPoRow, PrPoStageBucket, PrPoOwnerBucket } from "@/types";
+import type {
+  PrPoRow, PrPoStageBucket, PrPoOwnerBucket, PrPoAgeBand, PrPoDueBand,
+  PrPoBuyerLoad, PrPoApprovalLoad,
+} from "@/types";
 
 /* PR to Payment.
 
-   THE SCREEN IS BUILT ROUND THREE QUESTIONS, in the order a morning meeting
-   asks them: where is the work stuck, who is holding it, and which cases do
-   we talk about today. A flat table answers none of them -- the first
-   version of this page was 2,191 rows sorted by release date, which opened
-   on the newest items, every one of them reading "on track", while 1,695
-   sat past their target below the fold.
+   Built round the order a morning meeting asks its questions: what should we
+   look at first, where is the work stuck, who is holding it, and which cases
+   do we talk about. The table is the last thing on the page because it is
+   the last thing anybody needs -- by the time you reach it you should already
+   know which forty rows you came for.
 
-   The pipeline strip is the backbone. Procurement is a sequence, so the
-   stages are drawn in sequence rather than as ten identical boxes: where the
-   column is tall is where the backlog is, and that is readable before any
-   number is. */
+   The first version of this screen was a flat table sorted newest-first,
+   which opened on rows reading "0d, on track" while 1,654 items sat over
+   thirty days in stage further down. Ordering is not presentation. */
 
 /* ── money ──────────────────────────────────────────────────────────────
-   Rupees in crore. The register runs to ten-digit figures and
-   "₹ 1,65,64,06,404" is a number nobody reads off a projector; "₹ 165.6 Cr"
-   is the same fact at the precision the conversation actually uses. The
-   exact figure stays in the tooltip for whoever needs to reconcile it. */
+   Crore, because the register runs to ten digits and "₹ 1,65,64,06,404" is
+   not a number anybody reads off a projector. Exact figure in the tooltip
+   for whoever has to reconcile it. */
 function crore(v: number | null | undefined): string {
   if (v === null || v === undefined) return "—";
-  const abs = Math.abs(v);
-  if (abs >= 1e7) return `₹ ${(v / 1e7).toFixed(1)} Cr`;
-  if (abs >= 1e5) return `₹ ${(v / 1e5).toFixed(1)} L`;
+  const a = Math.abs(v);
+  if (a >= 1e7) return `₹ ${(v / 1e7).toFixed(1)} Cr`;
+  if (a >= 1e5) return `₹ ${(v / 1e5).toFixed(1)} L`;
   return `₹ ${Math.round(v).toLocaleString("en-IN")}`;
 }
 const exact = (v: number | null | undefined) =>
   v === null || v === undefined ? "" : `₹ ${Math.round(v).toLocaleString("en-IN")}`;
+const num = (v: number | null | undefined) =>
+  v === null || v === undefined ? "—" : v.toLocaleString("en-IN");
 
-/* Colour never carries a fact on its own -- this is read off a projector and
-   by people who cannot separate red from green. Every badge says the word. */
+/* Colour never carries a fact alone: this is read off a projector and by
+   people who cannot separate red from green. Every badge says the word. */
 const RAG_STYLE: Record<string, string> = {
   red:     "bg-rose-100 text-rose-900 ring-rose-200 dark:bg-rose-950/60 dark:text-rose-200 dark:ring-rose-900",
   amber:   "bg-amber-100 text-amber-900 ring-amber-200 dark:bg-amber-950/60 dark:text-amber-200 dark:ring-amber-900",
@@ -45,22 +47,26 @@ const RAG_WORD: Record<string, string> = {
   red: "Overdue", amber: "Due soon", green: "On track", unknown: "No target",
 };
 
-/* The procurement sequence, in order. Drawn left to right so the shape of
-   the backlog is visible before any figure is read. */
-const PIPELINE: { stage: string; short: string }[] = [
-  { stage: "UNASSIGNED",   short: "Assign" },
-  { stage: "ASSIGNED",     short: "RFQ" },
-  { stage: "RFQ_ISSUED",   short: "Quotes" },
-  { stage: "QUOTES_IN",    short: "Compare" },
-  { stage: "EVALUATION",   short: "Evaluate" },
-  { stage: "NFA_PENDING",  short: "NFA" },
-  { stage: "NFA_APPROVED", short: "Raise PO" },
-  { stage: "PO_CREATED",   short: "Release" },
-  { stage: "PO_RELEASED",  short: "Deliver" },
-  { stage: "RECEIVED",     short: "Invoice" },
-  { stage: "INVOICED",     short: "Pay" },
-  { stage: "PAID",         short: "Closed" },
+/* The procurement sequence. Drawn as horizontal bars rather than vertical
+   ones: the stage names are words, and words read along a row. A vertical
+   chart forces each label into six characters and then needs a legend to
+   undo the abbreviation. */
+const PIPELINE = [
+  { stage: "UNASSIGNED",   label: "Assign buyer" },
+  { stage: "ASSIGNED",     label: "Issue RFQ" },
+  { stage: "RFQ_ISSUED",   label: "Await quotations" },
+  { stage: "QUOTES_IN",    label: "Compare quotes" },
+  { stage: "EVALUATION",   label: "Evaluate" },
+  { stage: "NFA_PENDING",  label: "NFA approval" },
+  { stage: "NFA_APPROVED", label: "Raise PO" },
+  { stage: "PO_CREATED",   label: "Release PO" },
+  { stage: "PO_RELEASED",  label: "Delivery" },
+  { stage: "RECEIVED",     label: "Invoice" },
+  { stage: "INVOICED",     label: "Payment" },
 ];
+
+const CARD = "rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900";
+const PANEL_H3 = "text-sm font-semibold";
 
 function Dash() { return <span className="text-slate-400">—</span>; }
 
@@ -72,9 +78,7 @@ export default function PrPoSection() {
   const [q, setQ] = useState("");
 
   const summary  = usePrPoSummary();
-  const register = usePrPoRegister({
-    stage, owner, q, rag: onlyOverdue ? "red" : undefined,
-  });
+  const register = usePrPoRegister({ stage, owner, q, rag: onlyOverdue ? "red" : undefined });
 
   if (summary.isError) {
     const status = (summary.error as { response?: { status?: number } })?.response?.status;
@@ -89,140 +93,154 @@ export default function PrPoSection() {
     );
   }
 
-  const s    = summary.data;
+  const s = summary.data;
   const rows = register.data?.rows ?? [];
   const byStage = new Map((s?.by_stage ?? []).map((b: PrPoStageBucket) => [b.stage, b]));
-  const peak = Math.max(1, ...(s?.by_stage ?? []).map((b) => b.count));
+  const stagePeak = Math.max(1, ...(s?.by_stage ?? []).map((b) => b.count));
+  const agePeak   = Math.max(1, ...(s?.ageing ?? []).map((a) => a.count));
+  const duePeak   = Math.max(1, ...(s?.payment_profile.bands ?? []).map((d) => d.amount));
   const filtering = Boolean(stage || owner || q || onlyOverdue);
 
   const clear = () => { setStage(undefined); setOwner(undefined);
                         setOnlyOverdue(false); setQ(""); setTyped(""); };
+  const pickStage = (code: string) => {
+    setOwner(undefined); setOnlyOverdue(false);
+    setStage(stage === code ? undefined : code);
+  };
 
-  const money = s?.cards.find((c) => c.key === "outstanding");
-  const overdueDelivery = s?.cards.find((c) => c.key === "delivery_overdue");
-  const pastTarget = s?.cards.find((c) => c.key === "overdue_stage");
+  const card = (k: string) => s?.cards.find((c) => c.key === k);
+  const overduePayable = (s?.payment_profile.bands ?? []).find((b) => b.band === "Overdue");
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <header className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="flex items-center gap-2 text-lg font-semibold">
-          <ClipboardList className="h-5 w-5" /> PR to Payment
-        </h2>
+        <div>
+          <h2 className="flex items-center gap-2 text-lg font-semibold">
+            <ClipboardList className="h-5 w-5" /> PR to Payment
+          </h2>
+          <p className="text-xs text-slate-500">
+            Procurement progress and daily action review · Kaliapani
+          </p>
+        </div>
         <p className="text-xs text-slate-500">
-          {s ? `${s.totals.pr_items.toLocaleString("en-IN")} PR items · ${s.totals.pr_numbers} PRs · ${s.totals.po_numbers} POs · released in the last year · as on ${String(s.as_on)}` : ""}
+          {s && `${num(s.totals.pr_items)} PR items · ${s.totals.pr_numbers} PRs · ${s.totals.po_numbers} POs · released in the last year · as on ${String(s.as_on)}`}
         </p>
       </header>
 
-      {/* ── the three figures worth a headline ─────────────────────────── */}
-      <div className="grid gap-3 sm:grid-cols-3">
-        <button
-          onClick={() => { clear(); setOnlyOverdue(true); }}
-          className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-left
-                     hover:border-rose-400 dark:border-rose-900 dark:bg-rose-950/40"
-        >
-          <div className="text-3xl font-semibold tabular-nums text-rose-900 dark:text-rose-200">
-            {pastTarget?.count ?? "—"}
+      {/* ── the figures ───────────────────────────────────────────────── */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <div className={`${CARD} p-3`}>
+          <div className="text-2xl font-semibold tabular-nums">{num(s?.totals.pr_items)}</div>
+          <div className="text-xs font-medium">Open PR items</div>
+        </div>
+
+        <button onClick={() => { clear(); setOnlyOverdue(true); }}
+          className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-left hover:border-rose-400
+                     dark:border-rose-900 dark:bg-rose-950/40">
+          <div className="text-2xl font-semibold tabular-nums text-rose-900 dark:text-rose-200">
+            {num(card("overdue_stage")?.count)}
           </div>
-          <div className="mt-1 text-sm font-medium">Past stage target</div>
-          <div className="text-xs text-slate-600 dark:text-slate-400">
-            of {s?.totals.pr_items.toLocaleString("en-IN")} open items · click to list them
+          <div className="text-xs font-medium">Past stage target</div>
+          <div className="text-[11px] text-slate-600 dark:text-slate-400">
+            {s && card("overdue_stage")
+              ? `${Math.round((card("overdue_stage")!.count / s.totals.pr_items) * 100)}% of open items`
+              : ""}
           </div>
         </button>
 
-        <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
-          <div className="text-3xl font-semibold tabular-nums" title={exact(money?.amount)}>
-            {crore(money?.amount)}
-          </div>
-          <div className="mt-1 text-sm font-medium">Outstanding payable</div>
-          <div className="text-xs text-slate-600 dark:text-slate-400">
-            invoiced and not yet paid, counted once per PO
-          </div>
+        <button onClick={() => pickStage("NFA_PENDING")}
+          className={`${CARD} p-3 text-left hover:border-slate-400`}>
+          <div className="text-2xl font-semibold tabular-nums">{num(card("nfa_pending")?.count)}</div>
+          <div className="text-xs font-medium">NFA awaiting approval</div>
+        </button>
+
+        <div className={`${CARD} p-3`}>
+          <div className="text-2xl font-semibold tabular-nums">{num(card("delivery_overdue")?.count)}</div>
+          <div className="text-xs font-medium">Delivery overdue</div>
         </div>
 
-        <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
-          <div className="text-3xl font-semibold tabular-nums">{overdueDelivery?.count ?? "—"}</div>
-          <div className="mt-1 text-sm font-medium">Delivery overdue</div>
-          <div className="text-xs text-slate-600 dark:text-slate-400">
-            PO delivery date passed, not marked complete
+        <div className={`${CARD} p-3`}>
+          <div className="text-2xl font-semibold tabular-nums" title={exact(card("outstanding")?.amount)}>
+            {crore(card("outstanding")?.amount)}
+          </div>
+          <div className="text-xs font-medium">Outstanding payable</div>
+          <div className="text-[11px] text-rose-700 dark:text-rose-300" title={exact(overduePayable?.amount)}>
+            {crore(overduePayable?.amount)} already overdue
           </div>
         </div>
       </div>
 
-      {/* ── the pipeline ───────────────────────────────────────────────── */}
-      <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
-        <div className="mb-3 flex items-baseline justify-between">
-          <h3 className="text-sm font-semibold">Where the work is sitting</h3>
-          <p className="text-xs text-slate-500">height is the count · red is past target · click a stage to filter</p>
+      {/* ── review first ──────────────────────────────────────────────── */}
+      {!!s?.review_first.length && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-300
+                        bg-amber-50 px-4 py-2.5 text-sm text-amber-950
+                        dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+          <Megaphone className="h-4 w-4 shrink-0" />
+          <span className="font-semibold">Review first:</span>
+          <span>{s.review_first.join(" · ")}</span>
         </div>
-        <div className="flex items-end gap-1 overflow-x-auto pb-1">
-          {PIPELINE.map(({ stage: code, short }, i) => {
-            const b = byStage.get(code);
-            const count = b?.count ?? 0;
-            const red = b?.red ?? 0;
-            const active = stage === code;
-            const h = Math.round((count / peak) * 72) + 4;
-            return (
-              <div key={code} className="flex items-end gap-1">
-                <button
-                  onClick={() => { setOwner(undefined); setOnlyOverdue(false);
-                                   setStage(active ? undefined : code); }}
-                  disabled={!count}
-                  title={b ? `${b.label}: ${count} items, ${red} past target, oldest ${b.oldest_days ?? "?"} days`
-                           : `${short}: nothing here`}
-                  className={`flex min-w-[64px] flex-col items-center rounded-lg px-1.5 py-2 transition
-                    ${active ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
-                             : count ? "hover:bg-slate-100 dark:hover:bg-slate-800"
-                                     : "opacity-40"}`}
-                >
-                  <span className="text-sm font-semibold tabular-nums">{count}</span>
-                  <span
-                    className="mt-1 w-7 rounded-sm bg-slate-300 dark:bg-slate-600"
-                    style={{ height: `${h}px` }}
-                  >
-                    {/* the overdue share, drawn inside the same bar so the
-                        eye compares it against the whole and not against
-                        a second chart somewhere else */}
-                    <span
-                      className="block w-full rounded-sm bg-rose-500"
-                      style={{ height: count ? `${Math.round((red / count) * h)}px` : 0 }}
-                    />
-                  </span>
-                  <span className="mt-1 text-[10px] leading-tight">{short}</span>
-                </button>
-                {i < PIPELINE.length - 1 && (
-                  <ChevronRight className="mb-6 h-3 w-3 shrink-0 text-slate-300 dark:text-slate-600" />
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </section>
+      )}
 
-      <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
-        {/* ── who is holding it ────────────────────────────────────────── */}
-        <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
-          <h3 className="mb-1 text-sm font-semibold">Pending with</h3>
-          <p className="mb-3 text-xs text-slate-500">worst queue first</p>
-          <ul className="space-y-1">
-            {(s?.by_owner ?? []).slice(0, 10).map((o: PrPoOwnerBucket) => {
+      {/* ── where the work is, who holds it, how old it is ────────────── */}
+      <div className="grid gap-4 xl:grid-cols-[1.35fr_1fr_1fr]">
+        <section className={`${CARD} min-w-0 p-4`}>
+          <div className="mb-3 flex items-baseline justify-between gap-2">
+            <h3 className={PANEL_H3}>Where the work is pending</h3>
+            <span className="text-[11px] text-slate-500">click a stage to filter</span>
+          </div>
+          <div className="space-y-1">
+            {PIPELINE.map(({ stage: code, label }) => {
+              const b = byStage.get(code);
+              const count = b?.count ?? 0;
+              const red = b?.red ?? 0;
+              const active = stage === code;
+              const pct = (count / stagePeak) * 100;
+              return (
+                <button key={code} onClick={() => pickStage(code)} disabled={!count}
+                  title={b ? `${count} items, ${red} past target, oldest ${b.oldest_days ?? "?"} days` : "nothing here"}
+                  className={`flex w-full items-center gap-2 rounded px-1.5 py-1 text-left text-xs transition
+                    ${active ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
+                             : count ? "hover:bg-slate-100 dark:hover:bg-slate-800" : "opacity-40"}`}>
+                  <span className="w-28 shrink-0 truncate">{label}</span>
+                  <span className="relative h-3.5 flex-1 overflow-hidden rounded bg-slate-100 dark:bg-slate-800">
+                    {/* within target, then the overdue share drawn inside the
+                        same bar -- compared against the whole, not against a
+                        separate chart somewhere else on the page */}
+                    <span className="absolute inset-y-0 left-0 bg-emerald-400/70"
+                          style={{ width: `${pct}%` }} />
+                    <span className="absolute inset-y-0 left-0 bg-rose-500"
+                          style={{ width: `${count ? (red / stagePeak) * 100 : 0}%` }} />
+                  </span>
+                  <span className="w-20 shrink-0 text-right tabular-nums">
+                    {count}{red > 0 && <span className={active ? "" : " text-rose-600 dark:text-rose-400"}> · {red} late</span>}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className={`${CARD} min-w-0 p-4`}>
+          <div className="mb-3 flex items-baseline justify-between gap-2">
+            <h3 className={PANEL_H3}>Pending with</h3>
+            <span className="text-[11px] text-slate-500">worst queue first</span>
+          </div>
+          <ul className="space-y-0.5">
+            {(s?.by_owner ?? []).slice(0, 11).map((o: PrPoOwnerBucket) => {
               const active = owner === o.owner;
               return (
                 <li key={o.owner}>
                   <button
                     onClick={() => { setStage(undefined); setOnlyOverdue(false);
                                      setOwner(active ? undefined : o.owner); }}
-                    className={`flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs
+                    title={`${o.owner} — oldest ${o.oldest_days ?? "?"} days`}
+                    className={`flex w-full items-center justify-between gap-2 rounded px-2 py-1 text-left text-xs
                       ${active ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
-                               : "hover:bg-slate-100 dark:hover:bg-slate-800"}`}
-                  >
-                    <span className="truncate" title={o.owner}>{o.owner}</span>
+                               : "hover:bg-slate-100 dark:hover:bg-slate-800"}`}>
+                    <span className="truncate">{o.owner}</span>
                     <span className="shrink-0 tabular-nums">
                       {o.count}
-                      {o.red > 0 && (
-                        <span className={active ? "ml-1" : "ml-1 text-rose-600 dark:text-rose-400"}>
-                          ({o.red} late)
-                        </span>
-                      )}
+                      {o.red > 0 && <span className={active ? "" : " text-rose-600 dark:text-rose-400"}> ({o.red} late)</span>}
                     </span>
                   </button>
                 </li>
@@ -231,120 +249,221 @@ export default function PrPoSection() {
           </ul>
         </section>
 
-        {/* ── the register ─────────────────────────────────────────────── */}
-        <section className="min-w-0 space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-2 top-1.5 h-4 w-4 text-slate-400" />
-              <input
-                id="pr-po-search"
-                value={typed}
-                onChange={(e) => setTyped(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") setQ(typed); }}
-                onBlur={() => setQ(typed)}
-                placeholder="PR, PO, vendor, description…"
-                className="w-64 rounded border border-slate-300 py-1 pl-8 pr-2 text-sm
-                           dark:border-slate-700 dark:bg-slate-900"
-              />
-            </div>
-            <label className="flex items-center gap-1.5 text-xs">
-              <input type="checkbox" checked={onlyOverdue}
-                     onChange={(e) => setOnlyOverdue(e.target.checked)} />
-              Overdue only
-            </label>
-            {filtering && (
-              <button onClick={clear}
-                      className="flex items-center gap-1 rounded bg-slate-200 px-2 py-1 text-xs
-                                 dark:bg-slate-700">
-                <X className="h-3 w-3" /> Clear filters
-              </button>
-            )}
-            <span className="ml-auto text-xs text-slate-500">
-              {register.isFetching ? "loading…"
-                : `${(register.data?.total ?? 0).toLocaleString("en-IN")} items`}
-              {register.data?.truncated && " · first 500"}
-            </span>
+        <section className={`${CARD} min-w-0 p-4`}>
+          <h3 className={`${PANEL_H3} mb-1`}>Open-item ageing</h3>
+          <p className="mb-3 text-[11px] text-slate-500">days in the current stage</p>
+          <div className="space-y-1.5">
+            {(s?.ageing ?? []).map((a: PrPoAgeBand) => (
+              <div key={a.band} className="flex items-center gap-2 text-xs">
+                <span className="w-20 shrink-0">{a.band}</span>
+                <span className="relative h-3.5 flex-1 overflow-hidden rounded bg-slate-100 dark:bg-slate-800">
+                  <span className="absolute inset-y-0 left-0 bg-sky-400/70"
+                        style={{ width: `${(a.count / agePeak) * 100}%` }} />
+                  <span className="absolute inset-y-0 left-0 bg-rose-500"
+                        style={{ width: `${(a.red / agePeak) * 100}%` }} />
+                </span>
+                <span className="w-10 shrink-0 text-right tabular-nums">{a.count}</span>
+              </div>
+            ))}
           </div>
-
-          <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
-            <table className="w-full min-w-[1000px] text-sm">
-              <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wide
-                                text-slate-500 dark:bg-slate-800">
-                <tr>
-                  <th className="px-3 py-2">Age</th>
-                  <th className="px-3 py-2">PR / item</th>
-                  <th className="px-3 py-2">What it is</th>
-                  <th className="px-3 py-2">Next action</th>
-                  <th className="px-3 py-2">Pending with</th>
-                  <th className="px-3 py-2">Requested by</th>
-                  <th className="px-3 py-2">PO / vendor</th>
-                  <th className="px-3 py-2 text-right">Value</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r: PrPoRow) => (
-                  <tr key={`${r.pr_number}-${r.pr_item}`}
-                      className="border-t border-slate-100 align-top dark:border-slate-800">
-                    <td className="whitespace-nowrap px-3 py-2">
-                      <span className={`rounded px-1.5 py-0.5 text-xs ring-1 ${RAG_STYLE[r.rag] ?? RAG_STYLE.unknown}`}>
-                        {r.stage_age_days === null ? "—" : `${r.stage_age_days}d`} · {RAG_WORD[r.rag] ?? "—"}
-                      </span>
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2 font-medium">
-                      {r.pr_number}
-                      <span className="text-slate-400">/{r.pr_item}</span>
-                    </td>
-                    <td className="max-w-[18rem] px-3 py-2">
-                      <div className="truncate" title={r.description ?? ""}>
-                        {r.description || <Dash />}
-                      </div>
-                      <div className="text-xs text-slate-500">{r.stage_label}</div>
-                    </td>
-                    <td className="px-3 py-2">{r.next_action || <Dash />}</td>
-                    <td className="max-w-[14rem] truncate px-3 py-2" title={r.pending_with ?? ""}>
-                      {r.pending_with || <Dash />}
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2">
-                      {r.requisitioner || r.created_by || <Dash />}
-                    </td>
-                    <td className="max-w-[14rem] px-3 py-2">
-                      {r.po_no ? (
-                        <>
-                          <div className="font-medium">{r.po_no}</div>
-                          <div className="truncate text-xs text-slate-500" title={r.vendor ?? ""}>
-                            {r.vendor || "vendor not named"}
-                          </div>
-                        </>
-                      ) : <Dash />}
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">
-                      <div title={exact(r.po_value)}>{crore(r.po_value)}</div>
-                      {r.outstanding !== null && r.outstanding > 0 && (
-                        <div className="text-xs text-slate-500" title={exact(r.outstanding)}>
-                          {crore(r.outstanding)} due
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-                {!rows.length && !register.isFetching && (
-                  <tr><td colSpan={8} className="px-3 py-8 text-center text-slate-500">
-                    Nothing matches this filter.
-                  </td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          {s?.targets_provisional && (
-            <p className="text-xs text-slate-500">
-              Stage targets are provisional pending SCM agreement, so
-              &ldquo;overdue&rdquo; is measured against a working assumption,
-              not an agreed service level.
-            </p>
-          )}
         </section>
       </div>
+
+      {/* ── buyers, approvers, money ──────────────────────────────────── */}
+      <div className="grid gap-4 xl:grid-cols-3">
+        <section className={`${CARD} min-w-0 p-4`}>
+          <h3 className={`${PANEL_H3} mb-1`}>Buyer workload</h3>
+          <p className="mb-2 text-[11px] text-slate-500">
+            procurement stages only · median, not mean — one two-year-old item
+            would drag a mean until every desk looked alike
+          </p>
+          <table className="w-full text-xs">
+            <thead className="text-left text-[10px] uppercase text-slate-500">
+              <tr><th className="py-1">Buyer</th><th className="text-right">Open</th>
+                  <th className="text-right">Late</th><th className="text-right">Median</th></tr>
+            </thead>
+            <tbody>
+              {(s?.buyer_workload ?? []).slice(0, 7).map((w: PrPoBuyerLoad) => (
+                <tr key={w.buyer} className="border-t border-slate-100 dark:border-slate-800">
+                  <td className="max-w-[10rem] truncate py-1" title={w.department ?? ""}>
+                    {w.buyer}
+                    {w.department && (
+                      <span className="block truncate text-[10px] text-slate-500">{w.department}</span>
+                    )}
+                  </td>
+                  <td className="text-right tabular-nums">{w.open_items}</td>
+                  <td className="text-right tabular-nums text-rose-600 dark:text-rose-400">{w.past_target}</td>
+                  <td className="text-right tabular-nums">
+                    {w.median_age_days === null ? "—" : `${w.median_age_days}d`}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+
+        <section className={`${CARD} min-w-0 p-4`}>
+          <h3 className={`${PANEL_H3} mb-1`}>Approval bottlenecks</h3>
+          <p className="mb-2 text-[11px] text-slate-500">NFAs waiting on a signature</p>
+          {(s?.approval_bottlenecks ?? []).length ? (
+            <ul className="space-y-2">
+              {(s?.approval_bottlenecks ?? []).slice(0, 6).map((a: PrPoApprovalLoad) => (
+                <li key={a.approver} className="text-xs">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="truncate font-medium" title={a.department ?? ""}>{a.approver}</span>
+                    <span className="shrink-0 tabular-nums">
+                      {a.pending} pending
+                      {a.overdue > 0 && <span className="text-rose-600 dark:text-rose-400"> · {a.overdue} overdue</span>}
+                    </span>
+                  </div>
+                  <div className="mt-0.5 h-1.5 overflow-hidden rounded bg-slate-100 dark:bg-slate-800">
+                    <div className="h-full bg-amber-400"
+                         style={{ width: `${Math.min(100, (a.pending / Math.max(1, s!.approval_bottlenecks[0].pending)) * 100)}%` }} />
+                  </div>
+                  <div className="text-[10px] text-slate-500">oldest {a.oldest_days ?? "?"} days</div>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="text-xs text-slate-500">Nothing is waiting on an approver.</p>}
+        </section>
+
+        <section className={`${CARD} min-w-0 p-4`}>
+          <h3 className={`${PANEL_H3} mb-1`}>Payment due profile</h3>
+          <p className="mb-2 text-[11px] text-slate-500">open invoice balance, once per PO</p>
+          <div className="space-y-1.5">
+            {(s?.payment_profile.bands ?? []).map((d: PrPoDueBand) => (
+              <div key={d.band} className="flex items-center gap-2 text-xs">
+                <span className="w-28 shrink-0">{d.band}</span>
+                <span className="relative h-3.5 flex-1 overflow-hidden rounded bg-slate-100 dark:bg-slate-800">
+                  <span className={`absolute inset-y-0 left-0 ${
+                    d.band === "Overdue" ? "bg-rose-500"
+                      : d.band === "Due in 7 days" ? "bg-amber-400"
+                      : d.band === "Due later" ? "bg-emerald-400/80" : "bg-slate-400"}`}
+                    style={{ width: `${(d.amount / duePeak) * 100}%` }} />
+                </span>
+                <span className="w-20 shrink-0 text-right tabular-nums" title={exact(d.amount)}>
+                  {crore(d.amount)}
+                </span>
+              </div>
+            ))}
+          </div>
+          <p className="mt-2 text-[10px] leading-snug text-slate-500">
+            {s?.payment_profile.basis}
+          </p>
+        </section>
+      </div>
+
+      {/* ── the register ──────────────────────────────────────────────── */}
+      <section className="space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className={PANEL_H3}>Priority action register</h3>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2 top-1.5 h-4 w-4 text-slate-400" />
+            <input id="pr-po-search" value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") setQ(typed); }}
+              onBlur={() => setQ(typed)}
+              placeholder="PR, PO, vendor, description…"
+              className="w-60 rounded border border-slate-300 py-1 pl-8 pr-2 text-sm
+                         dark:border-slate-700 dark:bg-slate-900" />
+          </div>
+          <label className="flex items-center gap-1.5 text-xs">
+            <input type="checkbox" checked={onlyOverdue}
+                   onChange={(e) => setOnlyOverdue(e.target.checked)} />
+            Overdue only
+          </label>
+          {filtering && (
+            <button onClick={clear}
+              className="flex items-center gap-1 rounded bg-slate-200 px-2 py-1 text-xs dark:bg-slate-700">
+              <X className="h-3 w-3" /> Clear
+            </button>
+          )}
+          <span className="ml-auto text-xs text-slate-500">
+            {register.isFetching ? "loading…" : `${num(register.data?.total)} items`}
+            {register.data?.truncated && " · first 500"}
+          </span>
+        </div>
+
+        <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
+          <table className="w-full min-w-[1080px] text-sm">
+            <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wide
+                              text-slate-500 dark:bg-slate-800">
+              <tr>
+                <th className="px-3 py-2">Age</th>
+                <th className="px-3 py-2">PR / item &amp; requirement</th>
+                <th className="px-3 py-2">Requested by</th>
+                <th className="px-3 py-2">Buyer</th>
+                <th className="px-3 py-2">Stage</th>
+                <th className="px-3 py-2">Pending with</th>
+                <th className="px-3 py-2">Next action</th>
+                <th className="px-3 py-2 text-right">PO / payment</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r: PrPoRow) => (
+                <tr key={`${r.pr_number}-${r.pr_item}`}
+                    className="border-t border-slate-100 align-top dark:border-slate-800">
+                  <td className="whitespace-nowrap px-3 py-2">
+                    <span className={`rounded px-1.5 py-0.5 text-xs ring-1 ${RAG_STYLE[r.rag] ?? RAG_STYLE.unknown}`}>
+                      {r.stage_age_days === null ? "—" : `${r.stage_age_days}d`} · {RAG_WORD[r.rag] ?? "—"}
+                    </span>
+                  </td>
+                  <td className="max-w-[20rem] px-3 py-2">
+                    <div className="font-medium">
+                      {r.pr_number}<span className="text-slate-400">/{r.pr_item}</span>
+                    </div>
+                    <div className="truncate text-xs text-slate-600 dark:text-slate-400"
+                         title={r.description ?? ""}>
+                      {r.description || <Dash />}
+                    </div>
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    {r.requisitioner || r.created_by || <Dash />}
+                  </td>
+                  <td className="max-w-[10rem] truncate px-3 py-2" title={r.buyer_department ?? ""}>
+                    {r.buyer_name || <Dash />}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">{r.stage_label}</td>
+                  <td className="max-w-[12rem] truncate px-3 py-2" title={r.pending_with ?? ""}>
+                    {r.pending_with || <Dash />}
+                  </td>
+                  <td className="px-3 py-2">{r.next_action || <Dash />}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-right">
+                    {r.po_no ? (
+                      <>
+                        <div className="font-medium">{r.po_no}</div>
+                        <div className="text-xs tabular-nums text-slate-500" title={exact(r.po_value)}>
+                          {crore(r.po_value)}
+                        </div>
+                        {!!r.outstanding && r.outstanding > 0 && (
+                          <div className={`text-xs tabular-nums ${
+                            r.overdue_payable ? "text-rose-600 dark:text-rose-400" : "text-slate-500"}`}
+                            title={exact(r.outstanding)}>
+                            {crore(r.outstanding)} {r.overdue_payable ? "overdue" : "due"}
+                          </div>
+                        )}
+                      </>
+                    ) : <Dash />}
+                  </td>
+                </tr>
+              ))}
+              {!rows.length && !register.isFetching && (
+                <tr><td colSpan={8} className="px-3 py-8 text-center text-slate-500">
+                  Nothing matches this filter.
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {s?.targets_provisional && (
+          <p className="text-xs text-slate-500">
+            Stage targets are provisional pending SCM agreement, so
+            &ldquo;overdue&rdquo; is measured against a working assumption rather
+            than an agreed service level.
+          </p>
+        )}
+      </section>
     </div>
   );
 }

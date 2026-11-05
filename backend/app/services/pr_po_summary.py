@@ -141,6 +141,11 @@ def summarise(rows: list[dict[str, Any]], as_on: date) -> dict[str, Any]:
 
     return {
         "as_on": as_on,
+        "ageing": _ageing(rows),
+        "payment_profile": _payment_profile(rows, as_on),
+        "buyer_workload": _buyer_workload(rows),
+        "approval_bottlenecks": _approval_bottlenecks(rows),
+        "review_first": _review_first(rows, as_on),
         "totals": {
             "pr_items": len(rows),
             "pr_numbers": len(pr_numbers),
@@ -183,3 +188,164 @@ def _by_owner(rows: list[dict]) -> list[dict]:
         if age is not None and (b["oldest_days"] is None or age > b["oldest_days"]):
             b["oldest_days"] = age
     return sorted(out.values(), key=lambda b: (-b["red"], -b["count"]))
+
+
+# ── the panels the meeting reads before the table ───────────────────────────
+
+AGE_BANDS: list[tuple[str, int, int | None]] = [
+    ("0-7 days",   0,   7),
+    ("8-15 days",  8,  15),
+    ("16-30 days", 16, 30),
+    ("Over 30",    31, None),
+]
+
+
+def _ageing(rows: list[dict]) -> list[dict]:
+    """How long open items have been sitting in their current stage.
+
+    Items whose stage age is unknown are counted in their own band rather
+    than dropped, so the bands add up to the population and nobody has to
+    wonder where the difference went.
+    """
+    out = [{"band": name, "count": 0, "red": 0} for name, _, _ in AGE_BANDS]
+    unknown = {"band": "No date", "count": 0, "red": 0}
+    for r in rows:
+        age = r.get("stage_age_days")
+        if age is None:
+            unknown["count"] += 1
+            continue
+        for slot, (_, lo, hi) in zip(out, AGE_BANDS):
+            if age >= lo and (hi is None or age <= hi):
+                slot["count"] += 1
+                if r["rag"] == "red":
+                    slot["red"] += 1
+                break
+    return out + ([unknown] if unknown["count"] else [])
+
+
+def _payment_profile(rows: list[dict], as_on: date) -> dict:
+    """Open invoice balance split by when it falls due -- once per PO.
+
+    SAP's own due_payment column is empty at these plants, so the due date
+    comes from the payment term text. Terms that state no period are kept in
+    their own bucket: an unknown due date is not an overdue one, and rolling
+    them into "overdue" would overstate the figure Finance checks first.
+    """
+    seen: set[str] = set()
+    buckets = {"overdue": 0.0, "due_7": 0.0, "due_later": 0.0, "no_terms": 0.0}
+    counts = {"overdue": 0, "due_7": 0, "due_later": 0, "no_terms": 0}
+    for r in rows:
+        amount = r.get("outstanding") or 0
+        if amount <= 0:
+            continue
+        po = r.get("po_no")
+        if po:
+            if po in seen:
+                continue
+            seen.add(po)
+        due = r.get("due_date")
+        if due is None:
+            key = "no_terms"
+        elif due < as_on:
+            key = "overdue"
+        elif (due - as_on).days <= 7:
+            key = "due_7"
+        else:
+            key = "due_later"
+        buckets[key] += float(amount)
+        counts[key] += 1
+    return {
+        "bands": [
+            {"band": "Overdue",        "amount": round(buckets["overdue"], 2),   "count": counts["overdue"]},
+            {"band": "Due in 7 days",  "amount": round(buckets["due_7"], 2),     "count": counts["due_7"]},
+            {"band": "Due later",      "amount": round(buckets["due_later"], 2), "count": counts["due_later"]},
+            {"band": "Terms not stated", "amount": round(buckets["no_terms"], 2), "count": counts["no_terms"]},
+        ],
+        "basis": "Open invoice balance, counted once per PO. Due date derived "
+                 "from the payment term; SAP records no due date at these plants.",
+    }
+
+
+def _median(values: list[int]) -> int | None:
+    if not values:
+        return None
+    s = sorted(values)
+    mid = len(s) // 2
+    return s[mid] if len(s) % 2 else (s[mid - 1] + s[mid]) // 2
+
+
+def _buyer_workload(rows: list[dict]) -> list[dict]:
+    """Per buyer: what they are carrying and how long it has sat.
+
+    Median rather than mean stage age. One PR stuck for two years drags a
+    mean so far that every buyer looks the same; the median says what a
+    typical item on that desk is actually waiting.
+    """
+    out: dict[str, dict] = {}
+    for r in rows:
+        # Only the stages a buyer owns. Counting invoices against a buyer
+        # would make Accounts' backlog look like SCM's.
+        if r["stage"] in ("INVOICED", "PAID", "RECEIVED"):
+            continue
+        name = r.get("buyer_name") or (
+            f"Buyer {r['purchasing_group']}" if r.get("purchasing_group") else None)
+        if not name:
+            continue
+        b = out.setdefault(name, {
+            "buyer": name, "department": r.get("buyer_department"),
+            "open_items": 0, "past_target": 0, "_ages": []})
+        b["open_items"] += 1
+        if r["rag"] == "red":
+            b["past_target"] += 1
+        if r["stage_age_days"] is not None:
+            b["_ages"].append(r["stage_age_days"])
+    result = []
+    for b in out.values():
+        ages = b.pop("_ages")
+        b["median_age_days"] = _median(ages)
+        result.append(b)
+    return sorted(result, key=lambda b: (-b["past_target"], -b["open_items"]))
+
+
+def _approval_bottlenecks(rows: list[dict]) -> list[dict]:
+    """NFAs waiting on an approver, worst first.
+
+    Only the NFA stage: this answers "whose signature is the hold-up", and
+    mixing in cases waiting on a vendor or on Accounts would bury it.
+    """
+    out: dict[str, dict] = {}
+    for r in rows:
+        if r["stage"] != "NFA_PENDING":
+            continue
+        who = r.get("approver_name") or r.get("nfa_approver") or "Approver not named"
+        b = out.setdefault(who, {"approver": who, "department": r.get("approver_dept"),
+                                 "pending": 0, "overdue": 0, "oldest_days": None})
+        b["pending"] += 1
+        if r["rag"] == "red":
+            b["overdue"] += 1
+        age = r.get("nfa_pending_days") if r.get("nfa_pending_days") is not None \
+            else r.get("stage_age_days")
+        if age is not None and (b["oldest_days"] is None or age > b["oldest_days"]):
+            b["oldest_days"] = age
+    return sorted(out.values(), key=lambda b: (-b["overdue"], -b["pending"]))
+
+
+def _review_first(rows: list[dict], as_on: date) -> list[str]:
+    """The one line somebody reads out at the start of the meeting."""
+    lines: list[str] = []
+    pay_late = sum(1 for r in rows if r["stage"] == "INVOICED" and r["rag"] == "red")
+    if pay_late:
+        lines.append(f"{pay_late} items at payment stage past target")
+    deliv = sum(1 for r in rows if (
+        r.get("po_delivery_date") and r["po_delivery_date"] < as_on
+        and not r.get("delivery_complete")
+        and r["stage"] in ("PO_RELEASED", "PO_CREATED", "RECEIVED")))
+    if deliv:
+        lines.append(f"{deliv} overdue deliveries")
+    nfa_late = sum(1 for r in rows if r["stage"] == "NFA_PENDING" and r["rag"] == "red")
+    if nfa_late:
+        lines.append(f"{nfa_late} NFA approvals past target")
+    oldest = max((r["stage_age_days"] or 0) for r in rows) if rows else 0
+    if oldest:
+        lines.append(f"oldest open item {oldest} days in stage")
+    return lines
