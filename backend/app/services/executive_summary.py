@@ -50,6 +50,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.services import desilting_plan as desilt_svc
+from app.services import dewatering_entry as dewatering_svc
 from app.services import shifting as shifting_svc
 from app.services import production as prod_svc
 from app.services import stock as stock_svc
@@ -1098,4 +1099,14 @@ def get_executive_summary(db: Session, report_day: date,
         "stock": stock_svc.get_stock_position(db, stock_as_on),
         "td": block("td"),
         "mtd": block("mtd"),
+        # OUTSIDE td/mtd, UNLIKE EVERY OTHER BLOCK ON THIS PAGE. Dewatering
+        # carries its own window: the mine files it in arrears and the totals
+        # cover the days actually entered, which is usually not the month the
+        # rest of the page reports. Splitting it into the two period
+        # dictionaries would lose that, and a reader would have no way to see
+        # that the figures beside "MTD" cover thirteen days of thirty-one.
+        # None means the platform database could not be read -- not that
+        # nothing was pumped.
+        "dewatering": dewatering_svc.summary_detached(
+            mtd_from, report_day, report_day),
     }

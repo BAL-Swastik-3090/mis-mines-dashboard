@@ -20,7 +20,8 @@ export type EntryDialog =
   | "desilting-plan"
   | "equipment-plan"
   | "shifting-actual"
-  | "shifting-plan";
+  | "shifting-plan"
+  | "dewatering-entry";
 
 interface EntryDialogStore {
   which: EntryDialog | null;

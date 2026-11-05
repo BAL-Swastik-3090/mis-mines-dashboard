@@ -82,6 +82,79 @@ function flatten(rules: CSSRuleList): string {
  * - Snapshots <canvas> elements as PNG data-URLs
  * - Adds a branded export header with date range
  */
+/**
+ * WAIT UNTIL THE CHARTS HAVE STOPPED MOVING.
+ *
+ * ── THE BUG THIS EXISTS TO FIX ──────────────────────────────────────────────
+ * ECharts re-lays-out an axis the instant its data changes, and then ANIMATES
+ * the series from where the points used to be to where they now belong, over
+ * about a second. Capture the canvas during that second and the two halves of
+ * the picture disagree: the axis is already showing 02–03 Nov while the marks
+ * are still bunched where 01–09 Oct used to sit, with no line drawn between
+ * them yet. That is exactly what the Executive Summary export produced — a
+ * full-width axis with the data squeezed into the left third.
+ *
+ * It was intermittent, which is what made it look like a layout fault. A
+ * chart that had been sitting settled on screen before the click exported
+ * perfectly; one whose data had just arrived did not. And withExportMode
+ * makes the bad case the NORMAL case: it deliberately waits for the queries
+ * to finish and then captures two frames later, which lands precisely at the
+ * start of the animation it just triggered.
+ *
+ * ── WHY IT WATCHES PIXELS RATHER THAN ASKING ECHARTS ────────────────────────
+ * This module knows nothing about charting libraries and should not start:
+ * three export buttons use it, and the dashboard draws with ECharts today and
+ * may not tomorrow. "Has the drawing stopped changing?" is answerable from
+ * the canvas itself, and it is the question that actually matters — an
+ * animation, a late font, a deferred paint, all settle the same way.
+ *
+ * Each canvas is sampled into a small thumbnail rather than read at full
+ * resolution: a 756x292 toDataURL costs ~30KB a time and this polls. The
+ * sample is big enough that a line moving by a pixel still changes it.
+ *
+ * It gives up after `timeoutMs`. A chart that genuinely never settles — a
+ * live ticker, say — must not strand somebody on a frozen page; one blurred
+ * chart is better than no file.
+ */
+async function waitForStillCanvases(root: HTMLElement,
+                                    timeoutMs = 3000): Promise<void> {
+  const canvases = Array.from(root.querySelectorAll("canvas"));
+  if (!canvases.length) return;
+
+  const sample = (): string => {
+    let sig = "";
+    for (const c of canvases) {
+      // A canvas with no box — inside something collapsed — cannot be drawn
+      // from, and must not abort the whole wait.
+      if (!c.width || !c.height) { sig += "|"; continue; }
+      try {
+        const thumb = document.createElement("canvas");
+        thumb.width = 160;
+        thumb.height = 72;
+        const ctx = thumb.getContext("2d");
+        if (!ctx) { sig += "|"; continue; }
+        ctx.drawImage(c, 0, 0, 160, 72);
+        sig += thumb.toDataURL() + "|";
+      } catch {
+        sig += "|";                     // tainted canvas — nothing to compare
+      }
+    }
+    return sig;
+  };
+
+  const until = Date.now() + timeoutMs;
+  let previous: string | null = null;
+  let stable = 0;
+  // Twice, for the same reason waitForQuiet settles twice: one frame of
+  // stillness can fall between two moves.
+  while (Date.now() < until && stable < 2) {
+    const sig = sample();
+    stable = sig === previous ? stable + 1 : 0;
+    previous = sig;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
 export async function downloadDashboard(opts: DownloadDashboardOptions): Promise<void> {
   const {
     dateRange, periodLabel,
@@ -92,6 +165,9 @@ export async function downloadDashboard(opts: DownloadDashboardOptions): Promise
   // ── 1. Locate the live content element ──────────────────────
   const contentEl = document.querySelector(rootSelector) as HTMLElement | null;
   if (!contentEl) return;
+
+  // ── 1b. Let the charts finish moving before photographing them ──────
+  await waitForStillCanvases(contentEl);
 
   // ── 2. Deep-clone so we never mutate the live DOM ───────────
   const clone = contentEl.cloneNode(true) as HTMLElement;

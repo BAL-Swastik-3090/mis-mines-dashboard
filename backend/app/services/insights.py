@@ -238,44 +238,117 @@ def _despatch_mtd_actual(db: Session, from_date: date, to_date: date) -> float |
         return None
 
 
+# ── dewatering: on the platform database, not the shared MySQL one ──────────
+#
+# WHY THESE TWO OPEN THEIR OWN SESSION. Dewatering moved to
+# minehub.dewatering_daily_data when the entry form was built; the old MySQL
+# pivot `mines_dewatering_daily_data` took its last row on 15 October 2026.
+# Everything else in this module reads MySQL, and every caller -- the reality
+# check, the prompt builder, the streaming path, the digest -- hands down one
+# MySQL session. Threading a second session through all of them to reach two
+# functions would touch the routers and every test that builds this service by
+# hand, so these follow the convention already used by equipment_plan
+# .resolve_detached and desilting_plan.plan_for: a session of their own, and
+# never raising.
+#
+# AND WHY THEY RETURN None RATHER THAN ZEROS WHEN IT IS DOWN. Postgres here is
+# reached over the VPN and is not always up. Zero cubic metres disposed is a
+# claim about the mine; an unreachable database is a claim about the network,
+# and telling a language model the first when the second is true is how a
+# confident sentence about a pumping failure gets written about a VPN drop.
+def _minehub_session():
+    """A minehub session, or None if the platform database is not there."""
+    try:
+        from app.minehub_db import SessionLocal
+        if SessionLocal is None:
+            return None
+        return SessionLocal()
+    except Exception:                                       # noqa: BLE001
+        logger.warning("minehub session unavailable for dewatering",
+                       exc_info=True)
+        return None
+
+
 def _dewatering_mtd(db: Session, from_date: date, to_date: date) -> dict:
-    row = db.execute(text("""
-        SELECT
-            COALESCE(SUM(CASE WHEN kpi_id=33 THEN calculation_value END), 0) AS disp_plan,
-            COALESCE(SUM(CASE WHEN kpi_id=35 THEN calculation_value END), 0) AS disp_act,
-            COALESCE(SUM(CASE WHEN kpi_id=34 THEN calculation_value END), 0) AS pump_act,
-            COALESCE(SUM(CASE WHEN kpi_id=32 THEN calculation_value END), 0) AS pump_plan
-        FROM mines_dewatering_daily_data
-        WHERE date BETWEEN :f AND :t
-    """), {"f": from_date, "t": to_date}).fetchone()
+    """Period totals. `available` False means nobody knows, not nothing moved.
+
+    `db` is accepted and ignored: it is the MySQL session every other helper
+    here takes, and keeping the signature means the callers did not change.
+    """
+    blank = {"disp_plan": 0.0, "disp_act": None, "pump_plan": 0.0,
+             "pump_act": None, "available": False}
+    pg = _minehub_session()
+    if pg is None:
+        return blank
+    try:
+        row = pg.execute(text("""
+            SELECT COALESCE(SUM(plan_disposal_m3),   0) AS disp_plan,
+                   COALESCE(SUM(actual_disposal_m3), 0) AS disp_act,
+                   COALESCE(SUM(plan_pump_hr),       0) AS pump_plan,
+                   COALESCE(SUM(actual_pump_hr),     0) AS pump_act,
+                   COUNT(*)                             AS days
+            FROM   minehub.dewatering_daily_data
+            WHERE  data_date BETWEEN :f AND :t
+        """), {"f": from_date, "t": to_date}).fetchone()
+    except Exception:                                       # noqa: BLE001
+        logger.warning("dewatering MTD unavailable", exc_info=True)
+        return blank
+    finally:
+        pg.close()
+
+    # No days entered is not the same as days entered that pumped nothing: the
+    # first must reach the reality check as None so the row reads NO_DATA
+    # instead of "achieved nought of a nought target".
+    if not row.days:
+        return blank
     return {
         "disp_plan": _f(row.disp_plan),
         "disp_act":  _f(row.disp_act),
         "pump_plan": _f(row.pump_plan),
         "pump_act":  _f(row.pump_act),
+        "available": True,
     }
 
 
-def _dewatering_daily_rows(db: Session, from_date: date, to_date: date) -> list[dict]:
-    rows = db.execute(text("""
-        SELECT d.date,
-            MAX(CASE WHEN d.kpi_id=35 THEN d.calculation_value END) AS disp_act,
-            MAX(CASE WHEN d.kpi_id=33 THEN d.calculation_value END) AS disp_plan,
-            MAX(CASE WHEN d.kpi_id=37 THEN d.calculation_value END) AS closing_stock,
-            MAX(CASE WHEN d.kpi_id=34 THEN d.calculation_value END) AS pump_act
-        FROM mines_dewatering_daily_data d
-        WHERE d.date BETWEEN :f AND :t
-        GROUP BY d.date
-        ORDER BY d.date DESC
-        LIMIT 10
-    """), {"f": from_date, "t": to_date}).fetchall()
+def _dewatering_daily_rows(db: Session, from_date: date,
+                           to_date: date) -> list[dict]:
+    """The last ten days, newest first. Empty when the platform DB is down."""
+    pg = _minehub_session()
+    if pg is None:
+        return []
+    try:
+        rows = pg.execute(text("""
+            SELECT data_date          AS date,
+                   actual_disposal_m3 AS disp_act,
+                   plan_disposal_m3   AS disp_plan,
+                   closing_stock_m3   AS closing_stock,
+                   actual_pump_hr     AS pump_act
+            FROM   minehub.dewatering_daily_data
+            WHERE  data_date BETWEEN :f AND :t
+            ORDER  BY data_date DESC
+            LIMIT  10
+        """), {"f": from_date, "t": to_date}).fetchall()
+    except Exception:                                       # noqa: BLE001
+        logger.warning("dewatering daily rows unavailable", exc_info=True)
+        return []
+    finally:
+        pg.close()
+
+    # A half-entered day -- an opening and a seepage, no pump hours -- has no
+    # disposal and no closing stock. round(None) raises, so such a day is
+    # carried with the figures it has rather than taking the trend down.
+    def _r(v, places=0):
+        if v is None:
+            return None
+        return round(float(v), places) if places else round(float(v))
+
     return [
         {
             "date":          str(r.date),
-            "disp_act":      round(_f(r.disp_act)),
-            "disp_plan":     round(_f(r.disp_plan)),
-            "closing_stock": round(_f(r.closing_stock)),
-            "pump_act":      round(_f(r.pump_act), 1),
+            "disp_act":      _r(r.disp_act),
+            "disp_plan":     _r(r.disp_plan),
+            "closing_stock": _r(r.closing_stock),
+            "pump_act":      _r(r.pump_act, 1),
         }
         for r in rows
     ]
@@ -781,11 +854,22 @@ def build_insights_context(db: Session, from_date: date, to_date: date) -> str:
         "| Date | Disposal Plan (M³) | Disposal Actual (M³) | Pump Hrs | Closing Stock (M³) |",
         "|------|--------------------|---------------------|----------|-------------------|",
     ]
+    # A figure the mine has not filed is written as a dash, not as 0. The
+    # model reads this table as fact and would otherwise report a day of no
+    # pumping on a day that is simply half-entered.
+    def _cell(v, comma=True):
+        if v is None:
+            return "—"
+        return f"{v:,}" if comma else f"{v}"
+
     for d in dew_rows:
         dew_table_lines.append(
-            f"| {d['date']} | {d['disp_plan']:,} | {d['disp_act']:,} | "
-            f"{d['pump_act']} | {d['closing_stock']:,} |"
+            f"| {d['date']} | {_cell(d['disp_plan'])} | {_cell(d['disp_act'])} | "
+            f"{_cell(d['pump_act'], comma=False)} | {_cell(d['closing_stock'])} |"
         )
+    if not dew_rows:
+        dew_table_lines.append(
+            "| — | — | — | — | — |   (no dewatering days in this window)")
 
     prod_table_lines = [
         "| Date | Ore (MT) | OB (CuM) | COB (MT) |",
@@ -798,8 +882,27 @@ def build_insights_context(db: Session, from_date: date, to_date: date) -> str:
 
     disp_pct = (
         round(dew_mtd["disp_act"] / dew_mtd["disp_plan"] * 100, 1)
-        if dew_mtd["disp_plan"] > 0 else 0
+        if (dew_mtd["disp_plan"] and dew_mtd["disp_act"] is not None) else None
     )
+
+    # THE WHOLE BLOCK, NOT THE FIGURES ONE BY ONE. When the platform database
+    # is unreachable there is nothing true to say about dewatering, and a line
+    # reading "0 M³ actual vs 0 M³ plan" would be read by the model as a mine
+    # that pumped nothing — the one reading guaranteed to be wrong.
+    if dew_mtd.get("available"):
+        dew_status_lines = (
+            f"- MTD Disposal: {dew_mtd['disp_act']:,.0f} M³ actual vs "
+            f"{dew_mtd['disp_plan']:,.0f} M³ plan "
+            f"({disp_pct if disp_pct is not None else 'N/A'}% compliance)\n"
+            f"- MTD Pump Hours: {dew_mtd['pump_act']:.1f} hrs actual vs "
+            f"{dew_mtd['pump_plan']:.1f} hrs plan"
+        )
+    else:
+        dew_status_lines = (
+            "- NOT AVAILABLE: the dewatering data could not be read for this "
+            "window. Do not infer anything about pumping or water levels, and "
+            "do not describe this as low or zero disposal."
+        )
 
     # ── shift comparison block ────────────────────────────────
     if shift_cmp:
@@ -870,8 +973,7 @@ Average over this window: Ore {avg_ore:,} MT/day · OB {avg_ob:,} CuM/day
 {chr(10).join(prod_table_lines)}
 
 ## DEWATERING STATUS (MTD)
-- MTD Disposal: {dew_mtd['disp_act']:,.0f} M³ actual vs {dew_mtd['disp_plan']:,.0f} M³ plan ({disp_pct}% compliance)
-- MTD Pump Hours: {dew_mtd['pump_act']:.1f} hrs actual vs {dew_mtd['pump_plan']:.1f} hrs plan
+{dew_status_lines}
 
 ## DAILY DEWATERING TREND (last {len(dew_rows)} days, newest first)
 {chr(10).join(dew_table_lines)}

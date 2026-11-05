@@ -2,7 +2,10 @@
 import { useState, Fragment } from "react";
 import { Waves, MessageSquareText, ChevronDown } from "lucide-react";
 import { useDateFilter } from "@/contexts/useDateFilter";
+import { useQueryClient } from "@tanstack/react-query";
 import { useDewatering } from "@/hooks/useDewatering";
+import { useEntryDialog } from "@/contexts/useEntryDialog";
+import DewateringEntryModal from "@/components/sections/DewateringEntryModal";
 import { formatIndian, formatPct, pctBgClass } from "@/lib/utils";
 import type {
   DewateringTodayKpi,
@@ -540,10 +543,32 @@ function DewateringTable({ rows, loading }: { rows: DewateringDayRow[]; loading:
 export default function DewateringSection() {
   const { apiTo } = useDateFilter();
   const { data, isLoading, isError } = useDewatering();
+  const entryDialog = useEntryDialog((s) => s.which);
+  const closeEntryDialog = useEntryDialog((s) => s.close);
+  const qc = useQueryClient();
+
+  /* MOUNTED IN BOTH BRANCHES ON PURPOSE. The read below can fail -- it is a
+     different endpoint against a different database -- and a day that could
+     not be displayed is exactly the day somebody needs to go and enter. A
+     dialog that disappears when the summary breaks would be unavailable at
+     the moment it is most wanted. */
+  const entry = (
+    <DewateringEntryModal
+      open={entryDialog === "dewatering-entry"}
+      onClose={closeEntryDialog}
+      onSaved={async () => {
+        await Promise.all([
+          qc.invalidateQueries({ queryKey: ["dewatering-entry"] }),
+          qc.invalidateQueries({ queryKey: ["dewatering"] }),
+        ]);
+      }}
+    />
+  );
 
   if (isError && !data) {
     return (
       <section className="space-y-4">
+        {entry}
         <div className="section-title">
           <Waves size={13} />
           Dewatering Operations
@@ -562,6 +587,7 @@ export default function DewateringSection() {
 
   return (
     <section className="space-y-4">
+      {entry}
 
       {/* Section title */}
       <div className="section-title">

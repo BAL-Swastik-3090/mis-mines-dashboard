@@ -367,7 +367,11 @@ export default function PlantOutputTrendChart({ from, to }: {
             No production for this selection in the period.
           </div>
         ) : (
-          <ReactECharts option={option} style={{ height: 300, width: "100%" }} notMerge />
+          /* Canvas, said out loud — see QualityTrendCharts: the HTML export
+             both waits on and photographs the canvas, and fails silently
+             against an SVG renderer. */
+          <ReactECharts option={option} style={{ height: 300, width: "100%" }}
+                        opts={{ renderer: "canvas" }} notMerge />
         )}
 
         {/* WHAT THE AVERAGE COVERS, under the figure rather than in a footnote

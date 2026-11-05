@@ -31,19 +31,23 @@
  * dated the 6th is what the 5th's work left behind. Both are printed, so nobody
  * has to remember the rule to read the page.
  */
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ClipboardList, Package, Truck, Factory, Pickaxe, ShieldCheck, Send, Mountain,
-  Layers,
+  Layers, Waves, Download, Check,
 } from "lucide-react";
 import api from "@/lib/api";
+import { downloadDashboard } from "@/utils/downloadDashboard";
+import { withExportMode } from "@/contexts/useExportMode";
 import QualityTrendCharts from "@/components/charts/QualityTrendCharts";
 import PlantOutputTrendChart from "@/components/charts/PlantOutputTrendChart";
 import { formatIndian } from "@/lib/utils";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import type {
   ExecutiveSummaryResponse, ExecGradeRow, ExecWeightedTotal, ExecPlantRow,
-  ExecExcavationRow,
+  ExecExcavationRow, ExecDewateringBlock, ExecDewateringLine,
+  ExecDewateringPeriod,
 } from "@/types";
 
 /* ── one hue per grade, used in every table on the page ─────────────────── */
@@ -150,8 +154,12 @@ function niceDate(iso?: string | null) {
 }
 
 /* ── chrome ────────────────────────────────────────────────────────────── */
+/* `sub` is a ReactNode rather than a string so a card can put a status chip
+   up in its header beside the date. Every other caller passes a plain string
+   and is unaffected. */
 function Card({ icon, title, sub, children }: {
-  icon: React.ReactNode; title: string; sub?: string; children: React.ReactNode;
+  icon: React.ReactNode; title: string; sub?: React.ReactNode;
+  children: React.ReactNode;
 }) {
   return (
     <section className="bg-white border border-border rounded-lg shadow-sm overflow-hidden">
@@ -608,6 +616,218 @@ function ExcavationBlock({ statusTill, tdLabel, mtdLabel, td, mtd }: {
   );
 }
 
+/* ── Block 4b · dewatering ─────────────────────────────────────────────── */
+/* THIS BLOCK CARRIES ITS OWN WINDOW, and that is the only reason it does not
+   simply look like the tables above it. Every other card on this page reports
+   the month the page reports. The mine files dewatering in arrears and
+   sometimes stops for a fortnight, so a month-to-date column here can be
+   thirteen days wearing the label of thirty-one — and every rate under it,
+   average pumping and days to clear especially, is then wrong by the ratio of
+   the two. So the gap is stated above the figures rather than footnoted
+   below them, and the MTD heading names the days it actually covers.
+
+   The six tiles reuse the page's own Tile, and the table is the same ruled
+   TD/MTD grid as Overburden, so the card reads as part of this report rather
+   than as a dashboard pasted into it. */
+function DewateringBlock({ d }: { d: ExecDewateringBlock }) {
+  const k = d.kpi;
+
+  /* Achievement colouring on the page's shared thresholds, so a percentage
+     means one thing across the whole report. */
+  const pctTone = (v: number | null | undefined) =>
+    v == null ? "text-txt-light"
+      : v >= 90 ? "text-[#2e7d32]" : v >= 70 ? "text-[#c8960c]" : "text-[#c62828]";
+
+  const BADGE: Record<string, string> = {
+    ok:       "bg-emerald-bg text-emerald ring-1 ring-emerald-ring",
+    watch:    "bg-amber-bg text-amber ring-1 ring-amber-ring",
+    critical: "bg-danger-bg text-danger ring-1 ring-danger/30",
+  };
+  const BADGE_TEXT: Record<string, string> = {
+    ok: "COMPLETE", watch: "PARTIAL", critical: "INCOMPLETE",
+  };
+
+  const gapDays = d.window_days - d.entered;
+
+  const cells = (r: ExecDewateringLine | undefined, tint: string) => (
+    <>
+      <td className={`${TD} text-right border-l border-border-light ${tint}`}>
+        {/* Inflow has no plan and never will; stock's left-hand figure is an
+            OPENING, not a plan, so it is printed as a figure rather than
+            dashed out. The two cases look alike and are not. */}
+        {r?.no_plan
+          ? <span className="text-[9px] uppercase tracking-wide text-txt-light"
+                  title="Seepage is measured and rain is weather — neither is planned.">
+              no plan
+            </span>
+          : <N v={r?.plan} dp={r?.dp ?? 0} />}
+      </td>
+      <td className={`${TD} text-right whitespace-nowrap ${tint}`}>
+        <N v={r?.actual} dp={r?.dp ?? 0} strong />
+      </td>
+      <td className={`${TD} text-right whitespace-nowrap ${tint}`}>
+        {r?.no_pct
+          ? /* Opening against closing is not an achievement, it is a
+               movement — so it is shown as one, with its direction. */
+            (() => {
+              const o = r?.plan, c = r?.actual;
+              if (o == null || c == null || !o) return <span className="text-txt-light/40">—</span>;
+              const pc = (c - o) / o * 100;
+              return (
+                <span className={`font-bold ${pc <= 0 ? "text-[#2e7d32]" : "text-[#c62828]"}`}>
+                  {pc <= 0 ? "↓" : "↑"} {Math.abs(pc).toFixed(1)}%
+                </span>
+              );
+            })()
+          : r?.no_plan
+            ? <span className="text-txt-light/40">—</span>
+            : <span className={`font-bold ${pctTone(r?.pct)}`}>
+                {r?.pct == null ? "—" : `${r.pct.toFixed(1)}%`}
+              </span>}
+      </td>
+    </>
+  );
+
+  const keys = (d.mtd?.rows ?? d.td?.rows ?? []).map((r) => r.key);
+  const at = (p: ExecDewateringPeriod | null | undefined, key: string) =>
+    p?.rows.find((r) => r.key === key);
+
+  return (
+    <Card icon={<Waves size={14} />} title="Dewatering Performance"
+          sub={
+            <span className="flex items-center gap-2">
+              <span className="text-[10px] tabular-nums text-txt-light">
+                {d.data_to ? `data up to ${niceDate(d.data_to)}` : "no data"}
+              </span>
+              {/* The chip reports the DATA, not the pumping: a month 90%
+                  achieved on a third of its days is not a 90% month. */}
+              <span className={`px-1.5 py-0.5 rounded-sm text-[9px] font-bold
+                                tracking-widest uppercase ${BADGE[d.status]}`}
+                    title={`${d.entered} of ${d.window_days} days entered`}>
+                {BADGE_TEXT[d.status]}
+              </span>
+            </span>
+          }>
+      {/* THE GAP IS STATED BEFORE ANY FIGURE IS READ. A reader who takes the
+          MTD total without knowing it covers thirteen of thirty-one days has
+          taken a wrong number, and a footnote at the bottom of the card is
+          read after the figure has already been copied. */}
+      {d.gap_from && (
+        <div className="mx-4 mt-3 rounded-md border-l-[3px] border-danger
+                        bg-danger-bg/60 px-3 py-2">
+          <p className="text-[11px] leading-relaxed text-txt-secondary">
+            <span className="font-bold text-danger">Data gap:</span>{" "}
+            no dewatering actuals for {shortDay(d.gap_from)}–{shortDay(d.gap_to)}
+            {" "}({gapDays} of {d.window_days} days).{" "}
+            {/* With nothing entered at all there is no window to qualify, and
+                "figures below cover — to —" would be worse than silence. */}
+            {d.entered === 0
+              ? "Nothing has been filed for this month."
+              : <>Every figure below covers {shortDay(d.mtd?.from)} – {shortDay(d.data_to)} only.</>}
+          </p>
+        </div>
+      )}
+
+      {k && (
+        <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3 p-4">
+          <Tile label="MTD Water Disposal" value={k.disposal_actual} unit="M³"
+                accent="#1565c0" strong
+                sub={k.disposal_plan == null ? undefined
+                  : `Plan ${formatIndian(k.disposal_plan, 0)} · Ach ${k.disposal_pct ?? "—"}%`} />
+          <Tile label="MTD Pump Run Hours" value={k.pump_actual_hr} unit="h"
+                accent="#c8960c"
+                sub={k.pump_plan_hr == null ? undefined
+                  : `Plan ${k.pump_plan_hr} · Ach ${k.pump_pct ?? "—"}%`} />
+          {/* The one figure here that is not a total. It is what the pumps
+              averaged, beside what they MUST average to match the inflow —
+              the line below which the sump rises however good the
+              compliance percentage looks. */}
+          <Tile label="Avg Pumping / Day" value={k.avg_pump_hr} unit="h/day"
+                accent="#283593"
+                sub={`Plan ${k.avg_plan_hr ?? "—"} h`
+                  + (k.offset_hr == null ? "" : ` · ${k.offset_hr} h/day offsets inflow`)} />
+          <Tile label="Sump Closing Stock" value={k.closing_stock} unit="M³"
+                accent="#2e7d32"
+                sub={k.opening_stock == null ? undefined
+                  : `Opening ${formatIndian(Math.round(k.opening_stock), 0)}`
+                    + (k.stock_change_pct == null ? ""
+                      : ` · ${k.stock_change_pct <= 0 ? "↓" : "↑"} ${Math.abs(k.stock_change_pct)}%`)} />
+          {/* Blank when the sump is RISING. A sump that is filling has no
+              date it empties, and a negative number of days would read as a
+              small one. */}
+          <Tile label="Est. Days to Clear" value={k.days_to_clear} unit="days"
+                accent="#0f766e"
+                sub={k.net_drawdown == null || k.net_drawdown <= 0
+                  ? "sump is not falling — no clearance date"
+                  : `Net drawdown ≈ ${formatIndian(Math.round(k.net_drawdown), 0)} M³/day`} />
+          <Tile label="Data Completeness" value={k.completeness_pct} unit="%"
+                accent={d.status === "ok" ? "#2e7d32"
+                  : d.status === "watch" ? "#c8960c" : "#c62828"}
+                sub={`${d.entered} of ${d.window_days} days entered`} />
+        </div>
+      )}
+
+      {/* A header with no rows under it is chrome. With nothing entered the
+          banner above has already said so, and an empty grid only invites
+          somebody to look for figures that are not there. */}
+      {keys.length > 0 && (
+      <table className="w-full text-[12px] tabular-nums border-collapse">
+        <thead>
+          <tr className={THEAD}>
+            <th className={`${TH} text-left min-w-[180px]`} rowSpan={2}>Parameter</th>
+            <th className={`${TH} text-center border-l border-border text-steel`}
+                colSpan={3}>
+              TD · {shortDay(d.td?.date)}
+            </th>
+            <th className={`${TH} text-center border-l-2 border-border text-steel ${MTD_BG}`}
+                colSpan={3}>
+              MTD · {shortDay(d.mtd?.from)} – {shortDay(d.mtd?.to)}
+            </th>
+          </tr>
+          <tr className={THEAD}>
+            <th className={`${TH} text-right border-l border-border`}>Plan</th>
+            <th className={`${TH} text-right`}>Actual</th>
+            <th className={`${TH} text-right`}>Ach %</th>
+            <th className={`${TH} text-right border-l-2 border-border ${MTD_BG}`}>Plan</th>
+            <th className={`${TH} text-right ${MTD_BG}`}>Actual</th>
+            <th className={`${TH} text-right ${MTD_BG}`}>Ach %</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border-light">
+          {keys.map((key) => {
+            const a = at(d.td, key), b = at(d.mtd, key);
+            return (
+              <tr key={key} className="hover:bg-bg-light">
+                <td className={`${TD} font-semibold text-[11px] whitespace-nowrap`}>
+                  {b?.label ?? a?.label ?? key}
+                  <span className="ml-1 font-normal text-txt-light">({b?.uom ?? a?.uom})</span>
+                </td>
+                {cells(a, "")}
+                {cells(b, MTD_BG)}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      )}
+
+      <p className="px-4 py-2 border-t border-border-light bg-bg-section/40
+                    text-[9px] font-mono leading-relaxed text-txt-secondary">
+        <span className="font-semibold">ALL FIGURES · </span>entered at the mine,
+        day by day, on the Enter Daily Dewatering Data form — there is no feed
+        behind any of them.
+        {"   "}<span className="font-semibold">DISPOSAL · </span>pump hours ×
+        adjusted pump capacity, as the mine&apos;s own sheet computes it.
+        {"   "}<span className="font-semibold">INFLOW · </span>measured seepage
+        plus rainfall converted at the factor the day was filed under.
+        {"   "}<span className="font-semibold">SUMP STOCK · </span>opening is
+        the previous day&apos;s closing, so the MTD pair spans the first and
+        last days ENTERED, not the first and last days of the month.
+      </p>
+    </Card>
+  );
+}
+
 /* ── Block 5 · ferrochrome ─────────────────────────────────────────────── */
 function PlantBlock({ statusTill, tdLabel, mtdLabel, td, mtd, tdTotal, mtdTotal }: {
   statusTill: string; tdLabel: string; mtdLabel: string;
@@ -816,6 +1036,50 @@ export default function ExecutiveSummarySection() {
     ? `MTD · ${shortDay(d.mtd_from)} – ${shortDay(d.report_day)}`
     : "MTD";
 
+  /* ── the HTML download ──────────────────────────────────────────────── */
+  const { label: dateRange, periodLabel } = useDateFilter();
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const [htmlDone, setHtmlDone] = useState(false);
+
+  async function handleHtml() {
+    if (busy) return;
+    setBusy(true);
+    setHtmlDone(false);
+    try {
+      // EXPORT MODE FIRST, even though nothing on this page collapses. The
+      // two trend charts at the foot of the report fetch their own windows
+      // on mount, and capturing before they land writes their skeletons into
+      // the file — a grey box where the quality trend should be. The
+      // isFetching callback is what waits for them.
+      await withExportMode(
+        () =>
+          downloadDashboard({
+            // THE WINDOW THE REPORT ACTUALLY COVERS, NOT THE ONE THE FILTER
+            // ASKED FOR. The server cuts the end back to the last day that
+            // has ENDED, so the default "this month" filter reads
+            // "1 Nov – 30 Nov" while the report inside covers four days. The
+            // banner is the first thing a reader sees in the file, and it
+            // must not contradict the heading two inches below it. Falls
+            // back to the filter's own label only if the response is absent,
+            // in which case there is nothing to export anyway.
+            dateRange: d
+              ? `${niceDate(d.mtd_from)} – ${niceDate(d.report_day)}`
+              : dateRange,
+            periodLabel,
+            rootSelector: "#executive-summary-section",
+            title: "Executive Summary",
+            fileStem: "kaliapani-executive-summary",
+          }),
+        () => qc.isFetching(),
+      );
+      setHtmlDone(true);
+      setTimeout(() => setHtmlDone(false), 2500);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const pd = d?.stock?.proposed_despatch;
   const pdSub = pd?.has_data
     ? Object.entries(pd.by_destination ?? {})
@@ -846,20 +1110,61 @@ export default function ExecutiveSummarySection() {
   ] : [];
 
   return (
-    <div className="space-y-4">
+    // The id is what the download points at: the whole report, none of the
+    // chrome around it. Same mechanism the MIS, Intelligence and OEE exports
+    // use — see utils/downloadDashboard.ts.
+    <div id="executive-summary-section" className="space-y-4">
       {/* THE HOUSE SECTION HEADING, not a navy banner of its own. `.section-title`
           is what every other screen uses — condensed steel caps with a rule
           running off to the right — so this page announces itself the same way
-          OEE / LCM and Plant Output do instead of inventing a heavier one. */}
-      <div className="section-title">
-        <ClipboardList size={13} />
-        Executive Summary
-        {d && (
-          <span className="text-[10px] text-txt-light font-medium normal-case tracking-normal ml-1">
-            TD {niceDate(d.report_day)} · MTD {niceDate(d.mtd_from)} – {niceDate(d.report_day)}
-            {" · "}Stock as on {niceDate(d.stock_as_on)}
-          </span>
-        )}
+          OEE / LCM and Plant Output do instead of inventing a heavier one.
+
+          Wrapped in a flex row so the download button can sit at the end of
+          that rule rather than before it: `.section-title::after` is the rule
+          itself and is always the last child, so a button placed inside would
+          have the line drawn past it. */}
+      <div className="flex items-center gap-3 mb-2.5">
+        <div className="section-title flex-1 mb-0">
+          <ClipboardList size={13} />
+          Executive Summary
+          {d && (
+            <span className="text-[10px] text-txt-light font-medium normal-case tracking-normal ml-1">
+              TD {niceDate(d.report_day)} · MTD {niceDate(d.mtd_from)} – {niceDate(d.report_day)}
+              {" · "}Stock as on {niceDate(d.stock_as_on)}
+            </span>
+          )}
+        </div>
+
+        {/* THE WHOLE REPORT AS ONE HTML FILE — the tiles, the stock grid and
+            every performance card, exactly as they sit here. Disabled while
+            loading: a snapshot of a loading message is worse than no file.
+            Styled from OEESection's button down to the three states, because
+            they do the same job and must not read as two features. */}
+        <button
+          type="button"
+          onClick={handleHtml}
+          disabled={q.isLoading || busy || !d}
+          data-export-hide
+          title="Download the Executive Summary as a self-contained HTML file"
+          className={`
+            shrink-0 flex items-center gap-[6px] px-3 py-1.5 rounded
+            font-condensed text-[11px] font-bold tracking-[.08em] uppercase
+            transition-all duration-150
+            ${htmlDone
+              ? "bg-[#e8f5e9] text-[#2e7d32] border border-[#a5d6a7]"
+              : busy || q.isLoading || !d
+                ? "bg-[#f5f7fb] text-[#8899bb] border border-[#d0d9e8] cursor-wait"
+                : "bg-[#2e7d32] text-white border border-[#2e7d32] hover:bg-[#388e3c] hover:border-[#388e3c] active:scale-95"
+            }
+          `}
+        >
+          {htmlDone
+            ? <><Check size={12} className="shrink-0" /><span>Downloaded</span></>
+            : busy
+              ? <><span className="w-3 h-3 border border-[#b0bdd4] border-t-[#6b7ea8] rounded-full animate-spin shrink-0" /><span>Preparing…</span></>
+              : <><Download size={12} className="shrink-0" /><span>Export to HTML</span></>
+          }
+        </button>
       </div>
 
       {q.isLoading && <div className="py-20 text-center text-txt-muted text-[13px]">Loading…</div>}
@@ -964,6 +1269,14 @@ export default function ExecutiveSummarySection() {
           <ExcavationBlock statusTill={statusTill}
             tdLabel={tdLabel} mtdLabel={mtdLabel}
             td={d.td.excavation ?? []} mtd={d.mtd.excavation ?? []} />
+
+          {/* Dewatering sits with the excavation work above it rather than
+              with the despatch blocks below: keeping the pit dry is what
+              makes the faces workable, so it answers a question about the
+              same shift. Absent entirely when the platform database could
+              not be read — a card of dashes would say the mine pumped
+              nothing, which is a different claim from "nobody knows". */}
+          {d.dewatering?.available && <DewateringBlock d={d.dewatering} />}
 
           {/* Despatch as a whole, before the two destination blocks break it
               down. Rendered by the SAME component they are, so the three
