@@ -98,7 +98,7 @@ export default function PrPoSection() {
   const byStage = new Map((s?.by_stage ?? []).map((b: PrPoStageBucket) => [b.stage, b]));
   const stagePeak = Math.max(1, ...(s?.by_stage ?? []).map((b) => b.count));
   const agePeak   = Math.max(1, ...(s?.ageing ?? []).map((a) => a.count));
-  const duePeak   = Math.max(1, ...(s?.payment_profile.bands ?? []).map((d) => d.amount));
+  const duePeak   = Math.max(1, ...(s?.payment_profile?.bands ?? []).map((d) => d.amount));
   const filtering = Boolean(stage || owner || q || onlyOverdue);
 
   const clear = () => { setStage(undefined); setOwner(undefined);
@@ -109,7 +109,7 @@ export default function PrPoSection() {
   };
 
   const card = (k: string) => s?.cards.find((c) => c.key === k);
-  const overduePayable = (s?.payment_profile.bands ?? []).find((b) => b.band === "Overdue");
+  const overduePayable = (s?.payment_profile?.bands ?? []).find((b) => b.band === "Overdue");
 
   return (
     <div className="space-y-4">
@@ -171,13 +171,13 @@ export default function PrPoSection() {
       </div>
 
       {/* ── review first ──────────────────────────────────────────────── */}
-      {!!s?.review_first.length && (
+      {!!s?.review_first?.length && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-300
                         bg-amber-50 px-4 py-2.5 text-sm text-amber-950
                         dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
           <Megaphone className="h-4 w-4 shrink-0" />
           <span className="font-semibold">Review first:</span>
-          <span>{s.review_first.join(" · ")}</span>
+          <span>{s.review_first?.join(" · ")}</span>
         </div>
       )}
 
@@ -318,7 +318,7 @@ export default function PrPoSection() {
                   </div>
                   <div className="mt-0.5 h-1.5 overflow-hidden rounded bg-slate-100 dark:bg-slate-800">
                     <div className="h-full bg-amber-400"
-                         style={{ width: `${Math.min(100, (a.pending / Math.max(1, s!.approval_bottlenecks[0].pending)) * 100)}%` }} />
+                         style={{ width: `${Math.min(100, (a.pending / Math.max(1, s?.approval_bottlenecks?.[0]?.pending ?? 1)) * 100)}%` }} />
                   </div>
                   <div className="text-[10px] text-slate-500">oldest {a.oldest_days ?? "?"} days</div>
                 </li>
@@ -331,7 +331,7 @@ export default function PrPoSection() {
           <h3 className={`${PANEL_H3} mb-1`}>Payment due profile</h3>
           <p className="mb-2 text-[11px] text-slate-500">open invoice balance, once per PO</p>
           <div className="space-y-1.5">
-            {(s?.payment_profile.bands ?? []).map((d: PrPoDueBand) => (
+            {(s?.payment_profile?.bands ?? []).map((d: PrPoDueBand) => (
               <div key={d.band} className="flex items-center gap-2 text-xs">
                 <span className="w-28 shrink-0">{d.band}</span>
                 <span className="relative h-3.5 flex-1 overflow-hidden rounded bg-slate-100 dark:bg-slate-800">
@@ -348,7 +348,7 @@ export default function PrPoSection() {
             ))}
           </div>
           <p className="mt-2 text-[10px] leading-snug text-slate-500">
-            {s?.payment_profile.basis}
+            {s?.payment_profile?.basis}
           </p>
         </section>
       </div>
