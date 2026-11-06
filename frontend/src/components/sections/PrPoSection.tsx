@@ -79,6 +79,39 @@ const PANEL_H3 = "text-sm font-semibold";
 
 function Dash() { return <span className="text-slate-400">—</span>; }
 
+/* A hover card, in place of the browser's own tooltip.
+   The native one waits a second, wraps where it likes, cannot be styled and
+   renders in the operating system's font in the corner of the pointer --
+   which on a row of figures is exactly where it covers the next row. This
+   appears at once under the row it belongs to, in the page's own type, and
+   has room for the two or three facts worth reading.
+
+   `pointer-events-none` matters: a tooltip that can be hovered sits between
+   the pointer and the row underneath and makes the row flicker. */
+function Hint({ lines, children, align = "left" }: {
+  lines: (string | false | null | undefined)[];
+  children: React.ReactNode;
+  align?: "left" | "right";
+}) {
+  const text = lines.filter(Boolean) as string[];
+  return (
+    <span className="group/hint relative block">
+      {children}
+      {text.length > 0 && (
+        <span className={`pointer-events-none absolute ${align === "right" ? "right-0" : "left-0"}
+                          top-full z-30 mt-1 hidden w-max max-w-[16rem] rounded-lg
+                          border border-slate-700/40 bg-slate-900 px-2.5 py-1.5 text-left
+                          text-[11px] leading-relaxed text-white shadow-xl
+                          group-hover/hint:block dark:bg-slate-800`}>
+          {text.map((t, i) => (
+            <span key={i} className={`block ${i ? "text-slate-300" : "font-semibold"}`}>{t}</span>
+          ))}
+        </span>
+      )}
+    </span>
+  );
+}
+
 export default function PrPoSection() {
   const [filter, setFilter] = useState<PrPoFilter>({});
   const patch = (p: Partial<PrPoFilter>) => setFilter((f) => ({ ...f, ...p }));
@@ -150,8 +183,12 @@ export default function PrPoSection() {
       {/* ── the figures ───────────────────────────────────────────────── */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <div className={`${CARD} p-3`}>
-          <div className="text-2xl font-semibold tabular-nums">{num(s?.totals.pr_items)}</div>
-          <div className="text-xs font-medium">Open PR items</div>
+          <div className="text-2xl font-semibold tabular-nums">{num(s?.totals.pr_numbers)}</div>
+          <div className="text-xs font-medium">Open requisitions</div>
+          <div className="text-[11px] text-slate-500">
+            <span className="tabular-nums">{num(s?.totals.pr_items)}</span> lines
+            {" · "}<span className="tabular-nums">{num(s?.totals.po_numbers)}</span> POs
+          </div>
         </div>
 
         <button onClick={() => setFilter({ rag: "red" })}
@@ -162,8 +199,8 @@ export default function PrPoSection() {
           </div>
           <div className="text-xs font-medium">Past stage target</div>
           <div className="text-[11px] text-slate-600 dark:text-slate-400">
-            {s && card("overdue_stage")
-              ? `${Math.round((card("overdue_stage")!.count / s.totals.pr_items) * 100)}% of open items`
+            {s && card("overdue_stage") && s.totals.pr_numbers
+              ? `${Math.round((card("overdue_stage")!.count / s.totals.pr_numbers) * 100)}% of open requisitions`
               : ""}
           </div>
         </button>
@@ -206,7 +243,7 @@ export default function PrPoSection() {
         <section className={`${CARD} min-w-0 p-4`}>
           <div className="mb-3 flex items-baseline justify-between gap-2">
             <h3 className={PANEL_H3}>Where the work is pending</h3>
-            <span className="text-[11px] text-slate-500">click a stage to filter</span>
+            <span className="text-[11px] text-slate-500">requisitions · click to filter</span>
           </div>
           <div className="space-y-1">
             {PIPELINE.map(({ stage: code, label }) => {
@@ -216,8 +253,13 @@ export default function PrPoSection() {
               const active = stage === code;
               const pct = (count / stagePeak) * 100;
               return (
-                <button key={code} onClick={() => pickStage(code)} disabled={!count}
-                  title={b ? `${count} items, ${red} past target, oldest ${b.oldest_days ?? "?"} days` : "nothing here"}
+                <Hint key={code} lines={[
+                  b ? `${count} requisition${count === 1 ? "" : "s"} at ${label}` : `Nothing at ${label}`,
+                  red > 0 && `${red} past the stage target`,
+                  b?.oldest_days != null && `oldest has been here ${b.oldest_days} days`,
+                  Boolean(count) && (active ? "click to clear this filter" : "click to filter the register"),
+                ]}>
+                <button onClick={() => pickStage(code)} disabled={!count}
                   className={`flex w-full items-center gap-2 rounded px-1.5 py-1 text-left text-xs transition
                     ${active ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
                              : count ? "hover:bg-slate-100 dark:hover:bg-slate-800" : "opacity-40"}`}>
@@ -235,6 +277,7 @@ export default function PrPoSection() {
                     {count}{red > 0 && <span className={active ? "" : " text-rose-600 dark:text-rose-400"}> · {red} late</span>}
                   </span>
                 </button>
+                </Hint>
               );
             })}
           </div>
@@ -243,16 +286,25 @@ export default function PrPoSection() {
         <section className={`${CARD} min-w-0 p-4`}>
           <div className="mb-3 flex items-baseline justify-between gap-2">
             <h3 className={PANEL_H3}>Pending with</h3>
-            <span className="text-[11px] text-slate-500">worst queue first</span>
+            <span className="text-[11px] text-slate-500">requisitions · worst first</span>
           </div>
-          <ul className="space-y-0.5">
-            {(s?.by_owner ?? []).slice(0, 11).map((o: PrPoOwnerBucket) => {
+          {/* EVERY OWNER, not the first eleven. A queue that is cut off is
+              worse than no list: the desks that fall below the cut are
+              exactly the ones nobody is watching, and the panel gave no
+              sign they existed. */}
+          <ul className="max-h-[19rem] space-y-0.5 overflow-y-auto pr-1 scrollbar-thin">
+            {(s?.by_owner ?? []).map((o: PrPoOwnerBucket) => {
               const active = owner === o.owner;
               return (
                 <li key={o.owner}>
+                  <Hint align="right" lines={[
+                    `${o.owner} is holding ${o.count} requisition${o.count === 1 ? "" : "s"}`,
+                    o.red > 0 && `${o.red} past the stage target`,
+                    o.oldest_days != null && `oldest has waited ${o.oldest_days} days`,
+                    active ? "click to clear this filter" : "click to filter the register",
+                  ]}>
                   <button
                     onClick={() => setOwner(active ? undefined : o.owner)}
-                    title={`${o.owner} — oldest ${o.oldest_days ?? "?"} days`}
                     className={`flex w-full items-center justify-between gap-2 rounded px-2 py-1 text-left text-xs
                       ${active ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
                                : "hover:bg-slate-100 dark:hover:bg-slate-800"}`}>
@@ -262,6 +314,7 @@ export default function PrPoSection() {
                       {o.red > 0 && <span className={active ? "" : " text-rose-600 dark:text-rose-400"}> ({o.red} late)</span>}
                     </span>
                   </button>
+                  </Hint>
                 </li>
               );
             })}
@@ -269,11 +322,18 @@ export default function PrPoSection() {
         </section>
 
         <section className={`${CARD} min-w-0 p-4`}>
-          <h3 className={`${PANEL_H3} mb-1`}>Open-item ageing</h3>
-          <p className="mb-3 text-[11px] text-slate-500">days in the current stage</p>
+          <h3 className={`${PANEL_H3} mb-1`}>Ageing</h3>
+          <p className="mb-3 text-[11px] text-slate-500">
+            requisitions, by how long the holding item has sat in its stage
+          </p>
           <div className="space-y-1.5">
             {(s?.ageing ?? []).map((a: PrPoAgeBand) => (
-              <div key={a.band} className="flex items-center gap-2 text-xs">
+              <Hint key={a.band} lines={[
+                `${a.count} requisition${a.count === 1 ? "" : "s"} · ${a.band}`,
+                a.red > 0 && `${a.red} past the stage target`,
+                a.band === "No date" && "no stage date recorded, so the wait cannot be measured",
+              ]}>
+              <div className="flex items-center gap-2 text-xs">
                 <span className="w-20 shrink-0">{a.band}</span>
                 <span className="relative h-3.5 flex-1 overflow-hidden rounded bg-slate-100 dark:bg-slate-800">
                   <span className="absolute inset-y-0 left-0 bg-sky-400/70"
@@ -283,6 +343,7 @@ export default function PrPoSection() {
                 </span>
                 <span className="w-10 shrink-0 text-right tabular-nums">{a.count}</span>
               </div>
+              </Hint>
             ))}
           </div>
         </section>
@@ -293,16 +354,16 @@ export default function PrPoSection() {
         <section className={`${CARD} min-w-0 p-4`}>
           <h3 className={`${PANEL_H3} mb-1`}>Buyer workload</h3>
           <p className="mb-2 text-[11px] text-slate-500">
-            procurement stages only · median, not mean — one two-year-old item
-            would drag a mean until every desk looked alike
+            requisitions at procurement stages only · median, not mean — one
+            two-year-old item would drag a mean until every desk looked alike
           </p>
           <table className="w-full text-xs">
             <thead className="text-left text-[10px] uppercase text-slate-500">
-              <tr><th className="py-1">Buyer</th><th className="text-right">Open</th>
+              <tr><th className="py-1">Buyer</th><th className="text-right">PRs</th>
                   <th className="text-right">Late</th><th className="text-right">Median</th></tr>
             </thead>
             <tbody>
-              {(s?.buyer_workload ?? []).slice(0, 7).map((w: PrPoBuyerLoad) => (
+              {(s?.buyer_workload ?? []).map((w: PrPoBuyerLoad) => (
                 <tr key={w.buyer} className="border-t border-slate-100 dark:border-slate-800">
                   <td className="max-w-[10rem] truncate py-1" title={w.department ?? ""}>
                     {w.buyer}
@@ -326,7 +387,7 @@ export default function PrPoSection() {
           <p className="mb-2 text-[11px] text-slate-500">NFAs waiting on a signature</p>
           {(s?.approval_bottlenecks ?? []).length ? (
             <ul className="space-y-2">
-              {(s?.approval_bottlenecks ?? []).slice(0, 6).map((a: PrPoApprovalLoad) => (
+              {(s?.approval_bottlenecks ?? []).map((a: PrPoApprovalLoad) => (
                 <li key={a.approver} className="text-xs">
                   <div className="flex items-baseline justify-between gap-2">
                     <span className="truncate font-medium" title={a.department ?? ""}>{a.approver}</span>

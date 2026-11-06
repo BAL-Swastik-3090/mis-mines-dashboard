@@ -53,6 +53,58 @@ def rag(stage: str, age: int | None) -> str:
 
 Indicator = dict[str, Any]
 
+# The procurement sequence, in order. A requisition is only as far along as
+# its furthest-behind line.
+STAGE_ORDER = [
+    "UNASSIGNED", "ASSIGNED", "RFQ_ISSUED", "QUOTES_IN", "EVALUATION",
+    "NFA_PENDING", "NFA_APPROVED", "PO_CREATED", "PO_RELEASED", "RECEIVED",
+    "INVOICED", "PAID",
+]
+_STAGE_AT = {name: i for i, name in enumerate(STAGE_ORDER)}
+
+
+def _leads(rows: list[dict]) -> list[dict]:
+    """One row per requisition: the line that is holding it up.
+
+    THE PANELS COUNT REQUISITIONS, NOT LINES. PR 1600003149 is eighteen
+    spare parts on one order from one buyer; counted per line it put
+    eighteen into "Issue RFQ" and made one piece of work look like
+    eighteen. Every queue on the screen was inflated the same way -- 1,045
+    at Payment out of 2,190 lines -- and none of it could be reconciled
+    with anything a person does, because nobody chases a line.
+
+    The furthest-behind line decides, matching the table: it is the one
+    that has to move before the requisition is finished, and it carries the
+    owner and the next action the meeting needs. Where two lines sit in the
+    same stage the older is taken, so the age shown is the real wait.
+
+    MONEY DOES NOT COME THROUGH HERE. Invoices and payments belong to the
+    purchase order, which is neither a line nor a requisition, and those
+    figures stay with _money_once.
+    """
+    best: dict[str, dict] = {}
+    for r in rows:
+        pr = r["pr_number"]
+        cur = best.get(pr)
+        if cur is None:
+            best[pr] = r
+            continue
+        a = (_STAGE_AT.get(r["stage"], 0), -(r.get("stage_age_days") or 0))
+        b = (_STAGE_AT.get(cur["stage"], 0), -(cur.get("stage_age_days") or 0))
+        if a < b:
+            best[pr] = r
+    return list(best.values())
+
+
+def _prs_where(rows: list[dict], pred: Callable[[dict], bool]) -> int:
+    """Requisitions with AT LEAST ONE line matching.
+
+    For facts that belong to a line rather than to the requisition's
+    position: an overdue delivery on one of six items still makes the
+    requisition late.
+    """
+    return len({r["pr_number"] for r in rows if pred(r)})
+
 
 def _count(rows: list[dict], pred: Callable[[dict], bool]) -> int:
     return sum(1 for r in rows if pred(r))
@@ -101,37 +153,45 @@ def summarise(rows: list[dict[str, Any]], as_on: date) -> dict[str, Any]:
     pr_numbers = {r["pr_number"] for r in rows}
     po_numbers = {r["po_no"] for r in rows if r.get("po_no")}
 
+    # Counts are of requisitions; money stays per PO. See _leads.
+    leads = _leads(rows)
+
     cards: list[Indicator] = [
         {"key": "unassigned", "label": "Released, not assigned",
-         "count": _count(rows, lambda r: r["stage"] == "UNASSIGNED"),
+         "count": _count(leads, lambda r: r["stage"] == "UNASSIGNED"),
          "filter": {"stage": "UNASSIGNED"}, "tone": "alert"},
         {"key": "rfq_pending", "label": "Buyer assigned, RFQ pending",
-         "count": _count(rows, lambda r: r["stage"] == "ASSIGNED"),
+         "count": _count(leads, lambda r: r["stage"] == "ASSIGNED"),
          "filter": {"stage": "ASSIGNED"}, "tone": "watch"},
         {"key": "quotes_awaited", "label": "Quotations awaited",
-         "count": _count(rows, lambda r: r["stage"] == "RFQ_ISSUED"),
+         "count": _count(leads, lambda r: r["stage"] == "RFQ_ISSUED"),
          "filter": {"stage": "RFQ_ISSUED"}, "tone": "watch"},
         {"key": "evaluation", "label": "Evaluation in progress",
-         "count": _count(rows, lambda r: r["stage"] in ("QUOTES_IN", "EVALUATION")),
+         "count": _count(leads, lambda r: r["stage"] in ("QUOTES_IN", "EVALUATION")),
          "filter": {"stage": "EVALUATION"}, "tone": "watch"},
         {"key": "nfa_pending", "label": "NFA under approval",
-         "count": _count(rows, lambda r: r["stage"] == "NFA_PENDING"),
+         "count": _count(leads, lambda r: r["stage"] == "NFA_PENDING"),
          "filter": {"stage": "NFA_PENDING"}, "tone": "alert"},
         {"key": "nfa_approved", "label": "NFA approved, PO awaited",
-         "count": _count(rows, lambda r: r["stage"] == "NFA_APPROVED"),
+         "count": _count(leads, lambda r: r["stage"] == "NFA_APPROVED"),
          "filter": {"stage": "NFA_APPROVED"}, "tone": "alert"},
         {"key": "po_unreleased", "label": "PO created, not released",
-         "count": _count(rows, lambda r: r["stage"] == "PO_CREATED"),
+         "count": _count(leads, lambda r: r["stage"] == "PO_CREATED"),
          "filter": {"stage": "PO_CREATED"}, "tone": "watch"},
         {"key": "delivery_overdue", "label": "Delivery overdue",
-         "count": _count(rows, lambda r: (
+         "count": _prs_where(rows, lambda r: (
              r.get("po_delivery_date") is not None
              and r["po_delivery_date"] < as_on
              and not r.get("delivery_complete")
              and r["stage"] in ("PO_RELEASED", "PO_CREATED", "RECEIVED"))),
          "filter": {"delivery": "overdue"}, "tone": "alert"},
         {"key": "outstanding", "label": "Outstanding payable",
-         "count": _count(rows, lambda r: (r.get("outstanding") or 0) > 0),
+         # COUNTED IN POs, not requisitions, because the amount beside it is
+         # per PO. A count on a different footing from the figure next to it
+         # invites exactly the arithmetic that does not work.
+         "count": len({r.get("po_no") or ("~" + r["pr_number"] + "/" + r["pr_item"])
+                       for r in rows if (r.get("outstanding") or 0) > 0}),
+         "count_unit": "PO",
          # PER PO, ONCE. Invoices and payments are recorded against the PO,
          # not the PR item, so a PO covering five PR items appears on five
          # register rows carrying the same invoice total. Summing the rows
@@ -141,26 +201,30 @@ def summarise(rows: list[dict[str, Any]], as_on: date) -> dict[str, Any]:
          "amount": _money_once(rows, "outstanding"),
          "filter": {"payment": "outstanding"}, "tone": "money"},
         {"key": "overdue_stage", "label": "Past stage target",
-         "count": _count(rows, lambda r: r["rag"] == "red"),
+         "count": _count(leads, lambda r: r["rag"] == "red"),
          "filter": {"rag": "red"}, "tone": "alert"},
     ]
 
     return {
         "as_on": as_on,
-        "ageing": _ageing(rows),
+        "ageing": _ageing(leads),
         "payment_profile": _payment_profile(rows, as_on),
-        "buyer_workload": _buyer_workload(rows),
-        "approval_bottlenecks": _approval_bottlenecks(rows),
-        "review_first": _review_first(rows, as_on),
+        "buyer_workload": _buyer_workload(leads),
+        "approval_bottlenecks": _approval_bottlenecks(leads),
+        "review_first": _review_first(rows, leads, as_on),
         "totals": {
             "pr_items": len(rows),
             "pr_numbers": len(pr_numbers),
             "po_numbers": len(po_numbers),
             "invoices": sum(r.get("invoice_docs") or 0 for r in rows),
         },
+        # Every count on this screen is of requisitions unless the
+        # indicator carries its own count_unit, so the screen can label
+        # them without guessing.
+        "count_unit": "PR",
         "cards": cards,
-        "by_stage": _by_stage(rows),
-        "by_owner": _by_owner(rows),
+        "by_stage": _by_stage(leads),
+        "by_owner": _by_owner(leads),
         "targets_provisional": TARGETS_ARE_PROVISIONAL,
     }
 
@@ -336,22 +400,26 @@ def _approval_bottlenecks(rows: list[dict]) -> list[dict]:
     return sorted(out.values(), key=lambda b: (-b["overdue"], -b["pending"]))
 
 
-def _review_first(rows: list[dict], as_on: date) -> list[str]:
-    """The one line somebody reads out at the start of the meeting."""
+def _review_first(rows: list[dict], leads: list[dict], as_on: date) -> list[str]:
+    """The one line somebody reads out at the start of the meeting.
+
+    In requisitions, like every other count here -- the deliveries included,
+    counted as requisitions with at least one late line.
+    """
     lines: list[str] = []
-    pay_late = sum(1 for r in rows if r["stage"] == "INVOICED" and r["rag"] == "red")
+    pay_late = sum(1 for r in leads if r["stage"] == "INVOICED" and r["rag"] == "red")
     if pay_late:
-        lines.append(f"{pay_late} items at payment stage past target")
-    deliv = sum(1 for r in rows if (
+        lines.append(f"{pay_late} PRs at payment stage past target")
+    deliv = _prs_where(rows, lambda r: bool(
         r.get("po_delivery_date") and r["po_delivery_date"] < as_on
         and not r.get("delivery_complete")
         and r["stage"] in ("PO_RELEASED", "PO_CREATED", "RECEIVED")))
     if deliv:
-        lines.append(f"{deliv} overdue deliveries")
-    nfa_late = sum(1 for r in rows if r["stage"] == "NFA_PENDING" and r["rag"] == "red")
+        lines.append(f"{deliv} PRs with an overdue delivery")
+    nfa_late = sum(1 for r in leads if r["stage"] == "NFA_PENDING" and r["rag"] == "red")
     if nfa_late:
         lines.append(f"{nfa_late} NFA approvals past target")
-    oldest = max((r["stage_age_days"] or 0) for r in rows) if rows else 0
+    oldest = max((r["stage_age_days"] or 0) for r in leads) if leads else 0
     if oldest:
-        lines.append(f"oldest open item {oldest} days in stage")
+        lines.append(f"oldest open PR {oldest} days in stage")
     return lines
