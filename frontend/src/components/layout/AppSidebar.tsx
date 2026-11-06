@@ -25,7 +25,13 @@ const PRPO_URL =
  *  page value, a user whose last click was PR/PO would reload into a blank
  *  screen with no section to render. */
 export type NavItem =
-  | { kind: "page"; id: AppPage;  label: string; icon: React.ElementType }
+  /** `tag` is a short word printed beside the label, for a section that is
+   *  on the screen but not yet signed off — "UAT" while the numbers are
+   *  still being checked against SAP by the people who own them. It is a
+   *  claim about the state of the section, not decoration, so it is removed
+   *  when that stops being true rather than left to go stale. */
+  | { kind: "page"; id: AppPage;  label: string; icon: React.ElementType;
+      tag?: string }
   /** `need` is a permission code. A link is still access: the application it
    *  opens has its own login, but putting the shortcut in front of somebody is
    *  telling them the door is theirs. Without it the entry is open to anyone
@@ -63,7 +69,8 @@ const NAV_ITEMS: NavItem[] = [
   // one; "PR to Payment" is a page of this dashboard, following a released
   // requisition through RFQ, evaluation, NFA, PO, receipt, invoice and
   // payment, with the stage derived from whatever evidence exists.
-  { kind: "page", id: "pr-po",           label: "PR to Payment",              icon: Receipt         },
+  { kind: "page", id: "pr-po",           label: "PR to Payment",              icon: Receipt,
+    tag: "UAT" },
   { kind: "link", href: PRPO_URL,        label: "PR/PO Status",               icon: ClipboardList,
     need: "link.prpo.view" },
 ];
@@ -274,6 +281,7 @@ export default function AppSidebar() {
         {items.map((item) => {
           const { label, icon: Icon } = item;
           const isLink = item.kind === "link";
+          const tag = "tag" in item ? item.tag : undefined;
 
           /* Label + collapsed tooltip are identical for both kinds. */
           const inner = (isActive: boolean) => (
@@ -288,6 +296,18 @@ export default function AppSidebar() {
               {!collapsed && (
                 <span className="text-[12px] font-semibold tracking-wide leading-tight truncate font-condensed text-left">
                   {label}
+                </span>
+              )}
+              {/* Sits next to the label rather than at the far right, where
+                  the late-data dot already lives -- two marks sharing one
+                  edge read as one control. */}
+              {tag && !collapsed && (
+                <span
+                  title="Under user acceptance testing -- the figures are still being checked"
+                  className="shrink-0 rounded-[3px] bg-[#f5a623]/15 px-1 py-px text-[9px]
+                             font-bold uppercase leading-none tracking-wider text-[#f5a623]
+                             ring-1 ring-inset ring-[#f5a623]/30">
+                  {tag}
                 </span>
               )}
               {/* Leaving-the-app marker. Without it this reads as another
@@ -319,7 +339,7 @@ export default function AppSidebar() {
                   transition-opacity duration-150
                   z-50 border border-white/10
                 ">
-                  {label}{isLink ? " ↗" : ""}
+                  {label}{tag ? ` · ${tag}` : ""}{isLink ? " ↗" : ""}
                 </span>
               )}
             </>
