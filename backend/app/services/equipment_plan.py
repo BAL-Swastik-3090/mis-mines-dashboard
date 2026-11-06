@@ -58,6 +58,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.services import equipment_settings as eqs
+
 logger = logging.getLogger(__name__)
 
 ORE, OB = "ORE", "OB"
@@ -73,22 +75,61 @@ def month_start(d: date) -> date:
 
 
 # ── The fleet ────────────────────────────────────────────────────────────────
-def fleet(db: Session, include_inactive: bool = False) -> list[dict[str, Any]]:
-    """Every excavator in the master, active ones first.
+def fleet(db: Session, include_inactive: bool = False,
+          on_date: date | None = None) -> list[dict[str, Any]]:
+    """Every EXCAVATOR in the master, as it stood on `on_date`, active first.
 
     Ordered own-before-hired and then by name, which is the order the OEE
     table and the entry screen both read in.
+
+    TWO THINGS CHANGED UNDER THIS FUNCTION ON 6 NOVEMBER 2026, and both would
+    be silent failures if they were not handled here.
+
+    Status is no longer a column on the master: it is a dated decision on
+    oee_equip_status, so which machines are in service depends on WHEN you
+    ask. Unasked, this asks about today, which is what the entry screen means.
+
+    And the master is no longer excavators only -- it now carries the 37
+    tippers as well, because the Equipment Status Selector covers the whole
+    fleet. The excavation plan is about excavators, so the class filter is
+    not a tidy-up: without it the plan screen would offer a MAN tipper an
+    ORE/OB assignment, and resolve() would hand lcm.py thirty-seven machines
+    whose hours it has no way to bucket.
+
+    AND IT STILL WORKS BEFORE THE MIGRATION HAS RUN. On 6 November 2026 the
+    two were applied the other way round -- the schema went to the live
+    database before the code shipped -- and the deployed code, which still
+    selected `status` off the master, failed on this screen until the
+    database was put back. Deploying the code first would fail the same way
+    from the other side, so neither order is allowed to break it: if
+    oee_equip_status is not there yet, this reads the master the way it read
+    it before, and the screen keeps working until the migration lands.
     """
-    rows = db.execute(text(f"""
-        SELECT id, equipment_name, category, status
-        FROM   minehub.oee_equip_master
-        {'' if include_inactive else "WHERE status = 'ACTIVE'"}
-        ORDER  BY CASE WHEN status = 'ACTIVE' THEN 0 ELSE 1 END,
-                  CASE WHEN category = 'OWN' THEN 0 ELSE 1 END,
-                  equipment_name
-    """)).fetchall()
-    return [{"id": r.id, "equipment_name": r.equipment_name,
-             "category": r.category, "status": r.status} for r in rows]
+    if db.execute(text(
+            "SELECT to_regclass('minehub.oee_equip_status')")).scalar() is None:
+        # PRE-MIGRATION. Asked about explicitly rather than caught as an
+        # error, because a failed statement poisons the transaction and the
+        # fallback query would then fail too, for a different reason.
+        logger.warning("oee_equip_status is absent -- reading the fleet the "
+                       "pre-migration way. Apply migration 100.")
+        legacy = db.execute(text(f"""
+            SELECT id, equipment_name, category, status
+            FROM   minehub.oee_equip_master
+            {'' if include_inactive else "WHERE status = 'ACTIVE'"}
+            ORDER  BY CASE WHEN status = 'ACTIVE' THEN 0 ELSE 1 END,
+                      CASE WHEN category = 'OWN' THEN 0 ELSE 1 END,
+                      equipment_name
+        """)).fetchall()
+        return [{"id": r.id, "equipment_name": r.equipment_name,
+                 "category": r.category, "status": r.status} for r in legacy]
+
+    rows = eqs.resolve(db, on_date or date.today(), klass=eqs.EXCAVATOR,
+                       active_only=not include_inactive)
+    rows.sort(key=lambda r: (0 if r["status"] == "ACTIVE" else 1,
+                             0 if r["category"] == "OWN" else 1,
+                             r["equipment_name"]))
+    return [{"id": r["id"], "equipment_name": r["equipment_name"],
+             "category": r["category"], "status": r["status"]} for r in rows]
 
 
 # ── The month ────────────────────────────────────────────────────────────────
@@ -122,7 +163,10 @@ def resolve(db: Session, month: date) -> dict[str, Any]:
     month, the month it came from is in the result.
     """
     m = month_start(month)
-    machines = fleet(db)
+    # The fleet as it stood at the START of the month being resolved, not as
+    # it stands today. A machine retired in November must still appear in
+    # October's plan, or October's LCM loses its hours.
+    machines = fleet(db, on_date=m)
     names = [x["equipment_name"] for x in machines]
 
     # ONE STATEMENT FOR ALL THREE CASES. DISTINCT ON keeps the first row per

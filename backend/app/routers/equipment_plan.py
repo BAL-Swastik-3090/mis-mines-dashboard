@@ -26,7 +26,13 @@ from app.minehub_db import get_minehub_db
 from app.services import equipment_plan as svc
 from app.services.equipment_plan import PlanError
 
-router = APIRouter(prefix="/api/equipment-plan", tags=["Equipment Excavation Plan"])
+# THE PATH KEEPS THE OLD NAME AND THE TAG DOES NOT, which is deliberate.
+# A tag is a display label in /api/docs and changing it breaks nothing; the
+# path is an identifier nine call sites depend on, and renaming it buys
+# nothing a reader can see. The screen is now the OEE Master Selector and
+# these endpoints are its Excavation Plan tab, so that is what the docs say.
+router = APIRouter(prefix="/api/equipment-plan",
+                   tags=["OEE Master Selector"])
 
 
 def _actor(request: Request) -> str:
