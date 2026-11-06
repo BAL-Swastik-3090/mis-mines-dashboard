@@ -5,20 +5,26 @@ deleted in SAP and still showing in PR to Payment as an open order.
 
 ## What is wrong
 
-The PO extract does not carry SAP's deletion indicator (`EKPO-LOEKZ`).
-The column exists and is always empty.
+The PO extract does not carry SAP's deletion indicator. The column exists
+and is empty on every row.
 
-| Table | Rows | Rows with a deletion flag |
+There is **one** source table, `sap_odata_api.scm_purchase_order`.
+`crm.scm_purchase_order` is only a view over it that renames the columns to
+upper case, so it is not independent evidence — it is the same rows counted
+twice. The same holds for the requisition and RFQ tables.
+
+Every deletion-flag column in the database, and whether it is ever set:
+
+| Source table | Rows | Flagged |
 |---|---:|---:|
-| `crm.scm_purchase_order` | 22,450 | **0** |
-| `sap_odata_api.scm_purchase_order` | 22,450 | **0** |
-| `crm.scm_purchase_requisition` | 27,139 | 1,507 |
-| `sap_odata_api.scm_purchase_requisition` | 27,139 | 1,507 |
+| `sap_odata_api.scm_purchase_order.delete_indicator` | 22,450 | **0** |
+| `sap_odata_api.scm_rfq_header.delete_ind` | 20,010 | **0** |
+| `sap_odata_api.scm_purchase_requisition.delete_indicator` | 27,139 | 1,507 |
+| `sap_odata_api.scm_rfq_items.delete_ind` | 54,985 | 258 |
 
-`sap_odata_api` is a mirror of `crm`; both agree, so the gap is upstream of
-both. The requisition rows prove the pipeline carries the field perfectly
-well when SAP sends it — this is a missing mapping on the PO feed, not a
-limitation of the sync.
+The requisition and RFQ-item feeds carry the flag through the same sync into
+the same schema, so the pipeline is not the limitation. Two feeds map the
+field and two do not.
 
 The extract is not stale: its newest `changed_on` is the current date.
 
@@ -36,10 +42,13 @@ dashboard. The filter in `backend/app/services/pr_po.py` reads
 
 ## What needs to happen
 
-Whoever owns the feed into `crm.scm_purchase_order` must map `EKPO-LOEKZ`
-into `DELETE_INDICATOR`, the way the requisition feed already does. Nothing
-in this repository needs to change once it arrives — the filter is already
-in place and will begin working the day the column is populated.
+Whoever owns the feed into `sap_odata_api.scm_purchase_order` must map
+`EKPO-LOEKZ` into `delete_indicator`, the way the requisition feed already
+maps its own. `scm_rfq_header.delete_ind` is missing for the same reason and
+is worth fixing in the same pass.
+
+Nothing in this repository needs to change once it arrives — the filter is
+already in place and will begin working the day the column is populated.
 
 Not in `D:\Projects\sap_sync`: that project does not mention the table or
 the field.
