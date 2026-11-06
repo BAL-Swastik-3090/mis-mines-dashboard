@@ -29,11 +29,14 @@ Reporting-only (feeds no formula):
 """
 from __future__ import annotations
 from datetime import date
+from functools import lru_cache
+
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from app.services import breakdown as bd
 from app.services import equipment_plan as eqp
+from app.services import equipment_settings as eqs
 from app.services.sap_source import sap_session
 
 PLANT           = "1200"
@@ -135,7 +138,7 @@ def _num(v) -> float:
 # it belongs to, and the grouping happens on that label.
 
 
-def _machine_list() -> str:
+def _machine_list(n: int) -> str:
     """The fleet as a derived table of (machine, code), to join the log against.
 
     WHY A JOIN AND NOT A CASE. A CASE labels each log row with one machine, and
@@ -152,14 +155,14 @@ def _machine_list() -> str:
     """
     return " UNION ALL ".join(
         f"SELECT :name{i} AS machine, CAST(:code{i} AS CHAR) AS code"
-        for i in range(len(EXCAVATORS)))
+        for i in range(n))
 
 
-def _machine_params() -> dict:
+def _machine_params(roster: list[dict]) -> dict:
     """Both keys for every machine; code is NULL for the hired ones, which is
     what makes FIND_IN_SET fall through to the name test, exactly as it did."""
     p: dict = {}
-    for i, ex in enumerate(EXCAVATORS):
+    for i, ex in enumerate(roster):
         p[f"name{i}"] = ex["name"]
         p[f"code{i}"] = ex["code"]
     return p
@@ -176,7 +179,16 @@ _MATCH_ON = ("(FIND_IN_SET(m.code, t.equipment_name) > 0 "
 # Machine matching needs BOTH branches: equipment_name switched from a CSV of the
 # excavator plus its tippers ('470-7,MAN-67,80,...') to a single full name
 # ('TATA-470(7)') in July 2026. FIND_IN_SET alone does not match the new form.
-_SHIFT_ALL_SQL = text(f"""
+@lru_cache(maxsize=8)
+def _shift_all_sql(n: int):
+    """The shift-log read, for a fleet of `n` machines.
+
+    Built per fleet size rather than once at import, because the roster is no
+    longer a constant -- it is resolved from minehub.oee_equip_status for the
+    day the window opens. Only the number of UNION arms varies, so the cache
+    is keyed on that and the string is still built once per distinct size.
+    """
+    return text(f"""
     SELECT m.machine AS machine,
         SUM(COALESCE(CAST(NULLIF(t.sunday_holiday_weekly_off,'') AS DECIMAL(14,2)),0)) AS holiday_hrs,
         SUM(COALESCE(CAST(NULLIF(t.no_excavation_plan,'')        AS DECIMAL(14,2)),0)) AS no_plan_hrs,
@@ -222,10 +234,11 @@ _SHIFT_ALL_SQL = text(f"""
             + COALESCE(CAST(NULLIF(t.silt_quantity,'') AS DECIMAL(14,2)),0) * 4
         ) AS other_cum
     FROM mines_tipper_details t
-    JOIN ({_machine_list()}) m ON {_MATCH_ON}
+    JOIN ({_machine_list(n)}) m ON {_MATCH_ON}
     WHERE t.Prod_date BETWEEN :fd AND :td
     GROUP BY m.machine
 """)
+
 
 # Breakdown hours come from services/breakdown.py, which selects notifications
 # that OVERLAP the window, clips each to it, and merges a machine's
@@ -273,24 +286,29 @@ _PM_ALL_SQL = text("""
 # 5,409 rows, so a handful of dates each — with the week test applied in Python
 # below. Same rule, same answers: 24 July for SANY-2 and TATA-210, 9 August for
 # TATA-490, 3 October for both TATA-350s.
-_SEEN_DAYS_SQL = text(f"""
+@lru_cache(maxsize=8)
+def _seen_days_sql(n: int):
+    return text(f"""
     SELECT m.machine AS machine, t.Prod_date AS d
       FROM mines_tipper_details t
-      JOIN ({_machine_list()}) m ON {_MATCH_ON}
+      JOIN ({_machine_list(n)}) m ON {_MATCH_ON}
      WHERE t.Prod_date > '2020-01-01'
      GROUP BY m.machine, t.Prod_date
 """)
 
 
-def _shift_by_machine(db: Session, fd: date, td: date) -> dict:
+def _shift_by_machine(db: Session, fd: date, td: date,
+                      roster: list[dict]) -> dict:
     """One row per machine that has any shift row in the window."""
     return {r["machine"]: r for r in db.execute(
-        _SHIFT_ALL_SQL, {"fd": fd, "td": td, **_machine_params()}).mappings()}
+        _shift_all_sql(len(roster)),
+        {"fd": fd, "td": td, **_machine_params(roster)}).mappings()}
 
 
-def _sap_hours(db: Session, fd: date, td: date) -> tuple[dict, dict]:
+def _sap_hours(db: Session, fd: date, td: date,
+               roster: list[dict]) -> tuple[dict, dict]:
     """Breakdown and maintenance hours per SAP equipment number, in two reads."""
-    eqs = [ex["sap_eq"] for ex in EXCAVATORS if ex["sap_eq"]]
+    eqs = [ex["sap_eq"] for ex in roster if ex["sap_eq"]]
     if not eqs:
         return {}, {}
 
@@ -317,10 +335,11 @@ def _sap_hours(db: Session, fd: date, td: date) -> tuple[dict, dict]:
     return bd_by, pm_by
 
 
-def _first_seen_by_machine(db: Session) -> dict:
+def _first_seen_by_machine(db: Session, roster: list[dict]) -> dict:
     """First logged date that was followed by another within the week."""
     days: dict = {}
-    for r in db.execute(_SEEN_DAYS_SQL, _machine_params()).mappings():
+    for r in db.execute(_seen_days_sql(len(roster)),
+                        _machine_params(roster)).mappings():
         days.setdefault(r["machine"], []).append(r["d"])
 
     out: dict = {}
@@ -400,11 +419,12 @@ def _plan_fields(plan: dict | None, carried: dict[str, str], name: str) -> dict:
 
 
 # ── Which excavators the mine counts as new ──────────────────────────────────
-# Named by the mine on 26 October 2026, not derived. Being hired is NOT the
-# test — TATA-350(1), SANY-2 and TATA-210 are hired and belong with the old
-# machines — and nothing in SAP or the shift log records a commissioning date,
-# so there is no field to read this from. When another machine arrives, add it
-# here; that is the only change needed, the two tables follow.
+# Named by the mine on 26 October 2026. Being hired is NOT the test —
+# TATA-350(1), SANY-2 and TATA-210 are hired and belong with the old machines —
+# and nothing in SAP or the shift log records a commissioning date, so there is
+# no field to derive it from. It is now a choice the mine makes on the
+# Equipment Status Selector, carried on the machine as `generation`, and the
+# frozenset below is the fallback used only when minehub cannot be reached.
 OLD, NEW = "old", "new"
 NEW_EXCAVATORS: frozenset[str] = frozenset({"TATA-490", "TATA-350(2)"})
 
@@ -446,12 +466,26 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
     days            = (to_date - from_date).days + 1
     full_god_hours  = days * 24.0
 
+    # WHO IS ON THIS SCREEN, AS THE MINE SET IT FOR THE DAY THE WINDOW OPENS.
+    # Resolved on from_date for the same reason the excavation plan is: the
+    # settings have no grain finer than the day they take effect, so a range
+    # that crosses a change is answered by one version rather than a blend.
+    #
+    # EXCAVATORS is the fallback and nothing more. If minehub is unreachable
+    # these four tables still render what they rendered before the selector
+    # existed, which is better than four empty tables — but the figures are
+    # then the compiled-in ones, so the response says which was used.
+    roster = eqs.excavators(from_date)
+    from_table = roster is not None
+    if not from_table:
+        roster = EXCAVATORS
+
     # Four reads for the whole fleet, before the loop, instead of twenty-five
     # inside it. first_seen is not restricted to the window on purpose: it asks
     # when a machine first arrived at the mine, ever.
-    shift_by   = _shift_by_machine(db, from_date, to_date)
-    bd_by, pm_by = _sap_hours(db, from_date, to_date)
-    first_by   = _first_seen_by_machine(db)
+    shift_by   = _shift_by_machine(db, from_date, to_date, roster)
+    bd_by, pm_by = _sap_hours(db, from_date, to_date, roster)
+    first_by   = _first_seen_by_machine(db, roster)
 
     # Resolved on the month the range STARTS in. The plan has no grain finer
     # than a month by the mine's own decision, so a range crossing a boundary
@@ -461,9 +495,15 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
     carried    = ({c["equipment_name"]: c["from_month"] for c in plan["carried"]}
                   if plan else {})
 
+    # Old or new, per machine, as the table says. A roster that came from the
+    # fallback carries no `generation`, so the frozenset answers for it.
+    def gen_of(ex: dict) -> str:
+        g = ex.get("generation")
+        return g if g else (NEW if ex["name"] in NEW_EXCAVATORS else OLD)
+
     machines = []
     absent: list[str] = []
-    for ex in EXCAVATORS:
+    for ex in roster:
         shift = shift_by.get(ex["name"])
 
         # A MACHINE WITH NO SHIFT ROWS IS LEFT OUT, NOT SHOWN AS ZERO.
@@ -546,7 +586,7 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
         machines.append({
             "machine":        ex["name"],
             "ideal_cap":      ex["ideal_cap"],
-            "generation":     NEW if ex["name"] in NEW_EXCAVATORS else OLD,
+            "generation":     gen_of(ex),
             # So the table can say where this row's BD/PM came from instead of
             # one footer claiming SAP for every machine.
             "bd_source":      ex["bd_source"],
@@ -582,17 +622,22 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
             "deviation_pct":  round(deviation_pct, 1) if deviation_pct is not None else None,
         })
 
+    # The absent list is names only, so their generation is looked up here
+    # rather than re-derived from a frozenset that may not apply.
+    gen_by_name = {ex["name"]: gen_of(ex) for ex in roster}
+
     return {
         "machines":  machines,
         "fleet":     _roll_up(machines, absent),
+        "roster_source": "table" if from_table else "fallback",
         # The mine reports the new excavators as their own table. Split here
         # rather than in the frontend so each table's OVERALL row is weighted by
         # the same code that weights the whole fleet — a roll-up re-derived in
         # TypeScript would drift from this one the first time either changed.
         "fleet_old": _roll_up([m for m in machines if m["generation"] == OLD],
-                              [a for a in absent if a not in NEW_EXCAVATORS]),
+                              [a for a in absent if gen_by_name.get(a) != NEW]),
         "fleet_new": _roll_up([m for m in machines if m["generation"] == NEW],
-                              [a for a in absent if a in NEW_EXCAVATORS]),
+                              [a for a in absent if gen_by_name.get(a) == NEW]),
     }
 
 

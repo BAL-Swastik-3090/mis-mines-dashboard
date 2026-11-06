@@ -32,6 +32,7 @@ from app.services.sap_source import sap_one
 from app.services import breakdown as bd
 from app.services import ibm_rates
 from app.services import equipment_plan as eqp
+from app.services import lcm_settings as lset
 from app.services.oee import EXCAVATORS as _FLEET_SPEC
 
 # Actuals are net of SAP reversal documents. Without this the ore deviation
@@ -317,12 +318,21 @@ def _label_from_column(col: str) -> str:
     return " ".join(out)
 
 
-def discover_loss_heads(db: Session) -> list[dict]:
+def discover_loss_heads(db: Session,
+                        settings: dict | None = None) -> list[dict]:
     """Loss heads, discovered from the table, in the mine's reporting sequence.
 
-    Which heads exist is dynamic — read from the table's columns. Only their
-    order and Sl numbers come from DISPLAY_ORDER, so the matrix reads in a
-    familiar sequence while still picking up new columns automatically.
+    WHICH HEADS EXIST IS STILL DYNAMIC — read from the table's columns, as it
+    always was. What changed on 6 November 2026 is where their label, loss
+    type, owner and Sl come from: the LCM KAM Selector
+    (minehub.lcm_loss_head_setting), resolved for the day the window opens,
+    instead of four maps compiled into this file.
+
+    `settings` is the resolved head map. None means minehub could not be
+    reached, and the maps below answer instead — the matrix then shows the
+    classifications it showed before the selector existed, which is better
+    than a matrix with no owners on it. Either way a column nobody has
+    classified is reported as Unclassified at the bottom rather than dropped.
     """
     rows = db.execute(text("""
         SELECT COLUMN_NAME AS col
@@ -333,14 +343,24 @@ def discover_loss_heads(db: Session) -> list[dict]:
     """)).fetchall()
 
     cols = [r.col for r in rows if r.col.lower() not in NON_LOSS_COLUMNS]
+    chosen = (settings or {})
 
-    # Known columns keep their conventional Sl; anything new is numbered after the
-    # highest one so it lands at the bottom rather than shifting the rest.
-    next_sl = max(DISPLAY_ORDER.values(), default=0)
+    def pick(col: str, field: str, fallback):
+        """The mine's choice for this head, or what the code used to say."""
+        row = chosen.get(col)
+        if row is not None and row.get(field) is not None:
+            return row[field]
+        return fallback
+
+    # Known columns keep their conventional Sl; anything new is numbered after
+    # the highest one so it lands at the bottom rather than shifting the rest.
+    known_sl = {c: r["sl_order"] for c, r in chosen.items()
+                if r.get("sl_order") is not None} or DISPLAY_ORDER
+    next_sl = max(known_sl.values(), default=0)
     sl_of: dict[str, int] = {}
     for col in cols:
-        if col in DISPLAY_ORDER:
-            sl_of[col] = DISPLAY_ORDER[col]
+        if col in known_sl:
+            sl_of[col] = known_sl[col]
         else:
             next_sl += 1
             sl_of[col] = next_sl
@@ -348,10 +368,16 @@ def discover_loss_heads(db: Session) -> list[dict]:
     heads = [{
         "sl_no":     sl_of[col],
         "column":    col,
-        "label":     _label_from_column(col),
+        "label":     pick(col, "label", _label_from_column(col)),
         "source":    SAP_SOURCED.get(col, col),
-        "loss_type": LOSS_TYPE_BY_COLUMN.get(col, UNCLASSIFIED),
-        "kam":       KAM_BY_COLUMN.get(col, "—"),
+        "loss_type": pick(col, "loss_type",
+                          LOSS_TYPE_BY_COLUMN.get(col, UNCLASSIFIED)),
+        "kam":       pick(col, "kam_name", KAM_BY_COLUMN.get(col, "—")),
+        # Carried through to the KAM Wise Loss Tree so the two sections can
+        # never put one head under two different owners.
+        "role":      pick(col, "role_code",
+                          ROLE_BY_COLUMN.get(col, ROLE_UNMAPPED)),
+        "is_active": pick(col, "is_active", True),
     } for col in cols]
     heads.sort(key=lambda h: h["sl_no"])
     return heads
@@ -707,13 +733,42 @@ def get_kam_loss_tree(db: Session, from_date: date, to_date: date) -> dict:
         return {"controllable": 0.0, "non_controllable": 0.0, "unclassified": 0.0,
                 "total": 0.0, "heads": 0, "loss_heads": []}
 
-    buckets = {m["role"]: blank() for m in ROLE_META}
+    # THE NODES COME FROM THE SAME TABLE THE OWNERS DO. lcm_role_master holds
+    # all of them, including the Chief at the root and COB alongside; this
+    # section needs the ones in between, in the mine's own left-to-right
+    # order. ROLE_META is the fallback for an unreachable minehub.
+    settings = lset.resolve_detached(from_date)
+    all_roles = (settings or {}).get("roles") or []
+    mid = [r for r in all_roles
+           if r["role_code"] not in (CHIEF_OF_MINES["role"], ROLE_COB,
+                                     ROLE_UNMAPPED)]
+    role_meta = ([{"role": r["role_code"], "title": r["title"],
+                   "owner": r["owner_kam"] or "—"} for r in mid]
+                 if mid else ROLE_META)
+    chief = next((r for r in all_roles
+                  if r["role_code"] == CHIEF_OF_MINES["role"]), None)
+    chief_meta = ({"role": chief["role_code"], "title": chief["title"],
+                   "owner": chief["owner_kam"] or "—"}
+                  if chief else CHIEF_OF_MINES)
+    cob_role = next((r for r in all_roles if r["role_code"] == ROLE_COB), None)
+    cob_meta = ({"role": cob_role["role_code"], "title": cob_role["title"],
+                 "owner": cob_role["owner_kam"] or "—"}
+                if cob_role else COB_META)
+
+    buckets = {m["role"]: blank() for m in role_meta}
     buckets[ROLE_UNMAPPED] = blank()
 
     rate_available = lcm["totals"]["loss_amount"] is not None
 
     for r in rows:
-        role = ROLE_BY_COLUMN.get(r["column"], ROLE_UNMAPPED)
+        # The row carries the role the matrix used, so the two sections cannot
+        # disagree. A role that is not one of the nodes above -- a head
+        # assigned to COB, or to a node since removed -- falls to UNMAPPED,
+        # where it is still SHOWN. Dropping it would break the one invariant
+        # this section has: the root must keep matching the matrix total.
+        role = r.get("role") or ROLE_BY_COLUMN.get(r["column"], ROLE_UNMAPPED)
+        if role not in buckets:
+            role = ROLE_UNMAPPED
         b = buckets[role]
         amt = r["loss_amount"] or 0.0
         if r["loss_type"] == "Controllable":
@@ -744,7 +799,7 @@ def get_kam_loss_tree(db: Session, from_date: date, to_date: date) -> dict:
             "loss_heads":       b["loss_heads"],
         }
 
-    children = [node(m["role"], m["title"], m["owner"]) for m in ROLE_META]
+    children = [node(m["role"], m["title"], m["owner"]) for m in role_meta]
     # Only shown when it has something in it — an empty node is noise.
     if buckets[ROLE_UNMAPPED]["heads"]:
         children.append(node(ROLE_UNMAPPED, "Unmapped loss heads", "—"))
@@ -755,7 +810,7 @@ def get_kam_loss_tree(db: Session, from_date: date, to_date: date) -> dict:
     # missing too. Null must not become zero: "nobody planned it" and "the plant
     # lost nothing" are different statements.
     children.append({
-        **COB_META,
+        **cob_meta,
         "controllable":     None,
         "non_controllable": None,
         "unclassified":     None,
@@ -783,7 +838,7 @@ def get_kam_loss_tree(db: Session, from_date: date, to_date: date) -> dict:
             + (cob_total or 0.0), 2)
 
     root = {
-        **CHIEF_OF_MINES,
+        **chief_meta,
         "controllable":     rollup("controllable"),
         "non_controllable": rollup("non_controllable"),
         "unclassified":     rollup("unclassified"),
@@ -830,8 +885,12 @@ def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
     ore_dev = max(pa["ore_plan"] - pa["ore_actual"], 0.0)
     ob_dev  = max(pa["ob_plan"]  - pa["ob_actual"],  0.0)
 
+    # WHO OWNS EACH LOSS HEAD, AS THE MINE SET IT FOR THE DAY THE WINDOW
+    # OPENS. Resolved on from_date, the same rule the excavation plan and the
+    # fleet follow, so all three answer one window with one version.
+    settings   = lset.resolve_detached(from_date)
     # Head list comes from the table, so a new loss column needs no code change.
-    heads      = discover_loss_heads(db)
+    heads      = discover_loss_heads(db, (settings or {}).get("heads"))
     shift_cols = [h["column"] for h in heads if h["column"] not in SAP_SOURCED]
 
     # ── WHICH MACHINE DUG WHAT, THIS MONTH ──────────────────────────────────
@@ -857,8 +916,8 @@ def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
     # `column` is carried through so KAM Wise Loss Tree can key on it. Keying the
     # tree on the label would break the moment a label is reworded, which is the
     # same reason LOSS_TYPE_BY_COLUMN and KAM_BY_COLUMN are column-keyed.
-    raw = [(h["sl_no"], h["label"], *hours(h["source"]), h["loss_type"], h["kam"], h["column"])
-           for h in heads]
+    raw = [(h["sl_no"], h["label"], *hours(h["source"]), h["loss_type"],
+            h["kam"], h["column"], h["role"]) for h in heads]
 
     tot_ore_hrs = sum(r[2] for r in raw)
     tot_ob_hrs  = sum(r[3] for r in raw)
@@ -906,7 +965,7 @@ def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
     # the column missed its own total by ~Rs 640. On a Rs 4.5 crore figure the
     # precision is worth nothing and the inconsistency costs trust.
     rows = []
-    for (sl, label, oh, bh, lt, kam, col) in raw:
+    for (sl, label, oh, bh, lt, kam, col, role) in raw:
         pol = round(oh * ore_factor, 1)
         rows.append({
             "sl_no":            sl,
@@ -920,6 +979,9 @@ def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
             "loss_type":        lt,
             "kam":              kam,
             "column":           col,
+            # For the KAM Wise Loss Tree, so the matrix and the tree can never
+            # put one head under two different owners.
+            "role":             role,
         })
 
     # Loss Share — each head's rupee loss as a percentage of the period total.

@@ -992,7 +992,7 @@ export interface OEEMachineRow {
   ob_pct:       number | null;
   other_pct:    number | null;
   /** THE ORE / OB COLUMN. What the mine assigned this machine to for the
-   *  month, from the Equipment Excavation Plan — not what it actually moved,
+   *  month, from the OEE Master Selector — not what it actually moved,
    *  which is the `material` fields above and is now the tooltip. null means
    *  the plan has never named this machine, in any month. */
   plan_material: "ORE" | "OB" | null;

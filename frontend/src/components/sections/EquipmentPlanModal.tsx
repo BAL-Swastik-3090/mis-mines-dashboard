@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Pickaxe, X, Loader2, AlertTriangle, Check, History } from "lucide-react";
 import api from "@/lib/api";
+import EquipmentStatusSelector from "./EquipmentStatusSelector";
+import LcmKamSelector from "./LcmKamSelector";
 
 /**
  * Which excavator digs ore and which digs overburden, for one month.
@@ -26,6 +28,18 @@ import api from "@/lib/api";
  * ("was ORE — not saved yet"), and the whole trail of past edits is one click
  * away. Saving writes only what actually differs, so pressing Save twice is
  * not a revision.
+ *
+ * THREE TABS, ONE SCREEN. The month's ORE/OB assignment was the first thing
+ * the mine was given control of; the Equipment Status Selector and the LCM KAM
+ * Selector are the other two. All three answer the same kind of question —
+ * what the mine has decided, as opposed to what it measured — and all three
+ * feed the OEE and the Lost Cost Matrix, so they belong behind one door.
+ *
+ * THE OTHER TWO TABS ARE DATED, AND THIS ONE IS MONTHLY. That is not an
+ * inconsistency to be tidied away: the excavation plan has no grain finer
+ * than a month by the mine's own decision, and the other two apply from the
+ * day they are made. Each tab therefore carries its own period control rather
+ * than sharing one that would have to lie to half of them.
  *
  * WHY STORED AND EFFECTIVE ARE DRAWN DIFFERENTLY. An unentered month opens
  * pre-filled with last month's assignment, which is what the LCM is using. If
@@ -112,11 +126,12 @@ export default function EquipmentPlanModal({
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [tab, setTab] = useState<"plan" | "status" | "lcm">("plan");
 
   useEffect(() => {
     if (!open) return;
     const ym = currentYM();
-    setYear(ym.y); setMonth(ym.m);
+    setYear(ym.y); setMonth(ym.m); setTab("plan");
   }, [open]);
 
   useEffect(() => {
@@ -135,7 +150,7 @@ export default function EquipmentPlanModal({
     queryKey: ["equipment-plan", year, month],
     queryFn: async () =>
       (await api.get("/equipment-plan", { params: { year, month } })).data,
-    enabled: open,
+    enabled: open && tab === "plan",
     staleTime: 10 * 1000,
   });
 
@@ -219,17 +234,18 @@ export default function EquipmentPlanModal({
       onClick={onClose}
       role="dialog"
       aria-modal="true"
-      aria-label="Equipment excavation plan"
+      aria-label="OEE master selector"
     >
       <div
-        className="bg-white rounded-lg shadow-xl border border-border w-full max-w-2xl my-auto"
+        className={"bg-white rounded-lg shadow-xl border border-border w-full my-auto "
+          + (tab === "plan" ? "max-w-2xl" : "max-w-5xl")}
         onClick={(e) => e.stopPropagation()}
       >
         {/* ── heading ──────────────────────────────────────────────────── */}
         <div className="px-4 py-3 border-b border-border-light flex items-center gap-2">
           <Pickaxe size={15} className="text-accent" />
           <span className="font-condensed font-bold text-[13px] text-navy tracking-widest uppercase">
-            Equipment Excavation Plan
+            OEE Master Selector
           </span>
           <button
             onClick={onClose}
@@ -239,6 +255,37 @@ export default function EquipmentPlanModal({
             <X size={16} />
           </button>
         </div>
+
+        {/* ── the three things the mine sets here ──────────────────────── */}
+        {/* ONE DOOR, THREE DECISIONS. All three feed the OEE tables and the
+            Lost Cost Matrix, and all three are the mine's to make rather than
+            ours. Keeping them apart in the menu would have meant three places
+            to look for "the thing that changed the number". */}
+        <div className="px-4 pt-2 border-b border-border-light flex gap-1">
+          {([
+            ["plan",   "Excavation Plan"],
+            ["status", "Equipment Status Selector"],
+            ["lcm",    "LCM KAM Selector"],
+          ] as const).map(([k, label]) => (
+            <button
+              key={k}
+              onClick={() => setTab(k)}
+              aria-current={tab === k ? "page" : undefined}
+              className={"px-3 py-1.5 rounded-t text-[11px] font-condensed font-bold "
+                + "tracking-widest uppercase transition-colors "
+                + (tab === k
+                  ? "bg-white text-navy border border-border-light border-b-white -mb-px"
+                  : "text-txt-muted hover:text-navy hover:bg-bg-section")}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {tab === "status" && <EquipmentStatusSelector onSaved={onSaved} />}
+        {tab === "lcm" && <LcmKamSelector onSaved={onSaved} />}
+
+        {tab === "plan" && (<>
 
         {/* ── month ────────────────────────────────────────────────────── */}
         <div className="px-4 py-2.5 border-b border-border-light bg-bg-soft flex items-end gap-3 flex-wrap">
@@ -537,6 +584,7 @@ export default function EquipmentPlanModal({
             </button>
           </div>
         </div>
+        </>)}
       </div>
     </div>
   );

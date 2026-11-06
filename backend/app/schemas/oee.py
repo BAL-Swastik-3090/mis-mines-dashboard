@@ -107,6 +107,11 @@ class OEEResponse(BaseModel):
     # OVERALL row weighted by the service rather than averaged in the browser.
     fleet_old: OEEFleet
     fleet_new: OEEFleet
+    #: 'table' when the fleet came from the Equipment Status Selector, which is
+    #: the normal case; 'fallback' when minehub could not be reached and the
+    #: figures are the ones compiled into the service. A reader is entitled to
+    #: know which, because only the first reflects what the mine has set.
+    roster_source: str = "table"
 
 
 # ── Tipper OEE — the old (MAN) and new (PRIMA) tables ────────────────────────
@@ -161,3 +166,5 @@ class TipperOEEResponse(BaseModel):
     new_machines: list[TipperOEERow]
     old_fleet:    TipperOEEFleet
     new_fleet:    TipperOEEFleet
+    #: 'table' or 'fallback' — see OEEResponse.roster_source.
+    roster_source: str = "table"

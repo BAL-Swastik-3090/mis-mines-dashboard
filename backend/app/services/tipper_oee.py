@@ -61,6 +61,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.services import breakdown as bd
+from app.services import equipment_settings as eqs
 
 OLD, NEW = "old", "new"
 
@@ -253,6 +254,29 @@ def get_tipper_oee(db: Session, from_date: date, to_date: date) -> dict:
     days = (to_date - from_date).days + 1
     god  = max(days, 0) * 24.0
 
+    # THE ROSTER, AS THE MINE SET IT FOR THE DAY THE WINDOW OPENS. Resolved on
+    # from_date, matching the excavator table and the excavation plan: the
+    # settings change on a date, so a range crossing one is answered by the
+    # version in force when it opened rather than by a blend of two.
+    #
+    # The module constants are the fallback and nothing more — if minehub is
+    # unreachable these two tables still render what they rendered before the
+    # selector existed, and the response says which source answered.
+    fleet = eqs.tippers(from_date)
+    from_table = fleet is not None
+    if from_table:
+        old_names = fleet["old"]
+        new_ideal = fleet["new"]
+        rate_by   = fleet["rate"]
+        log_of    = lambda n: fleet["log_name"].get(n) or _log_name(n)
+        sap_of    = lambda n: fleet["sap_name"].get(n) or _sap_name(n)
+    else:
+        old_names = OLD_TIPPERS
+        new_ideal = NEW_TIPPER_IDEAL
+        rate_by   = {}
+        log_of    = _log_name
+        sap_of    = _sap_name
+
     engine = {r.veh: _f(r.eng)
               for r in db.execute(_ENGINE_SQL,
                                   {"f": from_date,
@@ -275,22 +299,23 @@ def get_tipper_oee(db: Session, from_date: date, to_date: date) -> dict:
         bind={"plant": "1200", "wc": "MINEAUTO", "ntype": "M2"})
 
     old_rows = []
-    for name in OLD_TIPPERS:
-        log = shift.get(_log_name(name), {})
+    for name in old_names:
+        log = shift.get(log_of(name), {})
         eng = engine.get(name, 0.0)
         old_rows.append(_row(
             display=name, generation=OLD, god=god, eng=eng,
-            bd_hrs=sap_bd.get(_sap_name(name), 0.0),
+            bd_hrs=sap_bd.get(sap_of(name), 0.0),
             # The mine's own rate, so the figures reproduce their sheet and
-            # still move when the date range does.
-            ideal=eng * TRIPS_PER_ENGINE_HOUR,
+            # still move when the date range does. Per machine now, defaulting
+            # to the 1.5 that every truck is seeded with.
+            ideal=eng * (rate_by.get(name) or TRIPS_PER_ENGINE_HOUR),
             actual=log.get("trips", 0.0),
             engine_source=TELEMATICS, bd_source=SAP,
             days_logged=log.get("days", 0)))
 
     new_rows = []
-    for name, ideal in NEW_TIPPER_IDEAL.items():
-        log = shift.get(_log_name(name), {})
+    for name, ideal in new_ideal.items():
+        log = shift.get(log_of(name), {})
         new_rows.append(_row(
             display=name, generation=NEW, god=god,
             # No Technoton unit on these ten, so the shift log is the only
@@ -308,6 +333,7 @@ def get_tipper_oee(db: Session, from_date: date, to_date: date) -> dict:
     return {
         "old_machines": old_rows,
         "new_machines": new_rows,
+        "roster_source": "table" if from_table else "fallback",
         "old_fleet":    _roll_up(old_rows, OLD),
         "new_fleet":    _roll_up(new_rows, NEW),
     }

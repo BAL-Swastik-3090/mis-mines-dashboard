@@ -206,10 +206,13 @@ function ActionsMenu() {
             // the other two: what the user is doing is entering a plan, and
             // the dialog is where they find out it wants a spreadsheet.
             ["desilting-plan", "Enter Desilting Plan", Droplets],
-            // Not "Enter" like the three above, because this is not a figure
-            // being entered -- it is which machine digs what for the month,
-            // and the word the mine uses for it is the plan.
-            ["equipment-plan", "Equipment Excavation Plan", Pickaxe],
+            // Not "Enter" like the three above, because nothing behind this
+            // one is a figure being entered. It is the three standing
+            // decisions the OEE and the Lost Cost Matrix are calculated
+            // from -- which machine digs what, which machines are on the
+            // tables and what they are measured against, and who owns each
+            // loss head.
+            ["equipment-plan", "OEE Master Selector", Pickaxe],
             // The day's three movements, typed against the plan beside them.
             ["shifting-actual", "Enter Shifting Actual", PencilLine],
             // And the plan those are read against: an upload, a month at a
