@@ -327,16 +327,19 @@ export default function PrPoSection() {
           </div>
         </section>
 
-        <section className={`${CARD} min-w-0 p-4`}>
+        <section className={`${CARD} flex min-w-0 flex-col p-4`}>
           <div className="mb-3 flex items-baseline justify-between gap-2">
             <h3 className={PANEL_H3}>Pending with</h3>
-            <span className="text-[11px] text-slate-500">requisitions · worst first</span>
+            <span className="text-[11px] text-slate-500">
+              requisitions · worst first
+              {(s?.by_owner ?? []).length > 0 && ` · ${(s?.by_owner ?? []).length}`}
+            </span>
           </div>
           {/* EVERY OWNER, not the first eleven. A queue that is cut off is
               worse than no list: the desks that fall below the cut are
               exactly the ones nobody is watching, and the panel gave no
               sign they existed. */}
-          <ul className="max-h-[19rem] space-y-0.5 overflow-y-auto pr-1 scrollbar-thin">
+          <ul className="min-h-0 flex-1 space-y-0.5 overflow-y-auto pr-1 scrollbar-thin">
             {(s?.by_owner ?? []).map((o: PrPoOwnerBucket) => {
               const active = owner === o.owner;
               return (
@@ -430,16 +433,18 @@ export default function PrPoSection() {
             to act next; this one says where the demand came from, which is
             what a department asks when it wants to know what it is still
             waiting on -- and the only list here that is not about SCM. */}
-        <section className={`${CARD} min-w-0 p-4`}>
+        <section className={`${CARD} flex min-w-0 flex-col p-4`}>
           <div className="mb-1 flex items-baseline justify-between gap-2">
             <h3 className={PANEL_H3}>Requested by</h3>
             <span className="text-[11px] text-slate-500">click to filter</span>
           </div>
           <p className="mb-2 text-[11px] text-slate-500">
             open requisitions, by who raised them
+            {(s?.by_requester ?? []).length > 0 &&
+              ` · ${(s?.by_requester ?? []).length} people`}
           </p>
           {(s?.by_requester ?? []).length ? (
-            <ul className="max-h-[17rem] space-y-0.5 overflow-y-auto pr-1 scrollbar-thin">
+            <ul className="min-h-0 flex-1 space-y-0.5 overflow-y-auto pr-1 scrollbar-thin">
               {(s?.by_requester ?? []).map((q: PrPoRequesterBucket) => {
                 const on = requester === q.requester;
                 return (
