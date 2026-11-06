@@ -226,9 +226,10 @@ export interface ExecDewateringLine {
   /** No plan exists for this measure and none ever will — inflow is seepage
    *  and weather. Different from a plan nobody has filed yet. */
   no_plan: boolean;
-  /** The two columns are not a plan and an actual: opening and closing stock
-   *  share a row, and a percentage of one against the other means nothing. */
-  no_pct:  boolean;
+  /** Beating this plan means coming in BELOW it — closing stock is the one
+   *  such measure. `pct` is then the signed VARIANCE against plan, not an
+   *  achievement, and below plan is the good direction. */
+  inverse: boolean;
 }
 
 export interface ExecDewateringPeriod {
@@ -252,6 +253,10 @@ export interface ExecDewateringKpi {
   offset_hr:        number | null;
   opening_stock:    number | null;
   closing_stock:    number | null;
+  /** Opening + seepage + rain water − PLAN disposal: where the sump would
+   *  have been left had the plan been pumped against the water that really
+   *  arrived. */
+  plan_closing_stock: number | null;
   stock_change_pct: number | null;
   net_drawdown:     number | null;
   days_to_clear:    number | null;
