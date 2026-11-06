@@ -736,18 +736,23 @@ export default function PrPoRegisterTable({
     });
   }, [cuts]);
 
+  /* THE COUNTS BESIDE EACH VALUE ARE REQUISITIONS, NOT LINES, because the
+     rows they will produce are requisitions. Counting lines, the list
+     offered "36" next to a value that turns out to be five rows, and the
+     number beside a filter has to be the number of things you will get. */
   const choices = useMemo(() => {
     const out: Record<string, { v: string; n: number }[]> = {};
     for (const c of cols) {
       if (!c.pick) continue;
-      const tally = new Map<string, number>();
+      const tally = new Map<string, Set<string>>();
       for (const r of broad) {
         if (!passes(r, c.key)) continue;
         const v = c.pick(r) || BLANK;
-        tally.set(v, (tally.get(v) ?? 0) + 1);
+        const seen = tally.get(v);
+        if (seen) seen.add(r.pr_number); else tally.set(v, new Set([r.pr_number]));
       }
       out[c.key] = [...tally.entries()]
-        .map(([v, n]) => ({ v, n }))
+        .map(([v, prs]) => ({ v, n: prs.size }))
         .sort((a, b) => a.v === BLANK ? 1 : b.v === BLANK ? -1
                       : a.v.localeCompare(b.v, "en", { numeric: true }));
     }
@@ -913,15 +918,16 @@ export default function PrPoRegisterTable({
           <thead>
             <tr className="bg-slate-50 dark:bg-slate-800">
               {/* pinned: a row forty columns wide must never lose its name */}
-              <th className="sticky left-0 z-10 w-64 bg-slate-50 px-3 py-2 text-left text-[10px]
-                             font-semibold uppercase tracking-wider text-slate-500
+              <th className="sticky left-0 z-10 w-72 min-w-[18rem] bg-slate-50 px-3 py-2 text-left
+                             text-[10px] font-semibold uppercase tracking-wider text-slate-500
                              dark:bg-slate-800">
                 Requisition &amp; progress
               </th>
               {cols.map((c) => (
                 <th key={c.key}
                     onClick={() => sortBy(c)}
-                    className={`group/th ${c.width ?? ""} whitespace-nowrap px-3 py-2 text-[10px]
+                    className={`group/th ${c.width ?? ""} ${c.width ? "min-w-[5rem]" : ""}
+                      whitespace-nowrap px-3 py-2 text-[10px]
                       font-semibold uppercase tracking-wider text-slate-500
                       ${c.align === "right" ? "text-right" : "text-left"}
                       ${c.sortOn ? "cursor-pointer select-none hover:text-slate-900 dark:hover:text-white" : ""}`}>
@@ -954,7 +960,7 @@ export default function PrPoRegisterTable({
                       className={`group cursor-pointer border-t border-slate-200 align-top
                         dark:border-slate-700 ${zebra}
                         hover:bg-sky-50/60 dark:hover:bg-sky-950/20`}>
-                    <td className={`sticky left-0 z-10 px-3 py-2 ${stick}
+                    <td className={`sticky left-0 z-10 min-w-[18rem] px-3 py-2 ${stick}
                       group-hover:bg-sky-50 dark:group-hover:bg-sky-950/40`}>
                       <div className="flex items-start gap-1.5">
                         <ChevronRight
@@ -963,7 +969,7 @@ export default function PrPoRegisterTable({
                         <div className="min-w-0 flex-1">
                           <div className="flex items-baseline gap-1.5">
                             <span className="text-[13px] font-semibold tabular-nums">{g.pr}</span>
-                            <span className="text-[11px] text-slate-400">
+                            <span className="whitespace-nowrap text-[11px] text-slate-400">
                               {g.items.length} item{g.items.length > 1 ? "s" : ""}
                             </span>
                           </div>
@@ -988,7 +994,8 @@ export default function PrPoRegisterTable({
                         className="group/i border-t border-slate-100 bg-sky-50/30 align-top
                                    text-slate-700 dark:border-slate-800 dark:bg-sky-950/10
                                    dark:text-slate-300">
-                      <td className="sticky left-0 z-10 bg-sky-50 px-3 py-1.5 pl-8 dark:bg-sky-950/30">
+                      <td className="sticky left-0 z-10 min-w-[18rem] bg-sky-50 px-3 py-1.5 pl-8
+                                     dark:bg-sky-950/30">
                         <div className="text-[12px] font-medium tabular-nums text-slate-500">
                           item {r.pr_item}
                         </div>
