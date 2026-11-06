@@ -1,31 +1,25 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   Search, X, SlidersHorizontal, ArrowUp, ArrowDown, ChevronsUpDown, Check,
-  Filter, ListFilter,
+  Filter, ListFilter, ChevronRight,
 } from "lucide-react";
 import type { PrPoRow } from "@/types";
 import type { PrPoFilter } from "@/hooks/usePrPo";
 
 /* The priority action register.
 
-   A procurement case has forty-odd facts attached to it and a meeting needs
-   a different dozen each time. So the table carries the lot and lets the
-   reader choose: columns are grouped by the part of the process they belong
-   to, hidden by default beyond the core set, and the whole thing scrolls
-   sideways with the PR number pinned so a row never loses its name.
+   A REQUISITION IS THE UNIT OF WORK, NOT A LINE OF ONE. PR 1600003149 is
+   eighteen spare parts on one order from one buyer, and listing it as
+   eighteen rows said "eighteen things need chasing" when it is one. So the
+   table opens a row per PR, carrying what the meeting asks -- how far it
+   has got, what is holding it, who has it, what it is worth -- and the
+   items are underneath it when somebody wants them.
 
    EVERYTHING HERE HAPPENS IN THE BROWSER. Sorting, searching and every
    filter work on rows that are already loaded; the server is asked again
    only when the "released from" date changes, because that is the one
-   control that changes which rows exist at all.
-
-   It used to ask the server for each of them. Each round trip rebuilt a
-   query across eleven tables -- 1.4s warm, 4.3s cold -- so clicking a
-   column heading meant a wait and then the figures silently rearranging
-   underneath the pointer, because the old page stayed on screen while the
-   new one loaded. A sort is not a question for a database that has already
-   handed over the answer.
+   control that changes which rows exist.
 
    WHY THE STAGE HAS ITS OWN COLOUR AND THE AGE DOES NOT SHARE IT. Two
    different facts: where a case is, and whether it is late. Painted in one
@@ -34,6 +28,17 @@ import type { PrPoFilter } from "@/hooks/usePrPo";
    follows the procurement sequence, so a column of pills shows the spread of
    the pipeline at a glance; lateness stays red/amber/green and nothing else
    on the row uses those three. */
+
+/* The procurement sequence, in order. The progress bar and "what is
+   holding this PR" both read off this: the furthest-behind item is the one
+   that decides when the requisition is finished. */
+const STAGE_ORDER = [
+  "UNASSIGNED", "ASSIGNED", "RFQ_ISSUED", "QUOTES_IN", "EVALUATION",
+  "NFA_PENDING", "NFA_APPROVED", "PO_CREATED", "PO_RELEASED", "RECEIVED",
+  "INVOICED", "PAID",
+] as const;
+const STAGE_AT = new Map(STAGE_ORDER.map((s, i) => [s as string, i]));
+const rank = (s: string) => STAGE_AT.get(s) ?? 0;
 
 const STAGE_TONE: Record<string, string> = {
   UNASSIGNED:   "bg-slate-100 text-slate-700 ring-slate-300 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-600",
@@ -50,6 +55,16 @@ const STAGE_TONE: Record<string, string> = {
   PAID:         "bg-slate-200 text-slate-600 ring-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:ring-slate-600",
 };
 
+/* The same progression as a solid fill, for the bar. */
+const STAGE_FILL: Record<string, string> = {
+  UNASSIGNED: "bg-slate-300 dark:bg-slate-600",
+  ASSIGNED: "bg-sky-400", RFQ_ISSUED: "bg-cyan-400", QUOTES_IN: "bg-teal-400",
+  EVALUATION: "bg-indigo-400", NFA_PENDING: "bg-violet-400",
+  NFA_APPROVED: "bg-fuchsia-400", PO_CREATED: "bg-amber-400",
+  PO_RELEASED: "bg-orange-400", RECEIVED: "bg-lime-500",
+  INVOICED: "bg-emerald-500", PAID: "bg-emerald-600",
+};
+
 const RAG_TONE: Record<string, string> = {
   red:     "bg-rose-50 text-rose-700 ring-rose-200 dark:bg-rose-950/50 dark:text-rose-300 dark:ring-rose-900",
   amber:   "bg-amber-50 text-amber-800 ring-amber-200 dark:bg-amber-950/50 dark:text-amber-300 dark:ring-amber-900",
@@ -59,6 +74,7 @@ const RAG_TONE: Record<string, string> = {
 const RAG_WORD: Record<string, string> = {
   red: "Overdue", amber: "Due soon", green: "On track", unknown: "No target",
 };
+const RAG_RANK: Record<string, number> = { red: 0, amber: 1, green: 2, unknown: 3 };
 
 function crore(v: number | null | undefined): string {
   if (v === null || v === undefined) return "—";
@@ -81,55 +97,192 @@ function shortDate(v: string | null | undefined): string {
     { day: "2-digit", month: "short", year: "2-digit" });
 }
 
-/* `pick` is what a header filter lists and matches on: the column's value as
-   a word, not as it is painted. Columns that are a number or a date are left
-   out -- a list of 2,190 distinct rupee figures is not a filter, and the
-   toolbar already carries the range controls those columns would want. */
-type Col = {
-  key: string;
-  pick?: (r: PrPoRow) => string;
-  head: string;
-  group: string;
-  sort?: string;               // row field to sort on, server's spelling
-  align?: "right";
-  core?: boolean;              // shown until the reader says otherwise
-  width?: string;
-  render: (r: PrPoRow) => React.ReactNode;
-};
-
 const Dash = () => <span className="text-slate-300 dark:text-slate-600">—</span>;
 const txt = (v: string | number | null | undefined) =>
   v === null || v === undefined || v === "" ? <Dash /> : <>{v}</>;
 
+/* ── one requisition ───────────────────────────────────────────────────
+   MONEY IS NOT SUMMED THE SAME WAY DOWN EVERY COLUMN, because SAP does not
+   record it at the same grain. po_value belongs to the line and adds up.
+   invoiced, paid and outstanding belong to the PURCHASE ORDER and are
+   repeated on each of its lines -- PR 1600003354 shows ₹76,095.80
+   outstanding against both of its items because that is one invoice, not
+   two. Adding those down the column reports ₹277 Cr against the register's
+   real ₹151 Cr, so they are counted once per PO. */
+interface PrGroup {
+  pr: string;
+  items: PrPoRow[];
+  lead: PrPoRow;          // the furthest-behind item: what is holding the PR
+  rag: string;            // the worst of them
+  age: number | null;     // the longest any item has sat in its stage
+  po_value: number | null;
+  invoiced: number | null;
+  paid: number | null;
+  outstanding: number | null;
+  pos: string[];
+  /* One of this PR's POs also sits on another PR. The invoice belongs to
+     the PO, so the figure on THIS row is right, but the column cannot be
+     added up -- 16 of the 523 POs here cover more than one requisition,
+     and totalling the column reports 153.93 Cr against the register's real
+     151.43 Cr. Marked rather than hidden: the reader needs the number, and
+     needs to know not to add it. */
+  shared: string[];
+  spread: { stage: string; n: number }[];
+}
+
+function oncePerPo(items: PrPoRow[], field: keyof PrPoRow): number | null {
+  const seen = new Set<string>();
+  let total = 0, any = false;
+  for (const r of items) {
+    const po = r.po_no;
+    if (po) { if (seen.has(po)) continue; seen.add(po); }
+    const v = r[field] as number | null | undefined;
+    if (v !== null && v !== undefined) { total += v; any = true; }
+  }
+  return any ? total : null;
+}
+
+function group(rows: PrPoRow[]): PrGroup[] {
+  const by = new Map<string, PrPoRow[]>();
+  const poPrs = new Map<string, Set<string>>();
+  for (const r of rows) {
+    const k = r.pr_number;
+    const list = by.get(k);
+    if (list) list.push(r); else by.set(k, [r]);
+    if (r.po_no) {
+      const set = poPrs.get(r.po_no);
+      if (set) set.add(k); else poPrs.set(r.po_no, new Set([k]));
+    }
+  }
+  const out: PrGroup[] = [];
+  for (const [pr, items] of by) {
+    const sorted = [...items].sort((a, b) =>
+      a.pr_item.localeCompare(b.pr_item, "en", { numeric: true }));
+    const lead = sorted.reduce((w, r) => rank(r.stage) < rank(w.stage) ? r : w, sorted[0]);
+    const ages = sorted.map((r) => r.stage_age_days).filter((v): v is number => v !== null);
+    const tally = new Map<string, number>();
+    for (const r of sorted) tally.set(r.stage, (tally.get(r.stage) ?? 0) + 1);
+    const vals = sorted.map((r) => r.po_value).filter((v): v is number => v !== null && v !== undefined);
+    const pos = [...new Set(sorted.map((r) => r.po_no).filter(Boolean) as string[])];
+    out.push({
+      pr, items: sorted, lead,
+      rag: sorted.reduce((w, r) =>
+        (RAG_RANK[r.rag] ?? 3) < (RAG_RANK[w] ?? 3) ? r.rag : w, "unknown"),
+      age: ages.length ? Math.max(...ages) : null,
+      po_value: vals.length ? vals.reduce((a, b) => a + b, 0) : null,
+      invoiced: oncePerPo(sorted, "invoiced_value"),
+      paid: oncePerPo(sorted, "paid_amount"),
+      outstanding: oncePerPo(sorted, "outstanding"),
+      pos,
+      shared: pos.filter((po) => (poPrs.get(po)?.size ?? 1) > 1),
+      spread: [...tally.entries()]
+        .sort((a, b) => rank(a[0]) - rank(b[0]))
+        .map(([stage, n]) => ({ stage, n })),
+    });
+  }
+  return out;
+}
+
+/* One value if every item agrees, otherwise null -- rendered as "3 values"
+   rather than silently showing the first, which would make a PR spread
+   across three cost centres look like it sat in one. */
+function same<T>(items: PrPoRow[], f: (r: PrPoRow) => T): T | null {
+  const set = new Set(items.map(f).filter((v) => v !== null && v !== undefined && v !== ""));
+  return set.size === 1 ? ([...set][0] as T) : null;
+}
+const Mixed = ({ n }: { n: number }) =>
+  <span className="text-[11px] italic text-slate-400">{n} values</span>;
+
+function many<T>(g: PrGroup, f: (r: PrPoRow) => T,
+                 draw: (v: T) => React.ReactNode): React.ReactNode {
+  const v = same(g.items, f);
+  if (v !== null) return draw(v);
+  const n = new Set(g.items.map(f).filter((x) => x !== null && x !== undefined && x !== "")).size;
+  return n === 0 ? <Dash /> : <Mixed n={n} />;
+}
+
+/* `pick` is what a header filter lists and matches on: the column's value as
+   a word, not as it is painted. Columns that are a number or a date are left
+   out -- a list of 2,190 distinct rupee figures is not a filter, and the
+   toolbar already carries the range controls those columns would want.
+
+   `agg` draws the PR row, `sortOn` orders PR rows. A column with neither
+   still shows on the item rows underneath. */
+type Col = {
+  key: string;
+  head: string;
+  group: string;
+  pick?: (r: PrPoRow) => string;
+  sort?: string;                       // item-level field, server's spelling
+  sortOn?: (g: PrGroup) => number | string | null;
+  align?: "right";
+  core?: boolean;
+  width?: string;
+  render: (r: PrPoRow) => React.ReactNode;
+  agg?: (g: PrGroup) => React.ReactNode;
+};
+
+const AgeBadge = ({ days, rag }: { days: number | null; rag: string }) => (
+  <span className={`inline-block whitespace-nowrap rounded-md px-1.5 py-0.5 text-[11px] font-medium ring-1 ${RAG_TONE[rag] ?? RAG_TONE.unknown}`}>
+    {days === null ? "—" : `${days}d`} · {RAG_WORD[rag] ?? "—"}
+  </span>
+);
+const StagePill = ({ stage, label }: { stage: string; label: string }) => (
+  <span className={`inline-block whitespace-nowrap rounded-md px-2 py-0.5 text-[11px] font-medium ring-1 ${STAGE_TONE[stage] ?? STAGE_TONE.UNASSIGNED}`}>
+    {label}
+  </span>
+);
+
 export const COLUMNS: Col[] = [
   { key: "age", head: "Age", group: "Status", sort: "stage_age_days", core: true, width: "w-28",
     pick: (r) => RAG_WORD[r.rag] ?? "—",
-    render: (r) => (
-      <span className={`inline-block whitespace-nowrap rounded-md px-1.5 py-0.5 text-[11px] font-medium ring-1 ${RAG_TONE[r.rag] ?? RAG_TONE.unknown}`}>
-        {r.stage_age_days === null ? "—" : `${r.stage_age_days}d`} · {RAG_WORD[r.rag] ?? "—"}
-      </span>) },
+    sortOn: (g) => g.age,
+    render: (r) => <AgeBadge days={r.stage_age_days} rag={r.rag} />,
+    agg: (g) => <AgeBadge days={g.age} rag={g.rag} /> },
+
   { key: "stage", head: "Stage", group: "Status", sort: "stage", core: true, width: "w-44",
     pick: (r) => r.stage_label ?? "",
-    render: (r) => (
-      <span className={`inline-block whitespace-nowrap rounded-md px-2 py-0.5 text-[11px] font-medium ring-1 ${STAGE_TONE[r.stage] ?? STAGE_TONE.UNASSIGNED}`}>
-        {r.stage_label}
-      </span>) },
+    sortOn: (g) => rank(g.lead.stage),
+    render: (r) => <StagePill stage={r.stage} label={r.stage_label} />,
+    agg: (g) => (
+      <div className="space-y-1">
+        <StagePill stage={g.lead.stage} label={g.lead.stage_label} />
+        {g.items.length > 1 && g.spread.length > 1 && (
+          <div className="text-[10px] text-slate-400">
+            + {g.items.length - (g.spread[0]?.n ?? 0)} further on
+          </div>)}
+      </div>) },
+
   { key: "next_action", head: "Next action", group: "Status", core: true, width: "w-52",
     pick: (r) => r.next_action ?? "",
-    render: (r) => <span className="text-[13px]">{txt(r.next_action)}</span> },
+    sortOn: (g) => g.lead.next_action ?? null,
+    render: (r) => <span className="text-[13px]">{txt(r.next_action)}</span>,
+    agg: (g) => <span className="text-[13px]">{txt(g.lead.next_action)}</span> },
+
   { key: "pending_with", head: "Pending with", group: "Status", sort: "pending_with", core: true, width: "w-44",
     pick: (r) => r.pending_with ?? "",
-    render: (r) => <span className="text-[13px]">{txt(r.pending_with)}</span> },
+    sortOn: (g) => g.lead.pending_with ?? null,
+    render: (r) => <span className="text-[13px]">{txt(r.pending_with)}</span>,
+    agg: (g) => <span className="text-[13px]">{txt(g.lead.pending_with)}</span> },
 
   { key: "requested_by", head: "Requested by", group: "Requester", core: true, width: "w-36",
     pick: (r) => r.requisitioner || r.created_by || "",
-    render: (r) => <span className="text-[13px]">{txt(r.requisitioner || r.created_by)}</span> },
+    sortOn: (g) => g.lead.requisitioner || g.lead.created_by || null,
+    render: (r) => <span className="text-[13px]">{txt(r.requisitioner || r.created_by)}</span>,
+    agg: (g) => many(g, (r) => r.requisitioner || r.created_by || "",
+                     (v) => <span className="text-[13px]">{txt(v)}</span>) },
+
   { key: "cost_center", head: "Cost centre", group: "Requester", width: "w-28",
     pick: (r) => r.cost_center ?? "",
-    render: (r) => <span className="text-[13px] tabular-nums">{txt(r.cost_center)}</span> },
+    render: (r) => <span className="text-[13px] tabular-nums">{txt(r.cost_center)}</span>,
+    agg: (g) => many(g, (r) => r.cost_center ?? "",
+                     (v) => <span className="text-[13px] tabular-nums">{txt(v)}</span>) },
+
   { key: "plant", head: "Plant", group: "Requester", width: "w-20",
     pick: (r) => r.plant ?? "",
-    render: (r) => <span className="text-[13px] tabular-nums">{txt(r.plant)}</span> },
+    render: (r) => <span className="text-[13px] tabular-nums">{txt(r.plant)}</span>,
+    agg: (g) => many(g, (r) => r.plant ?? "",
+                     (v) => <span className="text-[13px] tabular-nums">{txt(v)}</span>) },
 
   /* THE DEPARTMENT IS A TOOLTIP, NOT A SECOND LINE. "Spares parts,
      Planning & Contract Management" under every row of the same buyer is
@@ -139,36 +292,71 @@ export const COLUMNS: Col[] = [
      anybody cross-referencing SAP actually needs. */
   { key: "buyer", head: "Buyer", group: "SCM", sort: "buyer_name", core: true, width: "w-40",
     pick: (r) => r.buyer_name ?? "",
+    sortOn: (g) => g.lead.buyer_name ?? null,
     render: (r) => r.buyer_name ? (
       <div className="leading-tight"
            title={[r.buyer_name, r.buyer_department].filter(Boolean).join(" — ")}>
         <div className="truncate text-[13px]">{r.buyer_name}</div>
         {r.purchasing_group && (
           <div className="text-[11px] tabular-nums text-slate-400">{r.purchasing_group}</div>)}
-      </div>) : <Dash /> },
+      </div>) : <Dash />,
+    agg: (g) => many(g, (r) => r.buyer_name ?? "", (v) => (
+      <div className="leading-tight"
+           title={[v, g.lead.buyer_department].filter(Boolean).join(" — ")}>
+        <div className="truncate text-[13px]">{v}</div>
+        {g.lead.purchasing_group && (
+          <div className="text-[11px] tabular-nums text-slate-400">{g.lead.purchasing_group}</div>)}
+      </div>)) },
+
   { key: "pr_dates", head: "PR / released", group: "SCM", sort: "release_date", width: "w-32",
+    sortOn: (g) => g.lead.release_date ?? null,
     render: (r) => (
       <div className="leading-tight text-[12px] tabular-nums">
         <div>{shortDate(r.release_date)}</div>
         <div className="text-[11px] text-slate-500">raised {shortDate(r.pr_date)}</div>
+      </div>),
+    agg: (g) => (
+      <div className="leading-tight text-[12px] tabular-nums">
+        <div>{shortDate(g.lead.release_date)}</div>
+        <div className="text-[11px] text-slate-500">raised {shortDate(g.lead.pr_date)}</div>
       </div>) },
+
   { key: "pr_age", head: "PR age", group: "SCM", sort: "pr_age_days", align: "right", width: "w-20",
-    render: (r) => <span className="text-[13px] tabular-nums">{r.pr_age_days === null ? <Dash /> : `${r.pr_age_days}d`}</span> },
+    sortOn: (g) => g.lead.pr_age_days,
+    render: (r) => <span className="text-[13px] tabular-nums">{r.pr_age_days === null ? <Dash /> : `${r.pr_age_days}d`}</span>,
+    agg: (g) => <span className="text-[13px] tabular-nums">{g.lead.pr_age_days === null ? <Dash /> : `${g.lead.pr_age_days}d`}</span> },
+
   { key: "material", head: "Material group", group: "SCM", width: "w-40",
     pick: (r) => r.material_group ?? "",
-    render: (r) => <span className="text-[12px]">{txt(r.material_group)}</span> },
+    render: (r) => <span className="text-[12px]">{txt(r.material_group)}</span>,
+    agg: (g) => many(g, (r) => r.material_group ?? "",
+                     (v) => <span className="text-[12px]">{txt(v)}</span>) },
+
   { key: "qty", head: "Qty", group: "SCM", align: "right", width: "w-24",
     render: (r) => <span className="text-[13px] tabular-nums">
-      {r.quantity === null ? <Dash /> : `${r.quantity.toLocaleString("en-IN")} ${r.unit ?? ""}`}</span> },
+      {r.quantity === null ? <Dash /> : `${r.quantity.toLocaleString("en-IN")} ${r.unit ?? ""}`}</span>,
+    /* Not summed. Eighteen spares in four units of measure do not add up to
+       a number, and a figure that looks like one would be read as one. */
+    agg: (g) => <span className="text-[11px] italic text-slate-400">{g.items.length} items</span> },
 
   { key: "rfq", head: "RFQ", group: "Sourcing", width: "w-28",
     render: (r) => r.rfq_count ? (
       <div className="leading-tight text-[12px]">
         <div>{r.rfq_count} RFQ · {r.rfq_vendors ?? 0} vendors</div>
         <div className="text-[11px] text-slate-500">{shortDate(r.rfq_issued_at)}</div>
+      </div>) : <Dash />,
+    /* RFQ, quotes and the NFA are recorded against the requisition, so the
+       PR row shows them as they are rather than combining anything. */
+    agg: (g) => g.lead.rfq_count ? (
+      <div className="leading-tight text-[12px]">
+        <div>{g.lead.rfq_count} RFQ · {g.lead.rfq_vendors ?? 0} vendors</div>
+        <div className="text-[11px] text-slate-500">{shortDate(g.lead.rfq_issued_at)}</div>
       </div>) : <Dash /> },
+
   { key: "quotes", head: "Quotes", group: "Sourcing", align: "right", width: "w-20",
-    render: (r) => <span className="text-[13px] tabular-nums">{txt(r.quotation_count)}</span> },
+    render: (r) => <span className="text-[13px] tabular-nums">{txt(r.quotation_count)}</span>,
+    agg: (g) => <span className="text-[13px] tabular-nums">{txt(g.lead.quotation_count)}</span> },
+
   { key: "nfa", head: "NFA", group: "Sourcing", width: "w-40",
     pick: (r) => r.nfa_status ?? "",
     render: (r) => r.nfa_id ? (
@@ -178,38 +366,96 @@ export const COLUMNS: Col[] = [
           <div className="truncate text-[11px] text-slate-500">
             {r.approver_name}{r.nfa_pending_days !== null ? ` · ${r.nfa_pending_days}d` : ""}
           </div>)}
+      </div>) : <Dash />,
+    agg: (g) => g.lead.nfa_id ? (
+      <div className="leading-tight text-[12px]">
+        <div className="truncate">{g.lead.nfa_status ?? "—"}</div>
+        {g.lead.approver_name && (
+          <div className="truncate text-[11px] text-slate-500">
+            {g.lead.approver_name}{g.lead.nfa_pending_days !== null ? ` · ${g.lead.nfa_pending_days}d` : ""}
+          </div>)}
       </div>) : <Dash /> },
 
   { key: "po", head: "PO", group: "Order", sort: "po_date", core: true, width: "w-36",
     pick: (r) => r.po_no ?? "",
+    sortOn: (g) => g.lead.po_date ?? null,
     render: (r) => r.po_no ? (
       <div className="leading-tight">
         <div className="text-[13px] font-medium tabular-nums">{r.po_no}</div>
         <div className="text-[11px] text-slate-500">{shortDate(r.po_date)}</div>
-      </div>) : <Dash /> },
+      </div>) : <Dash />,
+    agg: (g) => g.pos.length === 0 ? <Dash /> : g.pos.length === 1 ? (
+      <div className="leading-tight">
+        <div className="text-[13px] font-medium tabular-nums">{g.pos[0]}</div>
+        <div className="text-[11px] text-slate-500">{shortDate(g.lead.po_date)}</div>
+      </div>) : (
+      <div className="leading-tight" title={g.pos.join(", ")}>
+        <div className="text-[13px] font-medium tabular-nums">{g.pos.length} POs</div>
+        <div className="truncate text-[11px] text-slate-500">{g.pos[0]} …</div>
+      </div>) },
+
   { key: "vendor", head: "Vendor", group: "Order", sort: "vendor", width: "w-48",
     pick: (r) => r.vendor ?? "",
-    render: (r) => <span className="text-[13px]">{txt(r.vendor)}</span> },
+    render: (r) => <span className="text-[13px]">{txt(r.vendor)}</span>,
+    agg: (g) => many(g, (r) => r.vendor ?? "",
+                     (v) => <span className="text-[13px]">{txt(v)}</span>) },
+
   { key: "po_value", head: "PO value", group: "Order", sort: "po_value", align: "right", core: true, width: "w-28",
-    render: (r) => <span className="text-[13px] tabular-nums" title={exact(r.po_value)}>{crore(r.po_value)}</span> },
+    sortOn: (g) => g.po_value,
+    render: (r) => <span className="text-[13px] tabular-nums" title={exact(r.po_value)}>{crore(r.po_value)}</span>,
+    agg: (g) => <span className="text-[13px] font-medium tabular-nums" title={exact(g.po_value)}>{crore(g.po_value)}</span> },
+
   { key: "delivery", head: "Delivery due", group: "Order", sort: "po_delivery_date", width: "w-28",
     render: (r) => r.po_delivery_date ? (
       <span className={`text-[12px] tabular-nums ${
         !r.delivery_complete && new Date(r.po_delivery_date) < new Date()
           ? "text-rose-600 dark:text-rose-400" : ""}`}>
         {shortDate(r.po_delivery_date)}{r.delivery_complete ? " ✓" : ""}
-      </span>) : <Dash /> },
+      </span>) : <Dash />,
+    /* The earliest outstanding date, because that is the one that slips
+       first. */
+    agg: (g) => {
+      const d = g.items.map((r) => r.po_delivery_date).filter(Boolean).sort()[0];
+      if (!d) return <Dash />;
+      return <span className={`text-[12px] tabular-nums ${
+        new Date(d) < new Date() ? "text-rose-600 dark:text-rose-400" : ""}`}>
+        {shortDate(d)}</span>;
+    } },
 
   { key: "invoiced", head: "Invoiced", group: "Payment", align: "right", width: "w-28",
-    render: (r) => <span className="text-[13px] tabular-nums" title={exact(r.invoiced_value)}>{crore(r.invoiced_value)}</span> },
+    render: (r) => <span className="text-[13px] tabular-nums" title={exact(r.invoiced_value)}>{crore(r.invoiced_value)}</span>,
+    sortOn: (g) => g.invoiced,
+    agg: (g) => <span className="text-[13px] tabular-nums" title={exact(g.invoiced)}>{crore(g.invoiced)}</span> },
+
   { key: "paid", head: "Paid", group: "Payment", align: "right", width: "w-28",
-    render: (r) => <span className="text-[13px] tabular-nums" title={exact(r.paid_amount)}>{crore(r.paid_amount)}</span> },
+    render: (r) => <span className="text-[13px] tabular-nums" title={exact(r.paid_amount)}>{crore(r.paid_amount)}</span>,
+    sortOn: (g) => g.paid,
+    agg: (g) => <span className="text-[13px] tabular-nums" title={exact(g.paid)}>{crore(g.paid)}</span> },
+
   { key: "outstanding", head: "Outstanding", group: "Payment", sort: "outstanding", align: "right", core: true, width: "w-32",
+    sortOn: (g) => g.outstanding,
     render: (r) => (r.outstanding ?? 0) > 0 ? (
       <span className={`text-[13px] font-medium tabular-nums ${
         r.overdue_payable ? "text-rose-600 dark:text-rose-400" : ""}`} title={exact(r.outstanding)}>
         {crore(r.outstanding)}
+      </span>) : <Dash />,
+    agg: (g) => (g.outstanding ?? 0) > 0 ? (
+      <span className={`text-[13px] font-medium tabular-nums ${
+        g.items.some((r) => r.overdue_payable) ? "text-rose-600 dark:text-rose-400" : ""}`}
+        title={[
+          exact(g.outstanding),
+          g.pos.length > 1 ? `across ${g.pos.length} POs` : "",
+          g.shared.length
+            ? `${g.shared.join(", ")} also covers another requisition, so this `
+              + `balance is shared and must not be added to other rows`
+            : "",
+        ].filter(Boolean).join(" — ")}>
+        {crore(g.outstanding)}
+        {g.shared.length > 0 && (
+          <span className="ml-0.5 align-super text-[9px] font-normal text-amber-600
+                           dark:text-amber-400">shared</span>)}
       </span>) : <Dash /> },
+
   { key: "due", head: "Due date", group: "Payment", sort: "due_date", width: "w-32",
     render: (r) => r.due_date ? (
       <span className={`text-[12px] tabular-nums ${r.overdue_payable ? "text-rose-600 dark:text-rose-400" : ""}`}>
@@ -219,10 +465,21 @@ export const COLUMNS: Col[] = [
       /* An unknown due date is not an overdue one -- say which it is rather
          than leaving a blank the reader will fill in with the worse guess. */
       <span className="text-[11px] text-slate-500" title={r.payment_terms_desc ?? ""}>terms not stated</span>
-    ) : <Dash /> },
+    ) : <Dash />,
+    agg: (g) => {
+      const d = g.items.map((r) => r.due_date).filter(Boolean).sort()[0];
+      if (!d) return (g.outstanding ?? 0) > 0
+        ? <span className="text-[11px] text-slate-500">terms not stated</span> : <Dash />;
+      return <span className={`text-[12px] tabular-nums ${
+        g.items.some((r) => r.overdue_payable) ? "text-rose-600 dark:text-rose-400" : ""}`}>
+        {shortDate(d)}</span>;
+    } },
+
   { key: "terms", head: "Payment terms", group: "Payment", width: "w-44",
     pick: (r) => r.payment_terms_desc ?? "",
-    render: (r) => <span className="text-[12px]">{txt(r.payment_terms_desc)}</span> },
+    render: (r) => <span className="text-[12px]">{txt(r.payment_terms_desc)}</span>,
+    agg: (g) => many(g, (r) => r.payment_terms_desc ?? "",
+                     (v) => <span className="text-[12px]">{txt(v)}</span>) },
 ];
 
 const GROUPS = ["Status", "Requester", "SCM", "Sourcing", "Order", "Payment"];
@@ -237,10 +494,8 @@ const BLANK = "(blank)";
 
 /* Rows are drawn a screenful at a time. The whole set is sorted and
    filtered -- the cap is on what reaches the DOM, not on what is
-   considered -- because 2,190 rows of twenty-four cells is 52,000 nodes and
-   the browser spends longer laying them out than the database spent
-   finding them. */
-const PAGE = 200;
+   considered. */
+const PAGE = 100;
 
 /* Missing values sort last in BOTH directions.
    The obvious comparator gets this wrong: making the key `[isNull, value]`
@@ -248,34 +503,59 @@ const PAGE = 200;
    puts every empty row at the top and the column looks unsorted. Absent is
    not large and not small; it belongs at the end whichever way the column
    points, so the blanks are held aside and only the real values ordered. */
-function sortRows(rows: PrPoRow[], field: string, desc: boolean): PrPoRow[] {
-  const has: PrPoRow[] = [];
-  const missing: PrPoRow[] = [];
-  for (const r of rows) {
-    const v = (r as unknown as Record<string, unknown>)[field];
-    (v === null || v === undefined || v === "" ? missing : has).push(r);
+function sortBySelector<T>(xs: T[], of: (x: T) => number | string | null | undefined,
+                           desc: boolean): T[] {
+  const has: T[] = [], missing: T[] = [];
+  for (const x of xs) {
+    const v = of(x);
+    (v === null || v === undefined || v === "" ? missing : has).push(x);
   }
   const dir = desc ? -1 : 1;
   has.sort((a, b) => {
-    const x = (a as unknown as Record<string, unknown>)[field];
-    const y = (b as unknown as Record<string, unknown>)[field];
+    const x = of(a), y = of(b);
     if (typeof x === "number" && typeof y === "number") return (x - y) * dir;
     return String(x).localeCompare(String(y), "en", { numeric: true }) * dir;
   });
   return [...has, ...missing];
 }
 
+/* ── how far this requisition has got ───────────────────────────────────
+   A segment per item, laid out in stage order and coloured by stage, so
+   the bar shows both how far the PR has travelled and how far apart its
+   items are. One item that never left the starting line is visible as a
+   grey segment on an otherwise green bar, which is exactly the case a
+   single "percent complete" number would hide. */
+function Progress({ g }: { g: PrGroup }) {
+  const n = g.items.length;
+  return (
+    <div className="mt-1 flex h-1.5 w-full gap-px overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"
+         title={g.spread.map((s) =>
+           `${s.n} × ${g.items.find((r) => r.stage === s.stage)?.stage_label ?? s.stage}`).join(" · ")}>
+      {g.spread.map((s) => (
+        <div key={s.stage} style={{ width: `${(s.n / n) * 100}%` }}
+             className={STAGE_FILL[s.stage] ?? "bg-slate-300"} />
+      ))}
+    </div>
+  );
+}
+
 /* ── the Excel-style column filter ──────────────────────────────────────
-   A funnel on the heading opens the list of values actually present in
-   that column, each with a tick. Like Excel, the list is built from the
-   rows the OTHER filters have already allowed, so it never offers a value
-   that would return nothing, and a long list has its own search box. */
+   A funnel on the heading opens the values actually present in that
+   column, each with a tick and a count. The list is built from the rows
+   the OTHER filters have already allowed, so it never offers a value that
+   would return nothing -- which is what makes the counts worth reading.
+
+   "Select all" is a real tri-state box: ticked when nothing is filtered,
+   and clicking it clears every tick so you can pick one or two out of
+   thirty-four rather than unticking thirty-two. An empty selection shows
+   no rows, as it does in Excel -- it does not quietly mean "no filter",
+   which is the bug the first version had. */
 function ColumnFilter({
   col, values, chosen, onChange,
 }: {
   col: Col;
   values: { v: string; n: number }[];
-  chosen: Set<string> | undefined;
+  chosen: Set<string> | undefined;     // undefined = unfiltered; empty = none
   onChange: (next: Set<string> | undefined) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -301,7 +581,11 @@ function ColumnFilter({
     return n ? values.filter((x) => x.v.toLowerCase().includes(n)) : values;
   }, [values, needle]);
 
-  const on = Boolean(chosen?.size);
+  const on = chosen !== undefined;
+  const allTicked = !on;
+  const noneTicked = on && chosen.size === 0;
+
+  const ticked = (v: string) => !chosen || chosen.has(v);
   const flip = (v: string) => {
     const next = new Set(chosen ?? values.map((x) => x.v));
     next.has(v) ? next.delete(v) : next.add(v);
@@ -314,7 +598,7 @@ function ColumnFilter({
       <button
         onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
         aria-label={`Filter ${col.head}`}
-        title={on ? `${chosen!.size} of ${values.length} selected` : `Filter ${col.head}`}
+        title={on ? `${chosen.size} of ${values.length} selected` : `Filter ${col.head}`}
         className={`ml-1 inline-flex h-4 w-4 items-center justify-center rounded
           ${on ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
                : "text-slate-400 opacity-0 hover:bg-slate-200 group-hover/th:opacity-100 dark:hover:bg-slate-700"}`}>
@@ -324,7 +608,7 @@ function ColumnFilter({
       {open && (
         <div
           onClick={(e) => e.stopPropagation()}
-          className="absolute left-0 z-30 mt-1 w-60 rounded-lg border border-slate-200 bg-white
+          className="absolute left-0 z-40 mt-1 w-64 rounded-lg border border-slate-200 bg-white
                      p-2 text-left shadow-xl dark:border-slate-700 dark:bg-slate-900">
           <input
             autoFocus value={needle} onChange={(e) => setNeedle(e.target.value)}
@@ -333,38 +617,62 @@ function ColumnFilter({
                        font-normal normal-case tracking-normal focus:border-slate-500
                        focus:outline-none dark:border-slate-700 dark:bg-slate-950" />
 
-          <div className="mb-1 flex items-center justify-between px-0.5 text-[11px] font-normal normal-case tracking-normal">
-            <button onClick={() => onChange(undefined)}
-                    className="text-sky-700 hover:underline dark:text-sky-400">Select all</button>
-            <button onClick={() => onChange(new Set(list.map((x) => x.v)))}
-                    className="text-sky-700 hover:underline dark:text-sky-400">
-              Only these ({list.length})
-            </button>
-          </div>
+          {/* the tri-state box: tick to take everything, untick to take none */}
+          <button
+            onClick={() => onChange(allTicked ? new Set<string>() : undefined)}
+            className="mb-1 flex w-full items-center gap-2 rounded px-1 py-1 text-left text-[12px]
+                       font-semibold normal-case tracking-normal hover:bg-slate-100
+                       dark:hover:bg-slate-800">
+            <span className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border
+              ${allTicked ? "border-slate-900 bg-slate-900 text-white dark:border-white dark:bg-white dark:text-slate-900"
+                : noneTicked ? "border-slate-300 dark:border-slate-600"
+                : "border-slate-900 bg-slate-900 dark:border-white dark:bg-white"}`}>
+              {allTicked && <Check className="h-2.5 w-2.5" />}
+              {!allTicked && !noneTicked && (
+                <span className="h-[2px] w-2 rounded bg-white dark:bg-slate-900" />)}
+            </span>
+            Select all
+            <span className="ml-auto font-normal text-slate-400">{values.length}</span>
+          </button>
 
-          <div className="max-h-56 overflow-y-auto">
-            {list.map(({ v, n }) => {
-              const ticked = !chosen || chosen.has(v);
-              return (
-                <button key={v} onClick={() => flip(v)}
-                  className="flex w-full items-center gap-2 rounded px-1 py-0.5 text-left
-                             text-[12px] font-normal normal-case tracking-normal
-                             hover:bg-slate-100 dark:hover:bg-slate-800">
-                  <span className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border
-                    ${ticked ? "border-slate-900 bg-slate-900 text-white dark:border-white dark:bg-white dark:text-slate-900"
-                             : "border-slate-300 dark:border-slate-600"}`}>
-                    {ticked && <Check className="h-2.5 w-2.5" />}
-                  </span>
-                  <span className="flex-1 truncate" title={v}>{v}</span>
-                  <span className="shrink-0 tabular-nums text-slate-400">{n}</span>
-                </button>
-              );
-            })}
+          {needle.trim() && (
+            <button onClick={() => onChange(new Set(list.map((x) => x.v)))}
+              className="mb-1 w-full rounded px-1 py-0.5 text-left text-[11px] font-normal
+                         normal-case tracking-normal text-sky-700 hover:bg-slate-100
+                         dark:text-sky-400 dark:hover:bg-slate-800">
+              Only the {list.length} matching
+            </button>
+          )}
+
+          <div className="max-h-56 overflow-y-auto border-t border-slate-100 pt-1 dark:border-slate-800">
+            {list.map(({ v, n }) => (
+              <button key={v} onClick={() => flip(v)}
+                className="flex w-full items-center gap-2 rounded px-1 py-0.5 text-left
+                           text-[12px] font-normal normal-case tracking-normal
+                           hover:bg-slate-100 dark:hover:bg-slate-800">
+                <span className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border
+                  ${ticked(v) ? "border-slate-900 bg-slate-900 text-white dark:border-white dark:bg-white dark:text-slate-900"
+                              : "border-slate-300 dark:border-slate-600"}`}>
+                  {ticked(v) && <Check className="h-2.5 w-2.5" />}
+                </span>
+                <span className="flex-1 truncate" title={v}>{v}</span>
+                <span className="shrink-0 tabular-nums text-slate-400">{n}</span>
+              </button>
+            ))}
             {!list.length && (
               <div className="px-1 py-2 text-[12px] font-normal normal-case text-slate-400">
                 No matching values.
               </div>)}
           </div>
+
+          {on && (
+            <button onClick={() => { onChange(undefined); setNeedle(""); }}
+              className="mt-1 w-full rounded border border-slate-200 px-1 py-1 text-[11px]
+                         font-normal normal-case tracking-normal hover:bg-slate-50
+                         dark:border-slate-700 dark:hover:bg-slate-800">
+              Clear this filter
+            </button>
+          )}
         </div>
       )}
     </span>
@@ -385,14 +693,12 @@ export default function PrPoRegisterTable({
   const [typed, setTyped] = useState(filter.q ?? "");
   const [picker, setPicker] = useState(false);
   const [cuts, setCuts] = useState<Record<string, Set<string>>>({});
-  const [sort, setSort] = useState<{ field: string; desc: boolean } | null>(null);
+  const [sort, setSort] = useState<{ key: string; desc: boolean } | null>(null);
   const [page, setPage] = useState(PAGE);
+  const [open, setOpen] = useState<Set<string>>(new Set());
   const [hidden, setHidden] = useState<Set<string>>(
     () => new Set(COLUMNS.filter((c) => !c.core).map((c) => c.key)));
 
-  // The free-text box is applied as it is typed now that nothing waits on a
-  // server; the committed value still lives in `filter.q` so the panels above
-  // and the Clear button keep working.
   useEffect(() => setTyped(filter.q ?? ""), [filter.q]);
 
   const cols = useMemo(() => COLUMNS.filter((c) => !hidden.has(c.key)), [hidden]);
@@ -419,11 +725,10 @@ export default function PrPoRegisterTable({
     });
   }, [rows, typed, filter.to, filter.stage, filter.rag, filter.owner, filter.buyer]);
 
-  /* Each column's tick-list is built from the rows the OTHER columns allow,
-     so a value is never offered that would empty the table -- which is what
-     Excel does and what makes the counts beside each value mean something. */
+  /* A filter is live as soon as the column HAS a selection, empty included:
+     unticking everything means "show none", not "show all". */
   const passes = useMemo(() => {
-    const live = Object.entries(cuts).filter(([, s]) => s && s.size);
+    const live = Object.entries(cuts);
     return (r: PrPoRow, skip?: string) => live.every(([k, s]) => {
       if (k === skip) return true;
       const c = COLUMNS.find((x) => x.key === k);
@@ -449,37 +754,52 @@ export default function PrPoRegisterTable({
     return out;
   }, [broad, cols, passes]);
 
-  const shown = useMemo(() => {
-    const kept = broad.filter((r) => passes(r));
-    return sort ? sortRows(kept, sort.field, sort.desc) : kept;
-  }, [broad, passes, sort]);
+  const kept = useMemo(() => broad.filter((r) => passes(r)), [broad, passes]);
 
-  // A narrower result should start from the top, not halfway down a list
-  // the reader has scrolled past.
-  useEffect(() => { setPage(PAGE); }, [shown.length, sort]);
+  const groups = useMemo(() => {
+    const gs = group(kept);
+    if (sort) {
+      const col = COLUMNS.find((c) => c.key === sort.key);
+      if (col?.sortOn) return sortBySelector(gs, col.sortOn, sort.desc);
+      return gs;
+    }
+    /* WORST FIRST. A register sorted newest-first opens on the healthiest
+       rows and answers "is anything wrong?" with "no" by accident of
+       ordering. Overdue first, then longest stuck. */
+    return [...gs].sort((a, b) =>
+      (RAG_RANK[a.rag] ?? 3) - (RAG_RANK[b.rag] ?? 3) || (b.age ?? 0) - (a.age ?? 0));
+  }, [kept, sort]);
 
-  const cutCount = Object.values(cuts).filter((s) => s && s.size).length;
+  useEffect(() => { setPage(PAGE); }, [groups.length, sort]);
+
+  const cutCount = Object.keys(cuts).length;
   const active = Boolean(filter.q || typed || filter.stage || filter.rag
                          || filter.owner || filter.buyer || filter.to || cutCount);
 
-  const toggle = (key: string) =>
+  const toggleCol = (key: string) =>
     setHidden((h) => { const n = new Set(h); n.has(key) ? n.delete(key) : n.add(key); return n; });
 
-  const sortBy = (field?: string) => {
-    if (!field) return;
-    setSort((s) => s?.field === field
-      ? (s.desc ? { field, desc: false } : null)   // desc → asc → off
-      : { field, desc: true });
+  const toggleRow = (pr: string) =>
+    setOpen((o) => { const n = new Set(o); n.has(pr) ? n.delete(pr) : n.add(pr); return n; });
+
+  const sortBy = (c: Col) => {
+    if (!c.sortOn) return;
+    setSort((s) => s?.key === c.key
+      ? (s.desc ? { key: c.key, desc: false } : null)   // desc → asc → off
+      : { key: c.key, desc: true });
   };
 
-  const SortIcon = ({ field }: { field?: string }) => {
-    if (!field) return null;
-    if (sort?.field !== field)
+  const SortIcon = ({ c }: { c: Col }) => {
+    if (!c.sortOn) return null;
+    if (sort?.key !== c.key)
       return <ChevronsUpDown className="ml-1 inline h-3 w-3 opacity-25" />;
     return sort.desc
       ? <ArrowDown className="ml-1 inline h-3 w-3" />
       : <ArrowUp className="ml-1 inline h-3 w-3" />;
   };
+
+  const shownGroups = groups.slice(0, page);
+  const allOpen = shownGroups.length > 0 && shownGroups.every((g) => open.has(g.pr));
 
   return (
     <section className="space-y-2">
@@ -535,11 +855,11 @@ export default function PrPoRegisterTable({
           {picker && (
             <div className="absolute right-0 z-20 mt-1 max-h-80 w-60 overflow-y-auto rounded-lg border
                             border-slate-200 bg-white p-2 shadow-lg dark:border-slate-700 dark:bg-slate-900">
-              {GROUPS.map((g) => (
-                <div key={g} className="mb-1">
-                  <div className="px-1 py-0.5 text-[10px] uppercase tracking-wide text-slate-400">{g}</div>
-                  {COLUMNS.filter((c) => c.group === g).map((c) => (
-                    <button key={c.key} onClick={() => toggle(c.key)}
+              {GROUPS.map((gname) => (
+                <div key={gname} className="mb-1">
+                  <div className="px-1 py-0.5 text-[10px] uppercase tracking-wide text-slate-400">{gname}</div>
+                  {COLUMNS.filter((c) => c.group === gname).map((c) => (
+                    <button key={c.key} onClick={() => toggleCol(c.key)}
                       className="flex w-full items-center gap-2 rounded px-1 py-0.5 text-left text-[12px]
                                  hover:bg-slate-100 dark:hover:bg-slate-800">
                       <span className={`flex h-3.5 w-3.5 items-center justify-center rounded border
@@ -555,6 +875,13 @@ export default function PrPoRegisterTable({
             </div>
           )}
         </div>
+
+        <button
+          onClick={() => setOpen(allOpen ? new Set() : new Set(shownGroups.map((g) => g.pr)))}
+          className="rounded-md border border-slate-300 px-2 py-1 text-[12px]
+                     hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">
+          {allOpen ? "Collapse all" : "Expand all"}
+        </button>
 
         {cutCount > 0 && (
           <button onClick={() => setCuts({})}
@@ -575,9 +902,8 @@ export default function PrPoRegisterTable({
 
         <span className="ml-auto text-xs tabular-nums text-slate-500">
           {loading ? "loading…"
-            : shown.length === rows.length
-              ? `${rows.length.toLocaleString("en-IN")} items`
-              : `${shown.length.toLocaleString("en-IN")} of ${rows.length.toLocaleString("en-IN")}`}
+            : `${groups.length.toLocaleString("en-IN")} PRs · ${kept.length.toLocaleString("en-IN")} items`}
+          {kept.length !== rows.length && ` of ${rows.length.toLocaleString("en-IN")}`}
         </span>
       </div>
 
@@ -587,20 +913,20 @@ export default function PrPoRegisterTable({
           <thead>
             <tr className="bg-slate-50 dark:bg-slate-800">
               {/* pinned: a row forty columns wide must never lose its name */}
-              <th className="sticky left-0 z-10 w-56 bg-slate-50 px-3 py-2 text-left text-[10px]
+              <th className="sticky left-0 z-10 w-64 bg-slate-50 px-3 py-2 text-left text-[10px]
                              font-semibold uppercase tracking-wider text-slate-500
                              dark:bg-slate-800">
-                PR / item &amp; requirement
+                Requisition &amp; progress
               </th>
               {cols.map((c) => (
                 <th key={c.key}
-                    onClick={() => sortBy(c.sort)}
+                    onClick={() => sortBy(c)}
                     className={`group/th ${c.width ?? ""} whitespace-nowrap px-3 py-2 text-[10px]
                       font-semibold uppercase tracking-wider text-slate-500
                       ${c.align === "right" ? "text-right" : "text-left"}
-                      ${c.sort ? "cursor-pointer select-none hover:text-slate-900 dark:hover:text-white" : ""}`}>
+                      ${c.sortOn ? "cursor-pointer select-none hover:text-slate-900 dark:hover:text-white" : ""}`}>
                   {c.head}
-                  <SortIcon field={c.sort} />
+                  <SortIcon c={c} />
                   {c.pick && (
                     <ColumnFilter
                       col={c}
@@ -616,32 +942,73 @@ export default function PrPoRegisterTable({
               ))}
             </tr>
           </thead>
+
           <tbody>
-            {shown.slice(0, page).map((r, i) => (
-              <tr key={`${r.pr_number}-${r.pr_item}`}
-                  className={`group border-t border-slate-100 align-top dark:border-slate-800
-                    ${i % 2 ? "bg-slate-50/40 dark:bg-slate-900/40" : ""}
-                    hover:bg-sky-50/60 dark:hover:bg-sky-950/20`}>
-                <td className={`sticky left-0 z-10 px-3 py-2
-                  ${i % 2 ? "bg-slate-50 dark:bg-slate-900" : "bg-white dark:bg-slate-950"}
-                  group-hover:bg-sky-50 dark:group-hover:bg-sky-950/40`}>
-                  <div className="text-[13px] font-semibold tabular-nums">
-                    {r.pr_number}<span className="font-normal text-slate-400">/{r.pr_item}</span>
-                  </div>
-                  <div className="line-clamp-2 text-[12px] leading-snug text-slate-600 dark:text-slate-400"
-                       title={r.description ?? ""}>
-                    {r.description || <Dash />}
-                  </div>
-                </td>
-                {cols.map((c) => (
-                  <td key={c.key}
-                      className={`px-3 py-2 ${c.align === "right" ? "text-right" : ""}`}>
-                    {c.render(r)}
-                  </td>
-                ))}
-              </tr>
-            ))}
-            {!shown.length && !loading && (
+            {shownGroups.map((g, i) => {
+              const isOpen = open.has(g.pr);
+              const zebra = i % 2 ? "bg-slate-50/40 dark:bg-slate-900/40" : "";
+              const stick = i % 2 ? "bg-slate-50 dark:bg-slate-900" : "bg-white dark:bg-slate-950";
+              return (
+                <Fragment key={g.pr}>
+                  <tr onClick={() => toggleRow(g.pr)}
+                      className={`group cursor-pointer border-t border-slate-200 align-top
+                        dark:border-slate-700 ${zebra}
+                        hover:bg-sky-50/60 dark:hover:bg-sky-950/20`}>
+                    <td className={`sticky left-0 z-10 px-3 py-2 ${stick}
+                      group-hover:bg-sky-50 dark:group-hover:bg-sky-950/40`}>
+                      <div className="flex items-start gap-1.5">
+                        <ChevronRight
+                          className={`mt-[3px] h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform
+                                      ${isOpen ? "rotate-90" : ""}`} />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-baseline gap-1.5">
+                            <span className="text-[13px] font-semibold tabular-nums">{g.pr}</span>
+                            <span className="text-[11px] text-slate-400">
+                              {g.items.length} item{g.items.length > 1 ? "s" : ""}
+                            </span>
+                          </div>
+                          <div className="line-clamp-1 text-[12px] leading-snug text-slate-600 dark:text-slate-400"
+                               title={g.items.map((r) => r.description).filter(Boolean).join(" · ")}>
+                            {g.lead.description || <Dash />}
+                          </div>
+                          <Progress g={g} />
+                        </div>
+                      </div>
+                    </td>
+                    {cols.map((c) => (
+                      <td key={c.key}
+                          className={`px-3 py-2 ${c.align === "right" ? "text-right" : ""}`}>
+                        {c.agg ? c.agg(g) : <Dash />}
+                      </td>
+                    ))}
+                  </tr>
+
+                  {isOpen && g.items.map((r) => (
+                    <tr key={`${g.pr}-${r.pr_item}`}
+                        className="group/i border-t border-slate-100 bg-sky-50/30 align-top
+                                   text-slate-700 dark:border-slate-800 dark:bg-sky-950/10
+                                   dark:text-slate-300">
+                      <td className="sticky left-0 z-10 bg-sky-50 px-3 py-1.5 pl-8 dark:bg-sky-950/30">
+                        <div className="text-[12px] font-medium tabular-nums text-slate-500">
+                          item {r.pr_item}
+                        </div>
+                        <div className="line-clamp-2 text-[12px] leading-snug"
+                             title={r.description ?? ""}>
+                          {r.description || <Dash />}
+                        </div>
+                      </td>
+                      {cols.map((c) => (
+                        <td key={c.key}
+                            className={`px-3 py-1.5 ${c.align === "right" ? "text-right" : ""}`}>
+                          {c.render(r)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </Fragment>
+              );
+            })}
+            {!groups.length && !loading && (
               <tr><td colSpan={cols.length + 1} className="px-3 py-10 text-center text-sm text-slate-500">
                 Nothing matches these filters.
               </td></tr>
@@ -650,20 +1017,20 @@ export default function PrPoRegisterTable({
         </table>
       </div>
 
-      {shown.length > page && (
+      {groups.length > page && (
         <div className="flex items-center justify-center gap-3 pt-1">
           <span className="text-xs tabular-nums text-slate-500">
-            showing {page.toLocaleString("en-IN")} of {shown.length.toLocaleString("en-IN")}
+            showing {page.toLocaleString("en-IN")} of {groups.length.toLocaleString("en-IN")} PRs
           </span>
           <button onClick={() => setPage((p) => p + PAGE * 2)}
             className="rounded-md border border-slate-300 px-3 py-1 text-[12px]
                        hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">
             Show more
           </button>
-          <button onClick={() => setPage(shown.length)}
+          <button onClick={() => setPage(groups.length)}
             className="rounded-md border border-slate-300 px-3 py-1 text-[12px]
                        hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">
-            Show all {shown.length.toLocaleString("en-IN")}
+            Show all {groups.length.toLocaleString("en-IN")}
           </button>
         </div>
       )}
