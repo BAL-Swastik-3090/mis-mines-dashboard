@@ -14,6 +14,25 @@ from app.database import test_connection, idle_connection_reaper, engine, pool_s
 
 settings = get_settings()
 
+# ── THE LOG MUST NOT CARE WHAT THE CONSOLE'S CODE PAGE IS ──────────────────
+# Several log lines carry a tick or a warning sign. On a Windows console
+# running cp1252 -- which is every developer machine here -- writing one
+# raises UnicodeEncodeError inside the logging handler, and the first thing
+# any run printed was a traceback for "Database connected" having succeeded.
+#
+# It is noise, but noise at start-up is expensive: it sat in the log for
+# days being dismissed as cosmetic, and while it was there nobody read the
+# start-up lines closely enough to notice a reload that had announced
+# itself and never finished. Make the stream UTF-8 and the question does
+# not arise. errors="replace" so an exotic character still never costs a
+# log line. In the container stdout is already UTF-8 and this changes
+# nothing.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+    except (AttributeError, ValueError, OSError):
+        pass
+
 # ── THE SERVICE'S OWN LOG HAS TO REACH THE CONTAINER LOG ───────────────────
 # There was no logging configuration at all, so the root logger kept its
 # default of WARNING with no handler and every logger.info in this application

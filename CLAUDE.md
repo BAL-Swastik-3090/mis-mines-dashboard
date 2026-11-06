@@ -58,6 +58,35 @@ the live schema, do nothing because they are `IF NOT EXISTS`, and the
 comparison then passes judgement on an empty scratch schema and returns a
 confident PASS that means nothing. Assert the table count went up first.
 
+## `--reload` lies on this machine. Restart the backend yourself.
+
+uvicorn's reloader does not reliably complete a reload on Windows here. It
+logs `WatchFiles detected changes ... Reloading...`, the new worker never
+finishes starting, **no `Application startup complete` follows** — and the
+OLD worker keeps answering requests, with 200s in the log the whole time.
+There is no error. The server simply serves yesterday's code while telling
+you it reloaded.
+
+This has already cost one round trip: a summary panel was rewritten,
+verified in a fresh Python process, and shipped — and the screen still
+showed the old figures because the running server had never picked the
+change up.
+
+So: start the backend **without** `--reload` and restart it after any
+backend edit. And when you verify, check the two startup lines are there
+*after* the restart:
+
+```
+INFO:     Started server process [...]
+INFO:     Application startup complete.
+```
+
+A reload line with no startup line after it means nothing was reloaded.
+
+**Verifying in a fresh `python` process is not verifying the server.** It
+proves the file is right, not that the process serving the page has it.
+Either restart first, or check the response the browser actually received.
+
 ## Related
 
 - Migrations are applied by hand by a DBA role, not by the application. The
