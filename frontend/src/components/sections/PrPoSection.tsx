@@ -80,6 +80,23 @@ const PANEL_H3 = "text-sm font-semibold";
 
 function Dash() { return <span className="text-slate-400">—</span>; }
 
+/* EVERY PANEL IN A ROW IS THE SAME FIXED HEIGHT, and whatever does not fit
+   scrolls inside it.
+
+   Letting them size to their contents went wrong twice in opposite
+   directions. A list in a fixed box inside a card the grid had stretched
+   left the bottom half of the card blank and the list looked truncated.
+   Letting the list set the height instead pushed the row to the tallest
+   list on it -- 34 requesters -- and a screen meant to be read at a glance
+   became a thing to scroll past.
+
+   A fixed box is the honest answer: the row stays the size of a glance,
+   and a list longer than it says so with a scrollbar. Only below xl, where
+   the panels stack one per row and there is nothing to line up with, do
+   they size to their contents. */
+const PANEL = "flex min-w-0 flex-col xl:h-[25rem]";
+const PANEL_BODY = "min-h-0 flex-1 overflow-y-auto pr-1 scrollbar-thin";
+
 /* A hover card, in place of the browser's own tooltip.
    The native one waits a second, wraps where it likes, cannot be styled and
    renders in the operating system's font at the pointer -- which on a row
@@ -168,6 +185,10 @@ export default function PrPoSection() {
      a real question, where stage-and-owner together is not. */
   const setRequester = (v: string | undefined) => patch({ requester: v });
   const requester = filter.requester;
+
+  const [reqFind, setReqFind] = useState("");
+  const shownRequesters = (summary.data?.by_requester ?? []).filter((q) =>
+    q.requester.toLowerCase().includes(reqFind.trim().toLowerCase()));
 
   if (summary.isError) {
     const status = (summary.error as { response?: { status?: number } })?.response?.status;
@@ -284,12 +305,12 @@ export default function PrPoSection() {
 
       {/* ── where the work is, who holds it, how old it is ────────────── */}
       <div className="grid gap-4 xl:grid-cols-[1.35fr_1fr_1fr]">
-        <section className={`${CARD} min-w-0 p-4`}>
+        <section className={`${CARD} ${PANEL} p-4`}>
           <div className="mb-3 flex items-baseline justify-between gap-2">
             <h3 className={PANEL_H3}>Where the work is pending</h3>
             <span className="text-[11px] text-slate-500">requisitions · click to filter</span>
           </div>
-          <div className="space-y-1">
+          <div className={`${PANEL_BODY} space-y-1`}>
             {PIPELINE.map(({ stage: code, label }) => {
               const b = byStage.get(code);
               const count = b?.count ?? 0;
@@ -327,7 +348,7 @@ export default function PrPoSection() {
           </div>
         </section>
 
-        <section className={`${CARD} flex min-w-0 flex-col p-4`}>
+        <section className={`${CARD} ${PANEL} p-4`}>
           <div className="mb-3 flex items-baseline justify-between gap-2">
             <h3 className={PANEL_H3}>Pending with</h3>
             <span className="text-[11px] text-slate-500">
@@ -339,7 +360,7 @@ export default function PrPoSection() {
               worse than no list: the desks that fall below the cut are
               exactly the ones nobody is watching, and the panel gave no
               sign they existed. */}
-          <ul className="min-h-0 flex-1 space-y-0.5 overflow-y-auto pr-1 scrollbar-thin">
+          <ul className={`${PANEL_BODY} space-y-0.5`}>
             {(s?.by_owner ?? []).map((o: PrPoOwnerBucket) => {
               const active = owner === o.owner;
               return (
@@ -368,7 +389,7 @@ export default function PrPoSection() {
           </ul>
         </section>
 
-        <section className={`${CARD} min-w-0 p-4`}>
+        <section className={`${CARD} ${PANEL} p-4`}>
           <h3 className={`${PANEL_H3} mb-1`}>Ageing</h3>
           <p className="mb-3 text-[11px] text-slate-500">
             requisitions, by how long the holding item has sat in its stage
@@ -398,14 +419,16 @@ export default function PrPoSection() {
 
       {/* ── buyers, requesters, approvers, money ──────────────────────── */}
       <div className="grid gap-4 xl:grid-cols-[1.2fr_1fr_1fr_1fr]">
-        <section className={`${CARD} min-w-0 p-4`}>
+        <section className={`${CARD} ${PANEL} p-4`}>
           <h3 className={`${PANEL_H3} mb-1`}>Buyer workload</h3>
           <p className="mb-2 text-[11px] text-slate-500">
             requisitions at procurement stages only · median, not mean — one
             two-year-old item would drag a mean until every desk looked alike
           </p>
+          <div className={PANEL_BODY}>
           <table className="w-full text-xs">
-            <thead className="text-left text-[10px] uppercase text-slate-500">
+            <thead className="sticky top-0 bg-white text-left text-[10px] uppercase
+                              text-slate-500 dark:bg-slate-900">
               <tr><th className="py-1">Buyer</th><th className="text-right">PRs</th>
                   <th className="text-right">Late</th><th className="text-right">Median</th></tr>
             </thead>
@@ -427,13 +450,14 @@ export default function PrPoSection() {
               ))}
             </tbody>
           </table>
+          </div>
         </section>
 
         {/* WHO ASKED FOR IT. Every other queue on this screen says who has
             to act next; this one says where the demand came from, which is
             what a department asks when it wants to know what it is still
             waiting on -- and the only list here that is not about SCM. */}
-        <section className={`${CARD} flex min-w-0 flex-col p-4`}>
+        <section className={`${CARD} ${PANEL} p-4`}>
           <div className="mb-1 flex items-baseline justify-between gap-2">
             <h3 className={PANEL_H3}>Requested by</h3>
             <span className="text-[11px] text-slate-500">click to filter</span>
@@ -443,9 +467,23 @@ export default function PrPoSection() {
             {(s?.by_requester ?? []).length > 0 &&
               ` · ${(s?.by_requester ?? []).length} people`}
           </p>
-          {(s?.by_requester ?? []).length ? (
-            <ul className="min-h-0 flex-1 space-y-0.5 overflow-y-auto pr-1 scrollbar-thin">
-              {(s?.by_requester ?? []).map((q: PrPoRequesterBucket) => {
+          {/* THIRTY-FOUR NAMES IS A LIST YOU SEARCH, NOT ONE YOU SCAN. It is
+              sorted worst-first, which is right for reading it cold and
+              useless for the other way it gets used -- somebody wants the
+              desk they already have in mind, and scrolling for it is the
+              slowest way to answer a question you already know. */}
+          {(s?.by_requester ?? []).length > 8 && (
+            <input
+              value={reqFind} onChange={(e) => setReqFind(e.target.value)}
+              placeholder="Find a requester…"
+              aria-label="Find a requester"
+              className="mb-1.5 w-full rounded-md border border-slate-300 px-2 py-1 text-[12px]
+                         placeholder:text-slate-400 focus:border-slate-500 focus:outline-none
+                         dark:border-slate-700 dark:bg-slate-900" />
+          )}
+          {shownRequesters.length ? (
+            <ul className={`${PANEL_BODY} space-y-0.5`}>
+              {shownRequesters.map((q: PrPoRequesterBucket) => {
                 const on = requester === q.requester;
                 return (
                   <li key={q.requester}>
@@ -475,14 +513,20 @@ export default function PrPoSection() {
                 );
               })}
             </ul>
-          ) : <p className="text-xs text-slate-500">No requester is recorded on these PRs.</p>}
+          ) : (
+            <p className="text-xs text-slate-500">
+              {(s?.by_requester ?? []).length
+                ? `No requester matches "${reqFind}".`
+                : "No requester is recorded on these PRs."}
+            </p>
+          )}
         </section>
 
-        <section className={`${CARD} min-w-0 p-4`}>
+        <section className={`${CARD} ${PANEL} p-4`}>
           <h3 className={`${PANEL_H3} mb-1`}>Approval bottlenecks</h3>
           <p className="mb-2 text-[11px] text-slate-500">NFAs waiting on a signature</p>
           {(s?.approval_bottlenecks ?? []).length ? (
-            <ul className="space-y-2">
+            <ul className={`${PANEL_BODY} space-y-2`}>
               {(s?.approval_bottlenecks ?? []).map((a: PrPoApprovalLoad) => (
                 <li key={a.approver} className="text-xs">
                   <div className="flex items-baseline justify-between gap-2">
@@ -503,7 +547,7 @@ export default function PrPoSection() {
           ) : <p className="text-xs text-slate-500">Nothing is waiting on an approver.</p>}
         </section>
 
-        <section className={`${CARD} min-w-0 p-4`}>
+        <section className={`${CARD} ${PANEL} p-4`}>
           <h3 className={`${PANEL_H3} mb-1`}>Payment due profile</h3>
           <p className="mb-2 text-[11px] text-slate-500">open invoice balance, once per PO</p>
           <div className="space-y-1.5">
