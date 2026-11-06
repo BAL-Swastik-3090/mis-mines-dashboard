@@ -59,10 +59,31 @@ WITH pr AS (
        AND r.pr_release_date IS NOT NULL
        AND r.pr_release_date >= :from_date
 ),
-po AS (
-    SELECT p.pr_no, p.pr_item,
+-- ONE ROW PER PO PER PR ITEM FIRST, THEN ONE PO PER PR ITEM.
+--
+-- A PR item can carry several POs: the buyer raises one, deletes it, and
+-- raises another. SAP keeps both. The first version of this grouped by
+-- (pr_no, pr_item) alone and took min()/max() of each column independently,
+-- which does not describe any one purchase order -- it takes the PO NUMBER
+-- from the oldest PO and the RELEASE STATE from the newest, so a dead PO
+-- number appears on screen wearing the live PO's status. On the Mines plants
+-- 114 PR items have more than one PO and 93 of them were reporting a PO that
+-- is not the released one.
+--
+-- So the grouping keeps po_no, and then exactly one PO is chosen per PR item
+-- and every field is read from that PO: the released one, else the latest,
+-- else the highest number. Release is the first key because it is SAP's own
+-- statement that this is the order that counts; among unreleased ones the
+-- newest is the buyer's latest attempt.
+--
+-- THIS DOES NOT DETECT DELETION, and nothing here can. delete_indicator is
+-- empty on all 22,450 rows of this extract -- the column exists and the sync
+-- never fills it -- so the filter below has never excluded anything. A PR
+-- item whose ONLY PO was deleted in SAP still shows that PO as live, and the
+-- fix for that is in the sap_odata_api extract, not here.
+po_item AS (
+    SELECT p.pr_no, p.pr_item, p.po_no,
            count(*)                            AS po_item_count,
-           min(p.po_no)                        AS po_no,
            min(p.po_date)                      AS po_date,
            min(p.vendor_name)                  AS vendor_name,
            min(p.vendor)                       AS vendor_code,
@@ -80,7 +101,15 @@ po AS (
       FROM sap_odata_api.scm_purchase_order p
      WHERE p.plant = ANY(:plants)
        AND COALESCE(p.delete_indicator, '') <> 'X'
-     GROUP BY p.pr_no, p.pr_item
+     GROUP BY p.pr_no, p.pr_item, p.po_no
+),
+po AS (
+    SELECT DISTINCT ON (pr_no, pr_item) *
+      FROM po_item
+     ORDER BY pr_no, pr_item,
+              (COALESCE(TRIM(release_state), '') <> '') DESC,
+              po_date DESC NULLS LAST,
+              po_no   DESC
 ),
 hist AS (
     SELECT h.po_number,
