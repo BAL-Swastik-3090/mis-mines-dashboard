@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ClipboardList, AlertTriangle, Megaphone } from "lucide-react";
+import { ClipboardList, AlertTriangle, Megaphone, Info } from "lucide-react";
 import { usePrPoSummary, usePrPoRegister, type PrPoFilter } from "@/hooks/usePrPo";
 import PrPoRegisterTable from "@/components/sections/PrPoRegisterTable";
 import type {
@@ -94,6 +94,29 @@ function Dash() { return <span className="text-slate-400">—</span>; }
    and a list longer than it says so with a scrollbar. Only below xl, where
    the panels stack one per row and there is nothing to line up with, do
    they size to their contents. */
+/* A CAVEAT IS NOT A SUBTITLE. "median, not mean -- one two-year-old item
+   would drag a mean until every desk looked alike" is worth saying once,
+   to the one person who asks why a desk reads 27d when they expected 200.
+   Printed under the heading it is three lines of small grey text above
+   every reading of the panel, and after the second reading nobody sees it
+   at all -- so it takes space permanently and is read once.
+
+   It goes behind a mark beside the heading, where it is there for whoever
+   wants it. The short line that says what the panel IS stays on the face:
+   that one orients every reader, every time, and is a different kind of
+   sentence. */
+function Note({ lines, align = "left" }: {
+  lines: (string | false | null | undefined)[];
+  align?: "left" | "right";
+}) {
+  return (
+    <Hint lines={lines} align={align} className="inline-flex shrink-0">
+      <Info className="h-3.5 w-3.5 cursor-help text-slate-400 hover:text-slate-700
+                       dark:hover:text-slate-200" />
+    </Hint>
+  );
+}
+
 const PANEL = "flex min-w-0 flex-col xl:h-[25rem]";
 const PANEL_BODY = "min-h-0 flex-1 overflow-y-auto pr-1 scrollbar-thin";
 
@@ -117,10 +140,11 @@ const PANEL_BODY = "min-h-0 flex-1 overflow-y-auto pr-1 scrollbar-thin";
 
    `pointer-events-none` matters too: a card the pointer can land on sits
    between the pointer and the row underneath, which is its own flicker. */
-function Hint({ lines, children, align = "left" }: {
+function Hint({ lines, children, align = "left", className = "block" }: {
   lines: (string | false | null | undefined)[];
   children: React.ReactNode;
   align?: "left" | "right";
+  className?: string;
 }) {
   const text = lines.filter(Boolean) as string[];
   const host = useRef<HTMLSpanElement>(null);
@@ -148,7 +172,7 @@ function Hint({ lines, children, align = "left" }: {
   }, [at]);
 
   return (
-    <span ref={host} className="block"
+    <span ref={host} className={className}
           onPointerEnter={place} onPointerLeave={() => setAt(null)}>
       {children}
       {at && createPortal(
@@ -390,9 +414,16 @@ export default function PrPoSection() {
         </section>
 
         <section className={`${CARD} ${PANEL} p-4`}>
-          <h3 className={`${PANEL_H3} mb-1`}>Ageing</h3>
+          <div className="mb-1 flex items-center gap-1.5">
+            <h3 className={PANEL_H3}>Ageing</h3>
+            <Note align="right" lines={[
+              "Days in the current stage, not since the PR was raised",
+              "A requisition is counted at its furthest-behind line, so the figure is how long the thing holding it has been waiting.",
+              "No date means the stage date is missing and the wait cannot be measured — not that there is no wait.",
+            ]} />
+          </div>
           <p className="mb-3 text-[11px] text-slate-500">
-            requisitions, by how long the holding item has sat in its stage
+            requisitions, by how long the holding item has sat
           </p>
           <div className="space-y-1.5">
             {(s?.ageing ?? []).map((a: PrPoAgeBand) => (
@@ -420,11 +451,14 @@ export default function PrPoSection() {
       {/* ── buyers, requesters, approvers, money ──────────────────────── */}
       <div className="grid gap-4 xl:grid-cols-[1.2fr_1fr_1fr_1fr]">
         <section className={`${CARD} ${PANEL} p-4`}>
-          <h3 className={`${PANEL_H3} mb-1`}>Buyer workload</h3>
-          <p className="mb-2 text-[11px] text-slate-500">
-            requisitions at procurement stages only · median, not mean — one
-            two-year-old item would drag a mean until every desk looked alike
-          </p>
+          <div className="mb-2 flex items-center gap-1.5">
+            <h3 className={PANEL_H3}>Buyer workload</h3>
+            <Note lines={[
+              "Requisitions at procurement stages only",
+              "Invoiced, paid and received are left out — counting those against a buyer would make Accounts' backlog look like SCM's.",
+              "The age is the median, not the mean: one two-year-old item drags a mean until every desk looks alike.",
+            ]} />
+          </div>
           <div className={PANEL_BODY}>
           <table className="w-full text-xs">
             <thead className="sticky top-0 bg-white text-left text-[10px] uppercase
@@ -548,7 +582,14 @@ export default function PrPoSection() {
         </section>
 
         <section className={`${CARD} ${PANEL} p-4`}>
-          <h3 className={`${PANEL_H3} mb-1`}>Payment due profile</h3>
+          <div className="mb-1 flex items-center gap-1.5">
+            <h3 className={PANEL_H3}>Payment due profile</h3>
+            <Note align="right" lines={[
+              "Open invoice balance, counted once per PO",
+              "An invoice belongs to the purchase order, so a PO covering five PR lines appears five times in the register — counted once here.",
+              "SAP records no due date at these plants, so it is derived from the payment term. A term that states no period is kept apart rather than called overdue.",
+            ]} />
+          </div>
           <p className="mb-2 text-[11px] text-slate-500">open invoice balance, once per PO</p>
           <div className="space-y-1.5">
             {(s?.payment_profile?.bands ?? []).map((d: PrPoDueBand) => (
@@ -567,9 +608,6 @@ export default function PrPoSection() {
               </div>
             ))}
           </div>
-          <p className="mt-2 text-[10px] leading-snug text-slate-500">
-            {s?.payment_profile?.basis}
-          </p>
         </section>
       </div>
 
