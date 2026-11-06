@@ -85,7 +85,7 @@ export default function PrPoSection() {
   const clear = () => setFilter({});
 
   const summary  = usePrPoSummary({ from: filter.from });
-  const register = usePrPoRegister(filter);
+  const register = usePrPoRegister({ from: filter.from });
 
   const stage = filter.stage;
   const owner = filter.owner;
@@ -372,12 +372,12 @@ export default function PrPoSection() {
         </section>
       </div>
 
+      {/* The whole window goes to the table, which does every filter and
+          sort itself. Only `from` is passed to the query, so touching a
+          stage, an owner or a column heading costs nothing. */}
       <PrPoRegisterTable
         rows={register.data?.rows ?? []}
-        total={register.data?.total ?? 0}
-        truncated={Boolean(register.data?.truncated)}
         loading={register.isFetching}
-        buyers={register.data?.buyers ?? []}
         filter={filter}
         onFilter={patch}
         onClear={clear}

@@ -15,7 +15,9 @@ output against response output.
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 from datetime import date, timedelta
+from time import monotonic
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -71,11 +73,46 @@ def _window(from_date: date | None, as_on: date | None) -> tuple[date, date]:
     return frm, on
 
 
-def _load(db: Session, from_date: date | None,
-          as_on: date | None) -> tuple[list[dict], date, date]:
-    frm, on = _window(from_date, as_on)
+# ONE COMPUTATION PER WINDOW, NOT ONE PER REQUEST.
+#
+# register() is a single query across eleven tables and takes 1.4s warm,
+# 4.3s cold. The page opens by calling /summary and /register together, and
+# every filter the reader touches called it again -- so the screen that is
+# meant to answer "what needs chasing today" spent most of its life waiting
+# on the same rows being rebuilt.
+#
+# The rows depend on nothing but the window and the plants, and SAP's
+# extracts move on a sync cycle, not per second, so they are held for a
+# minute. Two readers on the same window share one computation and every
+# filter after the first is served from memory.
+#
+# Keyed on the resolved dates, never on the raw query string: /register and
+# /summary word their defaults differently and would otherwise miss each
+# other's entry. Bounded to a handful of windows so a reader scrubbing the
+# date filter cannot grow it without limit.
+_CACHE: "OrderedDict[tuple[date, date], tuple[float, list[dict]]]" = OrderedDict()
+_CACHE_TTL_SECONDS = 60.0
+_CACHE_MAX_WINDOWS = 8
+
+
+def _cached_rows(db: Session, frm: date, on: date) -> list[dict]:
+    """The register for one window. Callers MUST NOT mutate the rows.
+
+    They are shared between requests, so a caller that writes to a row
+    writes into everyone else's copy. Filtering and sorting build new lists
+    and are fine; adding a field to a row is not.
+    """
+    key = (frm, on)
+    now = monotonic()
+    hit = _CACHE.get(key)
+    if hit is not None and now - hit[0] < _CACHE_TTL_SECONDS:
+        _CACHE.move_to_end(key)
+        return hit[1]
+
     rows = svc.register(db, on, frm, MINES_PLANTS)
     for r in rows:
+        # Set here, inside the cached build, so nothing writes to a shared
+        # row afterwards.
         r["rag"] = summ.rag(r["stage"], r["stage_age_days"])
 
     # WORST FIRST, NOT NEWEST FIRST. Sorted by release date the first screen
@@ -86,10 +123,25 @@ def _load(db: Session, from_date: date | None,
     #
     # Overdue first, then oldest in stage. An unknown age sorts last rather
     # than first: it is not evidence of a problem, only of a missing date.
+    #
+    # Done here rather than in _load so the cached list is already in its
+    # resting order and no request re-sorts a list other requests are
+    # holding.
     severity = {"red": 0, "amber": 1, "green": 2, "unknown": 3}
     rows.sort(key=lambda r: (severity.get(r["rag"], 3),
                              -(r["stage_age_days"] or 0)))
-    return rows, on, frm
+
+    _CACHE[key] = (now, rows)
+    _CACHE.move_to_end(key)
+    while len(_CACHE) > _CACHE_MAX_WINDOWS:
+        _CACHE.popitem(last=False)
+    return rows
+
+
+def _load(db: Session, from_date: date | None,
+          as_on: date | None) -> tuple[list[dict], date, date]:
+    frm, on = _window(from_date, as_on)
+    return _cached_rows(db, frm, on), on, frm
 
 
 @router.get("/summary")
