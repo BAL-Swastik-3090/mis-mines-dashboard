@@ -719,11 +719,14 @@ export default function PrPoRegisterTable({
       if (rags && !rags.has(r.rag)) return false;
       if (filter.owner && (r.pending_with ?? "") !== filter.owner) return false;
       if (filter.buyer && (r.buyer_name ?? "") !== filter.buyer) return false;
+      if (filter.requester
+          && (r.requisitioner || r.created_by || "") !== filter.requester) return false;
       if (q && !SEARCH_FIELDS.some((f) =>
         String(r[f] ?? "").toLowerCase().includes(q))) return false;
       return true;
     });
-  }, [rows, typed, filter.to, filter.stage, filter.rag, filter.owner, filter.buyer]);
+  }, [rows, typed, filter.to, filter.stage, filter.rag, filter.owner, filter.buyer,
+      filter.requester]);
 
   /* A filter is live as soon as the column HAS a selection, empty included:
      unticking everything means "show none", not "show all". */
@@ -779,7 +782,8 @@ export default function PrPoRegisterTable({
 
   const cutCount = Object.keys(cuts).length;
   const active = Boolean(filter.q || typed || filter.stage || filter.rag
-                         || filter.owner || filter.buyer || filter.to || cutCount);
+                         || filter.owner || filter.buyer || filter.requester
+                         || filter.to || cutCount);
 
   const toggleCol = (key: string) =>
     setHidden((h) => { const n = new Set(h); n.has(key) ? n.delete(key) : n.add(key); return n; });

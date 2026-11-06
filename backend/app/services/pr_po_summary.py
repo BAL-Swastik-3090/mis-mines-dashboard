@@ -225,6 +225,7 @@ def summarise(rows: list[dict[str, Any]], as_on: date) -> dict[str, Any]:
         "cards": cards,
         "by_stage": _by_stage(leads),
         "by_owner": _by_owner(leads),
+        "by_requester": _by_requester(leads),
         "targets_provisional": TARGETS_ARE_PROVISIONAL,
     }
 
@@ -242,6 +243,34 @@ def _by_stage(rows: list[dict]) -> list[dict]:
         if age is not None and (b["oldest_days"] is None or age > b["oldest_days"]):
             b["oldest_days"] = age
     return sorted(out.values(), key=lambda b: -b["count"])
+
+
+def _by_requester(rows: list[dict]) -> list[dict]:
+    """Who raised the requisitions that are still open.
+
+    The other queues say who has to act. This one says where the demand
+    came from, which is the question asked when a department wants to know
+    what it is still waiting on -- and the one list on this screen that is
+    not about SCM at all.
+
+    requisitioner first, created_by second: SAP records the person the
+    requisition is FOR in requisitioner and whoever keyed it in
+    created_by, and they are not always the same person.
+    """
+    out: dict[str, dict] = {}
+    for r in rows:
+        who = r.get("requisitioner") or r.get("created_by")
+        if not who:
+            continue
+        b = out.setdefault(who, {"requester": who, "count": 0, "red": 0,
+                                 "oldest_days": None})
+        b["count"] += 1
+        if r["rag"] == "red":
+            b["red"] += 1
+        age = r["stage_age_days"]
+        if age is not None and (b["oldest_days"] is None or age > b["oldest_days"]):
+            b["oldest_days"] = age
+    return sorted(out.values(), key=lambda b: (-b["red"], -b["count"]))
 
 
 def _by_owner(rows: list[dict]) -> list[dict]:

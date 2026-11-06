@@ -28,6 +28,7 @@ export interface PrPoFilter {
   rag?: string;
   owner?: string;
   buyer?: string;
+  requester?: string;
   q?: string;
 }
 

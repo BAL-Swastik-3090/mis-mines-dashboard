@@ -1,11 +1,12 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ClipboardList, AlertTriangle, Megaphone } from "lucide-react";
 import { usePrPoSummary, usePrPoRegister, type PrPoFilter } from "@/hooks/usePrPo";
 import PrPoRegisterTable from "@/components/sections/PrPoRegisterTable";
 import type {
-  PrPoStageBucket, PrPoOwnerBucket, PrPoAgeBand, PrPoDueBand,
-  PrPoBuyerLoad, PrPoApprovalLoad,
+  PrPoStageBucket, PrPoOwnerBucket, PrPoRequesterBucket, PrPoAgeBand,
+  PrPoDueBand, PrPoBuyerLoad, PrPoApprovalLoad,
 } from "@/types";
 
 /* PR to Payment.
@@ -81,33 +82,71 @@ function Dash() { return <span className="text-slate-400">—</span>; }
 
 /* A hover card, in place of the browser's own tooltip.
    The native one waits a second, wraps where it likes, cannot be styled and
-   renders in the operating system's font in the corner of the pointer --
-   which on a row of figures is exactly where it covers the next row. This
-   appears at once under the row it belongs to, in the page's own type, and
-   has room for the two or three facts worth reading.
+   renders in the operating system's font at the pointer -- which on a row
+   of figures is exactly where it covers the next row.
 
-   `pointer-events-none` matters: a tooltip that can be hovered sits between
-   the pointer and the row underneath and makes the row flicker. */
+   IT IS DRAWN IN A PORTAL, FIXED TO THE VIEWPORT, and that is not
+   decoration. The first version placed it absolutely inside the row, and
+   inside a scrollable list that flickered violently on the last few rows:
+   the card extended past the bottom of the list, which gave the list more
+   to scroll, which moved the row out from under the pointer, which hid the
+   card, which shrank the list back -- several times a second. An element
+   that is positioned against the viewport cannot change the size of
+   anything, so the loop has nowhere to start.
+
+   It also flips above the row when there is no room below, so a card on
+   the last row opens upwards instead of off the bottom of the screen, and
+   closes on scroll rather than hanging in the wrong place.
+
+   `pointer-events-none` matters too: a card the pointer can land on sits
+   between the pointer and the row underneath, which is its own flicker. */
 function Hint({ lines, children, align = "left" }: {
   lines: (string | false | null | undefined)[];
   children: React.ReactNode;
   align?: "left" | "right";
 }) {
   const text = lines.filter(Boolean) as string[];
+  const host = useRef<HTMLSpanElement>(null);
+  const [at, setAt] = useState<{ x: number; y: number; up: boolean } | null>(null);
+
+  const place = () => {
+    const el = host.current;
+    if (!el || !text.length) return;
+    const r = el.getBoundingClientRect();
+    // 22px a line plus the padding, which is all the room it needs.
+    const need = text.length * 22 + 16;
+    const up = r.bottom + need > window.innerHeight - 8;
+    setAt({ x: align === "right" ? r.right : r.left, y: up ? r.top - 4 : r.bottom + 4, up });
+  };
+
+  useEffect(() => {
+    if (!at) return;
+    const off = () => setAt(null);
+    window.addEventListener("scroll", off, true);
+    window.addEventListener("resize", off);
+    return () => {
+      window.removeEventListener("scroll", off, true);
+      window.removeEventListener("resize", off);
+    };
+  }, [at]);
+
   return (
-    <span className="group/hint relative block">
+    <span ref={host} className="block"
+          onPointerEnter={place} onPointerLeave={() => setAt(null)}>
       {children}
-      {text.length > 0 && (
-        <span className={`pointer-events-none absolute ${align === "right" ? "right-0" : "left-0"}
-                          top-full z-30 mt-1 hidden w-max max-w-[16rem] rounded-lg
-                          border border-slate-700/40 bg-slate-900 px-2.5 py-1.5 text-left
-                          text-[11px] leading-relaxed text-white shadow-xl
-                          group-hover/hint:block dark:bg-slate-800`}>
+      {at && createPortal(
+        <div
+          style={{
+            position: "fixed", left: at.x, top: at.y,
+            transform: `translate(${align === "right" ? "-100%" : "0"}, ${at.up ? "-100%" : "0"})`,
+          }}
+          className="pointer-events-none z-[100] w-max max-w-[18rem] rounded-lg border
+                     border-slate-700/40 bg-slate-900 px-2.5 py-1.5 text-left text-[11px]
+                     leading-relaxed text-white shadow-xl dark:bg-slate-800">
           {text.map((t, i) => (
             <span key={i} className={`block ${i ? "text-slate-300" : "font-semibold"}`}>{t}</span>
           ))}
-        </span>
-      )}
+        </div>, document.body)}
     </span>
   );
 }
@@ -124,6 +163,11 @@ export default function PrPoSection() {
   const owner = filter.owner;
   const setStage = (v: string | undefined) => patch({ stage: v, owner: undefined, rag: undefined });
   const setOwner = (v: string | undefined) => patch({ owner: v, stage: undefined, rag: undefined });
+  /* The requester narrows whatever is already on screen rather than
+     replacing it: "what is Accounts holding, of the ones TAPAS raised" is
+     a real question, where stage-and-owner together is not. */
+  const setRequester = (v: string | undefined) => patch({ requester: v });
+  const requester = filter.requester;
 
   if (summary.isError) {
     const status = (summary.error as { response?: { status?: number } })?.response?.status;
@@ -349,8 +393,8 @@ export default function PrPoSection() {
         </section>
       </div>
 
-      {/* ── buyers, approvers, money ──────────────────────────────────── */}
-      <div className="grid gap-4 xl:grid-cols-3">
+      {/* ── buyers, requesters, approvers, money ──────────────────────── */}
+      <div className="grid gap-4 xl:grid-cols-[1.2fr_1fr_1fr_1fr]">
         <section className={`${CARD} min-w-0 p-4`}>
           <h3 className={`${PANEL_H3} mb-1`}>Buyer workload</h3>
           <p className="mb-2 text-[11px] text-slate-500">
@@ -380,6 +424,53 @@ export default function PrPoSection() {
               ))}
             </tbody>
           </table>
+        </section>
+
+        {/* WHO ASKED FOR IT. Every other queue on this screen says who has
+            to act next; this one says where the demand came from, which is
+            what a department asks when it wants to know what it is still
+            waiting on -- and the only list here that is not about SCM. */}
+        <section className={`${CARD} min-w-0 p-4`}>
+          <div className="mb-1 flex items-baseline justify-between gap-2">
+            <h3 className={PANEL_H3}>Requested by</h3>
+            <span className="text-[11px] text-slate-500">click to filter</span>
+          </div>
+          <p className="mb-2 text-[11px] text-slate-500">
+            open requisitions, by who raised them
+          </p>
+          {(s?.by_requester ?? []).length ? (
+            <ul className="max-h-[17rem] space-y-0.5 overflow-y-auto pr-1 scrollbar-thin">
+              {(s?.by_requester ?? []).map((q: PrPoRequesterBucket) => {
+                const on = requester === q.requester;
+                return (
+                  <li key={q.requester}>
+                    <Hint align="right" lines={[
+                      `${q.requester} raised ${q.count} open requisition${q.count === 1 ? "" : "s"}`,
+                      q.red > 0 && `${q.red} past the stage target`,
+                      q.oldest_days != null && `oldest has waited ${q.oldest_days} days`,
+                      on ? "click to clear this filter" : "click to filter the register",
+                    ]}>
+                      <button
+                        onClick={() => setRequester(on ? undefined : q.requester)}
+                        className={`flex w-full items-center justify-between gap-2 rounded px-2 py-1
+                          text-left text-xs
+                          ${on ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
+                               : "hover:bg-slate-100 dark:hover:bg-slate-800"}`}>
+                        <span className="truncate">{q.requester}</span>
+                        <span className="shrink-0 tabular-nums">
+                          {q.count}
+                          {q.red > 0 && (
+                            <span className={on ? "" : " text-rose-600 dark:text-rose-400"}>
+                              {" "}({q.red} late)
+                            </span>)}
+                        </span>
+                      </button>
+                    </Hint>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : <p className="text-xs text-slate-500">No requester is recorded on these PRs.</p>}
         </section>
 
         <section className={`${CARD} min-w-0 p-4`}>

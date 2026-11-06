@@ -2099,6 +2099,13 @@ export interface PrPoStageBucket {
   stage: string; label: string; count: number; red: number; oldest_days: number | null;
 }
 
+export interface PrPoRequesterBucket {
+  requester: string;
+  count: number;
+  red: number;
+  oldest_days: number | null;
+}
+
 export interface PrPoOwnerBucket {
   owner: string; count: number; red: number; oldest_days: number | null;
 }
@@ -2126,6 +2133,7 @@ export interface PrPoSummaryResponse {
   cards: PrPoCard[];
   by_stage: PrPoStageBucket[];
   by_owner: PrPoOwnerBucket[];
+  by_requester: PrPoRequesterBucket[];
   targets_provisional: boolean;
 }
 
