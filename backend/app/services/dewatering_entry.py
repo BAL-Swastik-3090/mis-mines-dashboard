@@ -485,17 +485,37 @@ def _fl(v) -> float | None:
 
 def _blk(key: str, label: str, uom: str, plan: float | None,
          actual: float | None, dp: int = 0, no_plan: bool = False,
-         no_pct: bool = False) -> dict[str, Any]:
+         inverse: bool = False) -> dict[str, Any]:
     """One line of the block. `no_plan` means a plan will never exist for this
-    measure; `no_pct` means the two columns are not a plan and an actual at
-    all -- opening and closing stock share a row, and a percentage of one
-    against the other would be arithmetic with no meaning."""
+    measure -- inflow is seepage and weather, so that blank is permanent and
+    not a plan somebody has yet to file.
+
+    `inverse` marks the one measure where BEATING the plan means coming in
+    BELOW it: closing stock. Reporting 128% there the way disposal reports
+    95.6% would colour a sump sitting two thousand cubic metres above plan as
+    an overachievement, so the percentage carries a different meaning -- the
+    VARIANCE against plan, signed, with below-plan the good direction -- and
+    this flag is what tells the page to read it that way."""
+    if inverse:
+        pct = (None if (plan is None or plan <= 0 or actual is None)
+               else round((actual - plan) / plan * 100, 1))
+    else:
+        pct = (None if (no_plan or not plan or actual is None)
+               else round(actual / plan * 100, 1))
     return {"key": key, "label": label, "uom": uom, "dp": dp,
             "plan": None if plan is None else round(plan, dp),
             "actual": None if actual is None else round(actual, dp),
-            "pct": (None if (no_pct or no_plan or not plan or actual is None)
-                    else round(actual / plan * 100, 1)),
-            "no_plan": no_plan, "no_pct": no_pct}
+            "pct": pct,
+            "no_plan": no_plan, "inverse": inverse}
+
+
+def _day_plan_closing(r, inflow: float) -> float | None:
+    """One day's planned closing stock -- the same balance as the period's,
+    on that day's own opening and that day's own plan disposal. Without
+    either figure there is no benchmark, and a blank says so."""
+    if r.opening_stock_m3 is None or r.plan_disposal_m3 is None:
+        return None
+    return float(r.opening_stock_m3) + inflow - float(r.plan_disposal_m3)
 
 
 def _summary(pg: Session, frm: date, to: date, rd: date) -> dict[str, Any]:
@@ -536,6 +556,19 @@ def _summary(pg: Session, frm: date, to: date, rd: date) -> dict[str, Any]:
     opening = _fl(first.opening_stock_m3)
     closing = _fl(last.closing_stock_m3)
 
+    # WHERE THE SUMP WOULD STAND HAD THE PLAN BEEN PUMPED -- the mine's own
+    # formula, the same balance the sheet closes every day:
+    #
+    #     opening + seepage + rain water - PLAN disposal
+    #
+    # The inflow in it is the ACTUAL inflow, and deliberately so. Seepage is
+    # measured and rain is weather; neither was ever planned, and holding the
+    # plan to a dry month it did not get would flatter it. So the benchmark
+    # reads: given the water that really arrived, this is where the plan said
+    # the sump would be left. Over the period the first entered day's opening
+    # carries it, which is the same as chaining the plan forward day by day.
+    plan_closing = (opening + inflow - disp_plan) if opening is not None else None
+
     def pct(a: float | None, p: float | None) -> float | None:
         # Both halves or no percentage, the rule this page already applies to
         # de-silting: a plan with nothing against it yet is not 0%.
@@ -563,9 +596,9 @@ def _summary(pg: Session, frm: date, to: date, rd: date) -> dict[str, Any]:
             # not the same as a plan nobody has filed yet.
             _blk("inflow", "Seepage + Rain Inflow", "M³", None, inf,
                  no_plan=True),
-            _blk("stock", "Sump Stock: Open → Close", "M³",
-                 _fl(r.opening_stock_m3), _fl(r.closing_stock_m3),
-                 no_pct=True),
+            _blk("stock", "Sump Closing Stock", "M³",
+                 _day_plan_closing(r, inf), _fl(r.closing_stock_m3),
+                 inverse=True),
         ]
 
     mtd_rows = [
@@ -573,11 +606,11 @@ def _summary(pg: Session, frm: date, to: date, rd: date) -> dict[str, Any]:
         _blk("pump_hr", "Pump Run Hours", "Hr", hr_plan, hr_act, dp=1),
         _blk("inflow", "Seepage + Rain Inflow", "M³", None, inflow,
              no_plan=True),
-        # Opening is the FIRST entered day's opening and closing the LAST
-        # entered day's closing, so the pair reads as the movement across the
-        # days that exist rather than across the days that do not.
-        _blk("stock", "Sump Stock: Open → Close", "M³", opening, closing,
-             no_pct=True),
+        # Both figures run from the FIRST entered day's opening to the LAST
+        # entered day's closing, so the row spans the days that exist rather
+        # than the days that do not.
+        _blk("stock", "Sump Closing Stock", "M³", plan_closing, closing,
+             inverse=True),
     ]
 
     # ── the six figures across the top ───────────────────────────────────
@@ -631,6 +664,8 @@ def _summary(pg: Session, frm: date, to: date, rd: date) -> dict[str, Any]:
             "offset_hr": offset_hr,
             "opening_stock": opening,
             "closing_stock": closing,
+            "plan_closing_stock": (round(plan_closing)
+                                   if plan_closing is not None else None),
             "stock_change_pct": (round((closing - opening) / opening * 100, 1)
                                  if opening else None),
             "net_drawdown": drawdown,

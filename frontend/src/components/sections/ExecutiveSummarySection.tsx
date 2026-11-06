@@ -652,9 +652,8 @@ function DewateringBlock({ d }: { d: ExecDewateringBlock }) {
   const cells = (r: ExecDewateringLine | undefined, tint: string) => (
     <>
       <td className={`${TD} text-right border-l border-border-light ${tint}`}>
-        {/* Inflow has no plan and never will; stock's left-hand figure is an
-            OPENING, not a plan, so it is printed as a figure rather than
-            dashed out. The two cases look alike and are not. */}
+        {/* Inflow has no plan and never will. Every other row, closing stock
+            included, carries a real one. */}
         {r?.no_plan
           ? <span className="text-[9px] uppercase tracking-wide text-txt-light"
                   title="Seepage is measured and rain is weather — neither is planned.">
@@ -666,16 +665,20 @@ function DewateringBlock({ d }: { d: ExecDewateringBlock }) {
         <N v={r?.actual} dp={r?.dp ?? 0} strong />
       </td>
       <td className={`${TD} text-right whitespace-nowrap ${tint}`}>
-        {r?.no_pct
-          ? /* Opening against closing is not an achievement, it is a
-               movement — so it is shown as one, with its direction. */
+        {r?.inverse
+          ? /* THE ONE ROW WHERE LOW IS GOOD. A sump left below the level the
+               plan would have left it has been over-pumped, not under-
+               achieved, so this prints the signed variance against plan and
+               colours DOWN green — the opposite of every row above it. */
             (() => {
-              const o = r?.plan, c = r?.actual;
-              if (o == null || c == null || !o) return <span className="text-txt-light/40">—</span>;
-              const pc = (c - o) / o * 100;
+              if (r?.pct == null) return <span className="text-txt-light/40">—</span>;
+              const down = r.pct <= 0;
               return (
-                <span className={`font-bold ${pc <= 0 ? "text-[#2e7d32]" : "text-[#c62828]"}`}>
-                  {pc <= 0 ? "↓" : "↑"} {Math.abs(pc).toFixed(1)}%
+                <span className={`font-bold ${down ? "text-[#2e7d32]" : "text-[#c62828]"}`}
+                      title={down
+                        ? "Below the level the plan would have left — over-pumped against plan."
+                        : "Above the level the plan would have left — under-pumped against plan."}>
+                  {down ? "↓" : "↑"} {Math.abs(r.pct).toFixed(1)}%
                 </span>
               );
             })()
@@ -746,12 +749,17 @@ function DewateringBlock({ d }: { d: ExecDewateringBlock }) {
                 accent="#283593"
                 sub={`Plan ${k.avg_plan_hr ?? "—"} h`
                   + (k.offset_hr == null ? "" : ` · ${k.offset_hr} h/day offsets inflow`)} />
+          {/* The plan leads the sub-line here, as it does on every other
+              tile, with the movement off the opening behind it. */}
           <Tile label="Sump Closing Stock" value={k.closing_stock} unit="M³"
                 accent="#2e7d32"
-                sub={k.opening_stock == null ? undefined
-                  : `Opening ${formatIndian(Math.round(k.opening_stock), 0)}`
-                    + (k.stock_change_pct == null ? ""
-                      : ` · ${k.stock_change_pct <= 0 ? "↓" : "↑"} ${Math.abs(k.stock_change_pct)}%`)} />
+                sub={(k.plan_closing_stock == null ? ""
+                  : `Plan ${formatIndian(k.plan_closing_stock, 0)} · `)
+                  + (k.opening_stock == null ? ""
+                    : `Opening ${formatIndian(Math.round(k.opening_stock), 0)}`
+                      + (k.stock_change_pct == null ? ""
+                        : ` · ${k.stock_change_pct <= 0 ? "↓" : "↑"} ${Math.abs(k.stock_change_pct)}%`))
+                  || undefined} />
           {/* Blank when the sump is RISING. A sump that is filling has no
               date it empties, and a negative number of days would read as a
               small one. */}
@@ -820,9 +828,13 @@ function DewateringBlock({ d }: { d: ExecDewateringBlock }) {
         adjusted pump capacity, as the mine&apos;s own sheet computes it.
         {"   "}<span className="font-semibold">INFLOW · </span>measured seepage
         plus rainfall converted at the factor the day was filed under.
-        {"   "}<span className="font-semibold">SUMP STOCK · </span>opening is
-        the previous day&apos;s closing, so the MTD pair spans the first and
-        last days ENTERED, not the first and last days of the month.
+        {"   "}<span className="font-semibold">SUMP CLOSING STOCK · </span>
+        opening + seepage + rain water − disposal. The PLAN column is that
+        same balance with PLAN disposal in it — where the sump would have
+        been left had the plan been pumped against the water that actually
+        arrived — so below plan is the good direction. Opening is the previous
+        day&apos;s closing, which makes the MTD pair span the first and last
+        days ENTERED, not the first and last days of the month.
       </p>
     </Card>
   );

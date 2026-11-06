@@ -135,9 +135,10 @@ class DewateringLine(BaseModel):
     #: No plan exists for this measure and none ever will — inflow is seepage
     #: and weather. Different from a plan nobody has filed yet.
     no_plan: bool = False
-    #: The two columns are not a plan and an actual: opening and closing stock
-    #: share a row, and a percentage of one against the other means nothing.
-    no_pct:  bool = False
+    #: Beating this plan means coming in BELOW it — closing stock is the one
+    #: such measure. `pct` is then the signed VARIANCE against plan, not an
+    #: achievement, and below plan is the good direction.
+    inverse: bool = False
 
 
 class DewateringPeriod(BaseModel):
@@ -163,6 +164,10 @@ class DewateringKpi(BaseModel):
     offset_hr:        Optional[float] = None
     opening_stock:    Optional[float] = None
     closing_stock:    Optional[float] = None
+    #: Opening + seepage + rain water − PLAN disposal: where the sump would
+    #: have been left had the plan been pumped against the water that really
+    #: arrived.
+    plan_closing_stock: Optional[float] = None
     stock_change_pct: Optional[float] = None
     net_drawdown:     Optional[float] = None
     days_to_clear:    Optional[float] = None
