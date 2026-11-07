@@ -347,6 +347,31 @@ def _rechain(db: Session, after: date, revision: int,
     return {"chained": changed, "stopped_at": stopped_at}
 
 
+# The five inputs the generated closing stock is computed from. Any one of
+# them left blank makes closing_stock_m3 NULL, and a day with no closing
+# stock hands nothing on to the day after it.
+_CLOSING_INPUTS = {
+    "opening_stock_m3":    "opening stock",
+    "seepage_m3":          "seepage",
+    "rainfall_mm":         "rainfall",
+    "actual_pump_hr":      "actual pump hours",
+    "pump_capacity_m3_hr": "pump capacity",
+}
+
+
+def missing_for_closing(row: dict[str, Any] | None) -> list[str]:
+    """Which inputs a day is short of, named as the form names them.
+
+    Empty when the closing stock resolves. The point is to say WHICH figure
+    is missing: the chain banner used to assume pump hours and capacity, and
+    the day that actually broke the Executive Summary on 6 November was short
+    of rainfall, which that wording would have sent somebody looking past.
+    """
+    if row is None or row.get("closing_stock_m3") is not None:
+        return []
+    return [label for field, label in _CLOSING_INPUTS.items() if row.get(field) is None]
+
+
 def save_day(db: Session, d: date, values: dict[str, Any],
              actor: str, rechain: bool = True) -> dict[str, Any]:
     """Store or edit one day, then carry the change forward.
@@ -430,6 +455,12 @@ def save_day(db: Session, d: date, values: dict[str, Any],
             {f for f in clean if _as_text(clean[f]) != _as_text(before.get(f))}),
         "chained": chain["chained"],
         "stopped_at": chain["stopped_at"],
+        # What this day itself is short of, if anything. stopped_at only ever
+        # describes days AFTER this one, so saving the latest day -- the
+        # ordinary case -- warned about nothing even when the day just stored
+        # could not resolve its own closing stock. That is what happened on
+        # 6 November: saved, accepted, and silently unusable.
+        "closing_unresolved": missing_for_closing(after),
         "stored": after,
     }
 

@@ -102,6 +102,9 @@ export default function DewateringEntryModal({
   const [done, setDone] = useState<string | null>(null);
   const [chained, setChained] = useState<string[]>([]);
   const [stoppedAt, setStoppedAt] = useState<string | null>(null);
+  // What the day just saved is short of, if anything. stopped_at only
+  // describes days AFTER this one, so the latest day warned about nothing.
+  const [unresolved, setUnresolved] = useState<string[]>([]);
   const [showHistory, setShowHistory] = useState(false);
 
   useEffect(() => { if (open) setDay(yesterday()); }, [open]);
@@ -222,6 +225,7 @@ export default function DewateringEntryModal({
       const d = r.data ?? {};
       setChained(d.chained ?? []);
       setStoppedAt(d.stopped_at ?? null);
+      setUnresolved(d.closing_unresolved ?? []);
       setDone(
         d.action === "unchanged" ? "Nothing had changed — nothing was written."
           : d.action === "created" ? `Saved — ${d.fields_changed} figures.`
@@ -456,7 +460,7 @@ export default function DewateringEntryModal({
         </div>
 
         {/* ── what the save moved beyond this day ──────────────────────── */}
-        {(chained.length > 0 || stoppedAt) && (
+        {(chained.length > 0 || stoppedAt || unresolved.length > 0) && (
           <div className="px-4 pb-3">
             <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 flex items-start gap-2">
               <Link2 size={13} className="text-amber-600 mt-0.5 shrink-0" />
@@ -468,8 +472,15 @@ export default function DewateringEntryModal({
                 </>}
                 {stoppedAt && <>
                   It stopped at <strong>{niceDay(stoppedAt)}</strong>, because the day
-                  before it has no closing stock to hand on — enter its pump hours
-                  and capacity, then the chain will continue.
+                  before it has no closing stock to hand on — fill in what that
+                  day is missing and the chain will continue.
+                </>}
+                {unresolved.length > 0 && <>
+                  {(chained.length > 0 || stoppedAt) && <br />}
+                  <strong>This day has no closing stock yet</strong> — it needs{" "}
+                  {unresolved.join(", ")}. Until that is entered the sump figures are
+                  blank here and on the Executive Summary, and the next day has no
+                  opening stock to start from.
                 </>}
               </p>
             </div>
