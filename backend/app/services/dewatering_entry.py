@@ -666,8 +666,15 @@ def _summary(pg: Session, frm: date, to: date, rd: date) -> dict[str, Any]:
             "closing_stock": closing,
             "plan_closing_stock": (round(plan_closing)
                                    if plan_closing is not None else None),
+            # closing is NULL whenever a day is short of a figure the balance
+            # needs -- rainfall left blank makes rain_water_m3 NULL, and the
+            # generated closing stock with it. drawdown and days_to_clear
+            # above already allow for that; this did not, and the TypeError
+            # it raised was caught by the caller, which dropped the WHOLE
+            # dewatering block off the Executive Summary. One blank cell
+            # should cost one figure, not a section.
             "stock_change_pct": (round((closing - opening) / opening * 100, 1)
-                                 if opening else None),
+                                 if opening and closing is not None else None),
             "net_drawdown": drawdown,
             "days_to_clear": days_to_clear,
             "completeness_pct": completeness,
