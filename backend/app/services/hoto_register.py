@@ -55,8 +55,14 @@ def search(db: Session, *,
                (SELECT count(*) FROM hoto_response r
                  WHERE r.session_id = s.session_id
                    AND (r.answer IN ('NOT_OK','CAUTION') OR r.in_range = false)) AS adverse_count,
-               (SELECT max(r.severity) FROM hoto_response r
-                 WHERE r.session_id = s.session_id AND r.severity IS NOT NULL) AS worst_severity,
+               -- NOT max(r.severity): severity is text, so max() sorts it
+               -- alphabetically and MEDIUM comes out above CRITICAL. This
+               -- column read wrong from the day it was written.
+               (SELECT r.severity FROM hoto_response r
+                 WHERE r.session_id = s.session_id AND r.severity IS NOT NULL
+                 ORDER BY CASE r.severity WHEN 'CRITICAL' THEN 4 WHEN 'HIGH' THEN 3
+                                          WHEN 'MEDIUM' THEN 2 ELSE 1 END DESC
+                 LIMIT 1) AS worst_severity,
                (SELECT count(*) FROM hoto_response r WHERE r.session_id = s.session_id) AS answer_count,
                (SELECT COALESCE(sum(r.photo_count), 0) FROM hoto_response r
                  WHERE r.session_id = s.session_id) AS photo_count

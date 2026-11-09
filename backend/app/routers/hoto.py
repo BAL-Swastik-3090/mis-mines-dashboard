@@ -29,6 +29,7 @@ from app.services import hoto_capture as cap
 from app.services import hoto_admin as adm
 from app.services import hoto_register as reg
 from app.services import hoto_defects as dfx
+from app.services import hoto_board as brd
 
 router = APIRouter(prefix="/api/hoto", tags=["HOTO"])
 
@@ -442,3 +443,67 @@ def asset_state(asset_id: int, request: Request,
         "blocking_defects": [r for r in dfx.queue(db, asset_id=asset_id)
                              if r["blocks_operation"]],
     }
+
+
+# ── the Shift HOTO Board (phase 9) ───────────────────────────────────────────
+
+OVERRIDE_PERMISSION = "hoto.override"
+
+
+def _board(fn, *a, **kw):
+    try:
+        return fn(*a, **kw)
+    except brd.BoardError as e:
+        raise HTTPException(e.status, {"message": "Refused.", "problems": e.problems})
+
+
+@router.get("/board")
+def shift_board(request: Request,
+                plant_id: int | None = Query(default=None),
+                shift_id: int | None = Query(default=None),
+                production_day: date | None = Query(default=None),
+                only_attention: bool = Query(default=False),
+                db: Session = Depends(get_minehub_db)) -> dict:
+    """Every active machine in one shift, and what is known about each.
+
+    Starts from the MACHINES, not the handovers, because the rows a supervisor
+    most needs are the machines with no handover — and a list of handovers
+    cannot contain them.
+    """
+    _guard(request, db)
+    return _board(brd.board, db, plant_id=plant_id, shift_id=shift_id,
+                  production_day=production_day, only_attention=only_attention)
+
+
+@router.get("/board/shift")
+def board_shift(request: Request, db: Session = Depends(get_minehub_db)) -> dict:
+    """Which shift is running now, and the production day it belongs to."""
+    _guard(request, db)
+    return {"current": brd.current_shift(db), "shifts": svc.shifts(db)}
+
+
+@router.post("/board/{asset_id}/state")
+def board_decide(asset_id: int, request: Request, payload: dict,
+                 db: Session = Depends(get_minehub_db)) -> dict:
+    """A supervisor's call on one machine.
+
+    Stopping a machine needs only the capture permission — a supervisor who
+    thinks a machine should stop may always stop it. Releasing one that its own
+    open defects say should be held is an override: it needs `hoto.override`
+    and a written reason, and it is raised as an exception rather than filed
+    quietly in the state history.
+    """
+    actor = _capture_guard(request, db)
+    may_override = access_svc.has_permission(db, actor, OVERRIDE_PERMISSION)
+    return _board(brd.decide, db, asset_id, (payload.get("state") or "").upper(),
+                  actor, reason=payload.get("reason"), may_override=may_override,
+                  shift_instance_id=payload.get("shift_instance_id"))
+
+
+@router.get("/board/{asset_id}/history")
+def board_history(asset_id: int, request: Request,
+                  limit: int = Query(default=40, le=200),
+                  db: Session = Depends(get_minehub_db)) -> dict:
+    """How this machine's state has moved, newest first."""
+    _guard(request, db)
+    return {"asset_id": asset_id, "events": brd.history(db, asset_id, limit)}
