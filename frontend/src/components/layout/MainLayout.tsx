@@ -24,6 +24,7 @@ import CapacitySection         from "@/components/sections/CapacitySection";
 import PrPoSection             from "@/components/sections/PrPoSection";
 import HotoChecklistsSection  from "@/components/sections/HotoChecklistsSection";
 import HotoRegisterSection    from "@/components/sections/HotoRegisterSection";
+import HotoDefectsSection     from "@/components/sections/HotoDefectsSection";
 import AccessControlSection    from "@/components/sections/AccessControlSection";
 import UsageSection            from "@/components/sections/UsageSection";
 import { useAppPage }          from "@/contexts/useAppPage";
@@ -125,6 +126,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           {page === "pr-po"            && <PrPoSection />}
           {page === "hoto-checklists" && <HotoChecklistsSection />}
           {page === "hoto-register"   && <HotoRegisterSection />}
+          {page === "hoto-defects"    && <HotoDefectsSection />}
           {page === "usage"            && <UsageSection />}
           {page === "data-health"      && <DataHealthSection />}
             </>

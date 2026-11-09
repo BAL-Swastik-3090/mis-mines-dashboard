@@ -196,6 +196,28 @@ def set_state(db: Session, asset_id: int, state: str, *, reason: str, actor: str
     return {"from": now["state"] if now else None, "to": state, "reason": reason}
 
 
+def _recompute_state(db: Session, asset_id: int, actor: str,
+                     because: str) -> dict[str, Any] | None:
+    """Set the machine to whatever everything still open against it implies.
+
+    The worst still-open severity decides, through the same SEVERITY_STATE map
+    that raising uses -- so the state a defect put the machine into is the state
+    its repair takes it out of, and no other defect's repair can do it instead.
+    A no-op when the machine is already there.
+    """
+    worst = db.execute(text("""
+        SELECT severity FROM hoto_defect
+         WHERE asset_id = :a
+           AND state IN ('RAISED', 'ACKNOWLEDGED', 'RECTIFIED')
+         ORDER BY CASE severity WHEN 'CRITICAL' THEN 4 WHEN 'HIGH' THEN 3
+                                WHEN 'MEDIUM' THEN 2 ELSE 1 END DESC
+         LIMIT 1
+    """), {"a": asset_id}).scalar()
+    want = SEVERITY_STATE.get(worst or "", "AVAILABLE")
+    reason = because if want == "AVAILABLE" else f"{because}; a {worst} defect is still open"
+    return set_state(db, asset_id, want, reason=reason, actor=actor)
+
+
 # ── the workshop's queue ─────────────────────────────────────────────────────
 
 def queue(db: Session, *, asset_id: int | None = None, state: str | None = None,
@@ -315,20 +337,27 @@ def transition(db: Session, defect_id: int, to_state: str, actor: str,
     """), {"d": defect_id, "frm": d["state"], "to": to_state, "by": actor, "n": note})
 
     # ── releasing the machine ────────────────────────────────────────────────
-    # Only when nothing blocking is still open. A machine with two critical
-    # defects does not come back on the first repair, and this is where that
-    # would otherwise be got wrong.
+    # The state is RECOMPUTED from everything still open against the machine,
+    # not set to AVAILABLE because this one defect is finished. Two mistakes
+    # live here, and seeding one machine with a spread of defects found the
+    # second of them:
+    #
+    #   * a machine with two critical defects must not come back on the first
+    #     repair -- so the worst still-open severity decides, not this defect's;
+    #   * a machine RESTRICTED by an open HIGH defect must not be handed back as
+    #     AVAILABLE because an unrelated MEDIUM was verified. That is how a
+    #     machine with unrepaired steering comes to read as ready for work.
+    #
+    # VERIFIED counts as repaired; RAISED, ACKNOWLEDGED and RECTIFIED do not --
+    # a repair nobody has checked is still a reason to hold the machine.
+    #
+    # It runs on the way BACK as well. A machine released on a verification,
+    # whose repair then fails its re-check, must be held again -- otherwise a
+    # reversal leaves a locked machine's defect open and the machine working.
     released = None
-    if to_state in ("VERIFIED", "CLOSED", "CANCELLED"):
-        still_blocked = db.execute(text("""
-            SELECT count(*) FROM hoto_defect
-             WHERE asset_id = :a AND blocks_operation
-               AND state IN ('RAISED', 'ACKNOWLEDGED', 'RECTIFIED')
-        """), {"a": d["asset_id"]}).scalar()
-        if not still_blocked:
-            released = set_state(db, d["asset_id"], "AVAILABLE",
-                                 reason=f"{d['item_label']} verified ({defect_id})",
-                                 actor=actor)
+    if to_state in ("VERIFIED", "CLOSED", "CANCELLED", "ACKNOWLEDGED"):
+        released = _recompute_state(db, d["asset_id"], actor,
+                                    f"{d['item_label']} ({defect_id}) -> {to_state}")
 
     db.commit()
     return {"defect_id": defect_id, "from": d["state"], "to": to_state,

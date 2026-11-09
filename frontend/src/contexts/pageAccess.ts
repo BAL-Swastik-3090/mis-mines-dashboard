@@ -79,6 +79,10 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   // Read-only, so a wider audience than the editor: supervisors, workshop,
   // safety and management all have reason to open a handover record.
   "hoto-register": ["hoto.view", "hoto.admin"],
+  // The workshop reads this and the workshop acts on it, so the same
+  // permission that lets somebody file a handover lets them move a defect
+  // along -- the server checks hoto.capture on the transition itself.
+  "hoto-defects": ["hoto.view", "hoto.capture", "hoto.admin"],
   "minehub": ["platform.registry.browse"],
   "manpower": ["platform.operators.view"],
   "operations": ["ops.shift.view"],
@@ -164,6 +168,9 @@ const LANDING_RANK: Record<AppPage, number> = {
   // and this is a thing they visit rather than open to.
   "hoto-checklists": 90,
   "hoto-register": 88,
+  // Higher than the register: a fitter opening the dashboard wants the
+  // queue of what is broken, not the archive of what was handed over.
+  "hoto-defects": 86,
   // Above MIS, where the mine asked for it: the one-screen management view
   // comes before the operational detail it summarises.
   "executive-summary": 5,
