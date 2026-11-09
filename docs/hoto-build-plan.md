@@ -24,7 +24,9 @@ One row per phase. Updated as each lands. Scope and reasoning live in
 | 9b | Shift Board — the screen | ✅ | driven in a browser, override exercised end to end | `0807191` |
 | 10a | Mobile capture — the rules, the cache, the state machine | ✅ | 57 tests, incl. a live contract test against the dev backend | `ac7987d` |
 | 10b | Mobile capture — the screens | ✅ | typechecks; 20 render tests on the rules component; camera screens unproven until phase 12 | `f206c67` |
-| 11 | Mobile: sync engine and photo queue | ⬜ | | |
+| 11a | Photo storage on the server (migration 109) + upload endpoint | ✅ | applied to dev; 7 live contract tests | `pending` |
+| 11b | The sync engine, backoff and conflict retention | ✅ | 32 tests against a transport that fails on purpose | `pending` |
+| 11c | Triggers and the "still on this tablet" screen | ✅ | typechecks; background task unproven until phase 12 | `pending` |
 | 12 | **Field trial on one real tablet** | ⬜ | | |
 | 13 | Production migration of 105–108 | ⬜ | **held until ~75% built** | |
 

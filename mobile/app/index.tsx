@@ -49,7 +49,8 @@ export default function Home() {
       }
     >
       {/* ── what is still here ───────────────────────────────────────────── */}
-      <View style={[styles.banner, waiting > 0 ? styles.bannerWaiting : styles.bannerClear]}>
+      <Pressable testID="open-sync" onPress={() => router.push('/sync')}
+                 style={[styles.banner, waiting > 0 ? styles.bannerWaiting : styles.bannerClear]}>
         <Text style={styles.bannerTitle}>
           {waiting === 0
             ? 'Everything on this tablet has reached the office'
@@ -74,7 +75,7 @@ export default function Home() {
             {outbox?.conflict} clash with a handover already filed — show a supervisor.
           </Text>
         )}
-      </View>
+      </Pressable>
 
       {stale && (
         <View style={[styles.banner, styles.bannerStale]}>

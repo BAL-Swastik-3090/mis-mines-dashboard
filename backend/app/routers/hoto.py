@@ -19,7 +19,8 @@ from __future__ import annotations
 
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query,
+                     Request, UploadFile)
 from sqlalchemy.orm import Session
 
 from app.minehub_db import get_minehub_db
@@ -30,6 +31,7 @@ from app.services import hoto_admin as adm
 from app.services import hoto_register as reg
 from app.services import hoto_defects as dfx
 from app.services import hoto_board as brd
+from app.services import hoto_photos as pho
 
 router = APIRouter(prefix="/api/hoto", tags=["HOTO"])
 
@@ -526,3 +528,82 @@ def board_history(asset_id: int, request: Request,
     """How this machine's state has moved, newest first."""
     _guard(request, db)
     return {"asset_id": asset_id, "events": brd.history(db, asset_id, limit)}
+
+
+# ── photos (phase 11) ────────────────────────────────────────────────────────
+
+@router.post("/photos", status_code=201)
+async def upload_photo(request: Request,
+                       photo_uuid: str = Form(...),
+                       client_uuid: str = Form(...),
+                       item_id: int | None = Form(default=None),
+                       captured_at: str | None = Form(default=None),
+                       sha256: str | None = Form(default=None),
+                       lat: float | None = Form(default=None),
+                       lon: float | None = Form(default=None),
+                       accuracy_m: float | None = Form(default=None),
+                       file: UploadFile = File(...),
+                       db: Session = Depends(get_minehub_db)) -> dict:
+    """One photo, uploaded on its own.
+
+    SEPARATELY FROM THE HANDOVER, deliberately. At a gate on a signal that
+    lasts seconds, a session and its photos travelling together means neither
+    arrives. The session is filed first and the photos follow, each addressed
+    by the session's `client_uuid` — which is the only session key a device
+    has, because it never holds a server id until the session has synced.
+
+    Idempotent on `photo_uuid`, and the bytes are checked against the sha256
+    the device computed: a truncated JPEG is refused rather than stored, since
+    the only thing worse than no photo is a corrupt one that looks like
+    evidence until somebody opens it.
+    """
+    actor = _capture_guard(request, db)
+    content = await file.read()
+    try:
+        return pho.receive(
+            db, photo_uuid=photo_uuid, client_uuid=client_uuid, content=content,
+            actor=actor, item_id=item_id, captured_at=captured_at,
+            content_type=file.content_type or "image/jpeg", sha256=sha256,
+            lat=lat, lon=lon, accuracy_m=accuracy_m,
+        )
+    except pho.PhotoError as e:
+        raise HTTPException(e.status, {"message": "The photo was not stored.",
+                                       "problems": e.problems})
+
+
+@router.get("/register/{session_id}/photos")
+def session_photos(session_id: int, request: Request,
+                   db: Session = Depends(get_minehub_db)) -> dict:
+    """What evidence has arrived for this handover. Metadata only."""
+    _guard(request, db)
+    rows = pho.listing(db, session_id)
+    return {"session_id": session_id, "count": len(rows), "photos": rows}
+
+
+@router.get("/photos/{photo_id}")
+def photo_bytes(photo_id: int, request: Request,
+                db: Session = Depends(get_minehub_db)):
+    """The image itself."""
+    _guard(request, db)
+    got = pho.content_of(db, photo_id)
+    if not got:
+        raise HTTPException(404, "No such photo.")
+    content, content_type = got
+    from fastapi.responses import Response as RawResponse
+    return RawResponse(content=content, media_type=content_type,
+                       headers={"Cache-Control": "private, max-age=86400"})
+
+
+@router.get("/evidence/pending")
+def pending_evidence(request: Request,
+                     days: int = Query(default=7, ge=1, le=90),
+                     db: Session = Depends(get_minehub_db)) -> dict:
+    """Checks whose photos were attested to but have never arrived.
+
+    The report that keeps an offline system honest. A photo still sitting on a
+    tablet is indistinguishable from one nobody took unless somebody looks, and
+    this is where somebody looks.
+    """
+    _guard(request, db)
+    rows = pho.evidence_gaps(db, days)
+    return {"days": days, "count": len(rows), "pending": rows}

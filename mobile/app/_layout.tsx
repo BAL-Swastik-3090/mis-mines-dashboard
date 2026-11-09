@@ -12,11 +12,45 @@ import { useEffect, useState } from 'react';
 import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
 import { Stack } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import * as TaskManager from 'expo-task-manager';
+import * as BackgroundTask from 'expo-background-task';
+import * as SecureStore from 'expo-secure-store';
 import { adapt, openDb } from '@/core/db/open';
 import { useCapture } from '@/ui/useCapture';
+import { useSync } from '@/ui/useSync';
+import { BACKGROUND_TASK, registerBackgroundSync, useSyncTriggers } from '@/ui/syncTriggers';
+import { httpTransport } from '@/core/sync/transport';
+import { syncNow } from '@/core/sync/engine';
+
+/**
+ * The background task must be DEFINED at module scope, before React renders.
+ * Android calls into it on a cold start with no component tree, so a definition
+ * inside a hook is registered too late to ever be called.
+ */
+TaskManager.defineTask(BACKGROUND_TASK, async () => {
+  try {
+    const db = await openDb();
+    await syncNow({ store: adapt(db), transport: transportFor(), force: true });
+    return BackgroundTask.BackgroundTaskResult.Success;
+  } catch {
+    return BackgroundTask.BackgroundTaskResult.Failed;
+  }
+});
+
+/** One transport, built from whatever the tablet was enrolled with. */
+function transportFor() {
+  return httpTransport({
+    baseUrl: process.env.EXPO_PUBLIC_HOTO_API ?? 'https://mines.balasorealloys.in',
+    authHeader: async (): Promise<Record<string, string>> => {
+      const cookie = await SecureStore.getItemAsync('hoto.session.cookie');
+      return cookie ? { Cookie: `mines_session=${cookie}` } : {};
+    },
+  });
+}
 
 export default function RootLayout() {
   const attach = useCapture((s) => s.attach);
+  const attachSync = useSync((s) => s.attach);
   const [state, setState] = useState<'opening' | 'ready' | 'failed'>('opening');
   const [why, setWhy] = useState<string>('');
 
@@ -26,7 +60,10 @@ export default function RootLayout() {
       try {
         const db = await openDb();
         if (!alive) return;
-        attach(adapt(db));
+        const store = adapt(db);
+        attach(store);
+        attachSync(store, transportFor());
+        void registerBackgroundSync();
         setState('ready');
       } catch (e) {
         if (!alive) return;
@@ -35,7 +72,11 @@ export default function RootLayout() {
       }
     })();
     return () => { alive = false; };
-  }, [attach]);
+  }, [attach, attachSync]);
+
+  // Only once the database is open — a trigger that fires before it is
+  // would try to read an outbox that is not there yet.
+  useSyncTriggers(state === 'ready');
 
   if (state === 'opening') {
     return (
@@ -75,6 +116,7 @@ export default function RootLayout() {
         <Stack.Screen name="capture/confirm" options={{ title: 'Confirm' }} />
         <Stack.Screen name="capture/scan" options={{ title: 'Scan the cab' }} />
         <Stack.Screen name="capture/photo" options={{ title: 'Photo', presentation: 'modal' }} />
+        <Stack.Screen name="sync" options={{ title: 'Still on this tablet' }} />
       </Stack>
     </SafeAreaProvider>
   );
