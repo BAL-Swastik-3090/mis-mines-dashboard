@@ -21,6 +21,7 @@ import * as SQLite from 'expo-sqlite';
 import * as SecureStore from 'expo-secure-store';
 import * as Crypto from 'expo-crypto';
 import { MIGRATIONS, SCHEMA_VERSION } from './schema';
+import type { Store } from '../capture/store';
 
 const DB_NAME = 'hoto.db';
 const KEY_ENTRY = 'hoto.db.key';
@@ -88,6 +89,26 @@ export async function migrate(db: DB): Promise<number> {
 
   await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION};`);
   return SCHEMA_VERSION;
+}
+
+/**
+ * The database behind the {@link Store} interface the capture logic takes.
+ *
+ * expo-sqlite overloads `runAsync` and types its bind params narrowly, so it is
+ * not assignable to `Store` directly even though the shapes look the same. This
+ * is the whole of the difference.
+ */
+export function adapt(db: DB): Store {
+  return {
+    runAsync: (sql, params = []) =>
+      db.runAsync(sql, params as SQLite.SQLiteBindParams)
+        .then((r) => ({ changes: r.changes, lastInsertRowId: r.lastInsertRowId })),
+    getAllAsync: <T>(sql: string, params: unknown[] = []) =>
+      db.getAllAsync<T>(sql, params as SQLite.SQLiteBindParams),
+    getFirstAsync: <T>(sql: string, params: unknown[] = []) =>
+      db.getFirstAsync<T>(sql, params as SQLite.SQLiteBindParams),
+    withTransactionAsync: (fn) => db.withTransactionAsync(fn),
+  };
 }
 
 /** Tests only. Drops the cached handle so the next open re-runs migrations. */
