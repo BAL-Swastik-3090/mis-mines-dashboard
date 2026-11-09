@@ -15,14 +15,15 @@ One row per phase. Updated as each lands. Scope and reasoning live in
 | 6a | Admin templates — **the API** | ✅ | dev-tested | `pending` |
 | 6b | Admin templates — **the screen** | ⬜ | | |
 | 7a | HOTO register — the API | ✅ | dev-tested | `9e732ec` |
-| 7b | HOTO register — the screen | ✅ | typechecks | `pending` |
+| 7b | HOTO register — the screen | ✅ | typechecks | `794c053` |
 | -- | HOTO permissions (migration 107) | ✅ | dev | `9e732ec` |
-| 8 | Defect lifecycle and equipment state machine (migration 108) | ⬜ | | |
+| 8a | Defects + state machine — the schema (migration 108) | ✅ | dev-tested | `pending` |
+| 8b | Defects — API and screen | ⬜ | | |
 | 9 | Admin: Shift HOTO Board — approve / restrict / lock | ⬜ | | |
 | 10 | Mobile: the capture flow | ⬜ | | |
 | 11 | Mobile: sync engine and photo queue | ⬜ | | |
 | 12 | **Field trial on one real tablet** | ⬜ | | |
-| 13 | Production migration of 105–107 | ⬜ | | |
+| 13 | Production migration of 105–108 | ⬜ | **held until ~75% built** | |
 
 ---
 
