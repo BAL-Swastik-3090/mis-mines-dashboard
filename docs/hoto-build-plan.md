@@ -21,7 +21,7 @@ One row per phase. Updated as each lands. Scope and reasoning live in
 | 8b | Defects — the API and escalation | ✅ | dev-tested | `a0f7458` |
 | 8c | Defects — the workshop screen | ✅ | driven in a browser against seeded dev data | `17508d3` |
 | 9a | Shift Board — the API and the override rule | ✅ | dev-tested | `65db41c` |
-| 9b | Shift Board — the screen | ✅ | driven in a browser, override exercised end to end | `pending` |
+| 9b | Shift Board — the screen | ✅ | driven in a browser, override exercised end to end | `0807191` |
 | 10 | Mobile: the capture flow | ⬜ | | |
 | 11 | Mobile: sync engine and photo queue | ⬜ | | |
 | 12 | **Field trial on one real tablet** | ⬜ | | |
@@ -91,7 +91,14 @@ survived use.
 
 ## Still open
 
-1. **Who may override a lock, and on what authority** — blocks phase 9
-2. **What a missing handover counts as** — blocks reporting in phase 9
+1. **Who may override a lock** — no longer blocks phase 9. The mechanism
+   landed in 9a: releasing a machine its own defects say should be held needs
+   `hoto.override` and a written reason, and raises an exception. What is still
+   open is purely WHO holds that permission — today only the superadmins, and
+   only because the platform grants every new permission to them. A decision
+   for the mine, not a default to inherit.
+2. **What a missing handover counts as** — still open. Phase 9 reports the four
+   cases separately (captured / nobody filled it in / already off work / no
+   checklist) rather than guessing a denominator.
 3. **Whether an operator may ever take a machine outside his competency** — blocks phase 5's validation
 4. Dumper: its own template, or share the Tipper one (phase 6)
