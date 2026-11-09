@@ -34,7 +34,7 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "A photo is required for some checks \u2014 a cracked hose or a leaking seal is a defect the workshop can act on, where a tick is not.",
+          "cameraPermission": "A photo is required for some checks — a cracked hose or a leaking seal is a defect the workshop can act on, where a tick is not.",
           "recordAudioAndroid": false
         }
       ],
@@ -53,7 +53,8 @@
         }
       ],
       "expo-background-task",
-      "expo-task-manager"
+      "expo-task-manager",
+      "expo-asset"
     ],
     "extra": {
       "eas": {

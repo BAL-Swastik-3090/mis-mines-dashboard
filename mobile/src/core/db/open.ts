@@ -53,6 +53,16 @@ async function keyFor(): Promise<string> {
  * rather than a half-migrated one, because a half-migrated database is the one
  * state no later version knows how to repair.
  */
+/**
+ * Whether the database this process opened is actually encrypted.
+ *
+ * Null until `openDb` has run. False means the runtime has no SQLCipher, which
+ * happens in Expo Go and in any build where the expo-sqlite plugin's
+ * `useSQLCipher` was not applied.
+ */
+let encrypted: boolean | null = null;
+export const isEncrypted = (): boolean | null => encrypted;
+
 export async function openDb(): Promise<DB> {
   if (handle) return handle;
 
@@ -60,6 +70,31 @@ export async function openDb(): Promise<DB> {
   const db = await SQLite.openDatabaseAsync(DB_NAME);
   // Must be the first statement on the connection, before any read.
   await db.execAsync(`PRAGMA key = '${key}';`);
+
+  // DID THAT ACTUALLY DO ANYTHING? SQLite ignores pragmas it does not know, so
+  // on a runtime without SQLCipher the line above succeeds, encrypts nothing,
+  // and leaves the app believing the opposite. `cipher_version` answers only on
+  // a real SQLCipher build, and this is the only way to tell the two apart.
+  //
+  // It is not fatal: an unencrypted database is the right trade for testing the
+  // flow in Expo Go, where no native build exists. But the app has to KNOW,
+  // because what is in here is hashed operator credentials and handovers nobody
+  // has sent, and "we thought it was encrypted" is the worst of the three
+  // possible states.
+  try {
+    const v = await db.getFirstAsync<{ cipher_version?: string }>(
+      'PRAGMA cipher_version;');
+    encrypted = Boolean(v && Object.values(v)[0]);
+  } catch {
+    encrypted = false;
+  }
+  if (!encrypted) {
+    console.warn(
+      '[hoto] This database is NOT encrypted: the runtime has no SQLCipher. ' +
+      'Expected in Expo Go. A tablet issued to the mine must run a build where ' +
+      'it is, or the credentials and unsent handovers on it are in the clear.',
+    );
+  }
 
   await migrate(db);
   handle = db;

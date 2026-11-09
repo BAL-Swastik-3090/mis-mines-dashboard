@@ -13,7 +13,7 @@
       "distribution": "internal",
       "android": { "buildType": "apk" },
       "env": {
-        "EXPO_PUBLIC_HOTO_API": "http://192.168.10.30:8989"
+        "EXPO_PUBLIC_HOTO_API": "http://10.210.99.195:8990"
       }
     },
     "production": {

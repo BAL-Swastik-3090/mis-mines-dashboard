@@ -28,6 +28,14 @@ import { storedBaseUrl, storedToken } from '@/core/sync/enrolment';
  * Android calls into it on a cold start with no component tree, so a definition
  * inside a hook is registered too late to ever be called.
  */
+/**
+ * Wrapped in try/catch because Expo Go has no background-task module, and a
+ * throw at module scope takes the whole app down before anything renders. In
+ * Expo Go the registration simply does not happen, which costs nothing: the
+ * background task is best-effort even on a real build (see useSync.ts), and
+ * everything the trial actually tests is driven by the other four triggers.
+ */
+try {
 TaskManager.defineTask(BACKGROUND_TASK, async () => {
   try {
     const base = await storedBaseUrl();
@@ -43,6 +51,11 @@ TaskManager.defineTask(BACKGROUND_TASK, async () => {
     return BackgroundTask.BackgroundTaskResult.Failed;
   }
 });
+} catch {
+  console.warn('[hoto] background sync is not available in this runtime ' +
+               '(expected in Expo Go). Sync on open, on reconnect, after a ' +
+               'capture and the Sync now button all still work.');
+}
 
 export default function RootLayout() {
   const attach = useCapture((s) => s.attach);
