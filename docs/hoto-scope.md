@@ -132,7 +132,10 @@ There is no reliable network at the working face. The app must assume there is n
 
 - Every screen works from local storage. A handover is captured, confirmed by both parties and **stored complete** with no server contact.
 - A local queue holds unsent handovers. The operator sees the count and can keep working.
-- Sync happens when a network appears — at the gate, at the workshop, on site Wi-Fi — without anyone asking it to.
+- Sync runs **when the app opens, when connectivity returns while it is open, and through scheduled
+  background work** — plus a visible **Sync now**. It cannot be promised on reconnect alone: Android
+  controls background scheduling and will defer or drop it, so an app that only syncs in the background
+  is an app that silently holds records. The pending count is always on screen.
 - **Reference data is cached:** the assets, operators, locations, shift calendar, template and checklist items. Refreshed on sync, usable for at least 7 days stale.
 - The server assigns `hoto_ref` and `deployment_ref`. The device assigns a **client-generated id** that travels with the record so a retry cannot create the same handover twice.
 
@@ -432,7 +435,15 @@ Keep from `mine_system`:
 
 Discard: the .NET backend, the separate React admin, the standalone schema and the second identity system.
 
-**The mobile stack is the one open technical choice.** Flutter is already scaffolded and the earlier design committed to it; the dashboard is React/Next. Flutter means two frontend stacks in the estate and a second skill set; React Native means reusing one. A PWA will not do here — offline capture with encrypted local storage, NFC badge reads and camera control on a kiosk-locked tablet is not PWA territory. **Recommend Flutter**, because it is already started and it is the stronger offline client, and accept the second stack knowingly rather than by drift.
+**The mobile stack: React Native + Expo + TypeScript.** Settled 9 November, against an earlier recommendation of Flutter in this same document.
+
+The Flutter case rested on two arguments and neither survived. *Already scaffolded* was sunk cost: the scaffold is 539 lines built on the pre-session schema and was being rewritten regardless. *The stronger offline client* does not hold for this workload — SQLite, an encrypted store and a queue are identical work in either, and nothing here is performance-bound.
+
+What is left is one frontend language across the estate against two. The dashboard is React and TypeScript; the API contract and the validation rules can be shared rather than transcribed, and the people who maintain one maintain the other. That outweighs a scaffold being discarded.
+
+A PWA still will not do: encrypted local storage, NFC badge reads and camera control on a kiosk-locked tablet are outside it.
+
+**What choosing a framework does not buy.** Offline reliability is built, not inherited. The local-first write path, the photo upload queue, idempotent replay and conflict retention are the work, and they are the same work in any of these. Prove offline capture, geotagging and interrupted-upload recovery **on one actual mine tablet** before committing to the full build.
 
 ### 14.4 Questions section 9 can now stop asking
 
