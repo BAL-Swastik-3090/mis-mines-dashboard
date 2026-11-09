@@ -1,0 +1,64 @@
+{
+  "expo": {
+    "name": "Kaliapani HOTO",
+    "slug": "kaliapani-hoto",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "kaliapanihoto",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "android": {
+      "package": "in.balasorealloys.kaliapani.hoto",
+      "versionCode": 1,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.INTERNET"
+      ],
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.ACCESS_BACKGROUND_LOCATION"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "A photo is required for some checks \u2014 a cracked hose or a leaking seal is a defect the workshop can act on, where a tick is not.",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Each handover records where it was captured, so a record can be tied to the machine it describes.",
+          "isAndroidBackgroundLocationEnabled": false
+        }
+      ],
+      [
+        "expo-sqlite",
+        {
+          "enableFTS": false,
+          "useSQLCipher": true
+        }
+      ],
+      "expo-background-task",
+      "expo-task-manager"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "SET-ON-FIRST-EAS-BUILD"
+      }
+    }
+  }
+}

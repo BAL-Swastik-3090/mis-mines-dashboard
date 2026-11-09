@@ -1,0 +1,28 @@
+{
+  "cli": { "version": ">= 5.9.0", "appVersionSource": "local" },
+  "build": {
+    "trial": {
+      "android": { "buildType": "apk" },
+      "channel": "trial",
+      "env": {
+        "EXPO_PUBLIC_HOTO_API": "https://mines.balasorealloys.in"
+      }
+    },
+    "trial-dev": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "android": { "buildType": "apk" },
+      "env": {
+        "EXPO_PUBLIC_HOTO_API": "http://192.168.10.30:8989"
+      }
+    },
+    "production": {
+      "android": { "buildType": "app-bundle" },
+      "channel": "production",
+      "env": {
+        "EXPO_PUBLIC_HOTO_API": "https://mines.balasorealloys.in"
+      }
+    }
+  },
+  "submit": { "production": {} }
+}

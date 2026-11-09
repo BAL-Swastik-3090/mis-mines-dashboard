@@ -32,6 +32,7 @@ from app.services import hoto_register as reg
 from app.services import hoto_defects as dfx
 from app.services import hoto_board as brd
 from app.services import hoto_photos as pho
+from app.services import hoto_devices as dvc
 
 router = APIRouter(prefix="/api/hoto", tags=["HOTO"])
 
@@ -607,3 +608,62 @@ def pending_evidence(request: Request,
     _guard(request, db)
     rows = pho.evidence_gaps(db, days)
     return {"days": days, "count": len(rows), "pending": rows}
+
+
+# ── enrolling tablets (phase 12) ─────────────────────────────────────────────
+
+def _devices(fn, *a, **kw):
+    try:
+        return fn(*a, **kw)
+    except dvc.DeviceError as e:
+        raise HTTPException(e.status, {"message": "Refused.", "problems": e.problems})
+
+
+@router.get("/admin/devices")
+def list_devices(request: Request, db: Session = Depends(get_minehub_db)) -> dict:
+    """Every tablet, what it has filed, and when it last called in."""
+    _admin_guard(request, db)
+    rows = dvc.listing(db)
+    return {"count": len(rows), "devices": rows}
+
+
+@router.post("/admin/devices", status_code=201)
+def enrol_device(request: Request, payload: dict,
+                 db: Session = Depends(get_minehub_db)) -> dict:
+    """Register a tablet and issue its credential.
+
+    THE TOKEN COMES BACK ONCE. Only its hash is stored, so it cannot be shown
+    again — a lost token means re-issuing, which is one call and leaves a
+    trail. Recoverable secrets are how a credential ends up in a WhatsApp
+    group.
+    """
+    actor = _admin_guard(request, db)
+    return _devices(dvc.enrol, db,
+                    device_code=payload.get("device_code", ""),
+                    label=payload.get("label", ""),
+                    profile=(payload.get("profile") or "COMPANY").upper(),
+                    actor=actor,
+                    plant_id=payload.get("plant_id"),
+                    location_id=payload.get("location_id"),
+                    remarks=payload.get("remarks"))
+
+
+@router.post("/admin/devices/{device_code}/reissue")
+def reissue_device(device_code: str, request: Request,
+                   db: Session = Depends(get_minehub_db)) -> dict:
+    """A new token for a tablet that lost its one. The old token stops at once."""
+    actor = _admin_guard(request, db)
+    return _devices(dvc.reissue, db, device_code, actor)
+
+
+@router.post("/admin/devices/{device_code}/revoke")
+def revoke_device(device_code: str, request: Request, payload: dict,
+                  db: Session = Depends(get_minehub_db)) -> dict:
+    """Stop a tablet — lost, stolen, or retired.
+
+    Anything it captured and has not sent becomes unsendable, which the answer
+    says in as many words: sync it first if that matters.
+    """
+    actor = _admin_guard(request, db)
+    return _devices(dvc.revoke, db, device_code, actor,
+                    payload.get("reason") or "")

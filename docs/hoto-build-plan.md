@@ -27,7 +27,10 @@ One row per phase. Updated as each lands. Scope and reasoning live in
 | 11a | Photo storage on the server (migration 109) + upload endpoint | ✅ | applied to dev; 7 live contract tests | `c4c9f64` |
 | 11b | The sync engine, backoff and conflict retention | ✅ | 32 tests against a transport that fails on purpose | `c4c9f64` |
 | 11c | Triggers and the "still on this tablet" screen | ✅ | typechecks; background task unproven until phase 12 | `c4c9f64` |
-| 12 | **Field trial on one real tablet** | ⬜ | | |
+| 12a | Device enrolment and device authentication | ✅ | 30 checks end to end, incl. the exemption boundary | `pending` |
+| 12b | Buildable: app.json, eas.json, permissions | ✅ | expo-doctor 18/18 | `pending` |
+| 12c | The trial protocol | ✅ | written, not yet run | `pending` |
+| 12d | **Running the trial on a real tablet** | ⬜ | needs a tablet and a shift | |
 | 13 | Production migration of 105–109 | ⬜ | **held until ~75% built** | |
 
 ---
@@ -73,7 +76,16 @@ and a visible Sync now — Android will not honour anything stronger.
 
 **12 · Field trial.** One tablet, one section, one shift, alongside the paper.
 Prove offline capture, geotagging and interrupted-upload recovery on real
-hardware before committing to the rest.
+hardware before committing to the rest. The protocol, what counts as a pass and
+what counts as a stop are in [`hoto-field-trial.md`](hoto-field-trial.md).
+
+Getting there needed two things that were missing and would have stopped the
+trial on its first morning: the app had no Expo config at all, so there was
+nothing to build; and a tablet had no way to authenticate, because the app read
+a dashboard session cookie that nobody ever wrote and that would have been the
+wrong credential anyway — it idles out in twenty minutes, the platform permits
+one per employee, and it would mean typing a dashboard password into a shared
+tablet in a pit. Devices now carry their own token.
 
 **13 · Production.** Migrations 105–109 to `corpappdb`, once the dev shape has
 survived use.

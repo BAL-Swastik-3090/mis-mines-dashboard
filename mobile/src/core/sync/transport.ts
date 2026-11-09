@@ -7,6 +7,15 @@
  * server never having seen it. Collapsing both into a thrown error would make
  * the engine retry a refusal forever and give up on a timeout.
  *
+ * ── WHY THE PATHS ARE /api/hoto/device/* ─────────────────────────────────────
+ * A tablet is not a person. The person-facing /api/hoto endpoints sit behind
+ * the dashboard's session middleware, which refuses a request with no cookie
+ * before any handler runs -- and a session cookie is the wrong credential for a
+ * shared tablet three times over: it idles out in twenty minutes, the platform
+ * permits one per employee so two tablets evict each other, and it would mean
+ * typing a dashboard password into a tablet in a pit. The device prefix carries
+ * only what a device does, and the token names a tablet rather than a person.
+ *
  * ── WHY THE PHOTO GOES THROUGH expo-file-system AND NOT fetch ────────────────
  * `uploadAsync` streams the file from disk. Reading a 300 kB JPEG into a
  * JavaScript string to hand to fetch works, until a tablet with a long queue
@@ -23,9 +32,12 @@ export interface TransportConfig {
   /** Milliseconds. Short: a tablet's window of signal is seconds long, and a
    *  60-second timeout spends the whole window on one failing request. */
   timeoutMs?: number;
-  /** Supplies the session cookie. Async because it is read from secure storage. */
-  authHeader: () => Promise<Record<string, string>>;
+  /** The device token, read from secure storage. Async for that reason. */
+  deviceToken: () => Promise<string | null>;
 }
+
+/** The one header that identifies the tablet. */
+export const DEVICE_HEADER = 'X-HOTO-Device';
 
 const DEFAULT_TIMEOUT = 20_000;
 
@@ -36,8 +48,11 @@ export function httpTransport(cfg: TransportConfig): Transport {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), timeout);
     try {
-      const headers = { ...(init.headers as Record<string, string> | undefined),
-                        ...(await cfg.authHeader()) };
+      const token = await cfg.deviceToken();
+      const headers: Record<string, string> = {
+        ...(init.headers as Record<string, string> | undefined),
+        ...(token ? { [DEVICE_HEADER]: token } : {}),
+      };
       const r = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: ac.signal });
       const text = await r.text();
       let body: any = null;
@@ -51,21 +66,23 @@ export function httpTransport(cfg: TransportConfig): Transport {
   };
 
   return {
-    postSession: (payload) => call('/api/hoto/sessions', {
+    postSession: (payload) => call('/api/hoto/device/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     }),
 
-    getBundle: () => call('/api/hoto/sync', { method: 'GET' }),
+    getBundle: () => call('/api/hoto/device/sync', { method: 'GET' }),
 
     postPhoto: async ({ photoUuid, clientUuid, itemId, localPath, sha256, capturedAt }) => {
-      const r = await FileSystem.uploadAsync(`${cfg.baseUrl}/api/hoto/photos`, localPath, {
+      const token = await cfg.deviceToken();
+      const r = await FileSystem.uploadAsync(
+        `${cfg.baseUrl}/api/hoto/device/photos`, localPath, {
         httpMethod: 'POST',
         uploadType: FileSystem.FileSystemUploadType.MULTIPART,
         fieldName: 'file',
         mimeType: 'image/jpeg',
-        headers: await cfg.authHeader(),
+        headers: token ? { [DEVICE_HEADER]: token } : {},
         parameters: {
           photo_uuid: photoUuid,
           client_uuid: clientUuid,

@@ -419,7 +419,18 @@ _AUTH_EXEMPT = ("/api/auth/", "/api/health", "/api/docs", "/api/redoc", "/api/op
                 # people and stays behind the middleware. The handler authenticates
                 # the token itself and can do nothing but add readings to the one
                 # bridge that token names.
-                "/api/weighbridge/readings")
+                "/api/weighbridge/readings",
+                # A HOTO tablet is the same case. It carries a device token, not a
+                # session: the session JWT idles out in twenty minutes and the
+                # platform allows one per employee, so two tablets enrolled against
+                # one person would evict each other mid-shift. Every handler under
+                # this prefix authenticates the device token itself, and the prefix
+                # carries only what a device does -- pull masters, file handovers,
+                # upload photos. The register, the board, the defect queue and the
+                # template editor are NOT here and stay behind the session check,
+                # so a stolen tablet token cannot read the operator register or
+                # change a checklist.
+                "/api/hoto/device/")
 
 # The permission a path prefix requires. Permissions rather than role names, so
 # a new role created in the UI can be given exactly these without any code
@@ -718,6 +729,7 @@ from app.routers import equipment_plan
 from app.routers import pr_po
 from app.routers import oee_settings
 from app.routers import hoto
+from app.routers import hoto_device
 from app.routers import quality_e2e
 from app.routers import amira
 from app.routers import executive_summary
@@ -773,6 +785,7 @@ app.include_router(equipment_plan.router)
 app.include_router(pr_po.router)
 app.include_router(oee_settings.router)
 app.include_router(hoto.router)
+app.include_router(hoto_device.router)
 app.include_router(quality_e2e.router)
 app.include_router(amira.router)
 app.include_router(executive_summary.router)

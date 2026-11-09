@@ -14,13 +14,14 @@ import { Stack } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as TaskManager from 'expo-task-manager';
 import * as BackgroundTask from 'expo-background-task';
-import * as SecureStore from 'expo-secure-store';
 import { adapt, openDb } from '@/core/db/open';
 import { useCapture } from '@/ui/useCapture';
 import { useSync } from '@/ui/useSync';
+import Enrol from './enrol';
 import { BACKGROUND_TASK, registerBackgroundSync, useSyncTriggers } from '@/ui/syncTriggers';
 import { httpTransport } from '@/core/sync/transport';
 import { syncNow } from '@/core/sync/engine';
+import { storedBaseUrl, storedToken } from '@/core/sync/enrolment';
 
 /**
  * The background task must be DEFINED at module scope, before React renders.
@@ -29,29 +30,24 @@ import { syncNow } from '@/core/sync/engine';
  */
 TaskManager.defineTask(BACKGROUND_TASK, async () => {
   try {
+    const base = await storedBaseUrl();
+    if (!base) return BackgroundTask.BackgroundTaskResult.Success;   // nothing to do
     const db = await openDb();
-    await syncNow({ store: adapt(db), transport: transportFor(), force: true });
+    await syncNow({
+      store: adapt(db),
+      transport: httpTransport({ baseUrl: base, deviceToken: storedToken }),
+      force: true,
+    });
     return BackgroundTask.BackgroundTaskResult.Success;
   } catch {
     return BackgroundTask.BackgroundTaskResult.Failed;
   }
 });
 
-/** One transport, built from whatever the tablet was enrolled with. */
-function transportFor() {
-  return httpTransport({
-    baseUrl: process.env.EXPO_PUBLIC_HOTO_API ?? 'https://mines.balasorealloys.in',
-    authHeader: async (): Promise<Record<string, string>> => {
-      const cookie = await SecureStore.getItemAsync('hoto.session.cookie');
-      return cookie ? { Cookie: `mines_session=${cookie}` } : {};
-    },
-  });
-}
-
 export default function RootLayout() {
   const attach = useCapture((s) => s.attach);
   const attachSync = useSync((s) => s.attach);
-  const [state, setState] = useState<'opening' | 'ready' | 'failed'>('opening');
+  const [state, setState] = useState<'opening' | 'ready' | 'failed' | 'unenrolled'>('opening');
   const [why, setWhy] = useState<string>('');
 
   useEffect(() => {
@@ -62,7 +58,21 @@ export default function RootLayout() {
         if (!alive) return;
         const store = adapt(db);
         attach(store);
-        attachSync(store, transportFor());
+
+        // A tablet with no credential cannot sync, so it is sent to be set up
+        // rather than left looking like it is working. Its captured records are
+        // untouched and still there afterwards.
+        const base = await storedBaseUrl();
+        const token = await storedToken();
+        if (!base || !token) {
+          setState('unenrolled');
+          return;
+        }
+
+        attachSync(store, httpTransport({
+          baseUrl: base,
+          deviceToken: storedToken,
+        }));
         void registerBackgroundSync();
         setState('ready');
       } catch (e) {
@@ -85,6 +95,10 @@ export default function RootLayout() {
         <Text style={styles.note}>Opening the device database…</Text>
       </View>
     );
+  }
+
+  if (state === 'unenrolled') {
+    return <Enrol />;
   }
 
   if (state === 'failed') {
@@ -117,6 +131,7 @@ export default function RootLayout() {
         <Stack.Screen name="capture/scan" options={{ title: 'Scan the cab' }} />
         <Stack.Screen name="capture/photo" options={{ title: 'Photo', presentation: 'modal' }} />
         <Stack.Screen name="sync" options={{ title: 'Still on this tablet' }} />
+        <Stack.Screen name="enrol" options={{ title: 'Set up this tablet' }} />
       </Stack>
     </SafeAreaProvider>
   );
