@@ -1,0 +1,138 @@
+"""HOTO — what a device syncs down before it goes down the pit.
+
+Read-only. The capture path is phase 5 and lands separately, so this can ship
+and be cached against while the write contract is still being settled.
+
+── PERMISSIONS ──────────────────────────────────────────────────────────────
+`hoto.capture` is the device's own permission and is deliberately narrow: it
+grants the masters a tablet needs and nothing else. `hoto.view` is for people
+reading the register in the dashboard.
+
+Not gated on an existing permission that happens to be widely held. The PR to
+Payment module hangs off `link.prpo.view`, which was created for an unrelated
+shortcut and which thirteen of fifteen roles hold -- so that section is
+effectively open to anyone who can sign in. Repeating that here would put the
+fleet, the operator register and every competency record behind a permission
+nobody chose.
+"""
+from __future__ import annotations
+
+from datetime import date
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy.orm import Session
+
+from app.minehub_db import get_minehub_db
+from app.services import access as access_svc
+from app.services import hoto_masters as svc
+
+router = APIRouter(prefix="/api/hoto", tags=["HOTO"])
+
+VIEW_PERMISSIONS = ("hoto.capture", "hoto.view", "hoto.admin")
+
+
+def _guard(request: Request, db: Session) -> str:
+    """Whoever is asking must hold one of the HOTO permissions.
+
+    Returns the employee id, which every write will need and which the read
+    endpoints log, because "which device pulled the operator register" is a
+    question somebody will eventually ask.
+    """
+    emp = getattr(request.state, "emp_id", None)
+    if not emp:
+        raise HTTPException(401, "Please sign in to continue.")
+    if any(access_svc.has_permission(db, emp, code) for code in VIEW_PERMISSIONS):
+        return emp
+    raise HTTPException(403, "You do not have access to HOTO.")
+
+
+@router.get("/sync")
+def sync(request: Request,
+         plant_id: int | None = Query(default=None),
+         db: Session = Depends(get_minehub_db)) -> dict:
+    """Everything a device needs, in one round trip.
+
+    ONE CALL, NOT FIVE. The moment a tablet has a network is short and often
+    interrupted -- at a gate, in a yard, passing the workshop. Five calls can
+    half-succeed, and a partial cache is worse than a stale one because it
+    looks complete.
+    """
+    _guard(request, db)
+    return svc.sync_bundle(db, plant_id=plant_id)
+
+
+@router.get("/assets")
+def assets(request: Request,
+           plant_id: int | None = Query(default=None),
+           db: Session = Depends(get_minehub_db)) -> dict:
+    """The machines, with the last meter reading and any open defects."""
+    _guard(request, db)
+    rows = svc.assets(db, plant_id=plant_id)
+    return {"count": len(rows), "assets": rows}
+
+
+@router.get("/operators")
+def operators(request: Request,
+              db: Session = Depends(get_minehub_db)) -> dict:
+    """The operators, with what each is signed off to drive.
+
+    Competency is sent down so the device can SAY an operator is taking a
+    machine he is not signed off on. It does not refuse him -- the mine has not
+    decided whether that may be overridden, and until it does, recording the
+    fact is more useful than blocking on a rule nobody has agreed.
+    """
+    _guard(request, db)
+    rows = svc.operators(db)
+    signed_off = sum(1 for r in rows if r["competent_type_ids"])
+    return {"count": len(rows), "with_competency": signed_off, "operators": rows}
+
+
+@router.get("/shifts")
+def shifts(request: Request, db: Session = Depends(get_minehub_db)) -> dict:
+    """The shift calendar, with the production-day rule.
+
+    The device must never work the production day out itself: a handover at
+    06:00 belongs to the day that is ending, not the one starting, and a device
+    clock that has drifted would get that wrong silently.
+    """
+    _guard(request, db)
+    rows = svc.shifts(db)
+    return {"count": len(rows), "shifts": rows}
+
+
+@router.get("/template")
+def template(request: Request,
+             asset_type_id: int = Query(...),
+             plant_id: int | None = Query(default=None),
+             org_unit_id: int | None = Query(default=None),
+             on_date: date | None = Query(default=None),
+             db: Session = Depends(get_minehub_db)) -> dict:
+    """The checklist in force for a machine type, on a day.
+
+    `on_date` is the PRODUCTION DAY the handover belongs to, not today. A
+    capture that syncs three days late must resolve against the template that
+    was in force when it happened.
+    """
+    _guard(request, db)
+    head = svc.resolve_template(db, asset_type_id, plant_id=plant_id,
+                               org_unit_id=org_unit_id, on_date=on_date)
+    if not head:
+        raise HTTPException(404, "No active checklist is published for this machine type.")
+    return svc.template_payload(db, head["template_id"])
+
+
+@router.get("/template/{template_id}")
+def template_by_id(template_id: int,
+                   request: Request,
+                   db: Session = Depends(get_minehub_db)) -> dict:
+    """A specific template version, by id.
+
+    Needed to read a historic capture: a session records the template and
+    version it answered, and the register has to show the questions as they
+    were asked, not as they are today.
+    """
+    _guard(request, db)
+    payload = svc.template_payload(db, template_id)
+    if not payload:
+        raise HTTPException(404, "No such checklist.")
+    return payload
