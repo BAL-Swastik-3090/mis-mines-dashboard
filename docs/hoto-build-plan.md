@@ -24,11 +24,11 @@ One row per phase. Updated as each lands. Scope and reasoning live in
 | 9b | Shift Board — the screen | ✅ | driven in a browser, override exercised end to end | `0807191` |
 | 10a | Mobile capture — the rules, the cache, the state machine | ✅ | 57 tests, incl. a live contract test against the dev backend | `ac7987d` |
 | 10b | Mobile capture — the screens | ✅ | typechecks; 20 render tests on the rules component; camera screens unproven until phase 12 | `f206c67` |
-| 11a | Photo storage on the server (migration 109) + upload endpoint | ✅ | applied to dev; 7 live contract tests | `pending` |
-| 11b | The sync engine, backoff and conflict retention | ✅ | 32 tests against a transport that fails on purpose | `pending` |
-| 11c | Triggers and the "still on this tablet" screen | ✅ | typechecks; background task unproven until phase 12 | `pending` |
+| 11a | Photo storage on the server (migration 109) + upload endpoint | ✅ | applied to dev; 7 live contract tests | `c4c9f64` |
+| 11b | The sync engine, backoff and conflict retention | ✅ | 32 tests against a transport that fails on purpose | `c4c9f64` |
+| 11c | Triggers and the "still on this tablet" screen | ✅ | typechecks; background task unproven until phase 12 | `c4c9f64` |
 | 12 | **Field trial on one real tablet** | ⬜ | | |
-| 13 | Production migration of 105–108 | ⬜ | **held until ~75% built** | |
+| 13 | Production migration of 105–109 | ⬜ | **held until ~75% built** | |
 
 ---
 
@@ -75,7 +75,7 @@ and a visible Sync now — Android will not honour anything stronger.
 Prove offline capture, geotagging and interrupted-upload recovery on real
 hardware before committing to the rest.
 
-**13 · Production.** Migrations 105–107 to `corpappdb`, once the dev shape has
+**13 · Production.** Migrations 105–109 to `corpappdb`, once the dev shape has
 survived use.
 
 ---
