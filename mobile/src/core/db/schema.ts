@@ -59,9 +59,16 @@ export const MIGRATIONS: readonly string[][] = [
     `CREATE INDEX IF NOT EXISTS cached_asset_qr_idx ON cached_asset (qr_code);`,
     `CREATE INDEX IF NOT EXISTS cached_asset_code_idx ON cached_asset (fleet_code);`,
 
+    // emp_id IS NULLABLE, and matches `hoto_session.operator_emp_id`, which is
+    // too. 32 of the mine's 269 operators have no employee reference on record.
+    // Declaring it NOT NULL here looked like rigour and actually meant those
+    // 32 could never be cached, so no handover could ever be filed against
+    // them -- they would simply be missing from the tablet with nothing to say
+    // why. They are identified by name or PIN instead; the operator_id is the
+    // identity, and emp_id is a convenience.
     `CREATE TABLE IF NOT EXISTS cached_operator (
        operator_id            INTEGER PRIMARY KEY,
-       emp_id                 TEXT NOT NULL,
+       emp_id                 TEXT,
        name                   TEXT NOT NULL,
        photo_path             TEXT,
        -- Asset type ids this operator is signed off on, as a JSON array.

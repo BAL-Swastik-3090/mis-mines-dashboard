@@ -186,16 +186,35 @@ def submit_session(request: Request,
                                        "problems": e.problems})
     if not result["created"]:
         # Already filed. Not an error — the device is retrying, correctly.
-        from fastapi import Response
         from fastapi.responses import JSONResponse
         return JSONResponse(status_code=200, content=_jsonable(result))
     return result
 
 
 def _jsonable(d: dict) -> dict:
-    """datetimes out of a replayed row are not JSON on their own."""
+    """Coerce a row read back out of Postgres into something JSON accepts.
+
+    A REPLAY RETURNS THE STORED ROW, not the payload that was sent, so it
+    carries Postgres types: `client_uuid` comes back as a `UUID`, timestamps as
+    `datetime`, numerics as `Decimal`. The created path never sees any of them,
+    which is why this was wrong for `UUID` until a device actually retried --
+    and a retry is the normal case offline, not an exceptional one. A tablet
+    whose connection dropped mid-upload got a 500 and retried forever.
+    """
     from datetime import date as _d, datetime as _dt
-    return {k: (v.isoformat() if isinstance(v, (_d, _dt)) else v) for k, v in d.items()}
+    from decimal import Decimal as _dec
+    from uuid import UUID as _uuid
+
+    def one(v):
+        if isinstance(v, (_d, _dt)):
+            return v.isoformat()
+        if isinstance(v, _uuid):
+            return str(v)
+        if isinstance(v, _dec):
+            return float(v)
+        return v
+
+    return {k: one(v) for k, v in d.items()}
 
 
 @router.get("/sessions/{client_uuid}")

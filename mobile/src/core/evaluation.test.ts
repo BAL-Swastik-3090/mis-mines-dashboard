@@ -1,3 +1,4 @@
+import type { RawResponse } from './evaluation';
 import { evaluateOne, evaluateSession, rangeLabel, type ChecklistItem } from './evaluation';
 
 /** Items taken from the real seeded library (migration 105), not invented. */
@@ -57,7 +58,7 @@ describe('a gauge reading', () => {
     const r = evaluateOne(airPressure, { itemId: 1, numericValue: 74 });
     expect(r.problems).toContain('Say what is wrong');
     expect(r.problems).toContain('Add a photo');
-    expect(r.isComplete ?? r.problems.length === 0).toBe(false);
+    expect(r.problems.length).toBeGreaterThan(0);
   });
 });
 
@@ -97,7 +98,7 @@ describe('a whole session', () => {
   it('cannot be submitted while an item is unanswered', () => {
     const v = evaluateSession({
       items, sessionType: 'END_HANDOVER',
-      answers: new Map([[1, { itemId: 1, numericValue: 95 }], [3, ok(brakes)]]),
+      answers: new Map<number, RawResponse>([[1, { itemId: 1, numericValue: 95 }], [3, ok(brakes)]]),
     });
     expect(v.unanswered.map((i) => i.label)).toEqual(['Lights', 'Fire extinguisher (charge + date)']);
     expect(v.canSubmit).toBe(false);
@@ -141,7 +142,7 @@ describe('a whole session', () => {
   it('queries a meter that went backwards', () => {
     const v = evaluateSession({
       items: [lights], sessionType: 'END_HANDOVER',
-      answers: new Map([[4, ok(lights)]]),
+      answers: new Map<number, RawResponse>([[4, ok(lights)]]),
       meterReading: 12400, lastMeterReading: 12480,
     });
     expect(v.problems.join(' ')).toContain('Meter reads 12400 but was last 12480');
