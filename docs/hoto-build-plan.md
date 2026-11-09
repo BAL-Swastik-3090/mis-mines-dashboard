@@ -14,8 +14,10 @@ One row per phase. Updated as each lands. Scope and reasoning live in
 | 5 | API: capture — submit a session, idempotently | ✅ | dev-tested | `d6909f2` |
 | 6a | Admin templates — **the API** | ✅ | dev-tested | `pending` |
 | 6b | Admin templates — **the screen** | ⬜ | | |
-| 7 | **Admin: HOTO register** — the record anybody can read | ⬜ | | |
-| 8 | Defect lifecycle and equipment state machine (migration 107) | ⬜ | | |
+| 7a | HOTO register — the API | ✅ | dev-tested | `pending` |
+| 7b | HOTO register — the screen | ⬜ | | |
+| -- | HOTO permissions (migration 107) | ✅ | dev | `pending` |
+| 8 | Defect lifecycle and equipment state machine (migration 108) | ⬜ | | |
 | 9 | Admin: Shift HOTO Board — approve / restrict / lock | ⬜ | | |
 | 10 | Mobile: the capture flow | ⬜ | | |
 | 11 | Mobile: sync engine and photo queue | ⬜ | | |

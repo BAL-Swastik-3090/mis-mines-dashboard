@@ -27,6 +27,7 @@ from app.services import access as access_svc
 from app.services import hoto_masters as svc
 from app.services import hoto_capture as cap
 from app.services import hoto_admin as adm
+from app.services import hoto_register as reg
 
 router = APIRouter(prefix="/api/hoto", tags=["HOTO"])
 
@@ -309,3 +310,64 @@ def admin_retire(template_id: int, request: Request,
                  db: Session = Depends(get_minehub_db)) -> dict:
     actor = _admin_guard(request, db)
     return _admin(adm.retire, db, template_id, actor)
+
+
+# ── the register (phase 7) ───────────────────────────────────────────────────
+
+@router.get("/register")
+def register(request: Request,
+             from_date: date | None = Query(default=None),
+             to_date: date | None = Query(default=None),
+             asset_id: int | None = Query(default=None),
+             operator_id: int | None = Query(default=None),
+             status: str | None = Query(default=None),
+             session_type: str | None = Query(default=None),
+             only_adverse: bool = Query(default=False),
+             limit: int = Query(default=200, le=1000),
+             db: Session = Depends(get_minehub_db)) -> dict:
+    """Handovers, newest first.
+
+    `only_adverse` is the filter people actually want: a register of clean
+    handovers is long and says nothing, and the reason anybody opens this is
+    usually that something was found.
+    """
+    _guard(request, db)
+    rows = reg.search(db, from_date=from_date, to_date=to_date, asset_id=asset_id,
+                      operator_id=operator_id, status=status,
+                      session_type=session_type, only_adverse=only_adverse,
+                      limit=limit)
+    return {"count": len(rows), "sessions": rows}
+
+
+@router.get("/register/{session_id}")
+def register_detail(session_id: int, request: Request,
+                    db: Session = Depends(get_minehub_db)) -> dict:
+    """One handover in full, with every answer as it was given.
+
+    The answers come from the response's own copies of the label, type and
+    severity, not from a join to the live checklist — a register built that way
+    would show today's wording against last March's answer, and a retired item
+    would vanish from a record that definitely answered it.
+    """
+    _guard(request, db)
+    d = reg.detail(db, session_id)
+    if not d:
+        raise HTTPException(404, "No such handover.")
+    return d
+
+
+@router.get("/compliance")
+def compliance(request: Request,
+               from_date: date = Query(...),
+               to_date: date = Query(...),
+               db: Session = Depends(get_minehub_db)) -> dict:
+    """What was captured, and an explicit note that the denominator is unsettled.
+
+    A HOTO system used on half the handovers produces a register whose SILENCES
+    look like clean shifts — a reader cannot tell "nothing was wrong" from
+    "nobody filled it in". Publishing a compliance percentage against a guessed
+    expected-count would be worse than publishing none, so this reports what is
+    there and says so.
+    """
+    _guard(request, db)
+    return reg.compliance(db, from_date, to_date)
