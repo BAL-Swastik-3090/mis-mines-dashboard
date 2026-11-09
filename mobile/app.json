@@ -57,9 +57,13 @@
       "expo-asset"
     ],
     "extra": {
+      "router": {
+        "origin": false
+      },
       "eas": {
-        "projectId": "SET-ON-FIRST-EAS-BUILD"
+        "projectId": "9a050ab6-6e15-4952-a7a6-8bd97ebe1643"
       }
-    }
+    },
+    "owner": "balasore-alloys-limited"
   }
 }
