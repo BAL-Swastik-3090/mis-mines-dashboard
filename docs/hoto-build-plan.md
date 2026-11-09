@@ -27,9 +27,9 @@ One row per phase. Updated as each lands. Scope and reasoning live in
 | 11a | Photo storage on the server (migration 109) + upload endpoint | ✅ | applied to dev; 7 live contract tests | `c4c9f64` |
 | 11b | The sync engine, backoff and conflict retention | ✅ | 32 tests against a transport that fails on purpose | `c4c9f64` |
 | 11c | Triggers and the "still on this tablet" screen | ✅ | typechecks; background task unproven until phase 12 | `c4c9f64` |
-| 12a | Device enrolment and device authentication | ✅ | 30 checks end to end, incl. the exemption boundary | `pending` |
-| 12b | Buildable: app.json, eas.json, permissions | ✅ | expo-doctor 18/18 | `pending` |
-| 12c | The trial protocol | ✅ | written, not yet run | `pending` |
+| 12a | Device enrolment and device authentication | ✅ | 30 checks end to end, incl. the exemption boundary | `194c4bd` |
+| 12b | Buildable: app.json, eas.json, permissions | ✅ | expo-doctor 18/18 | `194c4bd` |
+| 12c | The trial protocol | ✅ | written, not yet run | `194c4bd` |
 | 12d | **Running the trial on a real tablet** | ⬜ | needs a tablet and a shift | |
 | 13 | Production migration of 105–109 | ⬜ | **held until ~75% built** | |
 
