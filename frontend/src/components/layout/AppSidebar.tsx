@@ -71,6 +71,12 @@ const NAV_ITEMS: NavItem[] = [
   // payment, with the stage derived from whatever evidence exists.
   { kind: "page", id: "pr-po",           label: "PR to Payment",              icon: Receipt,
     tag: "UAT" },
+
+  // The checklists an operator answers at a handover. Admin-edited, which is
+  // the whole point of migration 105 -- a new check is a change here, not a
+  // release. Marked UAT until the mine has signed off what it asks.
+  { kind: "page", id: "hoto-checklists", label: "HOTO Checklists",            icon: ClipboardList,
+    tag: "UAT" },
   { kind: "link", href: PRPO_URL,        label: "PR/PO Status",               icon: ClipboardList,
     need: "link.prpo.view" },
 ];

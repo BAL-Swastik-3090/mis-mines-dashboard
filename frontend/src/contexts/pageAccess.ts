@@ -71,6 +71,11 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   // procurement can open this too, which is the right audience on day one.
   // Granting mines.prpo.view later narrows it without touching this file.
   "pr-po": ["mines.prpo.view", "link.prpo.view"],
+  // Its OWN permission, not one borrowed from a widely-held entry.
+  // link.prpo.view above is held by thirteen of fifteen roles because it
+  // was created for an unrelated shortcut; gating a checklist editor that
+  // way would let anyone who can sign in change what blocks a machine.
+  "hoto-checklists": ["hoto.admin"],
   "minehub": ["platform.registry.browse"],
   "manpower": ["platform.operators.view"],
   "operations": ["ops.shift.view"],
@@ -152,6 +157,9 @@ const LANDING_RANK: Record<AppPage, number> = {
   // complements: costing says what a tonne cost, this says what is still
   // sitting unordered, unapproved or unpaid behind it.
   "pr-po": 62,
+  // Low: whoever administers checklists has a dashboard to land on first,
+  // and this is a thing they visit rather than open to.
+  "hoto-checklists": 90,
   // Above MIS, where the mine asked for it: the one-screen management view
   // comes before the operational detail it summarises.
   "executive-summary": 5,
