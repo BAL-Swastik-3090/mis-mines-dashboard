@@ -19,7 +19,7 @@ One row per phase. Updated as each lands. Scope and reasoning live in
 | -- | HOTO permissions (migration 107) | ✅ | dev | `9e732ec` |
 | 8a | Defects + state machine — the schema (migration 108) | ✅ | dev-tested | `0b9d6da` |
 | 8b | Defects — the API and escalation | ✅ | dev-tested | `a0f7458` |
-| 8c | Defects — the workshop screen | ✅ | driven in a browser against seeded dev data | `pending` |
+| 8c | Defects — the workshop screen | ✅ | driven in a browser against seeded dev data | `17508d3` |
 | 9 | Admin: Shift HOTO Board — approve / restrict / lock | ⬜ | | |
 | 10 | Mobile: the capture flow | ⬜ | | |
 | 11 | Mobile: sync engine and photo queue | ⬜ | | |
