@@ -54,7 +54,8 @@
       ],
       "expo-background-task",
       "expo-task-manager",
-      "expo-asset"
+      "expo-asset",
+      "expo-build-properties"
     ],
     "extra": {
       "router": {
