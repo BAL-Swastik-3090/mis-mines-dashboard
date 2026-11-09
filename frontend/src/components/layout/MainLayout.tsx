@@ -23,6 +23,7 @@ import WeatherForecastPage     from "@/components/sections/WeatherForecastPage";
 import CapacitySection         from "@/components/sections/CapacitySection";
 import PrPoSection             from "@/components/sections/PrPoSection";
 import HotoChecklistsSection  from "@/components/sections/HotoChecklistsSection";
+import HotoRegisterSection    from "@/components/sections/HotoRegisterSection";
 import AccessControlSection    from "@/components/sections/AccessControlSection";
 import UsageSection            from "@/components/sections/UsageSection";
 import { useAppPage }          from "@/contexts/useAppPage";
@@ -123,6 +124,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           {page === "capacity"         && <CapacitySection />}
           {page === "pr-po"            && <PrPoSection />}
           {page === "hoto-checklists" && <HotoChecklistsSection />}
+          {page === "hoto-register"   && <HotoRegisterSection />}
           {page === "usage"            && <UsageSection />}
           {page === "data-health"      && <DataHealthSection />}
             </>

@@ -77,6 +77,8 @@ const NAV_ITEMS: NavItem[] = [
   // release. Marked UAT until the mine has signed off what it asks.
   { kind: "page", id: "hoto-checklists", label: "HOTO Checklists",            icon: ClipboardList,
     tag: "UAT" },
+  { kind: "page", id: "hoto-register",   label: "HOTO Register",              icon: ClipboardList,
+    tag: "UAT" },
   { kind: "link", href: PRPO_URL,        label: "PR/PO Status",               icon: ClipboardList,
     need: "link.prpo.view" },
 ];
