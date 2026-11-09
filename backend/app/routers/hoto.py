@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from app.minehub_db import get_minehub_db
 from app.services import access as access_svc
 from app.services import hoto_masters as svc
+from app.services import hoto_capture as cap
 
 router = APIRouter(prefix="/api/hoto", tags=["HOTO"])
 
@@ -136,3 +137,74 @@ def template_by_id(template_id: int,
     if not payload:
         raise HTTPException(404, "No such checklist.")
     return payload
+
+
+# ── capture (phase 5) ────────────────────────────────────────────────────────
+
+CAPTURE_PERMISSIONS = ("hoto.capture", "hoto.admin")
+
+
+def _capture_guard(request: Request, db: Session) -> str:
+    emp = getattr(request.state, "emp_id", None)
+    if not emp:
+        raise HTTPException(401, "Please sign in to continue.")
+    if any(access_svc.has_permission(db, emp, c) for c in CAPTURE_PERMISSIONS):
+        return emp
+    raise HTTPException(403, "You may read HOTO but not record one.")
+
+
+@router.post("/sessions", status_code=201)
+def submit_session(request: Request,
+                   payload: dict,
+                   db: Session = Depends(get_minehub_db)) -> dict:
+    """File one captured handover.
+
+    IDEMPOTENT ON `client_uuid`. The device generates it at the moment of
+    capture, so a retry after a dropped connection carries the same one and
+    cannot file the handover twice. An identical replay returns the original
+    record with `created: false` — which is what a device's retry should see,
+    and why this returns 200 rather than 201 in that case.
+
+    The rules are evaluated again here. The device already evaluated at the
+    machine, because an operator who fails the brake check has to be told there
+    and then. Where the two disagree the server wins and the difference is
+    raised as an exception rather than smoothed over: it means either the device
+    is running old rules or a template moved under it, and both are things a
+    supervisor needs to see.
+    """
+    actor = _capture_guard(request, db)
+    try:
+        result = cap.submit(db, payload, actor)
+    except cap.CaptureConflict as e:
+        raise HTTPException(409, str(e))
+    except cap.CaptureError as e:
+        raise HTTPException(e.status, {"message": "The handover was not filed.",
+                                       "problems": e.problems})
+    if not result["created"]:
+        # Already filed. Not an error — the device is retrying, correctly.
+        from fastapi import Response
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=200, content=_jsonable(result))
+    return result
+
+
+def _jsonable(d: dict) -> dict:
+    """datetimes out of a replayed row are not JSON on their own."""
+    from datetime import date as _d, datetime as _dt
+    return {k: (v.isoformat() if isinstance(v, (_d, _dt)) else v) for k, v in d.items()}
+
+
+@router.get("/sessions/{client_uuid}")
+def session_by_uuid(client_uuid: str,
+                    request: Request,
+                    db: Session = Depends(get_minehub_db)) -> dict:
+    """Has this capture been filed? The device asks before resending.
+
+    Cheaper and safer than resending blind when a connection dropped
+    mid-request and the device cannot tell whether the server got it.
+    """
+    _guard(request, db)
+    row = cap._existing(db, client_uuid)
+    if not row:
+        raise HTTPException(404, "Not filed.")
+    return _jsonable(row)

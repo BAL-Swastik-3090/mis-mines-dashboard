@@ -10,8 +10,8 @@ One row per phase. Updated as each lands. Scope and reasoning live in
 | 1 | Checklist model, admin-controlled, seeded with the rescued library | ✅ | dev | `57f3ecb` |
 | 2 | Session model — sessions, responses, devices | ✅ | dev | `7f9abd7` |
 | 3 | Mobile foundation — enums, rules engine, local schema, tests | ✅ | repo | `4610662` |
-| 4 | **API: what the device syncs down** | ✅ | dev-tested | `pending` |
-| 5 | **API: capture** — submit a session, idempotently | ⬜ | | |
+| 4 | API: what the device syncs down | ✅ | dev-tested | `e161582` |
+| 5 | API: capture — submit a session, idempotently | ✅ | dev-tested | `pending` |
 | 6 | **Admin: templates** — build, clone, publish | ⬜ | | |
 | 7 | **Admin: HOTO register** — the record anybody can read | ⬜ | | |
 | 8 | Defect lifecycle and equipment state machine (migration 107) | ⬜ | | |
