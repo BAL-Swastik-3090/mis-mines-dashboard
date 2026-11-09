@@ -17,8 +17,9 @@ One row per phase. Updated as each lands. Scope and reasoning live in
 | 7a | HOTO register — the API | ✅ | dev-tested | `9e732ec` |
 | 7b | HOTO register — the screen | ✅ | typechecks | `794c053` |
 | -- | HOTO permissions (migration 107) | ✅ | dev | `9e732ec` |
-| 8a | Defects + state machine — the schema (migration 108) | ✅ | dev-tested | `pending` |
-| 8b | Defects — API and screen | ⬜ | | |
+| 8a | Defects + state machine — the schema (migration 108) | ✅ | dev-tested | `0b9d6da` |
+| 8b | Defects — the API and escalation | ✅ | dev-tested | `pending` |
+| 8c | Defects — the workshop screen | ⬜ | | |
 | 9 | Admin: Shift HOTO Board — approve / restrict / lock | ⬜ | | |
 | 10 | Mobile: the capture flow | ⬜ | | |
 | 11 | Mobile: sync engine and photo queue | ⬜ | | |

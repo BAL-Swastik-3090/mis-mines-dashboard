@@ -366,6 +366,16 @@ def submit(db: Session, payload: dict[str, Any], actor: str) -> dict[str, Any]:
                "by": actor, "k": f"drift:{client_uuid}"})
         logger.warning("HOTO verdict drift on session %s: %s", session_id, detail)
 
+    # ── what the findings mean ───────────────────────────────────────────────
+    # The device decided whether each ANSWER was adverse -- it had to, to tell
+    # the operator at the machine. Whether an adverse answer is a NEW defect or
+    # the fourth sighting of one raised last Tuesday depends on what is open
+    # across every device and every shift, which no single tablet knows. So the
+    # server decides that, here, before the commit that files the handover --
+    # one transaction, so a handover and the defects it raised cannot come apart.
+    from app.services import hoto_defects as defects
+    outcome = defects.raise_from_session(db, session_id, actor)
+
     db.commit()
 
     return {
@@ -380,4 +390,7 @@ def submit(db: Session, payload: dict[str, Any], actor: str) -> dict[str, Any]:
         "responses_stored": len(verdict["responses"]),
         "verdict_drift": verdict_drift,
         "template_drift": template_drift,
+        "defects_raised": outcome["raised"],
+        "defects_sighted": outcome["sighted"],
+        "machine_state_change": outcome["state_change"],
     }

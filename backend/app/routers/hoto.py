@@ -28,6 +28,7 @@ from app.services import hoto_masters as svc
 from app.services import hoto_capture as cap
 from app.services import hoto_admin as adm
 from app.services import hoto_register as reg
+from app.services import hoto_defects as dfx
 
 router = APIRouter(prefix="/api/hoto", tags=["HOTO"])
 
@@ -371,3 +372,73 @@ def compliance(request: Request,
     """
     _guard(request, db)
     return reg.compliance(db, from_date, to_date)
+
+
+# ── defects and machine state (phase 8b) ─────────────────────────────────────
+
+def _defects(fn, *a, **kw):
+    try:
+        return fn(*a, **kw)
+    except dfx.DefectError as e:
+        raise HTTPException(e.status, {"message": "Refused.", "problems": e.problems})
+
+
+@router.get("/defects")
+def defect_queue(request: Request,
+                 asset_id: int | None = Query(default=None),
+                 state: str | None = Query(default=None),
+                 severity: str | None = Query(default=None),
+                 open_only: bool = Query(default=True),
+                 db: Session = Depends(get_minehub_db)) -> dict:
+    """The workshop's queue, blocking machines first.
+
+    Ordered by whether the defect holds the machine, then severity, then age —
+    a queue sorted by date alone buries a locked machine under a fortnight of
+    cabin lights.
+    """
+    _guard(request, db)
+    rows = dfx.queue(db, asset_id=asset_id, state=state, severity=severity,
+                     open_only=open_only)
+    return {"count": len(rows),
+            "blocking": sum(1 for r in rows if r["blocks_operation"]),
+            "defects": rows}
+
+
+@router.get("/defects/{defect_id}")
+def defect_detail(defect_id: int, request: Request,
+                  db: Session = Depends(get_minehub_db)) -> dict:
+    """One defect, every sighting of it, and every move it has made."""
+    _guard(request, db)
+    d = dfx.detail(db, defect_id)
+    if not d:
+        raise HTTPException(404, "No such defect.")
+    return d
+
+
+@router.post("/defects/{defect_id}/transition")
+def defect_transition(defect_id: int, request: Request, payload: dict,
+                      db: Session = Depends(get_minehub_db)) -> dict:
+    """Move a defect along.
+
+    The database refuses a fitter verifying his own repair; this refuses the
+    moves that make no sense in order and says which ones would. A machine is
+    released only when NOTHING blocking is still open against it — one with two
+    critical defects does not come back on the first repair.
+    """
+    actor = _capture_guard(request, db)
+    to_state = (payload.get("to_state") or "").upper()
+    return _defects(dfx.transition, db, defect_id, to_state, actor,
+                    note=payload.get("note"))
+
+
+@router.get("/assets/{asset_id}/state")
+def asset_state(asset_id: int, request: Request,
+                db: Session = Depends(get_minehub_db)) -> dict:
+    """What state a machine is in, and what is holding it there."""
+    _guard(request, db)
+    return {
+        "asset_id": asset_id,
+        "state": dfx.current_state(db, asset_id),
+        "blocking_defects": [r for r in dfx.queue(db, asset_id=asset_id)
+                             if r["blocks_operation"]],
+    }
