@@ -23,7 +23,7 @@ One row per phase. Updated as each lands. Scope and reasoning live in
 | 9a | Shift Board — the API and the override rule | ✅ | dev-tested | `65db41c` |
 | 9b | Shift Board — the screen | ✅ | driven in a browser, override exercised end to end | `0807191` |
 | 10a | Mobile capture — the rules, the cache, the state machine | ✅ | 57 tests, incl. a live contract test against the dev backend | `ac7987d` |
-| 10b | Mobile capture — the screens | ✅ | typechecks; 20 render tests on the rules component; camera screens unproven until phase 12 | `pending` |
+| 10b | Mobile capture — the screens | ✅ | typechecks; 20 render tests on the rules component; camera screens unproven until phase 12 | `f206c67` |
 | 11 | Mobile: sync engine and photo queue | ⬜ | | |
 | 12 | **Field trial on one real tablet** | ⬜ | | |
 | 13 | Production migration of 105–108 | ⬜ | **held until ~75% built** | |
