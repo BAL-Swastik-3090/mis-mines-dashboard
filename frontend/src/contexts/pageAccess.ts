@@ -83,6 +83,10 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   // permission that lets somebody file a handover lets them move a defect
   // along -- the server checks hoto.capture on the transition itself.
   "hoto-defects": ["hoto.view", "hoto.capture", "hoto.admin"],
+  // A supervisor reads this and acts on it from the same screen. Whether a
+  // particular action is allowed is decided per action on the server -- the
+  // override is the one that needs more than hoto.capture.
+  "hoto-board": ["hoto.view", "hoto.capture", "hoto.admin"],
   "minehub": ["platform.registry.browse"],
   "manpower": ["platform.operators.view"],
   "operations": ["ops.shift.view"],
@@ -171,6 +175,9 @@ const LANDING_RANK: Record<AppPage, number> = {
   // Higher than the register: a fitter opening the dashboard wants the
   // queue of what is broken, not the archive of what was handed over.
   "hoto-defects": 86,
+  // The highest of the HOTO screens: a supervisor opening the dashboard at
+  // the start of a shift wants the board, not the archive or the queue.
+  "hoto-board": 84,
   // Above MIS, where the mine asked for it: the one-screen management view
   // comes before the operational detail it summarises.
   "executive-summary": 5,

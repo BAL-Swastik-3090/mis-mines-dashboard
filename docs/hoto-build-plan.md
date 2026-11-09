@@ -20,7 +20,8 @@ One row per phase. Updated as each lands. Scope and reasoning live in
 | 8a | Defects + state machine — the schema (migration 108) | ✅ | dev-tested | `0b9d6da` |
 | 8b | Defects — the API and escalation | ✅ | dev-tested | `a0f7458` |
 | 8c | Defects — the workshop screen | ✅ | driven in a browser against seeded dev data | `17508d3` |
-| 9 | Admin: Shift HOTO Board — approve / restrict / lock | ⬜ | | |
+| 9a | Shift Board — the API and the override rule | ✅ | dev-tested | `65db41c` |
+| 9b | Shift Board — the screen | ✅ | driven in a browser, override exercised end to end | `pending` |
 | 10 | Mobile: the capture flow | ⬜ | | |
 | 11 | Mobile: sync engine and photo queue | ⬜ | | |
 | 12 | **Field trial on one real tablet** | ⬜ | | |

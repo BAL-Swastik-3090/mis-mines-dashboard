@@ -81,6 +81,8 @@ const NAV_ITEMS: NavItem[] = [
     tag: "UAT" },
   { kind: "page", id: "hoto-defects",    label: "HOTO Defects",               icon: Wrench,
     tag: "UAT" },
+  { kind: "page", id: "hoto-board",      label: "Shift Board",                icon: ClipboardCheck,
+    tag: "UAT" },
   { kind: "link", href: PRPO_URL,        label: "PR/PO Status",               icon: ClipboardList,
     need: "link.prpo.view" },
 ];
