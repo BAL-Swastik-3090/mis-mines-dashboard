@@ -11,8 +11,9 @@ One row per phase. Updated as each lands. Scope and reasoning live in
 | 2 | Session model — sessions, responses, devices | ✅ | dev | `7f9abd7` |
 | 3 | Mobile foundation — enums, rules engine, local schema, tests | ✅ | repo | `4610662` |
 | 4 | API: what the device syncs down | ✅ | dev-tested | `e161582` |
-| 5 | API: capture — submit a session, idempotently | ✅ | dev-tested | `pending` |
-| 6 | **Admin: templates** — build, clone, publish | ⬜ | | |
+| 5 | API: capture — submit a session, idempotently | ✅ | dev-tested | `d6909f2` |
+| 6a | Admin templates — **the API** | ✅ | dev-tested | `pending` |
+| 6b | Admin templates — **the screen** | ⬜ | | |
 | 7 | **Admin: HOTO register** — the record anybody can read | ⬜ | | |
 | 8 | Defect lifecycle and equipment state machine (migration 107) | ⬜ | | |
 | 9 | Admin: Shift HOTO Board — approve / restrict / lock | ⬜ | | |
