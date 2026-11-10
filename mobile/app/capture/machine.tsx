@@ -39,11 +39,15 @@ export default function PickMachine() {
   const [type, setType] = useState<SessionType>('START_HANDOVER');
   const [search, setSearch] = useState('');
   const [list, setList] = useState<CachedAsset[]>([]);
+  const [held, setHeld] = useState<number | null>(null);
   const [noChecklist, setNoChecklist] = useState<string | null>(null);
 
   const load = useCallback(async (q: string) => {
     if (!store) return;
     setList(await masters.assets(store, q));
+    // How many it holds AT ALL, so an empty result can tell the operator
+    // which of the two very different things has happened.
+    setHeld(await masters.assetCount(store));
   }, [store]);
 
   useFocusEffect(useCallback(() => { void load(search); }, [load, search]));
@@ -106,11 +110,20 @@ export default function PickMachine() {
         keyExtractor={(a) => String(a.asset_id)}
         contentContainerStyle={{ paddingBottom: 24 }}
         ListEmptyComponent={
-          <Text style={styles.empty}>
-            {search
-              ? `No machine on this tablet matches “${search}”.`
-              : 'This tablet holds no machines. It has never been synced.'}
-          </Text>
+          held === 0 ? (
+            <View style={styles.warn}>
+              <Text style={styles.warnText}>
+                This tablet holds no machines yet. Bring it within signal and
+                press Sync now on the home screen.
+              </Text>
+            </View>
+          ) : (
+            <Text style={styles.empty}>
+              {search
+                ? `None of the ${held} machines on this tablet match “${search}”.`
+                : `${held} machines on this tablet.`}
+            </Text>
+          )
         }
         renderItem={({ item: a }) => (
           <Pressable

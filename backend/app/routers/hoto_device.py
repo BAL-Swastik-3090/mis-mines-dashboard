@@ -56,8 +56,12 @@ def hello(request: Request, app_version: str | None = Form(default=None),
     fails to send at the end of a shift.
     """
     dev.seen(db, device["device_id"], app_version)
+    # The tracking settings travel on every hello, so a change made in the
+    # dashboard reaches the device without anyone touching the device.
+    settings = dev.tracking_settings(db, device["device_id"])
     return {"device_code": device["device_code"], "label": device["label"],
             "profile": device["profile"],
+            **settings,
             # The device obeys this: a COMPANY tablet never carries an operator
             # between captures. Sent rather than hardcoded so the mine can
             # change a tablet's profile without a release.
@@ -131,6 +135,83 @@ async def device_photo(photo_uuid: str = Form(...),
             sha256=sha256, lat=lat, lon=lon, accuracy_m=accuracy_m)
     except pho.PhotoError as e:
         raise HTTPException(e.status, {"message": "The photo was not stored.",
+                                       "problems": e.problems})
+    dev.seen(db, device["device_id"])
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JOINING: the two endpoints a device calls BEFORE it has a credential
+#
+# These are the only unauthenticated handlers in the app, and they are narrow
+# on purpose. Between them they can create one PENDING row and read back its
+# status. They cannot read a machine, an operator, a defect or another device,
+# and neither of them can produce a credential -- `register` because the
+# database forbids a PENDING row from holding one (migration 110), and `claim`
+# because it hands over only what an approver already decided to issue, to an
+# installation that proves it is the one that asked.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post("/register", status_code=202)
+def device_register(payload: dict, request: Request,
+                    db: Session = Depends(get_minehub_db)) -> dict:
+    """A device asks to be allowed in.
+
+    Returns 202 rather than 201 because nothing has been granted: the request
+    has been recorded and a person now has to decide. Idempotent, so an app
+    that asks again while waiting does not fill the approval queue with copies
+    of itself.
+    """
+    try:
+        return dev.register(
+            db,
+            install_id=payload.get("install_id", ""),
+            claim_secret=payload.get("claim_secret", ""),
+            label=payload.get("label"),
+            requested_by_name=payload.get("requested_by_name"),
+            requested_note=payload.get("requested_note"),
+            platform=payload.get("platform"),
+            os_version=payload.get("os_version"),
+            manufacturer=payload.get("manufacturer"),
+            model=payload.get("model"),
+            app_version=payload.get("app_version"),
+            build_number=payload.get("build_number"),
+        )
+    except dev.DeviceError as e:
+        raise HTTPException(e.status, {"message": "This device could not be registered.",
+                                       "problems": e.problems})
+
+
+@router.post("/claim")
+def device_claim(payload: dict, db: Session = Depends(get_minehub_db)) -> dict:
+    """Have I been allowed yet? -- and if so, here is the credential, once.
+
+    A POST rather than a GET because the claim secret must not travel in a URL,
+    where it would be written into every access log between here and the
+    device, and because collecting a credential changes the row.
+    """
+    try:
+        return dev.claim(db, payload.get("install_id", ""),
+                         payload.get("claim_secret", ""))
+    except dev.DeviceError as e:
+        raise HTTPException(e.status, {"message": "This device could not check its status.",
+                                       "problems": e.problems})
+
+
+@router.post("/locations")
+def device_locations(payload: dict, device: dict = Depends(_device),
+                     db: Session = Depends(get_minehub_db)) -> dict:
+    """Where this device has been since it last managed to send.
+
+    A batch, because a device in a pit is out of signal for most of a shift and
+    then sends the whole morning at once. Idempotent per fix, so the retry that
+    follows a dropped connection does not double the track.
+    """
+    try:
+        out = dev.record_locations(db, device["device_id"],
+                                   payload.get("fixes") or [])
+    except dev.DeviceError as e:
+        raise HTTPException(e.status, {"message": "The positions were not stored.",
                                        "problems": e.problems})
     dev.seen(db, device["device_id"])
     return out

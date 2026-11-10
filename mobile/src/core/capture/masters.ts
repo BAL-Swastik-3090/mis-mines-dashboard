@@ -72,15 +72,42 @@ interface ItemRow {
   display_order: number;
 }
 
+/**
+ * Separators are noise, so neither side of a search keeps them.
+ *
+ * The fleet writes MAN-11 and the operator types "MAN 11", or "man11", because
+ * the sticker on the cab is stencilled with a gap in it and nobody types a
+ * hyphen on a phone keyboard in a pit. A LIKE on the raw code answers "no
+ * machine on this tablet matches MAN 11" while MAN-11 is sitting in the
+ * cache -- which reads as "my machine is not here" and sends the operator to
+ * paper. Found in the field on 10 Nov 2026.
+ */
+const STRIP = /[^A-Z0-9]+/g;
+export const normaliseCode = (s: string): string => s.toUpperCase().replace(STRIP, '');
+
+/** The same stripping, in SQLite, which has no regex. */
+const SQL_NORM = (col: string) =>
+  `REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(${col}),` +
+  `' ',''),'-',''),'_',''),'.',''),'/',''),'#','')`;
+
 /** Machines the operator can pick from, the ones needing attention first. */
 export async function assets(store: Store, search?: string): Promise<CachedAsset[]> {
-  const like = search ? `%${search.trim().toUpperCase()}%` : null;
+  const q = normaliseCode(search ?? '');
+  const like = q ? `%${q}%` : null;
   return store.getAllAsync<CachedAsset>(
     `SELECT * FROM cached_asset
-      WHERE (?1 IS NULL OR UPPER(fleet_code) LIKE ?1 OR UPPER(COALESCE(nickname,'')) LIKE ?1)
+      WHERE (?1 IS NULL
+             OR ${SQL_NORM('fleet_code')} LIKE ?1
+             OR ${SQL_NORM("COALESCE(nickname,'')")} LIKE ?1)
       ORDER BY has_critical_defect DESC, open_defect_count DESC, fleet_code`,
     [like],
   );
+}
+
+/** How many machines this tablet holds at all -- an empty search is not an empty cache. */
+export async function assetCount(store: Store): Promise<number> {
+  const r = await store.getFirstAsync<{ n: number }>(`SELECT count(*) AS n FROM cached_asset`);
+  return r?.n ?? 0;
 }
 
 /** A machine by the QR sticker on its cab, which is how it is meant to be picked. */

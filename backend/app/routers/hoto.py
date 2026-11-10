@@ -667,3 +667,54 @@ def revoke_device(device_code: str, request: Request, payload: dict,
     actor = _admin_guard(request, db)
     return _devices(dvc.revoke, db, device_code, actor,
                     payload.get("reason") or "")
+
+
+@router.post("/admin/devices/{device_code}/approve")
+def approve_device(device_code: str, request: Request, payload: dict,
+                   db: Session = Depends(get_minehub_db)) -> dict:
+    """Allow a device that registered itself.
+
+    THE TOKEN IS NOT RETURNED HERE. It is generated and left for the device to
+    collect on its next check, which is the whole point of migration 110: an
+    approver who never sees a credential cannot forward one, and nobody types
+    anything into the device.
+    """
+    actor = _admin_guard(request, db)
+    return _devices(dvc.approve, db, device_code, actor,
+                    label=payload.get("label"),
+                    new_code=payload.get("device_code"),
+                    profile=(payload.get("profile") or "").upper() or None,
+                    plant_id=payload.get("plant_id"),
+                    location_id=payload.get("location_id"),
+                    track_location=payload.get("track_location"),
+                    location_interval_s=payload.get("location_interval_s"),
+                    reason=payload.get("reason"))
+
+
+@router.post("/admin/devices/{device_code}/reject")
+def reject_device(device_code: str, request: Request, payload: dict,
+                  db: Session = Depends(get_minehub_db)) -> dict:
+    """Turn a registration down, with a reason the device shows its holder."""
+    actor = _admin_guard(request, db)
+    return _devices(dvc.reject, db, device_code, actor,
+                    payload.get("reason") or "")
+
+
+@router.post("/admin/devices/{device_code}/tracking")
+def device_tracking(device_code: str, request: Request, payload: dict,
+                    db: Session = Depends(get_minehub_db)) -> dict:
+    """Turn a device's location reporting on or off, and set how often."""
+    actor = _admin_guard(request, db)
+    return _devices(dvc.set_tracking, db, device_code, actor,
+                    track_location=bool(payload.get("track_location")),
+                    location_interval_s=payload.get("location_interval_s"))
+
+
+@router.get("/admin/devices/{device_code}/track")
+def device_track(device_code: str, request: Request, hours: int = 24,
+                 limit: int = 500, db: Session = Depends(get_minehub_db)) -> dict:
+    """Where one device has been, newest first."""
+    _admin_guard(request, db)
+    # Dates and Decimals both appear in a track; _jsonable is what the rest
+    # of this router already uses to make them survive the trip.
+    return _jsonable(_devices(dvc.track, db, device_code, hours=hours, limit=limit))
