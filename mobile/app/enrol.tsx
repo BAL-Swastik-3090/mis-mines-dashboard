@@ -26,14 +26,15 @@ import {
 import { useRouter } from 'expo-router';
 import {
   checkAccess, describeDevice, joinState, requestAccess, setBaseUrlOverride,
-  storedBaseUrl, type JoinState,
+  storedBaseUrl, trackingSettings, type JoinState,
 } from '@/core/sync/enrolment';
+import { applyTrackingSettings } from '@/core/location/tracker';
 
 /** How often a waiting device asks. Often enough to feel immediate to somebody
  *  standing next to the approver; rare enough to be nothing on a battery. */
 const CHECK_EVERY_MS = 10_000;
 
-export default function Join() {
+export default function Join({ onJoined }: { onJoined?: () => void } = {}) {
   const router = useRouter();
 
   const [join, setJoin] = useState<JoinState | null>(null);
@@ -43,6 +44,9 @@ export default function Join() {
   const [problem, setProblem] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
 
+  const [approved, setApproved] = useState<{ code: string; label: string } | null>(null);
+  const [permProblem, setPermProblem] = useState<string | null>(null);
+  const [finishing, setFinishing] = useState(false);
   const [server, setServer] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [serverDraft, setServerDraft] = useState('');
@@ -67,8 +71,8 @@ export default function Join() {
     if (r.problem && manual) setProblem(r.problem);
     if (!r.problem) setProblem(null);
     setJoin(r);
-    if (r.state === 'ready') router.replace('/');
-  }, [router]);
+    if (r.state === 'ready') setApproved({ code: r.deviceCode, label: r.label });
+  }, []);
 
   // Keep asking while waiting. Stops the moment it is no longer waiting, so an
   // approved or refused device is not still polling in somebody's pocket.
@@ -108,6 +112,75 @@ export default function Join() {
       <View style={[styles.screen, styles.centre]}>
         <ActivityIndicator size="large" />
       </View>
+    );
+  }
+
+  /* ── approved, and asking for what it needs ──────────────────────────── */
+  if (approved) {
+    return (
+      <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+        <View style={styles.waitBox}>
+          <Text style={styles.readyTick}>✓</Text>
+          <Text style={styles.waitTitle}>This device is allowed</Text>
+          <Text style={styles.code}>{approved.code}</Text>
+          <Text style={styles.waitHow}>{approved.label}</Text>
+        </View>
+
+        {/* ASKED HERE, ON A BUTTON, AND NOT AT STARTUP.
+            Android shows its permission dialog reliably only in response to
+            somebody touching the screen. Asking silently while the app boots
+            is how a device ends up never prompting at all and never
+            reporting its position, with nothing on screen to say so --
+            reported from the field on 10 Nov 2026. The person who just set
+            this device up is holding it right now, which is the one moment
+            they can answer. */}
+        <Text style={styles.note}>
+          The office has asked this device to report where it is. Android will
+          ask twice: allow it, and then choose
+          {' '}<Text style={styles.strong}>Allow all the time</Text> so it keeps
+          working while the app is closed.
+        </Text>
+
+        {permProblem && (
+          <View style={styles.warn}><Text style={styles.warnText}>{permProblem}</Text></View>
+        )}
+
+        <Pressable
+          testID="finish"
+          disabled={finishing}
+          style={[styles.primary, finishing && styles.primaryOff]}
+          onPress={async () => {
+            setFinishing(true);
+            const { track } = await trackingSettings();
+            if (track) {
+              const r = await applyTrackingSettings();
+              if (!alive.current) return;
+              if (!r.ok) {
+                // Not a dead end. The device still captures handovers, which
+                // is the job; position reporting is the extra. The home
+                // screen keeps offering it.
+                setPermProblem(r.message + ' You can still record handovers, '
+                             + 'and the home screen will ask again.');
+                setFinishing(false);
+                return;
+              }
+            }
+            if (!alive.current) return;
+            setFinishing(false);
+            if (onJoined) onJoined(); else router.replace('/');
+          }}
+        >
+          {finishing ? <ActivityIndicator color="#fff" />
+                     : <Text style={styles.primaryText}>Start using this device</Text>}
+        </Pressable>
+
+        {permProblem && (
+          <Pressable testID="skip-perms"
+                     onPress={() => { if (onJoined) onJoined(); else router.replace('/'); }}>
+            <Text style={styles.advancedLink}>Carry on without reporting position</Text>
+          </Pressable>
+        )}
+      </ScrollView>
     );
   }
 
@@ -320,6 +393,7 @@ const styles = StyleSheet.create({
   refusedWhy: { fontSize: 17, color: '#16202b', textAlign: 'center',
                 lineHeight: 24 },
 
+  readyTick: { fontSize: 44, color: '#1e8a4f', fontWeight: '800' },
   advancedLink: { fontSize: 12, color: '#8a97a5', textAlign: 'center',
                   marginTop: 8 },
   advancedBox: { backgroundColor: '#fff', borderRadius: 10, padding: 14, gap: 10,

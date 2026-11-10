@@ -8,7 +8,7 @@
  * "my machine is not here" rather than "wait a moment".
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
 import { Stack } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -64,43 +64,51 @@ export default function RootLayout() {
   const [state, setState] = useState<'opening' | 'ready' | 'failed' | 'unenrolled'>('opening');
   const [why, setWhy] = useState<string>('');
 
-  useEffect(() => {
-    let alive = true;
-    void (async () => {
-      try {
-        const db = await openDb();
-        if (!alive) return;
-        const store = adapt(db);
-        attach(store);
+  /**
+   * Open the database and decide whether this device may work yet.
+   *
+   * CALLABLE, not a one-shot effect. It used to run once at startup, which
+   * meant a device that was approved WHILE THE APP WAS OPEN -- the normal
+   * case, since somebody is standing there waiting for it -- stayed on the
+   * waiting screen until the app was killed and reopened. The join screen
+   * collected its credential perfectly and then had nowhere to go, because
+   * the navigator below is not mounted while this says 'unenrolled', so its
+   * `router.replace('/')` acted on nothing. Reported from the field,
+   * 10 Nov 2026: "when I approve, application does not refresh automatically".
+   */
+  const boot = useCallback(async (): Promise<void> => {
+    try {
+      const db = await openDb();
+      const store = adapt(db);
+      attach(store);
 
-        // A tablet with no credential cannot sync, so it is sent to be set up
-        // rather than left looking like it is working. Its captured records are
-        // untouched and still there afterwards.
-        const base = await storedBaseUrl();
-        const token = await storedToken();
-        if (!base || !token) {
-          setState('unenrolled');
-          return;
-        }
-
-        attachSync(store, httpTransport({
-          baseUrl: storedBaseUrl,
-          deviceToken: storedToken,
-        }));
-        void registerBackgroundSync();
-        // Whatever the office last told this device about reporting its
-        // position. Deliberately not awaited: it asks for permissions, and a
-        // device must be usable for capture while somebody decides about that.
-        void applyTrackingSettings();
-        setState('ready');
-      } catch (e) {
-        if (!alive) return;
-        setWhy(e instanceof Error ? e.message : String(e));
-        setState('failed');
+      // A device with no credential cannot sync, so it is sent to be set up
+      // rather than left looking like it is working. Its captured records are
+      // untouched and still there afterwards.
+      const base = await storedBaseUrl();
+      const token = await storedToken();
+      if (!base || !token) {
+        setState('unenrolled');
+        return;
       }
-    })();
-    return () => { alive = false; };
+
+      attachSync(store, httpTransport({
+        baseUrl: storedBaseUrl,
+        deviceToken: storedToken,
+      }));
+      void registerBackgroundSync();
+      // Whatever the office last told this device about reporting its
+      // position. Deliberately not awaited: it asks for permissions, and a
+      // device must be usable for capture while somebody decides about that.
+      void applyTrackingSettings();
+      setState('ready');
+    } catch (e) {
+      setWhy(e instanceof Error ? e.message : String(e));
+      setState('failed');
+    }
   }, [attach, attachSync]);
+
+  useEffect(() => { void boot(); }, [boot]);
 
   // Only once the database is open — a trigger that fires before it is
   // would try to read an outbox that is not there yet.
@@ -116,7 +124,10 @@ export default function RootLayout() {
   }
 
   if (state === 'unenrolled') {
-    return <Enrol />;
+    // onJoined is what makes approval take effect without anybody touching
+    // the device: the join screen has just stored a credential, so this runs
+    // the whole startup again and the navigator below comes up.
+    return <Enrol onJoined={() => { void boot(); }} />;
   }
 
   if (state === 'failed') {
