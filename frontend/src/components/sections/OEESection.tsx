@@ -1,13 +1,9 @@
 "use client";
 import { useState } from "react";
-import { Activity, Layers, Info, Factory, Download, Check } from "lucide-react";
+import { Activity, Info, Download, Check } from "lucide-react";
 import FormulaModal from "@/components/sections/FormulaModal";
-import LCMSection from "@/components/sections/LCMSection";
 import EquipmentPlanModal from "@/components/sections/EquipmentPlanModal";
-import { useLCM } from "@/hooks/useLCM";
 import { useEntryDialog } from "@/contexts/useEntryDialog";
-import LCMCobSection from "@/components/sections/LCMCobSection";
-import KamLossTreeSection from "@/components/sections/KamLossTreeSection";
 import { useDateFilter }  from "@/contexts/useDateFilter";
 import { useOEE }         from "@/hooks/useOEE";
 import { useTipperOEE }   from "@/hooks/useTipperOEE";
@@ -18,6 +14,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { downloadDashboard } from "@/utils/downloadDashboard";
 import { withExportMode }    from "@/contexts/useExportMode";
 import { toCsv, download } from "@/components/minehub/spreadsheet";
+import { KpiStrip, excavatorKpis } from "@/components/sections/OeeKpiStrip";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function fmt1(v: number) { return formatIndian(Number(v.toFixed(1))); }
@@ -46,84 +43,10 @@ function tillLabel(apiTo: string) {
     .toUpperCase();
 }
 
-// ── Fleet-level summary KPI strip ─────────────────────────────────────────────
-// Figures come straight from the server's weighted roll-up. Averaging the
-// machine percentages here would overstate fleet Performance and OEE by ~50%,
-// because a machine that barely ran would count as much as one that ran all month.
-function FleetKpis({ fleet, loading }: { fleet: OEEFleet | undefined; loading: boolean }) {
-  const cards = [
-    {
-      label: "Fleet OEE",
-      sub: "weighted · avail × perf × qual",
-      value: loading ? null : fleet?.oee ?? null,
-      unit: "%",
-      colorFn: (v: number) => pctColor(v),
-    },
-    {
-      label: "Availability",
-      sub: "Σ available ÷ Σ ideal time",
-      value: loading ? null : fleet?.availability ?? null,
-      unit: "%",
-      colorFn: (v: number) => pctColor(v, 85, 70),
-    },
-    {
-      label: "Performance",
-      sub: "Σ actual ÷ Σ ideal CuM",
-      value: loading ? null : fleet?.performance ?? null,
-      unit: "%",
-      colorFn: (v: number) => pctColor(v, 85, 70),
-    },
-    {
-      label: "Total Breakdown",
-      // No longer one source: the owned machines carry SAP M2 notifications,
-      // the hired ones have no equipment number and carry the shift log instead.
-      sub: "hrs · SAP + shift log",
-      value: loading ? null : fleet?.bd_hours ?? null,
-      unit: " hrs",
-      colorFn: () => "text-[#c62828]",
-      fmt: fmt1,
-    },
-    {
-      label: "Deviation Hrs",
-      sub: fleet?.deviation_pct != null ? `${fleet.deviation_pct}% of shift hrs` : "unplanned idle",
-      value: loading ? null : fleet?.deviation_hrs ?? null,
-      unit: " hrs",
-      colorFn: () => "text-[#c8960c]",
-      fmt: fmt1,
-    },
-    {
-      label: "Actual Excavation",
-      sub: "fleet total CuM",
-      value: loading ? null : fleet?.actual_cum ?? null,
-      unit: " M³",
-      colorFn: () => "text-[#1565c0]",
-      fmt: fmt0,
-    },
-  ];
-
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
-      {cards.map((c) => (
-        <div key={c.label} className="bg-white border border-border rounded-lg shadow-sm overflow-hidden">
-          <div className="px-4 pt-3 pb-1">
-            <div className="text-[10px] font-bold tracking-widest uppercase font-condensed text-txt-secondary">{c.label}</div>
-            <div className="text-[9px] text-txt-light tracking-wider font-condensed uppercase mt-0.5">{c.sub}</div>
-          </div>
-          <div className="px-4 pb-3">
-            {c.value == null ? (
-              <Shimmer w="w-20" h="h-7" />
-            ) : (
-              <div className={`font-condensed font-extrabold text-[24px] tracking-tight leading-none ${c.colorFn(c.value)}`}>
-                {c.fmt ? c.fmt(c.value) : c.value.toFixed(1)}
-                <span className="text-[11px] font-normal text-txt-muted ml-0.5">{c.unit}</span>
-              </div>
-            )}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
+// The fleet strip and its cards now live in OeeKpiStrip, shared with every
+// table on this page and with the tippers. They were local to this file when
+// there was one strip; there are five now, and five copies of "Σ actual ÷ Σ
+// ideal CuM" is five chances for one of them to stop being true.
 
 // ── Export ────────────────────────────────────────────────────────────────────
 // The twelve columns on screen, in the same order, then the four things the
@@ -293,10 +216,12 @@ function PlanTotals({ f }: {
 }
 
 // ── Per-machine OEE table ──────────────────────────────────────────────────────
-function OEETable({ title, slug, machines, fleet, loading, from, to }: {
+function OEETable({ title, slug, machines, fleet, loading, from, to, rosterAsOn }: {
   title: string; slug: string;
   machines: OEEMachineRow[]; fleet: OEEFleet | undefined; loading: boolean;
   from?: string; to?: string;
+  /** The day the fleet was resolved for — see the footer note. */
+  rosterAsOn?: string | null;
 }) {
   const canExport = !loading && machines.length > 0;
   return (
@@ -326,6 +251,14 @@ function OEETable({ title, slug, machines, fleet, loading, from, to }: {
           Excel
         </button>
       </div>
+
+      {/* THIS TABLE'S OWN FIGURES, directly above it. The same six measures
+          as the section strip, restricted to the machines listed below —
+          which is what makes them worth reading: the OVERALL row at the foot
+          carries the hours and the volumes, and these carry the four
+          percentages they multiply into. Both come from one weighted roll-up
+          on the server, so the strip and the row can never disagree. */}
+      <KpiStrip cards={excavatorKpis(fleet)} loading={loading} dense />
 
       {/* Table */}
       <div className="overflow-x-auto">
@@ -536,6 +469,19 @@ function OEETable({ title, slug, machines, fleet, loading, from, to }: {
         {/* Says outright that the ORE / OB column is the plan, not a
             measurement — the one column on this table whose source is the
             mine's own entry rather than a system of record. */}
+        {/* WHICH DAY THE FLEET WAS READ FOR. Not today -- the day this
+            window OPENS, which is how a dated setting is resolved. Printed
+            because the two are routinely a day or more apart on a
+            month-to-date view, and without it a machine marked inactive this
+            morning and still on the table looks like a broken screen rather
+            than a setting that has not started yet. */}
+        {rosterAsOn && (
+          <p className="text-[9px] font-mono text-success/70 leading-tight">
+            <span className="font-semibold text-success/60">FLEET · </span>
+            EQUIPMENT STATUS SELECTOR, AS SET ON {tillLabel(rosterAsOn)}{" "}
+            {new Date(rosterAsOn + "T00:00:00").getFullYear()}
+          </p>
+        )}
         <p className="text-[9px] font-mono text-success/70 leading-tight">
           <span className="font-semibold text-success/60">ORE / OB · </span>EQUIPMENT EXCAVATION PLAN
         </p>
@@ -554,14 +500,6 @@ export default function OEESection() {
   const oldMachines         = machines.filter((m) => m.generation !== "new");
   const newMachines         = machines.filter((m) => m.generation === "new");
   const tippers             = useTipperOEE();
-
-  /* Same query key as LCMSection's, so this reads the cached response rather
-     than fetching a second time. The heading and the matrix underneath it are
-     then the same object by construction and cannot drift apart. */
-  const lcmPlan = useLCM().data?.plan;
-  const hiredNames = new Set(machines.filter((m) => m.hired).map((m) => m.machine));
-  const lcmHasHired = !!lcmPlan &&
-    [...lcmPlan.ore, ...lcmPlan.ob].some((n) => hiredNames.has(n));
 
   const entryDialog = useEntryDialog((s) => s.which);
   const closeEntryDialog = useEntryDialog((s) => s.close);
@@ -585,8 +523,8 @@ export default function OEESection() {
             dateRange,
             periodLabel,
             rootSelector: "#oee-section",
-            title: "OEE / LCM Analysis",
-            fileStem: "kaliapani-oee-lcm",
+            title: "OEE Analysis",
+            fileStem: "kaliapani-oee",
           }),
         // The LCM trees below these tables fetch on mount, and export mode is
         // what mounts them. Without this the file keeps their skeletons.
@@ -611,7 +549,7 @@ export default function OEESection() {
         <div className="flex items-center gap-2">
           <Activity size={18} className="text-[#6a1b9a]" />
           <h2 className="font-condensed font-extrabold text-[15px] tracking-widest uppercase text-navy">
-            OEE / LCM Analysis
+            OEE Analysis
           </h2>
           <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-[#f3e5f5] text-[#6a1b9a] border-[#ce93d8] tracking-widest uppercase font-mono">
             Excavators
@@ -682,8 +620,25 @@ export default function OEESection() {
         </div>
       </div>
 
-      {/* Fleet KPI strip */}
-      <FleetKpis fleet={data?.fleet} loading={isLoading} />
+      {/* ── THE WHOLE EXCAVATOR FLEET, old and new together ───────────
+          Kept above the split tables rather than replaced by them: this is
+          the one line somebody quotes for the section, and it is the only
+          place the two generations are read as one fleet. Each table below
+          carries its own strip for the machines in it.
+
+          Tippers are NOT folded in. An excavator is measured in cubic metres
+          and a tipper in trips; one Performance figure across both would be
+          a number with no unit behind it. */}
+      <div className="flex items-baseline gap-2">
+        <span className="font-condensed font-bold text-[11px] tracking-widest
+                         uppercase text-txt-secondary">
+          All Excavators
+        </span>
+        <span className="text-[10px] text-txt-light font-condensed uppercase tracking-wider">
+          {data?.fleet ? `${data.fleet.machine_count} machines · old + new` : ""}
+        </span>
+      </div>
+      <KpiStrip cards={excavatorKpis(data?.fleet)} loading={isLoading} />
 
       {/* TWO TABLES, SPLIT BY GENERATION. The new machines are read on their
           own because a 58 CuM/hr excavator commissioned this year and a
@@ -692,11 +647,13 @@ export default function OEESection() {
           weighted roll-up from the server — see fleet_old / fleet_new. */}
       <OEETable title="OEE Breakdown — For Old Excavator" slug="old-excavator"
                 machines={oldMachines} fleet={data?.fleet_old} loading={isLoading}
-                from={data?.from_date} to={data?.to_date} />
+                from={data?.from_date} to={data?.to_date}
+                rosterAsOn={data?.roster_as_on} />
 
       <OEETable title="OEE Breakdown — For New Excavator" slug="new-excavator"
                 machines={newMachines} fleet={data?.fleet_new} loading={isLoading}
-                from={data?.from_date} to={data?.to_date} />
+                from={data?.from_date} to={data?.to_date}
+                rosterAsOn={data?.roster_as_on} />
 
       {/* ── TIPPERS. Same four factors, but Yield in place of Performance:
           an excavator is measured in volume against capacity, a tipper in
@@ -709,7 +666,7 @@ export default function OEESection() {
         machines={tippers.data?.old_machines ?? []}
         fleet={tippers.data?.old_fleet} loading={tippers.isLoading}
         from={tippers.data?.from_date} to={tippers.data?.to_date}
-        note="Engine Hrs · Technoton telematics   ·   BD Hrs · SAP M2 notifications. A Utilisation above 100% means the breakdown hours are overstated by a notification left open in SAP."
+        note="Engine Hrs · Technoton telematics   ·   BD Hrs · SAP M2 notifications. Ideal Trip is engine hours × the trips-per-hour rate set for each truck. A Utilisation above 100% means the breakdown hours are overstated by a notification left open in SAP."
       />
 
       <TipperOEETable
@@ -717,70 +674,25 @@ export default function OEESection() {
         machines={tippers.data?.new_machines ?? []}
         fleet={tippers.data?.new_fleet} loading={tippers.isLoading}
         from={tippers.data?.from_date} to={tippers.data?.to_date}
-        note="These ten have no Technoton unit and no SAP equipment record, so Engine Hrs and BD Hrs both come from the shift log. BD reads 0.00 until the mine fills the breakdown column, so Availability of 100% is the absence of a record, not a measurement."
+        note="These ten have no Technoton unit and no SAP equipment record, so Engine Hrs and BD Hrs both come from the shift log. Ideal Trip is engine hours × the trips-per-hour rate set for each truck, the same formula as the old fleet, so the target scales with the date range. BD reads 0.00 until the mine fills the breakdown column, so Availability of 100% is the absence of a record, not a measurement."
       />
 
-      {/* ── LCM — Lost Cost Matrix, inline below the OEE reference ────── */}
-      <div className="flex items-center gap-2 pt-3">
-        <Layers size={17} className="text-[#6a1b9a]" />
-        <h2 className="font-condensed font-extrabold text-[15px] tracking-widest uppercase text-navy">
-          LCM — Lost Cost Matrix
-        </h2>
-        {/* Was hardcoded "Own Equipment" and stopped being true the moment the
-            mine could assign a hired machine to a bucket. Read from the plan
-            against the fleet rather than asserted. */}
-        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-[#f3e5f5] text-[#6a1b9a] border-[#ce93d8] tracking-widest uppercase font-mono">
-          {lcmHasHired ? "Own + Hired" : "Own Equipment"}
-        </span>
-        {/* THE MACHINE SPLIT IS THE MINE'S OWN PLAN NOW, not a line of markup.
-            It was written out by hand here, which meant the heading and the
-            calculation could disagree without anyone noticing -- and once the
-            mine can change the split monthly, they would. */}
-        <span className="ml-auto text-[10px] font-mono text-txt-muted hidden sm:inline">
-          {lcmPlan
-            ? <>Ore · {lcmPlan.ore.join(", ") || "—"}&nbsp;&nbsp;|&nbsp;&nbsp;OB · {lcmPlan.ob.join(", ") || "—"}</>
-            : "—"}
-        </span>
-      </div>
-
-      {/* The excavation plan belongs to this page: it is what decides the
-          machine split in the matrix below, so it is entered from here. */}
+      {/* THE OEE MASTER SELECTOR, opened from the entry menu, which
+          navigates here. It belongs with this screen rather than with the
+          LCM: it decides which machines are on these tables and the rate
+          each is measured against. The ore/OB half of it also decides the
+          machine split the LCM divides by, which is why one invalidation
+          below refetches both screens. */}
       <EquipmentPlanModal
         open={entryDialog === "equipment-plan"}
         onClose={closeEntryDialog}
         onSaved={async () => {
           /* ["oee"] is the prefix of the LCM and KAM-tree keys as well as
              the OEE table's own, so one invalidation refetches every figure
-             the plan can move. */
+             the selector can move -- on this page and on the LCM page. */
           await qc.invalidateQueries({ queryKey: ["oee"] });
         }}
       />
-
-      <LCMSection />
-
-      {/* ── LCM for COB — the beneficiation plant, below the mines matrix ──
-          Kept a separate block rather than extra columns on the matrix above:
-          the mines LCM distributes across loss heads from the shift log, and
-          the plant has no downtime log to draw heads from. Different object,
-          different shape, same period and costing conventions. */}
-      <div className="flex items-center gap-2 pt-3">
-        <Factory size={17} className="text-[#00838f]" />
-        <h2 className="font-condensed font-extrabold text-[15px] tracking-widest uppercase text-navy">
-          LCM for COB
-        </h2>
-        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-[#e0f7fa] text-[#00838f] border-[#80deea] tracking-widest uppercase font-mono">
-          Plant 1210
-        </span>
-        <span className="ml-auto text-[10px] font-mono text-txt-muted hidden sm:inline">
-          Concentrate deviation&nbsp;·&nbsp;feed volume vs recovery
-        </span>
-      </div>
-
-      <LCMCobSection />
-
-      {/* Re-cut of the LCM figures by accountability head. Sits after both LCM
-          blocks because it is derived from them, not a new measurement. */}
-      <KamLossTreeSection />
 
     </div>
   );

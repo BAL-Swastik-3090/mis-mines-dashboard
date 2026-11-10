@@ -95,6 +95,18 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   //
   // The sidebar is the convenience; the enforcement is on /api/amira in
   // auth.py, which now maps to this page rather than to mis.
+  // THE SAME PERMISSION AS THE OEE SCREEN IT CAME OUT OF. The LCM reads
+  // /api/oee/lcm, /api/oee/lcm/cob and /api/oee/lcm/kam-tree -- all of them
+  // already gated on dashboard.oee at the API. Inventing dashboard.lcm would
+  // mean seeding a row per role in mines_role_page_access before a single
+  // person could open a page they can already reach by scrolling, and
+  // whoever was missed would simply lose the matrix.
+  //
+  // It is listed HERE rather than carried in allowed_pages because the two
+  // are resolved differently: allowed_pages names dashboards the server
+  // grants, and adding "lcm" to it would need a backend change and a new
+  // page key for no gain. The permission is already in the session payload.
+  "lcm": ["dashboard.oee"],
   "amira": ["dashboard.amira"],
   // The executive summary DOES ride on dashboard.mis, and that is right: it
   // shows nothing the MIS dashboard does not already show, only on one screen.
@@ -139,6 +151,8 @@ const LANDING_RANK: Record<AppPage, number> = {
   "executive-summary": 5,
   "mis": 10,
   "oee": 20,
+  // Directly below OEE, where it was before it had a page of its own.
+  "lcm": 25,
   "intelligence": 30,
   // Directly below Intelligence, where the mine asked for it: the dashboards
   // say what happened, AMIRA says what it cost in metal.

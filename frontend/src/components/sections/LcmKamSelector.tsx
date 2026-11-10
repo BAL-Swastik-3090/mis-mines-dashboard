@@ -1,8 +1,9 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Check, History, Loader2 } from "lucide-react";
+import { AlertTriangle, Check, History, Link2, Loader2, UserPlus } from "lucide-react";
 import api from "@/lib/api";
+import KamPicker from "@/components/sections/KamPicker";
 
 /**
  * The LCM KAM Selector — what each loss head is called, who owns it, whether
@@ -42,7 +43,19 @@ interface Head {
   revision: number;
 }
 
-interface Kam { kam_name: string; emp_id: string | null; status: string }
+interface Kam {
+  kam_name: string;
+  emp_id: string | null;
+  status: string;
+  /** Read live from SAP on every request, never copied — a copied
+   *  designation is wrong from the first promotion. */
+  sap_name: string | null;
+  designation: string | null;
+  department: string | null;
+  /** False for a name typed before the register was wired in. Shown rather
+   *  than hidden: these are exactly the ones that need an employee attached. */
+  in_sap: boolean;
+}
 interface Role { role_code: string; title: string; owner_kam: string | null }
 
 interface Read { on_date: string; heads: Head[]; kams: Kam[]; roles: Role[] }
@@ -71,6 +84,33 @@ function onDay(iso: string): string {
   });
 }
 
+/** The first of the month now showing, which is the day the OEE page opens
+ *  its window on.
+ *
+ *  WHY NOT TODAY, WHICH IS WHAT THIS DEFAULTED TO AT FIRST. The OEE and LCM
+ *  pages report days that have ENDED, so their window always stops at
+ *  yesterday. A setting saved as "from today" is therefore one day ahead of
+ *  anything those pages can show, and a mine marking a machine inactive saw
+ *  nothing change and reasonably concluded the screen was broken. Defaulting
+ *  to the first of the month makes the common case -- correcting the fleet
+ *  for the month being looked at -- do what it looks like it does. A genuine
+ *  mid-month change is still one click on the date. */
+function monthStartIso(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
+/** The last day the OEE and LCM pages can report: yesterday, because they
+ *  only count days that have finished. */
+function lastReportableIso(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+const MONTH_START = monthStartIso();
+const LAST_REPORTABLE = lastReportableIso();
+
 const TH = "px-2 py-1.5 text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary";
 const TD = "px-2 py-1.5 text-[12px]";
 
@@ -86,13 +126,14 @@ type Draft = Partial<Record<"label" | "loss_type" | "kam_name" | "role_code"
 export default function LcmKamSelector({ onSaved }: {
   onSaved: () => void | Promise<void>;
 }) {
-  const today = new Date().toISOString().slice(0, 10);
-  const [effective, setEffective] = useState(today);
+  const [effective, setEffective] = useState(MONTH_START);
   const [draft, setDraft] = useState<Record<string, Draft>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  /** null = closed; otherwise "add", or the KAM name being linked. */
+  const [picker, setPicker] = useState<null | { mode: "add" | "link"; name?: string }>(null);
 
   useEffect(() => { setDraft({}); setError(null); setDone(null); }, [effective]);
 
@@ -172,12 +213,82 @@ export default function LcmKamSelector({ onSaved }: {
           from this day until it is changed again.
         </p>
         <button
-          onClick={() => setShowHistory((v) => !v)}
+          onClick={() => setPicker({ mode: "add" })}
           className="ml-auto flex items-center gap-1 text-[11px] text-steel hover:text-navy"
+        >
+          <UserPlus size={12} /> Add KAM
+        </button>
+        <button
+          onClick={() => setShowHistory((v) => !v)}
+          className="flex items-center gap-1 text-[11px] text-steel hover:text-navy"
         >
           <History size={12} /> {showHistory ? "Hide" : "Show"} changes
         </button>
       </div>
+
+      {picker && (
+        <KamPicker
+          mode={picker.mode}
+          linkTo={picker.name}
+          onClose={() => setPicker(null)}
+          onDone={async () => { await q.refetch(); }}
+        />
+      )}
+
+      {/* THE NAMES THAT ARE NOT YET A PERSON. Eight were typed by hand before
+          the register was wired in, and five of them match no employee at
+          all. Named here rather than left to be discovered: a KAM with no
+          employee id can be added again tomorrow under another spelling and
+          own loss heads as two different people. */}
+      {kams.some((k) => !k.in_sap) && (
+        <div className="px-4 py-2 bg-[#e3f2fd] border-b border-[#90caf9]
+                        flex items-start gap-2 flex-wrap">
+          <Link2 size={13} className="text-[#1565c0] mt-0.5 shrink-0" />
+          <p className="text-[11px] text-[#0d47a1] leading-relaxed">
+            <strong>{kams.filter((k) => !k.in_sap).length} name(s) are not
+            linked to an employee record.</strong>{" "}
+            {kams.filter((k) => !k.in_sap).map((k, i, a) => (
+              <span key={k.kam_name}>
+                <button
+                  type="button"
+                  onClick={() => setPicker({ mode: "link", name: k.kam_name })}
+                  className="underline font-semibold hover:text-[#1565c0]"
+                >
+                  {k.kam_name}
+                </button>
+                {i < a.length - 1 ? ", " : ""}
+              </span>
+            ))}
+            {" "}— click one to find them in SAP.
+          </p>
+        </div>
+      )}
+
+
+      {/* THE ONE MISTAKE THIS SCREEN INVITES, caught before it is made.
+          A date later than the last completed day cannot change any figure
+          on the OEE or LCM pages, because those pages stop at yesterday.
+          Saving it is legitimate -- a change can be scheduled -- but it must
+          not look like nothing happened. */}
+      {effective > LAST_REPORTABLE && (
+        <div className="px-4 py-2 bg-[#e3f2fd] border-b border-[#90caf9] flex items-start gap-2">
+          <AlertTriangle size={13} className="text-[#1565c0] mt-0.5 shrink-0" />
+          <p className="text-[11px] text-[#0d47a1] leading-relaxed">
+            <strong>This starts on {onDay(effective)}, which is after the last
+            day those pages can report ({onDay(LAST_REPORTABLE)}).</strong>{" "}
+            It will be saved, but the figures will not move until the window
+            reaches it — the OEE and LCM pages count only days that have
+            ended.{" "}
+            <button
+              type="button"
+              onClick={() => setEffective(MONTH_START)}
+              className="underline font-semibold hover:text-[#1565c0]"
+            >
+              Apply from {onDay(MONTH_START)} instead
+            </button>
+          </p>
+        </div>
+      )}
 
       <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 flex items-start gap-2">
         <AlertTriangle size={13} className="text-amber-600 mt-0.5 shrink-0" />
@@ -252,7 +363,10 @@ export default function LcmKamSelector({ onSaved }: {
                     >
                       <option value="">— none —</option>
                       {kams.map((k) => (
-                        <option key={k.kam_name} value={k.kam_name}>{k.kam_name}</option>
+                        <option key={k.kam_name} value={k.kam_name}>
+                          {k.kam_name}
+                          {k.designation ? ` — ${k.designation}` : k.in_sap ? "" : " (not linked)"}
+                        </option>
                       ))}
                     </select>
                   </td>

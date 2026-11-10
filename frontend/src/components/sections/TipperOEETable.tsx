@@ -4,6 +4,7 @@ import { Download } from "lucide-react";
 import { formatIndian } from "@/lib/utils";
 import { toCsv, download } from "@/components/minehub/spreadsheet";
 import type { TipperOEERow, TipperOEEFleet } from "@/types";
+import { KpiStrip, tipperKpis } from "@/components/sections/OeeKpiStrip";
 
 /* Ten columns, in the order the mine reads them: the hours first, then the
  * trips, then the four percentages they multiply into.
@@ -101,6 +102,18 @@ export default function TipperOEETable({
           Excel
         </button>
       </div>
+
+      {/* THIS FLEET'S OWN FIGURES, directly above it. The strip and the
+          OVERALL row at the foot are the same weighted roll-up from the
+          server, so they cannot disagree; what the strip adds is the four
+          percentages read together, without scrolling a ten-column table to
+          the far right to find them.
+
+          NOTHING IS CAPPED HERE EITHER. A Utilisation or an OEE over 100%
+          is coloured as the fault it is -- an SAP notification left open
+          shrinks the denominator while the truck keeps working -- for the
+          same reason the table below does not cap it. */}
+      <KpiStrip cards={tipperKpis(fleet)} loading={loading} dense />
 
       <div className="overflow-x-auto">
         <table className="w-full text-[12px] font-mono">

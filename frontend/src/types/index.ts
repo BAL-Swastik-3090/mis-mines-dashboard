@@ -1068,6 +1068,15 @@ export interface OEEResponse {
    *  re-deriving percentages in the browser overstates them. */
   fleet_old: OEEFleet;
   fleet_new: OEEFleet;
+  /** 'table' when the fleet came from the Equipment Status Selector, which is
+   *  the normal case; 'fallback' when minehub could not be reached and these
+   *  are the figures compiled into the service. */
+  roster_source?: string;
+  /** The day the fleet was resolved FOR — the first day of the window, not
+   *  today. The two differ on any month-to-date view, which is why the table
+   *  prints it: a setting saved today starts after the last day this page
+   *  can report, and the footer has to say so. */
+  roster_as_on?: string | null;
 }
 
 // ── AMIRA Accounting ──────────────────────────────────────────

@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { Activity, BarChart3, Boxes, Database, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, Calculator, ClipboardCheck, ClipboardList, CloudSun, DoorOpen, ExternalLink, Gauge, LayoutDashboard, LineChart, Network, Radar, Scale, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
+import { Activity, BarChart3, Layers, Boxes, Database, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, Calculator, ClipboardCheck, ClipboardList, CloudSun, DoorOpen, ExternalLink, Gauge, LayoutDashboard, LineChart, Network, Radar, Scale, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { canOpen } from "@/contexts/pageAccess";
 import { useSidebar }               from "@/contexts/useSidebar";
@@ -48,7 +48,11 @@ const NAV_ITEMS: NavItem[] = [
   { kind: "page", id: "executive-summary", label: "Executive Summary",        icon: ClipboardCheck  },
   { kind: "page", id: "mis",             label: "MIS Dashboard",              icon: LayoutDashboard },
   { kind: "page", id: "weather",         label: "Weather Forecast",           icon: CloudSun        },
-  { kind: "page", id: "oee",             label: "OEE / LCM",                  icon: Activity        },
+  { kind: "page", id: "oee",             label: "OEE",                        icon: Activity        },
+  // Its own entry, directly under the screen it came out of, so somebody
+  // reading what the shortfall cost does not have to walk through four
+  // machine tables to reach it. Same permission as OEE — see pageAccess.
+  { kind: "page", id: "lcm",             label: "LCM",                        icon: Layers          },
   { kind: "page", id: "intelligence",    label: "Intelligence",               icon: Sparkles        },
   { kind: "page", id: "amira",           label: "AMIRA Accounting",           icon: Calculator      },
   { kind: "page", id: "market",          label: "Market Watch",               icon: LineChart       },

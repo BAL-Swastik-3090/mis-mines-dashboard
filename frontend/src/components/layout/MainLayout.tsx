@@ -7,6 +7,7 @@ import FuelManagementSection   from "@/components/sections/FuelManagementSection
 import ElectricVehiclesSection from "@/components/sections/ElectricVehiclesSection";
 import CostingSection from "@/components/sections/CostingSection";
 import OEESection              from "@/components/sections/OEESection";
+import LCMPageSection from "@/components/sections/LCMPageSection";
 import IntelligenceSection     from "@/components/sections/IntelligenceSection";
 import AmiraAccountingTable    from "@/components/tables/AmiraAccountingTable";
 import ExecutiveSummarySection from "@/components/sections/ExecutiveSummarySection";
@@ -101,6 +102,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
             <>
           {page === "mis"              && children}
           {page === "oee"              && <OEESection />}
+          {page === "lcm"              && <LCMPageSection />}
           {page === "intelligence"     && <IntelligenceSection />}
           {page === "amira"            && <AmiraAccountingTable />}
           {page === "executive-summary" && <ExecutiveSummarySection />}

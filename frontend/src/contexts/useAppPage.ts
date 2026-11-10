@@ -16,7 +16,12 @@ import { persist } from "zustand/middleware";
 // "weather" is its own screen rather than a strip on the MIS dashboard: it is
 // consulted before a shift is planned, by people who are not otherwise reading
 // production figures, and a full-height map cannot share a page with anything.
-export type AppPage = "mis" | "executive-summary" | "weather" | "fuel-management" | "ev-tracking" | "product-costing" | "oee" | "intelligence" | "amira" | "access-control" | "data-health" | "minehub" | "manpower" | "operations" | "workforce" | "market" | "organisation" | "weighbridge" | "weighbridge-sap" | "gate" | "capacity" | "usage";
+// "lcm" is its own screen rather than the bottom half of "oee". The two are
+// calculated from the same window and the same excavation plan, but they are
+// read by different people: OEE asks how the fleet performed, the LCM asks
+// what the shortfall cost and who owns it. Reaching the second meant
+// scrolling past four machine tables, and nobody could link to it.
+export type AppPage = "mis" | "executive-summary" | "weather" | "fuel-management" | "ev-tracking" | "product-costing" | "oee" | "lcm" | "intelligence" | "amira" | "access-control" | "data-health" | "minehub" | "manpower" | "operations" | "workforce" | "market" | "organisation" | "weighbridge" | "weighbridge-sap" | "gate" | "capacity" | "usage";
 
 interface AppPageStore {
   page: AppPage;

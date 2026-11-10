@@ -71,14 +71,30 @@ def roles(db: Session) -> list[dict[str, Any]]:
 
 
 def kams(db: Session, active_only: bool = True) -> list[dict[str, Any]]:
-    """The people a loss head can be assigned to."""
+    """The people a loss head can be assigned to.
+
+    Designation and department come from SAP on every read, not from a copy
+    taken when the person was added -- a copied designation is wrong from the
+    first promotion and nothing on the screen would say so. A LEFT JOIN, so a
+    name with no employee id yet still appears: the eight seeded ones are
+    precisely those, and hiding them would hide the thing to fix.
+
+    `in_sap` tells the screen which is which, so an unlinked name can be
+    marked rather than silently looking the same as a linked one.
+    """
     return [{"kam_name": r.kam_name, "emp_id": r.emp_id,
-             "status": r.status, "sl_order": r.sl_order}
+             "status": r.status, "sl_order": r.sl_order,
+             "sap_name": r.sap_name, "designation": r.designation,
+             "department": r.department,
+             "in_sap": r.emp_id is not None and r.sap_name is not None}
             for r in db.execute(text(
-                "SELECT kam_name, emp_id, status, sl_order "
-                "FROM minehub.lcm_kam_master "
-                + ("WHERE status = 'ACTIVE' " if active_only else "")
-                + "ORDER BY COALESCE(sl_order, 9999), kam_name"))]
+                "SELECT k.kam_name, k.emp_id, k.status, k.sl_order, "
+                "       e.empname AS sap_name, e.empdesg AS designation, "
+                "       e.empdept AS department "
+                "FROM   minehub.lcm_kam_master k "
+                f"LEFT   JOIN {EMP_TBL} e ON e.empid = k.emp_id "
+                + ("WHERE k.status = 'ACTIVE' " if active_only else "")
+                + "ORDER BY COALESCE(k.sl_order, 9999), k.kam_name"))]
 
 
 def resolve_detached(on_date: date) -> dict[str, Any] | None:
@@ -256,3 +272,168 @@ def versions(db: Session, column_name: str) -> list[dict[str, Any]]:
                 "SELECT * FROM minehub.lcm_loss_head_setting "
                 "WHERE column_name = :c ORDER BY effective_from DESC"),
                 {"c": column_name})]
+
+
+# ── The people, and where they come from ─────────────────────────────────────
+# A KAM is an employee SAP knows, picked from the register rather than typed.
+# Both schemas are in corpappdb, so designation and department are read LIVE
+# rather than copied: a copied designation is wrong from the first promotion
+# and nothing on the screen would say so.
+EMP_TBL = "sap_odata_api.sap_employee_details"
+
+
+def search_employees(db: Session, q: str, limit: int = 25) -> list[dict[str, Any]]:
+    """The employee picker behind "Add KAM".
+
+    ILIKE, not LIKE: Postgres is case-sensitive where MySQL is not, and a
+    LIKE here would quietly match nothing typed in the wrong case -- the
+    picker would simply look empty rather than wrong.
+
+    WITHDRAWN EMPLOYEES ARE EXCLUDED. 369 of the 1,328 rows are leavers, and
+    offering them would let a loss head be assigned to somebody who left the
+    company. An existing KAM who later leaves is NOT removed -- their past
+    assignments must keep naming them -- which is what `status` on the master
+    is for.
+
+    `already` says the person is on the KAM list, so the screen can show them
+    greyed rather than letting somebody add a duplicate and find out from a
+    constraint.
+    """
+    term = (q or "").strip()
+    if len(term) < 2:
+        return []
+    rows = db.execute(text(f"""
+        SELECT e.empid       AS emp_id,
+               e.empname     AS name,
+               e.empdesg     AS designation,
+               e.empdept     AS department,
+               e.location    AS location,
+               (k.emp_id IS NOT NULL) AS already,
+               k.kam_name    AS kam_name
+        FROM   {EMP_TBL} e
+        LEFT   JOIN minehub.lcm_kam_master k ON k.emp_id = e.empid
+        WHERE  (e.empid ILIKE :like OR e.empname ILIKE :like)
+          AND  (e.status IS NULL OR e.status <> 'Withdrawn')
+        ORDER  BY e.empname
+        LIMIT  :lim
+    """), {"like": f"%{term}%", "lim": limit}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def employee(db: Session, emp_id: str) -> dict[str, Any] | None:
+    """One employee, or None. Used to validate what the picker sent back."""
+    r = db.execute(text(f"""
+        SELECT empid AS emp_id, empname AS name, empdesg AS designation,
+               empdept AS department, status
+        FROM   {EMP_TBL} WHERE empid = :e
+    """), {"e": (emp_id or "").strip()}).mappings().first()
+    return dict(r) if r else None
+
+
+def _display_name(sap_name: str) -> str:
+    """SAP shouts; the matrix does not.
+
+    'RANA VIKASH KUMAR SINGH' on a row beside 'Gurpreet Singh' reads as two
+    different kinds of thing. This is a STARTING POINT the user can edit
+    before saving -- the mine's own short forms ('K L Das') are not derivable
+    from the register and should not be guessed at.
+    """
+    small = {"kumar", "kr", "ran", "de", "da", "van"}
+    out = []
+    for w in (sap_name or "").split():
+        lw = w.lower()
+        out.append(w.upper() if len(w) <= 2 and w.isalpha() and w.isupper()
+                   else (lw if lw in small and out else lw.capitalize()))
+    return " ".join(out).strip()
+
+
+def add_kam(db: Session, emp_id: str, kam_name: str | None,
+            actor: str) -> dict[str, Any]:
+    """Put an employee on the KAM list.
+
+    The employee id is the identity; kam_name is the DISPLAY name and the key
+    the dated loss-head settings point at. Both are stored: the first so the
+    same person cannot be added twice under two spellings, the second so the
+    matrix can go on saying what the mine calls them.
+    """
+    emp = employee(db, emp_id)
+    if emp is None:
+        raise SettingsError(f"{emp_id} is not an employee id SAP knows.")
+    if (emp.get("status") or "") == "Withdrawn":
+        raise SettingsError(
+            f"{emp['name']} ({emp_id}) has left the company and cannot be "
+            "given a loss head.")
+
+    name = (kam_name or "").strip() or _display_name(emp["name"])
+
+    held = db.execute(text(
+        "SELECT kam_name, emp_id FROM minehub.lcm_kam_master "
+        "WHERE emp_id = :e OR upper(kam_name) = upper(:n)"),
+        {"e": emp["emp_id"], "n": name}).mappings().all()
+    for h in held:
+        if h["emp_id"] == emp["emp_id"]:
+            raise SettingsError(
+                f"{emp['name']} is already on the list as \"{h['kam_name']}\".")
+        raise SettingsError(
+            f"\"{h['kam_name']}\" is already on the list. Use a name that "
+            "tells the two apart, or link the existing one to this employee.")
+
+    nxt = db.execute(text(
+        "SELECT coalesce(max(sl_order), 0) + 1 FROM minehub.lcm_kam_master")).scalar()
+    db.execute(text("""
+        INSERT INTO minehub.lcm_kam_master
+            (kam_name, emp_id, status, sl_order, entry_id)
+        VALUES (:n, :e, 'ACTIVE', :sl, :actor)
+    """), {"n": name, "e": emp["emp_id"], "sl": nxt, "actor": actor})
+    db.commit()
+    return {"kam_name": name, "emp_id": emp["emp_id"],
+            "name": emp["name"], "designation": emp.get("designation"),
+            "department": emp.get("department"), "sl_order": nxt}
+
+
+def link_kam(db: Session, kam_name: str, emp_id: str | None = None,
+             status: str | None = None, *, actor: str) -> dict[str, Any]:
+    """Attach an employee to a name already on the list, or retire it.
+
+    THE NAME IS NOT CHANGED HERE, deliberately. kam_name is what every dated
+    loss-head version points at; replacing it would orphan them, and the eight
+    seeded names are exactly the ones that need an employee attached. A
+    genuine rename is a cascade on the foreign key and a different job.
+
+    Retiring is `status`, never a delete: a person who leaves must still be
+    named by the months they owned.
+    """
+    cur = db.execute(text(
+        "SELECT kam_name, emp_id, status FROM minehub.lcm_kam_master "
+        "WHERE kam_name = :n"), {"n": kam_name}).mappings().first()
+    if cur is None:
+        raise SettingsError(f"\"{kam_name}\" is not on the KAM list.")
+
+    sets, params = [], {"n": kam_name, "actor": actor}
+    if emp_id is not None:
+        emp = employee(db, emp_id)
+        if emp is None:
+            raise SettingsError(f"{emp_id} is not an employee id SAP knows.")
+        clash = db.execute(text(
+            "SELECT kam_name FROM minehub.lcm_kam_master "
+            "WHERE emp_id = :e AND kam_name <> :n"),
+            {"e": emp["emp_id"], "n": kam_name}).scalar()
+        if clash:
+            raise SettingsError(
+                f"{emp['name']} is already on the list as \"{clash}\".")
+        sets.append("emp_id = :e")
+        params["e"] = emp["emp_id"]
+    if status is not None:
+        if status not in ("ACTIVE", "INACTIVE"):
+            raise SettingsError(f"{status!r} is not a status.")
+        sets.append("status = :st")
+        params["st"] = status
+    if not sets:
+        return {"kam_name": kam_name, "changed": []}
+
+    db.execute(text(
+        f"UPDATE minehub.lcm_kam_master SET {', '.join(sets)}, "
+        "entry_id = :actor, entry_date = now() WHERE kam_name = :n"), params)
+    db.commit()
+    return {"kam_name": kam_name,
+            "changed": [s.split(" =")[0] for s in sets]}

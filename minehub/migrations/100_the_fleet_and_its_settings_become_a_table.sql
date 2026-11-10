@@ -70,6 +70,10 @@ ALTER TABLE oee_equip_master
     ADD COLUMN IF NOT EXISTS bd_source            varchar(12) NOT NULL DEFAULT 'SHIFT_LOG',
     ADD COLUMN IF NOT EXISTS sl_order             integer;
 
+-- THE GUARDS BELOW SCOPE ON conrelid AS WELL AS ON THE NAME. A constraint
+-- name is unique per TABLE, not per database: checking the name alone found
+-- minehub's copy and skipped creating it anywhere else, so this migration
+-- stopped being able to build a fresh schema the moment it had been run once.
 DO $$
 BEGIN
     -- THREE SYSTEMS, THREE SPELLINGS OF THE SAME TRUCK. Telematics says
@@ -78,14 +82,16 @@ BEGIN
     -- as a truck that did no work -- indistinguishable from the real thing.
     -- Written down, they can be corrected without a deployment.
     IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                   WHERE conname = 'oee_equip_master_class_chk') THEN
+                   WHERE conname = 'oee_equip_master_class_chk'
+                     AND conrelid = 'oee_equip_master'::regclass) THEN
         ALTER TABLE oee_equip_master
             ADD CONSTRAINT oee_equip_master_class_chk
             CHECK (equipment_class IN ('EXCAVATOR', 'TIPPER'));
     END IF;
 
     IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                   WHERE conname = 'oee_equip_master_engine_src_chk') THEN
+                   WHERE conname = 'oee_equip_master_engine_src_chk'
+                     AND conrelid = 'oee_equip_master'::regclass) THEN
         ALTER TABLE oee_equip_master
             ADD CONSTRAINT oee_equip_master_engine_src_chk
             CHECK (engine_source IS NULL
@@ -93,7 +99,8 @@ BEGIN
     END IF;
 
     IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                   WHERE conname = 'oee_equip_master_bd_src_chk') THEN
+                   WHERE conname = 'oee_equip_master_bd_src_chk'
+                     AND conrelid = 'oee_equip_master'::regclass) THEN
         ALTER TABLE oee_equip_master
             ADD CONSTRAINT oee_equip_master_bd_src_chk
             CHECK (bd_source IN ('SAP', 'SHIFT_LOG'));
@@ -102,7 +109,8 @@ BEGIN
     -- Breakdown from SAP only for a machine SAP can be asked about, by
     -- whichever key that system knows it by.
     IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                   WHERE conname = 'oee_equip_master_sap_key_chk') THEN
+                   WHERE conname = 'oee_equip_master_sap_key_chk'
+                     AND conrelid = 'oee_equip_master'::regclass) THEN
         ALTER TABLE oee_equip_master
             ADD CONSTRAINT oee_equip_master_sap_key_chk
             CHECK (bd_source <> 'SAP'
@@ -113,7 +121,8 @@ BEGIN
     -- The target of the composite foreign key below, so a settings row can
     -- never claim a class its machine does not have.
     IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                   WHERE conname = 'oee_equip_master_name_class_key') THEN
+                   WHERE conname = 'oee_equip_master_name_class_key'
+                     AND conrelid = 'oee_equip_master'::regclass) THEN
         ALTER TABLE oee_equip_master
             ADD CONSTRAINT oee_equip_master_name_class_key
             UNIQUE (equipment_name, equipment_class);
