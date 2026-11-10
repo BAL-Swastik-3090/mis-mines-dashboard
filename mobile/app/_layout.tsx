@@ -43,7 +43,7 @@ TaskManager.defineTask(BACKGROUND_TASK, async () => {
     const db = await openDb();
     await syncNow({
       store: adapt(db),
-      transport: httpTransport({ baseUrl: base, deviceToken: storedToken }),
+      transport: httpTransport({ baseUrl: storedBaseUrl, deviceToken: storedToken }),
       force: true,
     });
     return BackgroundTask.BackgroundTaskResult.Success;
@@ -83,7 +83,7 @@ export default function RootLayout() {
         }
 
         attachSync(store, httpTransport({
-          baseUrl: base,
+          baseUrl: storedBaseUrl,
           deviceToken: storedToken,
         }));
         void registerBackgroundSync();

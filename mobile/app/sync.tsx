@@ -17,9 +17,10 @@ import { useCallback, useState } from 'react';
 import {
   View, Text, Pressable, ScrollView, StyleSheet, ActivityIndicator, RefreshControl,
 } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useSync } from '@/ui/useSync';
 import { useCapture } from '@/ui/useCapture';
+import { forget, storedBaseUrl, storedLabel } from '@/core/sync/enrolment';
 
 interface Waiting {
   client_uuid: string;
@@ -44,6 +45,7 @@ const howLong = (iso: string) => {
 };
 
 export default function Sync() {
+  const router = useRouter();
   const store = useCapture((s) => s.store);
   const run = useSync((s) => s.run);
   const refresh = useSync((s) => s.refresh);
@@ -52,10 +54,15 @@ export default function Sync() {
   const status = useSync((s) => s.status);
 
   const [rows, setRows] = useState<Waiting[]>([]);
+  const [server, setServer] = useState<string | null>(null);
+  const [tablet, setTablet] = useState<string | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
 
   const load = useCallback(async () => {
     if (!store) return;
     await refresh();
+    setServer(await storedBaseUrl());
+    setTablet(await storedLabel());
     setRows(await store.getAllAsync<Waiting>(
       `SELECT s.client_uuid, a.fleet_code, s.status, s.sync_state, s.sync_attempts,
               s.sync_error, s.captured_at, s.server_session_ref
@@ -179,6 +186,48 @@ export default function Sync() {
         Closing the app does not send anything. Bring the tablet within signal
         and leave it open, or press Sync now.
       </Text>
+
+      {/* ── which server, and how to change it ──────────────────────────────
+          A development backend runs on somebody's laptop and a laptop's
+          address moves. Without a way back to the setup screen the app points
+          at a dead address for good, and the only cure is clearing app data —
+          which also destroys every handover waiting to be sent. */}
+      <View style={styles.serverBox}>
+        <Text style={styles.serverLabel}>This tablet</Text>
+        <Text style={styles.serverValue}>{tablet ?? 'not set up'}</Text>
+        <Text style={styles.serverLabel}>Sends to</Text>
+        <Text style={styles.serverValue}>{server ?? '—'}</Text>
+
+        {confirmReset ? (
+          <View style={{ gap: 8, marginTop: 8 }}>
+            <Text style={styles.resetWarn}>
+              {waiting.length > 0
+                ? `${waiting.length} handover(s) are still waiting to be sent. They ` +
+                  `are KEPT — setting up again changes only the server and the token, ` +
+                  `and they will go once the new server is reachable.`
+                : 'Nothing is waiting, so nothing can be lost. Captured handovers are ' +
+                  'kept either way.'}
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <Pressable
+                testID="reset-confirm"
+                style={[styles.primary, { flex: 1, backgroundColor: '#c0392b' }]}
+                onPress={async () => { await forget(); router.replace('/enrol'); }}
+              >
+                <Text style={styles.primaryText}>Set up again</Text>
+              </Pressable>
+              <Pressable style={[styles.primary, { flex: 1, backgroundColor: '#5b6a7a' }]}
+                         onPress={() => setConfirmReset(false)}>
+                <Text style={styles.primaryText}>Cancel</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : (
+          <Pressable testID="reset-enrolment" onPress={() => setConfirmReset(true)}>
+            <Text style={styles.serverChange}>Server moved? Set this tablet up again</Text>
+          </Pressable>
+        )}
+      </View>
     </ScrollView>
   );
 }
@@ -224,4 +273,12 @@ const styles = StyleSheet.create({
   whyBad: { fontSize: 14, color: '#c0392b', fontWeight: '600' },
 
   footnote: { fontSize: 13, color: '#5b6a7a', textAlign: 'center', marginTop: 6 },
+
+  serverBox: { backgroundColor: '#fff', borderRadius: 10, padding: 14, gap: 2,
+               borderWidth: 1, borderColor: '#d8dee6', marginTop: 4 },
+  serverLabel: { fontSize: 11, fontWeight: '800', color: '#5b6a7a', letterSpacing: 0.5,
+                 marginTop: 6 },
+  serverValue: { fontSize: 15, color: '#16202b' },
+  serverChange: { fontSize: 14, color: '#1e5f8a', fontWeight: '600', marginTop: 12 },
+  resetWarn: { fontSize: 13, color: '#16202b' },
 });

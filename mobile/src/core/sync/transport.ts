@@ -27,8 +27,17 @@ import * as FileSystem from 'expo-file-system';
 import type { Transport } from './engine';
 
 export interface TransportConfig {
-  /** e.g. https://mines.balasorealloys.in — no trailing slash. */
-  baseUrl: string;
+  /**
+   * Where the server is, read FRESH on every call rather than captured once.
+   *
+   * A development backend runs on somebody's laptop, and a laptop's DHCP
+   * address moves — this one changed inside a day. Holding the address from
+   * startup meant that re-enrolling a tablet against the new address had no
+   * effect until the app was killed and reopened, which is not something an
+   * operator would ever think to do, and the app would sit there failing to
+   * sync against an address nothing answers on.
+   */
+  baseUrl: () => Promise<string | null>;
   /** Milliseconds. Short: a tablet's window of signal is seconds long, and a
    *  60-second timeout spends the whole window on one failing request. */
   timeoutMs?: number;
@@ -48,12 +57,14 @@ export function httpTransport(cfg: TransportConfig): Transport {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), timeout);
     try {
+      const base = await cfg.baseUrl();
+      if (!base) throw new Error('this tablet has not been set up yet');
       const token = await cfg.deviceToken();
       const headers: Record<string, string> = {
         ...(init.headers as Record<string, string> | undefined),
         ...(token ? { [DEVICE_HEADER]: token } : {}),
       };
-      const r = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: ac.signal });
+      const r = await fetch(`${base}${path}`, { ...init, headers, signal: ac.signal });
       const text = await r.text();
       let body: any = null;
       try { body = text ? JSON.parse(text) : null; } catch { body = { raw: text.slice(0, 400) }; }
@@ -75,9 +86,11 @@ export function httpTransport(cfg: TransportConfig): Transport {
     getBundle: () => call('/api/hoto/device/sync', { method: 'GET' }),
 
     postPhoto: async ({ photoUuid, clientUuid, itemId, localPath, sha256, capturedAt }) => {
+      const base = await cfg.baseUrl();
+      if (!base) throw new Error('this tablet has not been set up yet');
       const token = await cfg.deviceToken();
       const r = await FileSystem.uploadAsync(
-        `${cfg.baseUrl}/api/hoto/device/photos`, localPath, {
+        `${base}/api/hoto/device/photos`, localPath, {
         httpMethod: 'POST',
         uploadType: FileSystem.FileSystemUploadType.MULTIPART,
         fieldName: 'file',
