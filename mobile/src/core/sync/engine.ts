@@ -32,6 +32,9 @@
 
 import type { Store } from '../capture/store';
 import { payloadFor } from '../capture/session';
+import {
+  cacheBundle, clockDriftSeconds, DRIFT_WARN_SECONDS, type SyncBundle,
+} from '../capture/cache';
 import type { SyncState } from '../enums';
 
 export interface Transport {
@@ -53,6 +56,10 @@ export interface SyncReport {
   photosSent: number;
   photosRefused: number;
   locationsSent: number;
+  /** How many machines this device now holds. Null when masters were not refreshed. */
+  machinesCached: number | null;
+  /** The device's clock against the server's, in seconds. */
+  clockDriftSeconds: number | null;
   stillQueued: number;
   mastersRefreshed: boolean;
   problems: string[];
@@ -129,7 +136,7 @@ export async function syncNow(args: {
 
   const report: SyncReport = {
     sessionsSent: 0, sessionsRefused: 0, photosSent: 0, photosRefused: 0,
-    locationsSent: 0,
+    locationsSent: 0, machinesCached: null, clockDriftSeconds: null,
     stillQueued: 0, mastersRefreshed: false, problems: [], retryAfterSeconds: null,
   };
 
@@ -143,10 +150,46 @@ export async function syncNow(args: {
   await sendLocations(store, transport, report);
 
   if (args.refreshMasters) {
+    // THE BUNDLE IS STORED HERE. It was not, for the whole of phases 10-14:
+    // this block fetched the machine list, set mastersRefreshed, wrote a
+    // success line to the sync log, and dropped the data on the floor.
+    // `cacheBundle` had no caller outside its own tests, so every device ever
+    // set up held an empty machine list and the capture flow was unreachable
+    // -- "this tablet holds no machines yet", on a device that had just
+    // synced successfully. Found on a phone in the field, 10 Nov 2026.
+    //
+    // mastersRefreshed now means STORED, not fetched. Those are the two
+    // things this bug confused, and the difference is the entire app.
     const r = await transport.getBundle().catch(() => null);
-    if (r && r.status === 200) {
-      report.mastersRefreshed = true;
-      await log(store, 'MASTERS', null, true, 200, null);
+    if (r && r.status === 200 && Array.isArray(r.body?.assets)) {
+      try {
+        const n = await cacheBundle(store, r.body as SyncBundle, now);
+        report.mastersRefreshed = true;
+        report.machinesCached = n.assets;
+        await log(store, 'MASTERS', null, true, 200,
+                  `${n.assets} machines, ${n.operators} operators, ` +
+                  `${n.templates} checklists, ${n.items} checks`);
+
+        // A device whose clock is out files handovers into the wrong shift,
+        // and nothing about the record itself would ever show it.
+        const drift = clockDriftSeconds(r.body.server_time, now);
+        report.clockDriftSeconds = drift;
+        if (Math.abs(drift) > DRIFT_WARN_SECONDS) {
+          report.problems.push(
+            `This device's clock is ${Math.abs(Math.round(drift / 60))} minutes ` +
+            `${drift > 0 ? 'ahead of' : 'behind'} the office. Handovers may be ` +
+            `filed into the wrong shift until it is corrected.`);
+        }
+      } catch (e) {
+        // Fetched but not stored is a failure, and must read as one.
+        report.problems.push(
+          'The machine list arrived but could not be stored on this device.');
+        await log(store, 'MASTERS', null, false, 200,
+                  e instanceof Error ? e.message : String(e));
+      }
+    } else if (r && r.status === 200) {
+      report.problems.push('The server sent no machine list.');
+      await log(store, 'MASTERS', null, false, 200, 'no assets in the bundle');
     } else if (r) {
       report.problems.push(`Could not refresh the machine list (${r.status}).`);
       await log(store, 'MASTERS', null, false, r.status, null);

@@ -44,7 +44,13 @@ function transport(over: Partial<Transport> = {}): Transport & { batches: any[][
     batches,
     postSession: over.postSession ?? (async () => ({ status: 201, body: {} })),
     postPhoto: over.postPhoto ?? (async () => ({ status: 201, body: {} })),
-    getBundle: over.getBundle ?? (async () => ({ status: 200, body: {} })),
+    // A real bundle shape: an empty body is no longer a successful refresh,
+    // which is the point of the masters fix.
+    getBundle: over.getBundle ?? (async () => ({
+      status: 200,
+      body: { server_time: new Date().toISOString(), assets: [],
+              operators: [], locations: [], templates: [] },
+    })),
     postLocations: over.postLocations ?? (async (fixes) => {
       batches.push(fixes as any[]);
       return { status: 200, body: { stored: fixes.length, skipped: 0, duplicates: 0 } };
