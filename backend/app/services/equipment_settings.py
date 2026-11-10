@@ -170,13 +170,20 @@ def tippers(on_date: date) -> dict[str, Any] | None:
         return None
     old = [r for r in rows if r["generation"] == OLD]
     new = [r for r in rows if r["generation"] == NEW]
+    # BOTH MAPS COVER BOTH GENERATIONS. Until 7 November 2026 the old fleet
+    # was measured by a rate and the new one by a fixed figure, so each map
+    # held only the trucks it applied to. They are measured the same way now,
+    # and a truck may carry either, so the caller is handed both for everyone
+    # and picks per machine rather than per generation.
     return {
         "old":   tuple(r["equipment_name"] for r in old),
-        "new":   {r["equipment_name"]: r["ideal_trip_fixed"] for r in new},
-        # Per machine, defaulting to the mine's 1.5. One figure reproduces
-        # their own Ideal Trip column on all 18 working MAN trucks, so the
-        # table seeds it on every row rather than leaving it implicit.
-        "rate":  {r["equipment_name"]: r["trips_per_engine_hour"] for r in old},
+        "new":   tuple(r["equipment_name"] for r in new),
+        #: Trips a truck should turn per engine-hour. The mine's own 1.50 on
+        #: every row, and editable per machine.
+        "rate":  {r["equipment_name"]: r["trips_per_engine_hour"] for r in rows},
+        #: A target that does NOT scale with the window, for a truck the mine
+        #: genuinely measures that way. Used only where no rate is set.
+        "fixed": {r["equipment_name"]: r["ideal_trip_fixed"] for r in rows},
         "log_name": {r["equipment_name"]: r["name_shift_log"] for r in rows},
         "sap_name": {r["equipment_name"]: r["sap_desc_tech_object"] for r in rows},
     }
@@ -235,15 +242,25 @@ def save(db: Session, effective_from: date,
         row = {f: base.get(f) for f in SETTABLE}
         row.update(wanted)
 
-        # Moving a tipper between old and new swaps which figure applies, and
-        # the one it is leaving must go or the row is unstorable. Done before
-        # the checks below so the user is told what is missing, not what is
-        # left over.
+        # A machine carries the figures its CLASS is measured in and no
+        # others. Generation no longer decides anything here: since
+        # 7 November 2026 both tipper fleets use trips per engine-hour, and a
+        # truck on a flat target is a per-machine choice rather than a
+        # property of being new. Cleared before the checks below so the user
+        # is told what is missing rather than what is left over.
         if klass[name] == TIPPER:
             row["ideal_cum_per_hr"] = None
-            if row["generation"] == NEW:
+            # Setting one clears the other: the table allows a tipper either
+            # a rate or a fixed target, never both, so whichever the user
+            # just supplied is the one that survives.
+            if "trips_per_engine_hour" in wanted and row["trips_per_engine_hour"]:
+                row["ideal_trip_fixed"] = None
+            elif "ideal_trip_fixed" in wanted and row["ideal_trip_fixed"]:
                 row["trips_per_engine_hour"] = None
-            else:
+            elif row["trips_per_engine_hour"] and row["ideal_trip_fixed"]:
+                # Neither was touched and the row somehow holds both -- the
+                # rate wins, because it is the one that scales with the
+                # window the figure is read over.
                 row["ideal_trip_fixed"] = None
         else:
             row["ideal_trip_fixed"] = None

@@ -185,6 +185,67 @@ def save_loss_heads(body: LossHeadIn, request: Request,
     return {**res, "entry_id": _actor(request)}
 
 
+# ── The people a loss head can be given to ───────────────────────────────────
+class KamIn(BaseModel):
+    """Add an employee to the KAM list."""
+    emp_id: str = Field(min_length=1, max_length=20)
+    #: The display name for the matrix. Defaults to a title-cased form of the
+    #: SAP name, which the screen offers and the user may edit -- the mine's
+    #: own short forms ("K L Das") are not derivable from the register.
+    kam_name: str | None = Field(None, min_length=1, max_length=60)
+
+
+class KamLinkIn(BaseModel):
+    """Attach an employee to a name already on the list, or retire it."""
+    kam_name: str = Field(min_length=1, max_length=60)
+    emp_id: str | None = Field(None, min_length=1, max_length=20)
+    status: str | None = Field(None, pattern="^(ACTIVE|INACTIVE)$")
+
+
+@router.get("/employees")
+def search_employees(q: str = Query("", max_length=80),
+                     db: Session = Depends(get_minehub_db)) -> dict:
+    """Employee lookup for the Add KAM picker.
+
+    THE SAME REGISTER ACCESS CONTROL USES, but behind this page's own gate
+    rather than access.users.view -- somebody maintaining the loss matrix has
+    no business holding the user list, and requiring it would mean handing out
+    Access Control to let a clerk name a KAM.
+
+    It returns a name, a designation and a department and nothing else: enough
+    to tell two people called Singh apart, and no more of the HR record than
+    that question needs.
+    """
+    rows = lset.search_employees(db, q)
+    return {"q": q, "count": len(rows), "employees": rows}
+
+
+@router.post("/kams")
+def add_kam(body: KamIn, request: Request,
+            db: Session = Depends(get_minehub_db)) -> dict:
+    try:
+        return lset.add_kam(db, body.emp_id, body.kam_name, _actor(request))
+    except lset.SettingsError as exc:
+        db.rollback()
+        raise HTTPException(400, str(exc))
+
+
+@router.patch("/kams")
+def link_kam(body: KamLinkIn, request: Request,
+             db: Session = Depends(get_minehub_db)) -> dict:
+    """Attach an employee id to an existing name, or retire the name.
+
+    Retiring is a status, never a delete: the dated loss-head versions point
+    at this name, and a month already reported must keep naming its owner.
+    """
+    try:
+        return lset.link_kam(db, body.kam_name, body.emp_id, body.status,
+                             actor=_actor(request))
+    except lset.SettingsError as exc:
+        db.rollback()
+        raise HTTPException(400, str(exc))
+
+
 @router.get("/loss-heads/history")
 def loss_head_history(column_name: str | None = Query(None),
                       limit: int = Query(200, ge=1, le=1000),

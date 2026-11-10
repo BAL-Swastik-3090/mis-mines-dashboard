@@ -1129,7 +1129,7 @@ export default function ExecutiveSummarySection() {
       {/* THE HOUSE SECTION HEADING, not a navy banner of its own. `.section-title`
           is what every other screen uses — condensed steel caps with a rule
           running off to the right — so this page announces itself the same way
-          OEE / LCM and Plant Output do instead of inventing a heavier one.
+          OEE and Plant Output do instead of inventing a heavier one.
 
           Wrapped in a flex row so the download button can sit at the end of
           that rule rather than before it: `.section-title::after` is the rule

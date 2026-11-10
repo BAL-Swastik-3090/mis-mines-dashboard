@@ -79,7 +79,7 @@ SCREEN_NAMES = {
     "/operations": "Shift Control", "/workforce": "Workforce Planning",
     "/capacity": "Capacity", "/weighbridge": "Weighbridge", "/gate": "Gate",
     "/organisation": "Organisation", "/market": "Market Watch",
-    "/oee": "OEE / LCM", "/intelligence": "Intelligence",
+    "/oee": "OEE", "/lcm": "LCM", "/intelligence": "Intelligence",
     "/fuel-management": "Fuel Management", "/ev-tracking": "Electric Vehicles",
     "/access-control": "Access Control", "/weather": "Weather Forecast",
     "/usage": "Usage",

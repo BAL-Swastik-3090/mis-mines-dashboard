@@ -72,12 +72,19 @@ interface Edit {
   entry_date: string;
 }
 
-/** The one figure this machine is measured by, and what to call it. */
+/** The one figure this machine is measured by, and what to call it.
+ *
+ *  GENERATION NO LONGER DECIDES THIS. Until 7 November 2026 a new tipper was
+ *  measured by a fixed trip count and an old one by a rate, so this could ask
+ *  which fleet a truck was in. Both use the rate now, and a flat target is a
+ *  per-machine exception rather than a property of being new — so it asks the
+ *  row what it actually carries, and a truck somebody has deliberately put on
+ *  a fixed figure keeps showing that figure. */
 function rateOf(m: Machine): { field: keyof Machine; label: string; value: number | null } {
   if (m.equipment_class === "EXCAVATOR")
     return { field: "ideal_cum_per_hr", label: "Ideal CuM/hr", value: m.ideal_cum_per_hr };
-  if (m.generation === "NEW")
-    return { field: "ideal_trip_fixed", label: "Ideal Trip", value: m.ideal_trip_fixed };
+  if (m.trips_per_engine_hour == null && m.ideal_trip_fixed != null)
+    return { field: "ideal_trip_fixed", label: "Ideal Trip (fixed)", value: m.ideal_trip_fixed };
   return { field: "trips_per_engine_hour", label: "Trips / Engine hr", value: m.trips_per_engine_hour };
 }
 
@@ -97,6 +104,33 @@ function onDay(iso: string): string {
   });
 }
 
+/** The first of the month now showing, which is the day the OEE page opens
+ *  its window on.
+ *
+ *  WHY NOT TODAY, WHICH IS WHAT THIS DEFAULTED TO AT FIRST. The OEE and LCM
+ *  pages report days that have ENDED, so their window always stops at
+ *  yesterday. A setting saved as "from today" is therefore one day ahead of
+ *  anything those pages can show, and a mine marking a machine inactive saw
+ *  nothing change and reasonably concluded the screen was broken. Defaulting
+ *  to the first of the month makes the common case -- correcting the fleet
+ *  for the month being looked at -- do what it looks like it does. A genuine
+ *  mid-month change is still one click on the date. */
+function monthStartIso(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
+/** The last day the OEE and LCM pages can report: yesterday, because they
+ *  only count days that have finished. */
+function lastReportableIso(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+const MONTH_START = monthStartIso();
+const LAST_REPORTABLE = lastReportableIso();
+
 const TH = "px-2 py-1.5 text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary";
 const TD = "px-2 py-1.5 text-[12px]";
 
@@ -106,8 +140,7 @@ type Draft = Partial<Record<"status" | "generation" | "ideal_cum_per_hr"
 export default function EquipmentStatusSelector({ onSaved }: {
   onSaved: () => void | Promise<void>;
 }) {
-  const today = new Date().toISOString().slice(0, 10);
-  const [effective, setEffective] = useState(today);
+  const [effective, setEffective] = useState(MONTH_START);
   const [draft, setDraft] = useState<Record<string, Draft>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -197,13 +230,42 @@ export default function EquipmentStatusSelector({ onSaved }: {
 
       {/* THE WARNING IS AT THE TOP, NOT IN A FOOTNOTE. Somebody who has
           already pressed Save does not need to be told what it did. */}
+
+      {/* THE ONE MISTAKE THIS SCREEN INVITES, caught before it is made.
+          A date later than the last completed day cannot change any figure
+          on the OEE or LCM pages, because those pages stop at yesterday.
+          Saving it is legitimate -- a change can be scheduled -- but it must
+          not look like nothing happened. */}
+      {effective > LAST_REPORTABLE && (
+        <div className="px-4 py-2 bg-[#e3f2fd] border-b border-[#90caf9] flex items-start gap-2">
+          <AlertTriangle size={13} className="text-[#1565c0] mt-0.5 shrink-0" />
+          <p className="text-[11px] text-[#0d47a1] leading-relaxed">
+            <strong>This starts on {onDay(effective)}, which is after the last
+            day those pages can report ({onDay(LAST_REPORTABLE)}).</strong>{" "}
+            It will be saved, but the figures will not move until the window
+            reaches it — the OEE and LCM pages count only days that have
+            ended.{" "}
+            <button
+              type="button"
+              onClick={() => setEffective(MONTH_START)}
+              className="underline font-semibold hover:text-[#1565c0]"
+            >
+              Apply from {onDay(MONTH_START)} instead
+            </button>
+          </p>
+        </div>
+      )}
+
       <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 flex items-start gap-2">
         <AlertTriangle size={13} className="text-amber-600 mt-0.5 shrink-0" />
         <p className="text-[11px] text-amber-900 leading-relaxed">
           These settings are the OEE calculation. An ideal rate is the
-          denominator of Performance; <strong>old</strong> or <strong>new</strong>{" "}
-          decides which table a machine appears in; <strong>inactive</strong>{" "}
-          removes it from the tables and from both OVERALL rows.
+          denominator of Performance and of Yield; <strong>old</strong> or{" "}
+          <strong>new</strong> decides which table a machine appears in;{" "}
+          <strong>inactive</strong> removes it from the tables and from both
+          OVERALL rows. Both tipper fleets are measured the same way —{" "}
+          <em>trips per engine-hour</em>, so the target scales with whatever
+          date range the page is read over.
         </p>
       </div>
 

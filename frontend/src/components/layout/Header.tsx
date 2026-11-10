@@ -229,7 +229,7 @@ function ActionsMenu() {
                 setOpen(false);
                 // Each dialog is owned by the section holding the figures it
                 // needs, so opening one also goes to that section. The
-                // excavation plan belongs to OEE/LCM, which it feeds; the
+                // excavation plan belongs to OEE, which it feeds; the
                 // other three to the MIS dashboard.
                 setPage(which === "equipment-plan" ? "oee" : "mis");
                 openDialog(which);

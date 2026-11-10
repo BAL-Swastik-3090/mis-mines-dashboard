@@ -61,7 +61,8 @@ const TONE: Record<DataHealthStatus, {
 const SECTION_LABEL: Record<string, string> = {
   "executive-summary": "Executive Summary",
   "mis": "MIS Dashboard",
-  "oee": "OEE / LCM",
+  "oee": "OEE",
+  "lcm": "LCM",
   "intelligence": "Intelligence",
   "amira": "AMIRA Accounting",
   "market": "Market Watch",

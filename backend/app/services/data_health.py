@@ -138,12 +138,12 @@ class Feed:
 FEEDS: tuple[Feed, ...] = (
     # -- SAP, interfaced -----------------------------------------------------
     Feed("sap_production", "SAP production postings",
-         ("executive-summary", "mis", "amira", "oee", "intelligence"),
+         ("executive-summary", "mis", "amira", "oee", "lcm", "intelligence"),
          MYSQL, "pp_production", "POSTING_DATE", SAP,
          "Goods receipts for ore, OB and concentrate. Every production tonnage "
          "on the dashboard is this table, netted of its reversals."),
     Feed("sap_quality", "SAP quality inspection (assays)",
-         ("executive-summary", "mis", "amira", "intelligence"),
+         ("executive-summary", "mis", "amira", "lcm", "intelligence"),
          MYSQL, "pp_quality_inspection", "QLT_START_DATE", SAP,
          "Cr2O3, Cr/Fe, FeO and moisture, one row per characteristic. The lab "
          "files after the material moves, so a tonnage can be present a day or "
@@ -157,7 +157,7 @@ FEEDS: tuple[Feed, ...] = (
          MYSQL, "pp_prod_order_confirmation", "POSTING_DATE", SAP,
          "Furnace order confirmations at Balasore and Jabamoyee."),
     Feed("sap_maintenance", "Maintenance and breakdown orders",
-         ("oee",),
+         ("oee", "lcm"),
          MYSQL, "mm_plant_maint_calibration", "BASIC_START_DATE", SAP,
          "Breakdown hours for the five owned excavators. The hired machines are "
          "not in SAP -- their downtime comes from the tipper log."),
@@ -171,7 +171,7 @@ FEEDS: tuple[Feed, ...] = (
          "which is why this one is expected to hold TODAY, not yesterday.",
          expects=TODAY),
     Feed("tipper_details", "Tipper and shift log",
-         ("oee", "mis"),
+         ("oee", "lcm", "mis"),
          MYSQL, "mines_tipper_details", "Prod_date", ENTRY,
          "Running hours, idle reasons and breakdown per shift and location. "
          "Carries the downtime for the hired excavators."),
@@ -217,13 +217,13 @@ FEEDS: tuple[Feed, ...] = (
 
     # -- Plans: filled forward, judged on how far ahead they reach -----------
     Feed("plan_excavation", "Daily excavation plan",
-         ("mis", "intelligence"), MYSQL,
+         ("mis", "lcm", "intelligence"), MYSQL,
          "mines_daily_excavation_plan", "Prod_date", ENTRY,
          "Planned ore and OB per shift, location and face. Loaded ahead, so it "
          "is judged on how far forward it still reaches.",
          kind=PLAN),
     Feed("plan_cob", "COB plant plan",
-         ("mis",), MYSQL, "mines_cobp_plan", "Plan_date", ENTRY,
+         ("mis", "lcm"), MYSQL, "mines_cobp_plan", "Plan_date", ENTRY,
          "Planned feed, concentrate and tailings for the COB plant.",
          kind=PLAN),
     Feed("plan_despatch", "Despatch plan",

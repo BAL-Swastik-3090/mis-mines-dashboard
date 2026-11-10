@@ -27,7 +27,7 @@ on unclosed notifications.
   God Hrs           days × 24                      days × 24
   Engine Hrs        Technoton telematics           shift log running_hours
   BD Hrs            SAP M2 notifications           shift log breakdown
-  Ideal Trip        Engine Hrs × 1.5               fixed per machine
+  Ideal Trip        Engine Hrs × 1.5               Engine Hrs × 1.5
   Actual Trip       shift log, all trip classes    shift log, all trip classes
 
 THE SPLIT IS NOT A PREFERENCE, IT IS WHAT EXISTS. The ten PRIMA tippers have no
@@ -46,11 +46,24 @@ constant, and hardcoding them would silently break Yield on every other date
 range: a ten-day window would read about half its true yield. So MAN ideal trips
 are computed at 1.5 trips per engine-hour and reproduce the mine's own numbers.
 
-PRIMA keeps the supplied constants, because its ideal/running-hours ratio
-scatters from 2.38 to 2.96 with no rate behind it, so there is nothing to
-compute. That is the mine's decision of 26 October, and it carries a known cost:
-PRIMA Yield does not scale with the date range the way MAN Yield does. Agreeing
-a trips-per-hour rate for PRIMA would remove it.
+PRIMA KEPT THOSE SUPPLIED CONSTANTS UNTIL 7 NOVEMBER 2026, and it was wrong.
+A constant does not scale with the window, so the same truck was asked for 323
+trips over two days, five days and thirty-one. PRIMA Yield therefore meant
+something only over the one period the constants were set for: 15.12% over
+1-5 November against the MAN fleet's 90.08%, which reads as a collapsed fleet
+rather than as a mis-stated denominator.
+
+It was kept because the supplied constants, divided by their own engine hours,
+scatter with no rate behind them. But the TRUCKS have one: over 1-5 November
+the ten turned between 1.02 and 1.32 trips per engine-hour, against the MAN
+fleet's 1.35. So both fleets now use the same formula and the same 1.50, which
+is the mine's own figure, per machine and editable on the Equipment Status
+Selector.
+
+A FIXED FIGURE IS STILL STORABLE, for a truck the mine genuinely measures that
+way -- `ideal_trip_fixed` on the settings row, used when no rate is set. The
+table constraint allows one or the other and never both, so no row can leave a
+reader guessing which applied.
 """
 from __future__ import annotations
 
@@ -266,16 +279,38 @@ def get_tipper_oee(db: Session, from_date: date, to_date: date) -> dict:
     from_table = fleet is not None
     if from_table:
         old_names = fleet["old"]
-        new_ideal = fleet["new"]
+        new_names = fleet["new"]
         rate_by   = fleet["rate"]
+        fixed_by  = fleet["fixed"]
         log_of    = lambda n: fleet["log_name"].get(n) or _log_name(n)
         sap_of    = lambda n: fleet["sap_name"].get(n) or _sap_name(n)
     else:
         old_names = OLD_TIPPERS
-        new_ideal = NEW_TIPPER_IDEAL
+        new_names = tuple(NEW_TIPPER_IDEAL)
         rate_by   = {}
+        fixed_by  = dict(NEW_TIPPER_IDEAL)
         log_of    = _log_name
         sap_of    = _sap_name
+
+    def ideal_trips(name: str, eng: float) -> float:
+        """What this truck should have turned in the hours it ran.
+
+        ONE FORMULA FOR BOTH FLEETS since 7 November 2026: engine hours times
+        the trips-per-hour the mine sets for that machine. A rate scales with
+        the window, which a Yield read over an arbitrary date range has to.
+
+        `ideal_trip_fixed` is honoured where a rate is absent, for a truck the
+        mine genuinely measures against a flat target -- and it is also what
+        the FALLBACK uses, so an unreachable minehub still reproduces exactly
+        what this table showed before the settings moved into it.
+        """
+        rate = rate_by.get(name)
+        if rate:
+            return eng * float(rate)
+        fixed = fixed_by.get(name)
+        if fixed is not None:
+            return float(fixed)
+        return eng * TRIPS_PER_ENGINE_HOUR
 
     engine = {r.veh: _f(r.eng)
               for r in db.execute(_ENGINE_SQL,
@@ -306,26 +341,27 @@ def get_tipper_oee(db: Session, from_date: date, to_date: date) -> dict:
             display=name, generation=OLD, god=god, eng=eng,
             bd_hrs=sap_bd.get(sap_of(name), 0.0),
             # The mine's own rate, so the figures reproduce their sheet and
-            # still move when the date range does. Per machine now, defaulting
-            # to the 1.5 that every truck is seeded with.
-            ideal=eng * (rate_by.get(name) or TRIPS_PER_ENGINE_HOUR),
+            # still move when the date range does.
+            ideal=ideal_trips(name, eng),
             actual=log.get("trips", 0.0),
             engine_source=TELEMATICS, bd_source=SAP,
             days_logged=log.get("days", 0)))
 
     new_rows = []
-    for name, ideal in new_ideal.items():
+    for name in new_names:
         log = shift.get(log_of(name), {})
+        # No Technoton unit on these ten, so the shift log is the only record
+        # of hours that exists for them -- and it is therefore also what the
+        # rate is applied to.
+        eng = log.get("run", 0.0)
         new_rows.append(_row(
             display=name, generation=NEW, god=god,
-            # No Technoton unit on these ten, so the shift log is the only
-            # record of hours that exists for them.
-            eng=log.get("run", 0.0),
+            eng=eng,
             # Read from the shift log's own breakdown column at the mine's
             # instruction. It is zero today for every tipper; this reports
             # whatever is entered, so the column fills itself once they start.
             bd_hrs=log.get("bd", 0.0),
-            ideal=float(ideal),
+            ideal=ideal_trips(name, eng),
             actual=log.get("trips", 0.0),
             engine_source=SHIFT_LOG, bd_source=SHIFT_LOG,
             days_logged=log.get("days", 0)))
@@ -334,6 +370,7 @@ def get_tipper_oee(db: Session, from_date: date, to_date: date) -> dict:
         "old_machines": old_rows,
         "new_machines": new_rows,
         "roster_source": "table" if from_table else "fallback",
+        "roster_as_on": from_date.isoformat(),
         "old_fleet":    _roll_up(old_rows, OLD),
         "new_fleet":    _roll_up(new_rows, NEW),
     }

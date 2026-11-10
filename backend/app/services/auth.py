@@ -324,7 +324,7 @@ PAGES: tuple[str, ...] = ("mis", "oee", "intelligence", "amira",
 
 PAGE_LABELS = {
     "mis": "MIS Dashboard",
-    "oee": "OEE / LCM",
+    "oee": "OEE",
     "intelligence": "Intelligence",
     "amira": "AMIRA Accounting",
     "fuel-management": "Fuel Management",

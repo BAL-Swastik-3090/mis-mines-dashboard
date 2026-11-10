@@ -630,6 +630,12 @@ def get_oee_per_machine(db: Session, from_date: date, to_date: date) -> dict:
         "machines":  machines,
         "fleet":     _roll_up(machines, absent),
         "roster_source": "table" if from_table else "fallback",
+        # THE DAY THE FLEET WAS READ FOR, which is the day the window opens
+        # and NOT today. Reported because the two are routinely different:
+        # this page shows days that have ENDED, so a setting saved today is
+        # always at least a day ahead of anything it can show, and without
+        # this the screen gives a reader no way to see that.
+        "roster_as_on": from_date.isoformat(),
         # The mine reports the new excavators as their own table. Split here
         # rather than in the frontend so each table's OVERALL row is weighted by
         # the same code that weights the whole fleet — a roll-up re-derived in

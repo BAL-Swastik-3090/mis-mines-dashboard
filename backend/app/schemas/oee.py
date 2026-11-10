@@ -112,6 +112,9 @@ class OEEResponse(BaseModel):
     #: figures are the ones compiled into the service. A reader is entitled to
     #: know which, because only the first reflects what the mine has set.
     roster_source: str = "table"
+    #: The day the fleet was resolved for -- the first day of the window, not
+    #: today. Named so the screen can show it beside the figures.
+    roster_as_on: str | None = None
 
 
 # ── Tipper OEE — the old (MAN) and new (PRIMA) tables ────────────────────────
@@ -168,3 +171,4 @@ class TipperOEEResponse(BaseModel):
     new_fleet:    TipperOEEFleet
     #: 'table' or 'fallback' — see OEEResponse.roster_source.
     roster_source: str = "table"
+    roster_as_on: str | None = None
