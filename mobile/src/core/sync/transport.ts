@@ -85,6 +85,12 @@ export function httpTransport(cfg: TransportConfig): Transport {
 
     getBundle: () => call('/api/hoto/device/sync', { method: 'GET' }),
 
+    postLocations: (fixes) => call('/api/hoto/device/locations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fixes }),
+    }),
+
     postPhoto: async ({ photoUuid, clientUuid, itemId, localPath, sha256, capturedAt }) => {
       const base = await cfg.baseUrl();
       if (!base) throw new Error('this tablet has not been set up yet');

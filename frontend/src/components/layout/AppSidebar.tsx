@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { Activity, BarChart3, Boxes, Database, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, Calculator, ClipboardCheck, ClipboardList, CloudSun, DoorOpen, ExternalLink, Gauge, LayoutDashboard, LineChart, Network, Radar, Receipt, Scale, ShieldCheck, Sparkles, Users, Wrench, Zap } from "lucide-react";
+import { Activity, BarChart3, Boxes, Database, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, Calculator, ClipboardCheck, ClipboardList, CloudSun, DoorOpen, ExternalLink, Gauge, LayoutDashboard, LineChart, Network, Radar, Receipt, Scale, ShieldCheck, Smartphone, Sparkles, Users, Wrench, Zap } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { canOpen } from "@/contexts/pageAccess";
 import { useSidebar }               from "@/contexts/useSidebar";
@@ -82,6 +82,8 @@ const NAV_ITEMS: NavItem[] = [
   { kind: "page", id: "hoto-defects",    label: "HOTO Defects",               icon: Wrench,
     tag: "UAT" },
   { kind: "page", id: "hoto-board",      label: "Shift Board",                icon: ClipboardCheck,
+    tag: "UAT" },
+  { kind: "page", id: "hoto-devices",    label: "HOTO Devices",               icon: Smartphone,
     tag: "UAT" },
   { kind: "link", href: PRPO_URL,        label: "PR/PO Status",               icon: ClipboardList,
     need: "link.prpo.view" },

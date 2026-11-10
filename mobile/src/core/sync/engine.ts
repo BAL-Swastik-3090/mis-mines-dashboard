@@ -43,6 +43,8 @@ export interface Transport {
     localPath: string; sha256: string; capturedAt: string;
   }): Promise<{ status: number; body: any }>;
   getBundle(): Promise<{ status: number; body: any }>;
+  /** A batch of position fixes. Idempotent per fix on the server. */
+  postLocations(fixes: Record<string, unknown>[]): Promise<{ status: number; body: any }>;
 }
 
 export interface SyncReport {
@@ -50,6 +52,7 @@ export interface SyncReport {
   sessionsRefused: number;
   photosSent: number;
   photosRefused: number;
+  locationsSent: number;
   stillQueued: number;
   mastersRefreshed: boolean;
   problems: string[];
@@ -126,6 +129,7 @@ export async function syncNow(args: {
 
   const report: SyncReport = {
     sessionsSent: 0, sessionsRefused: 0, photosSent: 0, photosRefused: 0,
+    locationsSent: 0,
     stillQueued: 0, mastersRefreshed: false, problems: [], retryAfterSeconds: null,
   };
 
@@ -135,6 +139,8 @@ export async function syncNow(args: {
   for (const photo of await duePhotos(store, now, force)) {
     await sendPhoto(store, transport, photo, report, now);
   }
+
+  await sendLocations(store, transport, report);
 
   if (args.refreshMasters) {
     const r = await transport.getBundle().catch(() => null);
@@ -340,6 +346,69 @@ async function sendPhoto(store: Store, transport: Transport, p: PhotoRow,
 }
 
 /** The server's words, not ours. A paraphrase loses the thing a supervisor needs. */
+/**
+ * Send whatever positions have piled up, oldest first, and delete what landed.
+ *
+ * LAST in the sync, and deliberately quiet about failing. A handover is the
+ * thing somebody signed and the thing a shift depends on; a position is
+ * telemetry. If the window of signal is only wide enough for one of them it
+ * must be the handover, and a failure here must never add a problem to a
+ * report a supervisor reads, nor stop the sync being counted as a success.
+ */
+const LOCATION_BATCH = 200;
+
+export async function sendLocations(
+  store: Store, transport: Transport, report: SyncReport,
+): Promise<void> {
+  for (;;) {
+    const rows = await store.getAllAsync<{
+      local_id: number; client_uuid: string; recorded_at: string;
+      lat: number; lon: number; accuracy_m: number | null;
+      altitude_m: number | null; speed_mps: number | null; heading: number | null;
+      battery_pct: number | null; is_charging: number | null; source: string;
+    }>(`SELECT * FROM location_queue ORDER BY recorded_at LIMIT ${LOCATION_BATCH}`);
+    if (rows.length === 0) return;
+
+    let answer: { status: number; body: any };
+    try {
+      answer = await transport.postLocations(rows.map((r) => ({
+        client_uuid: r.client_uuid,
+        recorded_at: r.recorded_at,
+        lat: r.lat, lon: r.lon,
+        accuracy_m: r.accuracy_m, altitude_m: r.altitude_m,
+        speed_mps: r.speed_mps, heading: r.heading,
+        battery_pct: r.battery_pct,
+        is_charging: r.is_charging === null ? null : r.is_charging === 1,
+        source: r.source,
+      })));
+    } catch {
+      return;                       // no connection; they keep until next time
+    }
+
+    if (answer.status === 200) {
+      // Deleted on success only. A batch the server accepted is already
+      // idempotent on its side, so a delete that fails here costs one
+      // duplicate request, not a duplicated track.
+      const ids = rows.map((r) => r.local_id).join(',');
+      await store.runAsync(`DELETE FROM location_queue WHERE local_id IN (${ids})`);
+      report.locationsSent += Number(answer.body?.stored ?? rows.length);
+      await log(store, 'LOCATIONS', null, true, 200, `${rows.length} sent`);
+      if (rows.length < LOCATION_BATCH) return;
+      continue;                     // more waiting: keep going
+    }
+
+    if (!isRetryable(answer.status)) {
+      // The server will never take these. Dropping them is right: a device
+      // that keeps a rejected batch forever never sends another position
+      // again, which is a worse failure than losing some telemetry.
+      const ids = rows.map((r) => r.local_id).join(',');
+      await store.runAsync(`DELETE FROM location_queue WHERE local_id IN (${ids})`);
+      await log(store, 'LOCATIONS', null, false, answer.status, describe(answer.body));
+    }
+    return;
+  }
+}
+
 export function describe(body: any): string {
   if (!body) return 'no answer from the server';
   const d = body.detail ?? body;

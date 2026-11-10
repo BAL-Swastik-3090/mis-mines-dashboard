@@ -87,6 +87,10 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   // particular action is allowed is decided per action on the server -- the
   // override is the one that needs more than hoto.capture.
   "hoto-board": ["hoto.view", "hoto.capture", "hoto.admin"],
+  // Approving a device is letting something into the mine's data, so this
+  // one is admin only -- unlike every other HOTO screen, which a supervisor
+  // needs in order to do the job.
+  "hoto-devices": ["hoto.admin"],
   "minehub": ["platform.registry.browse"],
   "manpower": ["platform.operators.view"],
   "operations": ["ops.shift.view"],
@@ -178,6 +182,9 @@ const LANDING_RANK: Record<AppPage, number> = {
   // The highest of the HOTO screens: a supervisor opening the dashboard at
   // the start of a shift wants the board, not the archive or the queue.
   "hoto-board": 84,
+  // Below the operational screens: this is set up once and visited when a
+  // device is waiting, not every shift.
+  "hoto-devices": 88,
   // Above MIS, where the mine asked for it: the one-screen management view
   // comes before the operational detail it summarises.
   "executive-summary": 5,

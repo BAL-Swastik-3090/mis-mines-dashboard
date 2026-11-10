@@ -22,6 +22,7 @@ import { BACKGROUND_TASK, registerBackgroundSync, useSyncTriggers } from '@/ui/s
 import { httpTransport } from '@/core/sync/transport';
 import { syncNow } from '@/core/sync/engine';
 import { storedBaseUrl, storedToken } from '@/core/sync/enrolment';
+import { applyTrackingSettings } from '@/core/location/tracker';
 
 /**
  * The background task must be DEFINED at module scope, before React renders.
@@ -87,6 +88,10 @@ export default function RootLayout() {
           deviceToken: storedToken,
         }));
         void registerBackgroundSync();
+        // Whatever the office last told this device about reporting its
+        // position. Deliberately not awaited: it asks for permissions, and a
+        // device must be usable for capture while somebody decides about that.
+        void applyTrackingSettings();
         setState('ready');
       } catch (e) {
         if (!alive) return;
@@ -144,7 +149,7 @@ export default function RootLayout() {
         <Stack.Screen name="capture/scan" options={{ title: 'Scan the cab' }} />
         <Stack.Screen name="capture/photo" options={{ title: 'Photo', presentation: 'modal' }} />
         <Stack.Screen name="sync" options={{ title: 'Still on this tablet' }} />
-        <Stack.Screen name="enrol" options={{ title: 'Set up this tablet' }} />
+        <Stack.Screen name="enrol" options={{ title: 'Set up this device' }} />
       </Stack>
     </SafeAreaProvider>
   );

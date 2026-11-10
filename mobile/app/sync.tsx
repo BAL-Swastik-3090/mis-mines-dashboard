@@ -16,11 +16,14 @@
 import { useCallback, useState } from 'react';
 import {
   View, Text, Pressable, ScrollView, StyleSheet, ActivityIndicator, RefreshControl,
+  TextInput,
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSync } from '@/ui/useSync';
 import { useCapture } from '@/ui/useCapture';
-import { forget, storedBaseUrl, storedLabel } from '@/core/sync/enrolment';
+import {
+  setBaseUrlOverride, storedBaseUrl, storedCode, storedLabel,
+} from '@/core/sync/enrolment';
 
 interface Waiting {
   client_uuid: string;
@@ -56,13 +59,18 @@ export default function Sync() {
   const [rows, setRows] = useState<Waiting[]>([]);
   const [server, setServer] = useState<string | null>(null);
   const [tablet, setTablet] = useState<string | null>(null);
-  const [confirmReset, setConfirmReset] = useState(false);
+  const [code, setCode] = useState<string | null>(null);
+  const [editingServer, setEditingServer] = useState(false);
+  const [draft, setDraft] = useState('');
 
   const load = useCallback(async () => {
     if (!store) return;
     await refresh();
-    setServer(await storedBaseUrl());
+    const base = await storedBaseUrl();
+    setServer(base);
+    setDraft(base ?? '');
     setTablet(await storedLabel());
+    setCode(await storedCode());
     setRows(await store.getAllAsync<Waiting>(
       `SELECT s.client_uuid, a.fleet_code, s.status, s.sync_state, s.sync_attempts,
               s.sync_error, s.captured_at, s.server_session_ref
@@ -189,42 +197,57 @@ export default function Sync() {
 
       {/* ── which server, and how to change it ──────────────────────────────
           A development backend runs on somebody's laptop and a laptop's
-          address moves. Without a way back to the setup screen the app points
-          at a dead address for good, and the only cure is clearing app data —
-          which also destroys every handover waiting to be sent. */}
+          address moves. Changing it here does NOT touch the credential: this
+          device is still the same approved device, talking to the same server
+          at a different address. An earlier version threw the credential away
+          as well, which meant somebody in an office had to approve the device
+          a second time for what was really a DHCP lease expiring. */}
       <View style={styles.serverBox}>
-        <Text style={styles.serverLabel}>This tablet</Text>
-        <Text style={styles.serverValue}>{tablet ?? 'not set up'}</Text>
+        <Text style={styles.serverLabel}>This device</Text>
+        <Text style={styles.serverValue}>{tablet ?? 'not set up'}{code ? ` · ${code}` : ''}</Text>
         <Text style={styles.serverLabel}>Sends to</Text>
         <Text style={styles.serverValue}>{server ?? '—'}</Text>
 
-        {confirmReset ? (
+        {editingServer ? (
           <View style={{ gap: 8, marginTop: 8 }}>
             <Text style={styles.resetWarn}>
-              {waiting.length > 0
-                ? `${waiting.length} handover(s) are still waiting to be sent. They ` +
-                  `are KEPT — setting up again changes only the server and the token, ` +
-                  `and they will go once the new server is reachable.`
-                : 'Nothing is waiting, so nothing can be lost. Captured handovers are ' +
-                  'kept either way.'}
+              Only change this if IT told you to. Nothing captured on this
+              device is affected, and it stays the same approved device.
             </Text>
+            <TextInput
+              testID="server-draft"
+              style={styles.serverInput}
+              value={draft}
+              onChangeText={setDraft}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              placeholder="http://192.168.1.10:8990"
+            />
             <View style={{ flexDirection: 'row', gap: 8 }}>
               <Pressable
-                testID="reset-confirm"
-                style={[styles.primary, { flex: 1, backgroundColor: '#c0392b' }]}
-                onPress={async () => { await forget(); router.replace('/enrol'); }}
+                testID="server-save"
+                style={[styles.primary, { flex: 1 }]}
+                onPress={async () => {
+                  const v = draft.trim().replace(/\/+$/, '');
+                  if (v && !/^https?:\/\//i.test(v)) return;
+                  await setBaseUrlOverride(v || null);
+                  setEditingServer(false);
+                  await load();
+                  void run({ force: true, refreshMasters: true });
+                }}
               >
-                <Text style={styles.primaryText}>Set up again</Text>
+                <Text style={styles.primaryText}>Use this server</Text>
               </Pressable>
               <Pressable style={[styles.primary, { flex: 1, backgroundColor: '#5b6a7a' }]}
-                         onPress={() => setConfirmReset(false)}>
+                         onPress={() => setEditingServer(false)}>
                 <Text style={styles.primaryText}>Cancel</Text>
               </Pressable>
             </View>
           </View>
         ) : (
-          <Pressable testID="reset-enrolment" onPress={() => setConfirmReset(true)}>
-            <Text style={styles.serverChange}>Server moved? Set this tablet up again</Text>
+          <Pressable testID="change-server" onPress={() => setEditingServer(true)}>
+            <Text style={styles.serverChange}>Server moved? Change the address</Text>
           </Pressable>
         )}
       </View>
@@ -281,4 +304,7 @@ const styles = StyleSheet.create({
   serverValue: { fontSize: 15, color: '#16202b' },
   serverChange: { fontSize: 14, color: '#1e5f8a', fontWeight: '600', marginTop: 12 },
   resetWarn: { fontSize: 13, color: '#16202b' },
+  serverInput: { minHeight: 52, borderWidth: 1.5, borderColor: '#aeb8c4',
+                 borderRadius: 8, paddingHorizontal: 12, fontSize: 15,
+                 backgroundColor: '#fff', color: '#16202b' },
 });

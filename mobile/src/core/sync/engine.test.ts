@@ -29,12 +29,17 @@ afterEach(() => store.close());
 
 /** A transport whose every answer the test chooses. */
 function fakeTransport(over: Partial<Transport> = {}): Transport & {
-  sessions: Record<string, unknown>[]; photos: unknown[];
+  sessions: Record<string, unknown>[]; photos: unknown[]; fixes: unknown[];
 } {
   const sessions: Record<string, unknown>[] = [];
   const photos: unknown[] = [];
+  const fixes: unknown[] = [];
   return {
-    sessions, photos,
+    sessions, photos, fixes,
+    postLocations: over.postLocations ?? (async (batch) => {
+      fixes.push(...batch);
+      return { status: 200, body: { stored: batch.length, skipped: 0, duplicates: 0 } };
+    }),
     postSession: over.postSession ?? (async (p) => {
       sessions.push(p);
       return { status: 201, body: { session_id: 500 + sessions.length,

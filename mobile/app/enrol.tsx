@@ -1,139 +1,327 @@
 /**
- * Setting up a tablet. Done once, by whoever hands it to the section.
+ * Asking to be let in — the first screen on a device nobody has approved yet.
  *
- * ── THE SCREEN NOBODY AT THE FACE SHOULD EVER SEE ────────────────────────────
- * If an operator is looking at this, something has gone wrong — the tablet has
- * been wiped, or its credential revoked. So it says what to do about that
- * rather than reading like a login, which would invite somebody to guess.
+ * ── WHAT A PERSON HAS TO DO HERE ─────────────────────────────────────────────
+ * Type their name. That is the whole thing. No server address, no token, no
+ * device code to invent: the address is built into the app, the credential is
+ * collected by the app itself once somebody approves it, and the code is
+ * allocated by the server.
+ *
+ * ── WAITING IS A STATE, NOT AN ERROR ─────────────────────────────────────────
+ * Between asking and being approved there is a person in an office who may be
+ * at lunch. So the waiting screen shows the device code in the largest type on
+ * the screen -- it is what they will be read out over a phone -- says exactly
+ * where to go and look, and keeps checking by itself. It never tells somebody
+ * to try again later and then does nothing.
+ *
+ * ── "CANNOT REACH THE SERVER" IS NOT "YOU WERE REFUSED" ──────────────────────
+ * They look identical from here and mean opposite things, so they are never
+ * merged into one message. One needs a network; the other needs a conversation.
  */
 
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, TextInput, Pressable, ScrollView, StyleSheet, ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { enrol, type Enrolment } from '@/core/sync/enrolment';
+import {
+  checkAccess, describeDevice, joinState, requestAccess, setBaseUrlOverride,
+  storedBaseUrl, type JoinState,
+} from '@/core/sync/enrolment';
 
-export default function Enrol() {
+/** How often a waiting device asks. Often enough to feel immediate to somebody
+ *  standing next to the approver; rare enough to be nothing on a battery. */
+const CHECK_EVERY_MS = 10_000;
+
+export default function Join() {
   const router = useRouter();
-  const [baseUrl, setBaseUrl] = useState(
-    process.env.EXPO_PUBLIC_HOTO_API ?? 'https://mines.balasorealloys.in');
-  const [token, setToken] = useState('');
+
+  const [join, setJoin] = useState<JoinState | null>(null);
+  const [who, setWho] = useState('');
+  const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  const [done, setDone] = useState<Enrolment | null>(null);
+  const [checking, setChecking] = useState(false);
 
-  const go = async () => {
-    setBusy(true); setProblem(null);
-    const r = await enrol(baseUrl, token);
+  const [server, setServer] = useState<string | null>(null);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [serverDraft, setServerDraft] = useState('');
+
+  const alive = useRef(true);
+  useEffect(() => () => { alive.current = false; }, []);
+
+  useEffect(() => {
+    void (async () => {
+      setJoin(await joinState());
+      const s = await storedBaseUrl();
+      setServer(s);
+      setServerDraft(s ?? '');
+    })();
+  }, []);
+
+  const check = useCallback(async (manual = false) => {
+    if (manual) setChecking(true);
+    const r = await checkAccess();
+    if (!alive.current) return;
+    setChecking(false);
+    if (r.problem && manual) setProblem(r.problem);
+    if (!r.problem) setProblem(null);
+    setJoin(r);
+    if (r.state === 'ready') router.replace('/');
+  }, [router]);
+
+  // Keep asking while waiting. Stops the moment it is no longer waiting, so an
+  // approved or refused device is not still polling in somebody's pocket.
+  useEffect(() => {
+    if (join?.state !== 'waiting') return;
+    void check();
+    const t = setInterval(() => { void check(); }, CHECK_EVERY_MS);
+    return () => clearInterval(t);
+  }, [join?.state, check]);
+
+  const ask = async () => {
+    setBusy(true);
+    setProblem(null);
+    const r = await requestAccess(who, note);
+    if (!alive.current) return;
     setBusy(false);
-    if (r.ok) setDone(r.enrolment); else setProblem(r.problem);
+    if (!r.ok) { setProblem(r.problem); return; }
+    setJoin({ state: 'waiting', deviceCode: r.deviceCode, message: r.message });
   };
 
-  if (done) {
+  const saveServer = async () => {
+    const v = serverDraft.trim().replace(/\/+$/, '');
+    if (v && !/^https?:\/\//i.test(v)) {
+      setProblem('A server address starts with http:// or https://');
+      return;
+    }
+    await setBaseUrlOverride(v || null);
+    const s = await storedBaseUrl();
+    setServer(s);
+    setShowAdvanced(false);
+    setProblem(null);
+    void check(true);
+  };
+
+  if (!join) {
     return (
       <View style={[styles.screen, styles.centre]}>
-        <Text style={styles.title}>This tablet is set up</Text>
-        <Text style={styles.big}>{done.label}</Text>
-        <Text style={styles.note}>
-          {done.deviceCode} · {done.profile === 'COMPANY' ? 'shared tablet' : 'personal device'}
-        </Text>
-        {done.profile === 'COMPANY' && (
-          <Text style={styles.note}>
-            Every handover will ask who is taking the machine. Nobody stays
-            signed in.
-          </Text>
-        )}
-        <Pressable testID="enrolled-done" style={styles.primary}
-                   onPress={() => router.replace('/')}>
-          <Text style={styles.primaryText}>Start</Text>
-        </Pressable>
+        <ActivityIndicator size="large" />
       </View>
     );
   }
 
+  /* ── refused ─────────────────────────────────────────────────────────── */
+  if (join.state === 'refused') {
+    return (
+      <View style={[styles.screen, styles.centre]}>
+        <Text style={styles.refusedTitle}>This device was not allowed</Text>
+        <Text style={styles.refusedWhy}>{join.message}</Text>
+        <Text style={styles.note}>
+          {join.deviceCode} · Asking again will not change this. Speak to
+          whoever administers HOTO.
+        </Text>
+      </View>
+    );
+  }
+
+  /* ── waiting ─────────────────────────────────────────────────────────── */
+  if (join.state === 'waiting') {
+    return (
+      <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+        <View style={styles.waitBox}>
+          <ActivityIndicator size="large" color="#1e5f8a" />
+          <Text style={styles.waitTitle}>Waiting to be allowed</Text>
+          {/* The largest thing on the screen, because it is what somebody will
+              read out over a phone to the office. */}
+          <Text style={styles.code}>{join.deviceCode}</Text>
+          <Text style={styles.waitHow}>
+            Ask the office to open the HOTO dashboard, go to{' '}
+            <Text style={styles.strong}>Devices</Text>, and allow{' '}
+            <Text style={styles.strong}>{join.deviceCode}</Text>.
+          </Text>
+          <Text style={styles.note}>
+            This device checks by itself and will start as soon as it is
+            allowed. Nothing needs to be typed in here.
+          </Text>
+        </View>
+
+        {problem && (
+          <View style={styles.warn}>
+            <Text style={styles.warnText}>{problem}</Text>
+          </View>
+        )}
+
+        <Pressable testID="check-now" style={styles.primary}
+                   disabled={checking} onPress={() => void check(true)}>
+          {checking ? <ActivityIndicator color="#fff" />
+                    : <Text style={styles.primaryText}>Check now</Text>}
+        </Pressable>
+
+        <Advanced show={showAdvanced} server={server} draft={serverDraft}
+                  onDraft={setServerDraft} onToggle={setShowAdvanced}
+                  onSave={() => void saveServer()} />
+      </ScrollView>
+    );
+  }
+
+  /* ── not registered yet ──────────────────────────────────────────────── */
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>Set up this tablet</Text>
+      <Text style={styles.title}>Set up this device</Text>
       <Text style={styles.note}>
-        Done once, by whoever issues the tablet. An operator never needs this
-        screen — if you are seeing it at the face, tell your supervisor the
-        tablet needs setting up again.
+        This device needs to be allowed before it can record handovers. Say who
+        you are and the office will approve it.
       </Text>
 
+      <View style={styles.hardware}>
+        <Text style={styles.hardwareLabel}>This device</Text>
+        <Text style={styles.hardwareValue}>{describeDevice()}</Text>
+        <Text style={styles.hardwareNote}>
+          The office sees this, so they can tell which device they are allowing.
+        </Text>
+      </View>
+
       <View style={styles.field}>
-        <Text style={styles.label}>Server address</Text>
+        <Text style={styles.label}>Your name</Text>
         <TextInput
-          testID="base-url"
+          testID="who"
           style={styles.input}
-          value={baseUrl}
-          onChangeText={setBaseUrl}
-          autoCapitalize="none"
+          value={who}
+          onChangeText={setWho}
+          placeholder="e.g. Akash Jena"
+          autoCapitalize="words"
           autoCorrect={false}
-          keyboardType="url"
         />
       </View>
 
       <View style={styles.field}>
-        <Text style={styles.label}>Device token</Text>
-        <Text style={styles.hint}>
-          Issued from the dashboard, under HOTO → Devices. It is shown once.
-        </Text>
+        <Text style={styles.label}>Where it will be used (optional)</Text>
         <TextInput
-          testID="device-token"
-          style={[styles.input, styles.multiline]}
-          value={token}
-          onChangeText={setToken}
-          autoCapitalize="none"
-          autoCorrect={false}
-          multiline
-          placeholder="Paste or type the token"
+          testID="note"
+          style={styles.input}
+          value={note}
+          onChangeText={setNote}
+          placeholder="e.g. Kaliapani, night shift tipper"
         />
       </View>
 
       {problem && (
-        <View style={styles.problem} testID="enrol-problem">
-          <Text style={styles.problemText}>{problem}</Text>
-        </View>
+        <View style={styles.warn}><Text style={styles.warnText}>{problem}</Text></View>
       )}
 
       <Pressable
-        testID="enrol"
-        disabled={busy || !token.trim()}
-        style={[styles.primary, (busy || !token.trim()) && styles.primaryOff]}
-        onPress={() => void go()}
+        testID="ask"
+        disabled={busy || !who.trim()}
+        style={[styles.primary, (busy || !who.trim()) && styles.primaryOff]}
+        onPress={() => void ask()}
       >
         {busy ? <ActivityIndicator color="#fff" />
-              : <Text style={styles.primaryText}>Check and save</Text>}
+              : <Text style={styles.primaryText}>Ask for access</Text>}
       </Pressable>
 
-      <Text style={styles.footnote}>
-        The token is checked against the server before it is kept, so a wrong
-        one is found now rather than at the end of a shift.
-      </Text>
+      <Advanced show={showAdvanced} server={server} draft={serverDraft}
+                onDraft={setServerDraft} onToggle={setShowAdvanced}
+                onSave={() => void saveServer()} />
     </ScrollView>
+  );
+}
+
+/**
+ * The server address, kept off the main path.
+ *
+ * Needed for exactly one thing: a development server running on somebody's
+ * laptop, whose address changes when the laptop gets a new lease. On a real
+ * build nobody should ever open this, which is why it is a line of small text
+ * rather than a field.
+ */
+function Advanced({ show, server, draft, onDraft, onToggle, onSave }: {
+  show: boolean; server: string | null; draft: string;
+  onDraft: (v: string) => void; onToggle: (v: boolean) => void; onSave: () => void;
+}) {
+  if (!show) {
+    return (
+      <Pressable testID="advanced" onPress={() => onToggle(true)}>
+        <Text style={styles.advancedLink}>
+          Sends to {server ?? 'nowhere — this app was built without a server'}
+        </Text>
+      </Pressable>
+    );
+  }
+  return (
+    <View style={styles.advancedBox}>
+      <Text style={styles.label}>Server address</Text>
+      <TextInput
+        testID="server"
+        style={styles.input}
+        value={draft}
+        onChangeText={onDraft}
+        autoCapitalize="none"
+        autoCorrect={false}
+        keyboardType="url"
+        placeholder="http://192.168.1.10:8990"
+      />
+      <Text style={styles.note}>
+        Only change this if IT told you to. Leave it empty to go back to the
+        address this app was built with.
+      </Text>
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        <Pressable style={[styles.primary, { flex: 1 }]} onPress={onSave}>
+          <Text style={styles.primaryText}>Use this server</Text>
+        </Pressable>
+        <Pressable style={[styles.primary, { flex: 1, backgroundColor: '#5b6a7a' }]}
+                   onPress={() => onToggle(false)}>
+          <Text style={styles.primaryText}>Cancel</Text>
+        </Pressable>
+      </View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#f3f6f9' },
-  content: { padding: 20, gap: 16, paddingBottom: 40 },
-  centre: { alignItems: 'center', justifyContent: 'center', padding: 28, gap: 10 },
-  title: { fontSize: 22, fontWeight: '800', color: '#16202b' },
-  big: { fontSize: 26, fontWeight: '800', color: '#1e8449', textAlign: 'center' },
-  note: { fontSize: 15, color: '#5b6a7a', textAlign: 'center' },
+  content: { padding: 20, gap: 16, paddingBottom: 48 },
+  centre: { alignItems: 'center', justifyContent: 'center', padding: 28, gap: 12 },
+
+  title: { fontSize: 24, fontWeight: '700', color: '#16202b' },
+  note: { fontSize: 14, color: '#5b6a7a', lineHeight: 20 },
+  strong: { fontWeight: '800', color: '#16202b' },
+
+  hardware: { backgroundColor: '#fff', borderRadius: 10, padding: 14, gap: 3,
+              borderWidth: 1, borderColor: '#d8dee6' },
+  hardwareLabel: { fontSize: 11, fontWeight: '800', color: '#5b6a7a',
+                   letterSpacing: 0.5 },
+  hardwareValue: { fontSize: 17, fontWeight: '700', color: '#16202b' },
+  hardwareNote: { fontSize: 12, color: '#8a97a5' },
+
   field: { gap: 6 },
-  label: { fontSize: 16, fontWeight: '700', color: '#16202b' },
-  hint: { fontSize: 13, color: '#5b6a7a' },
-  input: { minHeight: 58, borderWidth: 1.5, borderColor: '#aeb8c4', borderRadius: 8,
-           paddingHorizontal: 14, fontSize: 16, backgroundColor: '#fff', color: '#16202b' },
-  multiline: { minHeight: 96, paddingTop: 12, textAlignVertical: 'top', fontSize: 15 },
-  problem: { backgroundColor: '#fff6f5', borderColor: '#c0392b', borderWidth: 1.5,
-             borderRadius: 8, padding: 14 },
-  problemText: { fontSize: 15, color: '#c0392b', fontWeight: '600' },
-  primary: { minHeight: 68, borderRadius: 10, backgroundColor: '#16202b',
-             alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
+  label: { fontSize: 13, fontWeight: '700', color: '#16202b' },
+  input: { minHeight: 56, borderWidth: 1.5, borderColor: '#aeb8c4', borderRadius: 8,
+           paddingHorizontal: 14, fontSize: 17, backgroundColor: '#fff',
+           color: '#16202b' },
+
+  primary: { minHeight: 64, borderRadius: 10, backgroundColor: '#1e5f8a',
+             alignItems: 'center', justifyContent: 'center' },
   primaryOff: { backgroundColor: '#aeb8c4' },
   primaryText: { color: '#fff', fontSize: 18, fontWeight: '700' },
-  footnote: { fontSize: 13, color: '#5b6a7a', textAlign: 'center' },
+
+  waitBox: { backgroundColor: '#fff', borderRadius: 12, padding: 22, gap: 10,
+             alignItems: 'center', borderWidth: 1, borderColor: '#d8dee6' },
+  waitTitle: { fontSize: 20, fontWeight: '700', color: '#16202b' },
+  code: { fontSize: 40, fontWeight: '800', color: '#1e5f8a', letterSpacing: 2 },
+  waitHow: { fontSize: 16, color: '#16202b', textAlign: 'center', lineHeight: 23 },
+
+  warn: { backgroundColor: '#fff8e6', borderColor: '#e0bf6a', borderWidth: 1,
+          borderRadius: 8, padding: 12 },
+  warnText: { fontSize: 14, color: '#16202b' },
+
+  refusedTitle: { fontSize: 22, fontWeight: '700', color: '#c0392b',
+                  textAlign: 'center' },
+  refusedWhy: { fontSize: 17, color: '#16202b', textAlign: 'center',
+                lineHeight: 24 },
+
+  advancedLink: { fontSize: 12, color: '#8a97a5', textAlign: 'center',
+                  marginTop: 8 },
+  advancedBox: { backgroundColor: '#fff', borderRadius: 10, padding: 14, gap: 10,
+                 borderWidth: 1, borderColor: '#d8dee6' },
 });

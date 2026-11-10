@@ -17,6 +17,9 @@
         "android.permission.CAMERA",
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
         "android.permission.ACCESS_NETWORK_STATE",
         "android.permission.INTERNET"
       ],
@@ -24,8 +27,7 @@
         "android.permission.RECORD_AUDIO",
         "android.permission.READ_MEDIA_IMAGES",
         "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.WRITE_EXTERNAL_STORAGE",
-        "android.permission.ACCESS_BACKGROUND_LOCATION"
+        "android.permission.WRITE_EXTERNAL_STORAGE"
       ]
     },
     "plugins": [
@@ -41,8 +43,10 @@
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "Each handover records where it was captured, so a record can be tied to the machine it describes.",
-          "isAndroidBackgroundLocationEnabled": false
+          "locationAlwaysAndWhenInUsePermission": "This device reports where it is to the mine office, including while the app is closed, and records where each handover was captured. The office can switch this off for this device.",
+          "locationWhenInUsePermission": "Each handover records where it was captured, so a record can be tied to the machine it describes.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
         }
       ],
       [

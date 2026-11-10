@@ -26,6 +26,7 @@ import HotoChecklistsSection  from "@/components/sections/HotoChecklistsSection"
 import HotoRegisterSection    from "@/components/sections/HotoRegisterSection";
 import HotoDefectsSection     from "@/components/sections/HotoDefectsSection";
 import HotoBoardSection       from "@/components/sections/HotoBoardSection";
+import HotoDevicesSection     from "@/components/sections/HotoDevicesSection";
 import AccessControlSection    from "@/components/sections/AccessControlSection";
 import UsageSection            from "@/components/sections/UsageSection";
 import { useAppPage }          from "@/contexts/useAppPage";
@@ -129,6 +130,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           {page === "hoto-register"   && <HotoRegisterSection />}
           {page === "hoto-defects"    && <HotoDefectsSection />}
           {page === "hoto-board"      && <HotoBoardSection />}
+          {page === "hoto-devices"    && <HotoDevicesSection />}
           {page === "usage"            && <UsageSection />}
           {page === "data-health"      && <DataHealthSection />}
             </>

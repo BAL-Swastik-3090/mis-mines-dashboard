@@ -14,6 +14,10 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useCapture } from '@/ui/useCapture';
 import * as session from '@/core/capture/session';
 import * as masters from '@/core/capture/masters';
+import {
+  applyTrackingSettings, isTracking, queuedCount,
+} from '@/core/location/tracker';
+import { trackingSettings } from '@/core/sync/enrolment';
 
 export default function Home() {
   const router = useRouter();
@@ -25,12 +29,16 @@ export default function Home() {
   const [outbox, setOutbox] = useState<Awaited<ReturnType<typeof session.outboxDepth>> | null>(null);
   const [cacheAge, setCacheAge] = useState<number | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [track, setTrack] = useState<{ wanted: boolean; running: boolean; queued: number } | null>(null);
+  const [trackProblem, setTrackProblem] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!store) return;
     setDrafts(await session.openDrafts(store));
     setOutbox(await session.outboxDepth(store));
     setCacheAge(await masters.cacheAgeHours(store));
+    const { track: wanted } = await trackingSettings();
+    setTrack({ wanted, running: await isTracking(), queued: await queuedCount(store) });
   }, [store]);
 
   useFocusEffect(useCallback(() => { void load(); }, [load]));
@@ -76,6 +84,29 @@ export default function Home() {
           </Text>
         )}
       </Pressable>
+
+      {/* ── position reporting ───────────────────────────────────────────
+          Shown only when the office has asked for it AND Android is not
+          actually doing it. That gap is invisible otherwise: the app looks
+          fine, the dashboard shows nothing, and nobody finds out for a week.
+          Android needs location set to "Allow all the time", which is two
+          screens deep and not what its first prompt offers. */}
+      {track?.wanted && !track.running && (
+        <Pressable
+          testID="fix-tracking"
+          style={[styles.banner, styles.bannerStale]}
+          onPress={async () => {
+            const r = await applyTrackingSettings();
+            setTrackProblem(r.ok ? null : r.message);
+            await load();
+          }}
+        >
+          <Text style={styles.bannerTitle}>This device is not reporting its position</Text>
+          <Text style={styles.bannerNote}>
+            {trackProblem ?? 'The office has asked this device to report where it is. Tap to allow it.'}
+          </Text>
+        </Pressable>
+      )}
 
       {stale && (
         <View style={[styles.banner, styles.bannerStale]}>

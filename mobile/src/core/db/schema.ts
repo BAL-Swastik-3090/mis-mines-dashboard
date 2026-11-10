@@ -23,7 +23,7 @@
  * unsynced handovers, and it lives in a cab.
  */
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 /** Run in order, inside one transaction, on first open and on upgrade. */
 export const MIGRATIONS: readonly string[][] = [
@@ -257,5 +257,32 @@ export const MIGRATIONS: readonly string[][] = [
        key   TEXT PRIMARY KEY,
        value TEXT
      );`,
+  ],
+
+  // ── 2 · where this device has been ────────────────────────────────────────
+  // A queue, not a log. Fixes are taken by a background task that cannot
+  // assume there is any network -- a device is out of signal for most of a
+  // shift at the face -- so they are written here and sent whenever a sync
+  // next succeeds, then deleted.
+  //
+  // `client_uuid` is allocated here, at the moment of the fix, so that the
+  // resend which follows a dropped connection cannot double the track.
+  [
+    `CREATE TABLE IF NOT EXISTS location_queue (
+       local_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+       client_uuid  TEXT    NOT NULL UNIQUE,
+       recorded_at  TEXT    NOT NULL,
+       lat          REAL    NOT NULL,
+       lon          REAL    NOT NULL,
+       accuracy_m   REAL,
+       altitude_m   REAL,
+       speed_mps    REAL,
+       heading      REAL,
+       battery_pct  INTEGER,
+       is_charging  INTEGER,
+       source       TEXT    NOT NULL DEFAULT 'BACKGROUND'
+     );`,
+    `CREATE INDEX IF NOT EXISTS location_queue_order_idx
+       ON location_queue (recorded_at);`,
   ],
 ];
