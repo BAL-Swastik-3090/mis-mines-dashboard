@@ -87,8 +87,19 @@ wrong credential anyway — it idles out in twenty minutes, the platform permits
 one per employee, and it would mean typing a dashboard password into a shared
 tablet in a pit. Devices now carry their own token.
 
-**13 · Production.** Migrations 105–109 to `corpappdb`, once the dev shape has
+**13 · Production.** Migrations 105–110 to `corpappdb`, once the dev shape has
 survived use.
+
+**14 · A device joins by itself.** ✅ 10 Nov. Enrolment inverted: the app
+registers with what hardware it is and who is asking, the office approves it
+from the dashboard, and the app collects its own credential. Nobody types a
+token or a server address. Devices also report their position, batched through
+the ordinary sync, switchable per device from the dashboard.
+
+Phase 12's enrolment — an administrator running a command and carrying a
+43-character token to the device — is kept for a bench test and is no longer
+how a device joins. It did not survive contact with the question "how does the
+fifth device get set up".
 
 ---
 
@@ -103,6 +114,8 @@ survived use.
 | Checklist | Four response types, gauge ranges, per-item severity; all admin-editable |
 | Device identity | Per capture on a shared tablet, never inherited |
 | Offline | Local SQLite under SQLCipher is the on-device source of truth |
+| Joining | The device asks, the office approves, the device collects (10 Nov) |
+| Position | Per device, off unless the office turns it on; a foreground service, so visibly on |
 
 ## Still open
 
@@ -117,3 +130,7 @@ survived use.
    checklist) rather than guessing a denominator.
 3. **Whether an operator may ever take a machine outside his competency** — blocks phase 5's validation
 4. Dumper: its own template, or share the Tipper one (phase 6)
+5. **Whether a worker's own phone may be tracked** — the mechanism is per
+   device and defaults to off, and the approval screen warns when a device is
+   marked as somebody's own phone. Whether the mine does it at all, and what
+   it tells people, is not a technical decision.
