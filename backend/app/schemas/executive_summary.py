@@ -139,6 +139,12 @@ class DewateringLine(BaseModel):
     #: such measure. `pct` is then the signed VARIANCE against plan, not an
     #: achievement, and below plan is the good direction.
     inverse: bool = False
+    #: M³ the plan asked for that was never in the sump. Non-zero only on
+    #: closing stock, and only where the plan out-ran the water that arrived —
+    #: the plan figure beside it is then a floor (an empty sump), not a
+    #: forecast, and `pct` is suppressed because there is no level to measure
+    #: against. 0 in a period the plan fitted.
+    overdraw: float = 0
 
 
 class DewateringPeriod(BaseModel):
@@ -164,10 +170,18 @@ class DewateringKpi(BaseModel):
     offset_hr:        Optional[float] = None
     opening_stock:    Optional[float] = None
     closing_stock:    Optional[float] = None
-    #: Opening + seepage + rain water − PLAN disposal: where the sump would
-    #: have been left had the plan been pumped against the water that really
-    #: arrived.
+    #: Where the plan would have left the sump — chained day by day against
+    #: the water that really arrived, and floored at empty, because a sump
+    #: holds no negative water.
     plan_closing_stock: Optional[float] = None
+    #: Total M³ the plan asked for beyond what was ever there. 0 when the
+    #: plan fitted the inflow.
+    plan_overdraw: float = 0
+    #: The first day the plan would have emptied the sump, null if it never
+    #: would have. From there on it was pumping water that did not exist.
+    plan_dry_from: Optional[str] = None
+    #: How many days in the period that was true of.
+    plan_dry_days: int = 0
     stock_change_pct: Optional[float] = None
     net_drawdown:     Optional[float] = None
     days_to_clear:    Optional[float] = None
