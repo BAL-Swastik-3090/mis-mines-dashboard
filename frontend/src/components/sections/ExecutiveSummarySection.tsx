@@ -659,7 +659,17 @@ function DewateringBlock({ d }: { d: ExecDewateringBlock }) {
                   title="Seepage is measured and rain is weather — neither is planned.">
               no plan
             </span>
-          : <N v={r?.plan} dp={r?.dp ?? 0} />}
+          : /* A PLAN THAT RAN THE SUMP DRY READS AS PLAIN 0. The sump holds no
+               negative water, so the plan column stops at empty; the water the
+               plan asked for beyond what arrived is carried on the response and
+               explained in the footnote rather than printed beside the figure,
+               which the mine found noisier than it was worth. The hover still
+               says it for anyone who wants the number. */
+            <span title={r?.overdraw
+              ? `The plan asked for ${formatIndian(r.overdraw, 0)} M³ more water than reached the sump, so it would have run dry — this figure stops at empty rather than going negative.`
+              : undefined}>
+              <N v={r?.plan} dp={r?.dp ?? 0} />
+            </span>}
       </td>
       <td className={`${TD} text-right whitespace-nowrap ${tint}`}>
         <N v={r?.actual} dp={r?.dp ?? 0} strong />
@@ -671,7 +681,12 @@ function DewateringBlock({ d }: { d: ExecDewateringBlock }) {
                achieved, so this prints the signed variance against plan and
                colours DOWN green — the opposite of every row above it. */
             (() => {
-              if (r?.pct == null) return <span className="text-txt-light/40">—</span>;
+              if (r?.pct == null) return (
+                <span className="text-txt-light/40"
+                      title={r?.overdraw
+                        ? "No variance: the plan would have emptied the sump, so there is no planned level to measure against."
+                        : undefined}>—</span>
+              );
               const down = r.pct <= 0;
               return (
                 <span className={`font-bold ${down ? "text-[#2e7d32]" : "text-[#c62828]"}`}
@@ -830,11 +845,24 @@ function DewateringBlock({ d }: { d: ExecDewateringBlock }) {
         plus rainfall converted at the factor the day was filed under.
         {"   "}<span className="font-semibold">SUMP CLOSING STOCK · </span>
         opening + seepage + rain water − disposal. The PLAN column is that
-        same balance with PLAN disposal in it — where the sump would have
-        been left had the plan been pumped against the water that actually
-        arrived — so below plan is the good direction. Opening is the previous
-        day&apos;s closing, which makes the MTD pair span the first and last
-        days ENTERED, not the first and last days of the month.
+        same balance with PLAN disposal in it, chained day by day — where the
+        sump would have been left had the plan been pumped against the water
+        that actually arrived — so below plan is the good direction. Opening
+        is the previous day&apos;s closing, which makes the MTD pair span the
+        first and last days ENTERED, not the first and last days of the month.
+        {"   "}<span className="font-semibold">A PLAN OF 0 · </span>means the
+        plan asked for more water than ever reached the sump. A sump holds no
+        negative water, so the plan column stops at empty rather than
+        subtracting water that was never there into a stock that cannot exist;
+        the variance is then left blank, because an empty sump is not a level
+        to measure against.
+        {k?.plan_dry_from && (
+          <>
+            {" "}Over this period the plan would have run the sump dry from{" "}
+            <span className="font-semibold">{shortDay(k.plan_dry_from)}</span>
+            {k.plan_dry_days > 1 ? ` and on ${k.plan_dry_days} days in all` : ""}.
+          </>
+        )}
       </p>
     </Card>
   );

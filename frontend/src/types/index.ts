@@ -230,6 +230,12 @@ export interface ExecDewateringLine {
    *  such measure. `pct` is then the signed VARIANCE against plan, not an
    *  achievement, and below plan is the good direction. */
   inverse: boolean;
+  /** M³ the plan asked for that was never in the sump. Non-zero only on
+   *  closing stock, and only where the plan out-ran the water that arrived —
+   *  the plan figure beside it is then a floor (an empty sump), not a
+   *  forecast, and `pct` is suppressed because the comparison is meaningless.
+   *  0 in a period the plan fitted. */
+  overdraw: number;
 }
 
 export interface ExecDewateringPeriod {
@@ -253,10 +259,18 @@ export interface ExecDewateringKpi {
   offset_hr:        number | null;
   opening_stock:    number | null;
   closing_stock:    number | null;
-  /** Opening + seepage + rain water − PLAN disposal: where the sump would
-   *  have been left had the plan been pumped against the water that really
-   *  arrived. */
+  /** Where the plan would have left the sump — chained day by day against
+   *  the water that really arrived, and floored at empty, because a sump
+   *  holds no negative water. */
   plan_closing_stock: number | null;
+  /** Total M³ the plan asked for beyond what was ever there. 0 when the plan
+   *  fitted the inflow. */
+  plan_overdraw: number;
+  /** The first day the plan would have emptied the sump, null if it never
+   *  would have. From here on the plan was pumping water that did not exist. */
+  plan_dry_from: string | null;
+  /** How many days in the period that was true of. */
+  plan_dry_days: number;
   stock_change_pct: number | null;
   net_drawdown:     number | null;
   days_to_clear:    number | null;

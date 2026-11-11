@@ -485,7 +485,7 @@ def _fl(v) -> float | None:
 
 def _blk(key: str, label: str, uom: str, plan: float | None,
          actual: float | None, dp: int = 0, no_plan: bool = False,
-         inverse: bool = False) -> dict[str, Any]:
+         inverse: bool = False, overdraw: float = 0.0) -> dict[str, Any]:
     """One line of the block. `no_plan` means a plan will never exist for this
     measure -- inflow is seepage and weather, so that blank is permanent and
     not a plan somebody has yet to file.
@@ -506,16 +506,82 @@ def _blk(key: str, label: str, uom: str, plan: float | None,
             "plan": None if plan is None else round(plan, dp),
             "actual": None if actual is None else round(actual, dp),
             "pct": pct,
-            "no_plan": no_plan, "inverse": inverse}
+            "no_plan": no_plan, "inverse": inverse,
+            # Water the plan asked for that was never in the sump. Non-zero
+            # only on closing stock, and only when the plan out-ran the
+            # inflow -- the plan figure beside it is then a floor, not a
+            # forecast, and the page has to be able to say so.
+            "overdraw": round(overdraw) if overdraw else 0}
 
 
-def _day_plan_closing(r, inflow: float) -> float | None:
-    """One day's planned closing stock -- the same balance as the period's,
-    on that day's own opening and that day's own plan disposal. Without
-    either figure there is no benchmark, and a blank says so."""
+def _day_plan_closing(r, inflow: float) -> tuple[float, float] | None:
+    """One day's planned closing stock, and the water the plan could not have
+    pumped -- on that day's own opening and that day's own plan disposal.
+    Without either figure there is no benchmark, and a blank says so.
+
+    FLOORED AT EMPTY, for the reason in _plan_chain: a sump holds no negative
+    water, so a plan asking for more than is there leaves it empty and the
+    remainder is over-draw, not stock.
+    """
     if r.opening_stock_m3 is None or r.plan_disposal_m3 is None:
         return None
-    return float(r.opening_stock_m3) + inflow - float(r.plan_disposal_m3)
+    want = float(r.opening_stock_m3) + inflow - float(r.plan_disposal_m3)
+    return (want, 0.0) if want >= 0 else (0.0, -want)
+
+
+def _plan_chain(rows) -> dict[str, Any]:
+    """Where the plan would have left the sump, chained day by day.
+
+        plan closing(d) = MAX(0, plan opening(d) + inflow(d) - plan disposal(d))
+        plan opening(d+1) = plan closing(d)
+
+    THE FLOOR IS THE WHOLE POINT, and its absence was a real defect. The
+    period used to be computed in one line -- first opening + total inflow -
+    total plan disposal -- which is the same as chaining forward ONLY while
+    the sump never empties. Once the plan asks for more water than is in it,
+    that line keeps subtracting water that does not exist and reports a
+    NEGATIVE STOCK. November 2026 read -3,728 M3: the plan emptied the sump on
+    the 7th and went on pumping air for three more days.
+
+    It was not a one-off. Over the 406 days entered, the plan runs the sump
+    dry in NINE of fourteen months -- and in three of those (Jan, Jun and Oct
+    2026) the old figure came out POSITIVE anyway, because later rain refilled
+    the arithmetic. Those were the dangerous ones: a negative number at least
+    announces itself.
+
+    The two outputs decompose the old figure exactly, in every month:
+
+        old figure = plan closing - over-draw
+
+    so nothing is lost. The single number is split into the two facts it was
+    conflating: where the plan would have left the sump, and how much water it
+    asked for that was never there.
+
+    THE INFLOW IS THE ACTUAL INFLOW, unchanged and deliberately so -- seepage
+    is measured and rain is weather, neither was ever planned, and holding the
+    plan to a dry month it did not get would flatter it.
+    """
+    opening = _fl(rows[0].opening_stock_m3)
+    if opening is None:
+        return {"closing": None, "overdraw": 0.0, "dry_from": None,
+                "dry_days": 0}
+
+    stock, overdraw, dry_from, dry_days = opening, 0.0, None, 0
+    for r in rows:
+        inflow = (_fl(r.seepage_m3) or 0.0) + (_fl(r.rain_water_m3) or 0.0)
+        # A day with no plan filed cannot move the plan's stock. The water
+        # still arrives, which is what the mine's own sheet does.
+        plan_disp = _fl(r.plan_disposal_m3) or 0.0
+        want = stock + inflow - plan_disp
+        if want < 0:
+            overdraw += -want
+            dry_days += 1
+            if dry_from is None:
+                dry_from = r.data_date
+            want = 0.0
+        stock = want
+    return {"closing": stock, "overdraw": overdraw,
+            "dry_from": dry_from, "dry_days": dry_days}
 
 
 def _summary(pg: Session, frm: date, to: date, rd: date) -> dict[str, Any]:
@@ -557,17 +623,11 @@ def _summary(pg: Session, frm: date, to: date, rd: date) -> dict[str, Any]:
     closing = _fl(last.closing_stock_m3)
 
     # WHERE THE SUMP WOULD STAND HAD THE PLAN BEEN PUMPED -- the mine's own
-    # formula, the same balance the sheet closes every day:
-    #
-    #     opening + seepage + rain water - PLAN disposal
-    #
-    # The inflow in it is the ACTUAL inflow, and deliberately so. Seepage is
-    # measured and rain is weather; neither was ever planned, and holding the
-    # plan to a dry month it did not get would flatter it. So the benchmark
-    # reads: given the water that really arrived, this is where the plan said
-    # the sump would be left. Over the period the first entered day's opening
-    # carries it, which is the same as chaining the plan forward day by day.
-    plan_closing = (opening + inflow - disp_plan) if opening is not None else None
+    # balance, chained day by day and floored at empty. See _plan_chain for
+    # why the floor is there and what it fixed.
+    chain = _plan_chain(rows)
+    plan_closing = chain["closing"]
+    plan_overdraw = chain["overdraw"]
 
     def pct(a: float | None, p: float | None) -> float | None:
         # Both halves or no percentage, the rule this page already applies to
@@ -586,6 +646,7 @@ def _summary(pg: Session, frm: date, to: date, rd: date) -> dict[str, Any]:
         if r is None:
             return []
         inf = (_fl(r.seepage_m3) or 0) + (_fl(r.rain_water_m3) or 0)
+        pc = _day_plan_closing(r, inf)
         return [
             _blk("disposal", "Water Disposal", "M³",
                  _fl(r.plan_disposal_m3), _fl(r.actual_disposal_m3)),
@@ -597,8 +658,8 @@ def _summary(pg: Session, frm: date, to: date, rd: date) -> dict[str, Any]:
             _blk("inflow", "Seepage + Rain Inflow", "M³", None, inf,
                  no_plan=True),
             _blk("stock", "Sump Closing Stock", "M³",
-                 _day_plan_closing(r, inf), _fl(r.closing_stock_m3),
-                 inverse=True),
+                 (pc or (None, 0.0))[0], _fl(r.closing_stock_m3),
+                 inverse=True, overdraw=(pc or (None, 0.0))[1]),
         ]
 
     mtd_rows = [
@@ -610,7 +671,7 @@ def _summary(pg: Session, frm: date, to: date, rd: date) -> dict[str, Any]:
         # entered day's closing, so the row spans the days that exist rather
         # than the days that do not.
         _blk("stock", "Sump Closing Stock", "M³", plan_closing, closing,
-             inverse=True),
+             inverse=True, overdraw=plan_overdraw),
     ]
 
     # ── the six figures across the top ───────────────────────────────────
@@ -666,6 +727,13 @@ def _summary(pg: Session, frm: date, to: date, rd: date) -> dict[str, Any]:
             "closing_stock": closing,
             "plan_closing_stock": (round(plan_closing)
                                    if plan_closing is not None else None),
+            # How far the plan out-ran the water, and from when. Zero and null
+            # in a month the plan fitted -- which is most of the KPI's job
+            # here: it is silent unless there is something to say.
+            "plan_overdraw": round(plan_overdraw) if plan_overdraw else 0,
+            "plan_dry_from": (chain["dry_from"].isoformat()
+                              if chain["dry_from"] else None),
+            "plan_dry_days": chain["dry_days"],
             "stock_change_pct": (round((closing - opening) / opening * 100, 1)
                                  if opening else None),
             "net_drawdown": drawdown,
