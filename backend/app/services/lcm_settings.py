@@ -61,13 +61,131 @@ def resolve(db: Session, on_date: date) -> dict[str, dict[str, Any]]:
     } for r in db.execute(text(_RESOLVE_HEADS), {"on_date": on_date})}
 
 
-def roles(db: Session) -> list[dict[str, Any]]:
-    """The nodes of the KAM Wise Loss Tree, left to right."""
-    return [{"role_code": r.role_code, "title": r.title,
-             "owner_kam": r.owner_kam, "sl_order": r.sl_order}
-            for r in db.execute(text(
-                "SELECT role_code, title, owner_kam, sl_order "
-                "FROM minehub.lcm_role_master ORDER BY sl_order"))]
+# NOT the same rule as the loss heads, and the difference matters.
+#
+# Elsewhere -- the fleet, the loss heads -- a date before the first row falls
+# back to the EARLIEST row, because those tables are seeded and a setting must
+# exist for every date. This one is an override on top of a derivation, so
+# there is somewhere better to fall back to: the heads themselves.
+#
+# Reaching forward would be actively wrong here. The mine overrides Head Human
+# Resource from 1 November; with the usual rule that single row is also the
+# earliest, so September and October would silently start naming November's
+# owner -- rewriting two months already reported. Only rows on or before the
+# date are considered; before the first override, the node derives.
+_RESOLVE_ROLES = """
+    SELECT DISTINCT ON (s.role_code)
+           s.role_code, s.owner_kam, s.title, s.effective_from, s.revision
+    FROM   minehub.lcm_role_setting s
+    WHERE  s.effective_from <= :on_date
+    ORDER  BY s.role_code, s.effective_from DESC
+"""
+
+
+def roles(db: Session, on_date: date | None = None,
+          heads: dict[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """The nodes of the KAM Wise Loss Tree, left to right, as of a date.
+
+    THE CARD FOLLOWS THE KAM SELECTOR. The owner of a node is taken from the
+    loss heads underneath it: the KAM holding the most of them. The mine moved
+    four Human Resource heads to a new KAM on 1 November; the matrix followed
+    and the tree did not, because its names came from lcm_role_master.owner_kam
+    -- a fixed column nothing in the application could write. Now there is one
+    place to change a name and both follow it.
+
+    MEASURED, NOT ASSUMED. Plurality reproduces every name the tree showed
+    before this changed, in both months, with no tie anywhere:
+
+        Mines Operation  Rana Vikash Singh 14
+        Engineering      Amarendra Sarangi 3, Praspero Sahoo 2, K L Das 1
+        Human Resource   Gurpreet Singh 4 / Dr. Pabitra Parida 4 (Nov),
+                         Maheswar Mohanty 1
+
+    A TIE IS NOT BROKEN BY GUESSING. Two KAMs level on head count means the
+    mine has not said who runs the node, and picking one alphabetically would
+    put a name on a reported figure for no reason. The registry's name stands
+    until somebody sets the node explicitly.
+
+    AN EXPLICIT DECISION ALWAYS WINS. lcm_role_setting (migration 104) is an
+    override for what the heads cannot answer: a department head who owns no
+    loss head personally, Chief of Mines and Head COB which have no heads
+    under them at all, a tie, or a post recorded as vacant. It is dated like
+    everything else, so overriding November leaves October as reported.
+
+    `owner_source` says which of the three answered -- selected, derived or
+    default -- so the screen can show it rather than implying every name was
+    chosen by hand. `heads` lets a caller that has already resolved them pass
+    them in instead of paying for the query twice.
+    """
+    # parent_role_code arrives with migration 105. Asked for rather than
+    # assumed, so the application renders on a database that has not had it
+    # yet -- the same rule the fleet and the role settings follow.
+    has_parent = db.execute(text(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_schema = 'minehub' AND table_name = 'lcm_role_master' "
+        "  AND column_name = 'parent_role_code'")).scalar() is not None
+    cols = ("role_code, title, owner_kam, sl_order"
+            + (", parent_role_code" if has_parent else ""))
+
+    master: dict[str, dict[str, Any]] = {
+        r.role_code: {"role_code": r.role_code, "title": r.title,
+                      "owner_kam": r.owner_kam, "sl_order": r.sl_order,
+                      # Who this head reports to. RECORDED, NEVER SUMMED --
+                      # the tree draws every node on one line and each carries
+                      # only its own heads, so adding through this would
+                      # count Electrical's loss inside Engineering's too.
+                      "parent_role_code": (getattr(r, "parent_role_code", None)
+                                           if has_parent else None),
+                      "owner_source": "default", "owner_heads": 0,
+                      "node_heads": 0, "owner_tied": False,
+                      "effective_from": None, "revision": None}
+        for r in db.execute(text(
+            f"SELECT {cols} FROM minehub.lcm_role_master ORDER BY sl_order"))}
+
+    # ── 1. Derived from the loss heads in force on the day ──────────────────
+    if heads is None:
+        heads = resolve(db, on_date or date.today())
+    tally: dict[str, dict[str, int]] = {}
+    for h in heads.values():
+        # A head hidden from the matrix does not vote for who runs the node.
+        if h.get("is_active") is False:
+            continue
+        code, kam = h.get("role_code"), h.get("kam_name")
+        if code and kam:
+            tally.setdefault(code, {})
+            tally[code][kam] = tally[code].get(kam, 0) + 1
+
+    for code, counts in tally.items():
+        node = master.get(code)
+        if node is None:
+            continue
+        top = max(counts.values())
+        tied = [k for k, v in counts.items() if v == top]
+        node["node_heads"] = sum(counts.values())
+        if len(tied) > 1:
+            node["owner_tied"] = True       # the registry's name stands
+            continue
+        node["owner_kam"] = tied[0]
+        node["owner_heads"] = top
+        node["owner_source"] = "derived"
+
+    # ── 2. An explicit dated decision, which beats the derivation ───────────
+    if db.execute(text("SELECT to_regclass('minehub.lcm_role_setting')")).scalar() is None:
+        logger.info("lcm_role_setting is absent -- node owners come from the "
+                    "loss heads alone; apply migration 104 to allow overrides")
+        return list(master.values())
+
+    for r in db.execute(text(_RESOLVE_ROLES), {"on_date": on_date or date.today()}):
+        node = master.get(r.role_code)
+        if node is None:            # a node removed from the registry but
+            continue                # still carrying dated decisions
+        node["owner_kam"] = r.owner_kam
+        if r.title:
+            node["title"] = r.title
+        node["owner_source"] = "selected"
+        node["effective_from"] = r.effective_from
+        node["revision"] = r.revision
+    return list(master.values())
 
 
 def kams(db: Session, active_only: bool = True) -> list[dict[str, Any]]:
@@ -114,8 +232,11 @@ def resolve_detached(on_date: date) -> dict[str, Any] | None:
         logger.warning("minehub unavailable for the loss heads", exc_info=True)
         return None
     try:
-        return {"heads": resolve(pg, on_date),
-                "roles": roles(pg),
+        resolved = resolve(pg, on_date)
+        return {"heads": resolved,
+                # Built from THOSE heads, not from a second query, so the card
+                # on a node can never name somebody the rows under it do not.
+                "roles": roles(pg, on_date, resolved),
                 "kams":  kams(pg)}
     except Exception:                                       # noqa: BLE001
         logger.warning("loss head settings could not be read", exc_info=True)
@@ -272,6 +393,149 @@ def versions(db: Session, column_name: str) -> list[dict[str, Any]]:
                 "SELECT * FROM minehub.lcm_loss_head_setting "
                 "WHERE column_name = :c ORDER BY effective_from DESC"),
                 {"c": column_name})]
+
+
+# ── The tree's node owners ───────────────────────────────────────────────────
+#: What the selector can set on a node of the KAM Wise Loss Tree. The node
+#: itself -- which roles exist and their order -- is not editable here: adding
+#: or removing a node re-shapes the tree and re-buckets every loss head under
+#: it, which is a migration, not a setting.
+ROLE_SETTABLE = ("owner_kam", "title")
+
+
+def save_roles(db: Session, effective_from: date,
+               changes: dict[str, dict[str, Any]], actor: str) -> dict[str, Any]:
+    """Record who owns each node of the loss tree, effective from a date.
+
+    `changes` is {role_code: {field: value}}.
+
+    SAME RULES AS THE LOSS HEADS, deliberately -- the two are edited on one
+    screen and saved with one date, and a reader should not have to learn two
+    sets of behaviour. A version is a whole setting rather than a delta; each
+    node starts from what is in force on that date and has the change applied
+    on top; a decision already recorded for that date is revised in place and
+    its revision number goes up; and nothing is written when nothing moved.
+
+    A VACANT POST IS A REAL ANSWER. owner_kam may be set to None: a node whose
+    head has left and has not been replaced should read as vacant, not as the
+    last person to hold it.
+    """
+    if not changes:
+        return {"effective_from": effective_from.isoformat(),
+                "written": [], "fields": 0}
+
+    if db.execute(text("SELECT to_regclass('minehub.lcm_role_setting')")).scalar() is None:
+        raise SettingsError(
+            "The tree's node owners cannot be changed yet -- migration 104 "
+            "has not been applied to this database.")
+
+    current = {r["role_code"]: r for r in roles(db, effective_from)}
+    known_kams = {r["kam_name"] for r in kams(db, active_only=False)}
+
+    written: list[dict[str, Any]] = []
+    fields = 0
+
+    for code, wanted in changes.items():
+        bad = set(wanted) - set(ROLE_SETTABLE)
+        if bad:
+            raise SettingsError(f"{code}: {', '.join(sorted(bad))} "
+                                "cannot be set on this screen")
+        if code not in current:
+            raise SettingsError(f"{code} is not a node of the loss tree")
+
+        base = current[code]
+        row = {f: base.get(f) for f in ROLE_SETTABLE}
+        row.update(wanted)
+
+        # A name the mine has not added would be refused by the foreign key;
+        # saying which one here is more use than a constraint violation.
+        if row["owner_kam"] is not None and row["owner_kam"] not in known_kams:
+            raise SettingsError(
+                f"{base['title']}: {row['owner_kam']} is not on the KAM list. "
+                "Add them with Add KAM first, so the tree names somebody SAP "
+                "knows.")
+        if row["title"] is not None and not str(row["title"]).strip():
+            raise SettingsError(f"{code} must keep a title")
+
+        existing = db.execute(text(
+            "SELECT owner_kam, title, revision FROM minehub.lcm_role_setting "
+            "WHERE role_code = :c AND effective_from = :d"),
+            {"c": code, "d": effective_from}).mappings().first()
+
+        was_of = (lambda f: _as_text(existing[f])) if existing \
+            else (lambda f: _as_text(base.get(f)))
+        moved = {f: (was_of(f), _as_text(row[f]))
+                 for f in ROLE_SETTABLE if was_of(f) != _as_text(row[f])}
+        if not moved:
+            continue
+
+        rev = (existing["revision"] + 1) if existing else 1
+        params = {"c": code, "d": effective_from, "rev": rev, "actor": actor,
+                  **{f: row[f] for f in ROLE_SETTABLE}}
+        if existing:
+            db.execute(text("""
+                UPDATE minehub.lcm_role_setting
+                SET    owner_kam = :owner_kam, title = :title,
+                       entry_id = :actor, entry_date = now(), revision = :rev
+                WHERE  role_code = :c AND effective_from = :d
+            """), params)
+        else:
+            db.execute(text("""
+                INSERT INTO minehub.lcm_role_setting
+                    (role_code, effective_from, owner_kam, title,
+                     entry_id, revision)
+                VALUES (:c, :d, :owner_kam, :title, :actor, :rev)
+            """), params)
+
+        for f, (was, now_) in moved.items():
+            db.execute(text("""
+                INSERT INTO minehub.lcm_role_hist
+                    (role_code, effective_from, action, field,
+                     old_value, new_value, revision, entry_id)
+                VALUES (:c, :d, :action, :f, :old, :new, :rev, :actor)
+            """), {"c": code, "d": effective_from, "f": f,
+                   "action": "CHANGED" if existing else "ADDED",
+                   "old": was if existing else None, "new": now_,
+                   "rev": rev, "actor": actor})
+            fields += 1
+
+        written.append({"role_code": code,
+                        "action": "CHANGED" if existing else "ADDED",
+                        "revision": rev, "fields": sorted(moved)})
+
+    db.commit()
+    return {"effective_from": effective_from.isoformat(),
+            "written": written, "fields": fields}
+
+
+def role_history(db: Session, role_code: str | None = None,
+                 limit: int = 200) -> list[dict[str, Any]]:
+    """Every change ever made to a node owner, newest first."""
+    if db.execute(text("SELECT to_regclass('minehub.lcm_role_hist')")).scalar() is None:
+        return []
+    where = "WHERE role_code = :c" if role_code else ""
+    rows = db.execute(text(f"""
+        SELECT role_code, effective_from, action, field, old_value, new_value,
+               revision, entry_id, entry_date
+        FROM   minehub.lcm_role_hist {where}
+        ORDER  BY entry_date DESC, id DESC
+        LIMIT  :lim
+    """), {"c": role_code, "lim": limit} if role_code else {"lim": limit})
+    return [dict(r) for r in rows.mappings()]
+
+
+def role_versions(db: Session, role_code: str) -> list[dict[str, Any]]:
+    """Every dated decision for one node, newest first."""
+    if db.execute(text("SELECT to_regclass('minehub.lcm_role_setting')")).scalar() is None:
+        return []
+    rows = db.execute(text("""
+        SELECT role_code, effective_from, owner_kam, title, revision,
+               entry_id, entry_date
+        FROM   minehub.lcm_role_setting
+        WHERE  role_code = :c
+        ORDER  BY effective_from DESC
+    """), {"c": role_code})
+    return [dict(r) for r in rows.mappings()]
 
 
 # ── The people, and where they come from ─────────────────────────────────────

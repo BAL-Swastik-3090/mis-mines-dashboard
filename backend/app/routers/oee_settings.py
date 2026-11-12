@@ -168,7 +168,10 @@ def read_loss_heads(on_date: date | None = Query(None),
     heads.sort(key=lambda h: (h["sl_order"] or 999, h["column_name"]))
     return {"on_date": d.isoformat(), "heads": heads,
             "kams": lset.kams(db, active_only=False),
-            "roles": lset.roles(db), "count": len(heads)}
+            # Dated, like the heads. These are the names on the KAM Wise Loss
+            # Tree's own cards -- who runs each node, as distinct from who
+            # owns each loss head under it.
+            "roles": lset.roles(db, d), "count": len(heads)}
 
 
 @router.post("/loss-heads")
@@ -183,6 +186,66 @@ def save_loss_heads(body: LossHeadIn, request: Request,
         db.rollback()
         raise HTTPException(400, str(exc))
     return {**res, "entry_id": _actor(request)}
+
+
+# ── The owners of the tree's own nodes ───────────────────────────────────────
+# SEPARATE FROM THE LOSS HEADS, because they are a separate fact. A head's KAM
+# is who owns that loss; a node's owner is who runs the department it rolls up
+# to. They do not derive from one another -- Head Human Resource holds four
+# heads under one KAM and Trans. truck jam under a different one -- so the
+# mine states both. Saved with its own date, resolved the same way.
+class RoleChange(BaseModel):
+    role_code: str = Field(min_length=1, max_length=20)
+    #: None is a vacant post, and is allowed. It is NOT the same as leaving
+    #: the field out, which means "do not touch the owner".
+    owner_kam: str | None = Field(None, max_length=60)
+    title: str | None = Field(None, min_length=1, max_length=60)
+
+    def fields(self) -> dict[str, Any]:
+        return self.model_dump(exclude_unset=True, exclude={"role_code"})
+
+
+class RolesIn(BaseModel):
+    effective_from: date
+    changes: list[RoleChange]
+
+
+@router.get("/roles")
+def read_roles(on_date: date | None = Query(None),
+               db: Session = Depends(get_minehub_db)) -> dict:
+    """The nodes of the KAM Wise Loss Tree as they stood on a day."""
+    d = _on(on_date)
+    return {"on_date": d.isoformat(), "roles": lset.roles(db, d),
+            "kams": lset.kams(db, active_only=False)}
+
+
+@router.post("/roles")
+def save_roles(body: RolesIn, request: Request,
+               db: Session = Depends(get_minehub_db)) -> dict:
+    changes = {c.role_code: c.fields() for c in body.changes}
+    if len(changes) != len(body.changes):
+        raise HTTPException(400, "The same node appears twice.")
+    try:
+        res = lset.save_roles(db, body.effective_from, changes, _actor(request))
+    except lset.SettingsError as exc:
+        db.rollback()
+        raise HTTPException(400, str(exc))
+    return {**res, "entry_id": _actor(request)}
+
+
+@router.get("/roles/history")
+def roles_history(role_code: str | None = Query(None),
+                  limit: int = Query(200, ge=1, le=1000),
+                  db: Session = Depends(get_minehub_db)) -> dict:
+    rows = lset.role_history(db, role_code, limit)
+    return {"role_code": role_code, "count": len(rows), "history": rows}
+
+
+@router.get("/roles/versions")
+def roles_versions(role_code: str = Query(...),
+                   db: Session = Depends(get_minehub_db)) -> dict:
+    rows = lset.role_versions(db, role_code)
+    return {"role_code": role_code, "count": len(rows), "versions": rows}
 
 
 # ── The people a loss head can be given to ───────────────────────────────────

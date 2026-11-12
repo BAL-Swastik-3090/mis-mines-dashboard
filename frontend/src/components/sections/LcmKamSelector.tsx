@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Check, History, Link2, Loader2, UserPlus } from "lucide-react";
+import { AlertTriangle, Check, History, Link2, Loader2, Network, UserPlus } from "lucide-react";
 import api from "@/lib/api";
 import KamPicker from "@/components/sections/KamPicker";
 
@@ -56,7 +56,28 @@ interface Kam {
    *  than hidden: these are exactly the ones that need an employee attached. */
   in_sap: boolean;
 }
-interface Role { role_code: string; title: string; owner_kam: string | null }
+interface Role {
+  role_code: string;
+  title: string;
+  /** Who runs this node of the tree. Null is a vacant post, not an error. */
+  owner_kam: string | null;
+  /** The head this one reports to — Electrical and Store under Engineering,
+   *  Security under Human Resource. Shown so somebody picking a node knows
+   *  where it sits; never added through, because the tree draws all seven on
+   *  one line and each carries only its own heads. */
+  parent_role_code?: string | null;
+  /** Where that name came from: the KAM holding the most loss heads under the
+   *  node ("derived"), an explicit override the mine set ("selected"), or the
+   *  registry's fixed name when neither applies ("default"). */
+  owner_source?: "derived" | "selected" | "default";
+  owner_heads?: number;
+  node_heads?: number;
+  /** Two KAMs level on head count — the node is not derived, and the mine has
+   *  to say who runs it. */
+  owner_tied?: boolean;
+  effective_from?: string | null;
+  revision?: number | null;
+}
 
 interface Read { on_date: string; heads: Head[]; kams: Kam[]; roles: Role[] }
 
@@ -67,6 +88,10 @@ interface Edit {
 }
 
 const TYPES: LossType[] = ["Controllable", "Non Controllable", "Unclassified"];
+
+/** Sentinel value for the "add somebody from SAP" row in a KAM dropdown. It
+ *  is never stored: picking it opens the employee register instead. */
+const ADD_FROM_SAP = "__ADD_FROM_SAP__";
 
 function stamp(iso: string | null): string {
   if (!iso) return "";
@@ -132,10 +157,20 @@ export default function LcmKamSelector({ onSaved }: {
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  /** Pending owner per tree node. "" is a deliberate vacancy, not "untouched"
+   *  — a key being absent is what means untouched. */
+  const [roleDraft, setRoleDraft] = useState<Record<string, string>>({});
   /** null = closed; otherwise "add", or the KAM name being linked. */
-  const [picker, setPicker] = useState<null | { mode: "add" | "link"; name?: string }>(null);
+  const [picker, setPicker] = useState<
+    null | { mode: "add" | "link"; name?: string;
+              /** Fill this tree node with whoever gets added. */
+              forRole?: string;
+              /** Fill this loss head's KAM with whoever gets added. */
+              forHead?: string }>(null);
 
-  useEffect(() => { setDraft({}); setError(null); setDone(null); }, [effective]);
+  useEffect(() => {
+    setDraft({}); setRoleDraft({}); setError(null); setDone(null);
+  }, [effective]);
 
   const q = useQuery<Read>({
     queryKey: ["oee-settings", "loss-heads", effective],
@@ -160,6 +195,23 @@ export default function LcmKamSelector({ onSaved }: {
   // outside the three heads the tree is drawn for.
   const roles = (q.data?.roles ?? []).filter(
     (r) => !["CHIEF", "COB", "UNMAPPED"].includes(r.role_code));
+  /* The owner block covers every node the tree DRAWS, which is a different
+     list: the Chief sits at the root and COB alongside, and both carry a name
+     on a card. Unmapped is the only one left out — it is where unclassified
+     heads fall, and it has no owner by design. */
+  const allRoles = (q.data?.roles ?? []).filter((r) => r.role_code !== "UNMAPPED");
+
+  /* WHO A NODE REPORTS TO, SHOWN BUT NEVER SUMMED. Electrical and Store sit
+     under Engineering, Security under Human Resource, yet the tree draws all
+     seven on one line and each card carries only its own heads. Rolling the
+     money up as well would count Electrical's loss inside Engineering's too
+     and the root would stop matching the matrix. So the reporting line is
+     shown here — where somebody choosing a node needs to know it — and
+     nowhere in the arithmetic. */
+  function parentOf(code: string | null | undefined): string | null {
+    if (!code) return null;
+    return (q.data?.roles ?? []).find((r) => r.role_code === code)?.title ?? code;
+  }
 
   function set(col: string, field: keyof Draft, value: string | number | boolean | null) {
     setDraft((d) => ({ ...d, [col]: { ...(d[col] ?? {}), [field]: value } }));
@@ -172,19 +224,43 @@ export default function LcmKamSelector({ onSaved }: {
   }
 
   const changed = Object.entries(draft).filter(([, d]) => Object.keys(d).length > 0);
+  const roleChanged = Object.entries(roleDraft).filter(
+    ([code, owner]) => owner !== (allRoles.find((r) => r.role_code === code)?.owner_kam ?? ""));
 
   async function save() {
     setBusy(true); setError(null); setDone(null);
     try {
-      const changes = changed.map(([column_name, d]) => ({ column_name, ...d }));
-      const r = await api.post("/oee-settings/loss-heads",
-        { effective_from: effective, changes });
-      const n = r.data?.fields ?? 0;
-      const k = r.data?.written?.length ?? 0;
-      setDone(n === 0
+      const said: string[] = [];
+
+      if (changed.length) {
+        const changes = changed.map(([column_name, d]) => ({ column_name, ...d }));
+        const r = await api.post("/oee-settings/loss-heads",
+          { effective_from: effective, changes });
+        const n = r.data?.fields ?? 0;
+        const k = r.data?.written?.length ?? 0;
+        if (n) said.push(`${n} setting${n === 1 ? "" : "s"} on ${k} loss head${k === 1 ? "" : "s"}`);
+      }
+
+      /* Saved as its own request against its own table, with the SAME date.
+         The node owner is a different fact from a head's KAM — see the note
+         above the block — and keeping the two writes apart means a rejected
+         owner cannot roll back a head's classification. */
+      if (roleChanged.length) {
+        const r = await api.post("/oee-settings/roles", {
+          effective_from: effective,
+          changes: roleChanged.map(([role_code, owner]) => ({
+            role_code, owner_kam: owner === "" ? null : owner,
+          })),
+        });
+        const n = r.data?.fields ?? 0;
+        if (n) said.push(`${n} tree node owner${n === 1 ? "" : "s"}`);
+      }
+
+      setDone(said.length === 0
         ? "Nothing had changed — nothing was written."
-        : `${n} setting${n === 1 ? "" : "s"} on ${k} loss head${k === 1 ? "" : "s"}, from ${onDay(effective)}.`);
+        : `${said.join(" and ")}, from ${onDay(effective)}.`);
       setDraft({});
+      setRoleDraft({});
       await q.refetch();
       if (showHistory) await hist.refetch();
       await onSaved();
@@ -231,7 +307,19 @@ export default function LcmKamSelector({ onSaved }: {
           mode={picker.mode}
           linkTo={picker.name}
           onClose={() => setPicker(null)}
-          onDone={async () => { await q.refetch(); }}
+          onDone={async (kamName) => {
+            await q.refetch();
+            /* Opened from a tree node, so put the person straight into that
+               node rather than making the user find the name they just added
+               in a dropdown. */
+            if (kamName && picker.forRole) {
+              setRoleDraft((d) => ({ ...d, [picker.forRole!]: kamName }));
+              setDone(null);
+            }
+            if (kamName && picker.forHead) {
+              set(picker.forHead, "kam_name", kamName);
+            }
+          }}
         />
       )}
 
@@ -286,6 +374,108 @@ export default function LcmKamSelector({ onSaved }: {
             >
               Apply from {onDay(MONTH_START)} instead
             </button>
+          </p>
+        </div>
+      )}
+
+      {/* ── Who runs each node of the KAM Wise Loss Tree ──────────────────
+          THE CARDS FOLLOW THIS TABLE ON THEIR OWN. A node's owner is the KAM
+          holding the most loss heads under it, so changing a head's KAM below
+          moves the name above too — which is what the mine expected, and what
+          the tree did not do while its names sat in a fixed column nothing
+          could write. This block is the OVERRIDE for what the heads cannot
+          answer: Chief of Mines and Head COB have no heads under them, a
+          department head may own none personally, and a tie is not something
+          to resolve by guessing. */}
+      {allRoles.length > 0 && (
+        <div className="px-4 py-3 border-b border-border-light bg-[#fafbfd]">
+          <div className="flex items-center gap-2 mb-2">
+            <Network size={12} className="text-[#6a1b9a]" />
+            <span className="text-[10px] font-condensed font-bold tracking-widest
+                             uppercase text-navy">
+              KAM Wise Loss Tree — node owners
+            </span>
+            <span className="text-[10px] font-mono text-txt-light">
+              the names on the tree&rsquo;s cards, from {onDay(effective)}
+            </span>
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {allRoles.map((r) => {
+              const cur = r.owner_kam ?? "";
+              const val = r.role_code in roleDraft ? roleDraft[r.role_code] : cur;
+              const dirty = val !== cur;
+              return (
+                <div key={r.role_code}
+                     className={`border rounded px-2.5 py-2 ${
+                       dirty ? "border-amber-300 bg-amber-50/60"
+                             : "border-border bg-white"}`}>
+                  <label htmlFor={`role-${r.role_code}`}
+                         className="block text-[9px] font-condensed font-bold
+                                    tracking-widest uppercase text-txt-secondary mb-1">
+                    {r.title}
+                    {r.parent_role_code && r.parent_role_code !== "CHIEF" && (
+                      <span className="ml-1 font-normal normal-case tracking-normal
+                                       text-[9px] text-txt-light">
+                        · reports to {parentOf(r.parent_role_code)}
+                      </span>
+                    )}
+                  </label>
+                  <select
+                    id={`role-${r.role_code}`}
+                    value={val}
+                    onChange={(e) => {
+                      /* THE NAME COMES FROM SAP, NEVER FROM A TEXT BOX — the
+                         same rule the KAM column below follows. Somebody not
+                         yet on the list is added through the employee
+                         register and then selected, so a node owner is always
+                         an employee with an id behind the name. */
+                      if (e.target.value === ADD_FROM_SAP) {
+                        setPicker({ mode: "add", forRole: r.role_code });
+                        return;
+                      }
+                      setRoleDraft((d) => ({ ...d, [r.role_code]: e.target.value }));
+                      setDone(null);
+                    }}
+                    className="w-full border border-border rounded px-1.5 py-1
+                               text-[12px] bg-white font-semibold text-navy"
+                  >
+                    {/* A vacant post is a real answer — a node whose head has
+                        left should read as vacant, not as the last holder. */}
+                    <option value="">— vacant —</option>
+                    {kams.map((k) => (
+                      <option key={k.kam_name} value={k.kam_name}>{k.kam_name}</option>
+                    ))}
+                    <option value={ADD_FROM_SAP}>+ Add from SAP…</option>
+                  </select>
+                  <p className="mt-1 text-[9px] font-mono text-txt-light">
+                    {dirty
+                      ? <span className="text-amber-700">was {cur || "vacant"}</span>
+                      : r.owner_tied
+                        ? <span className="text-[#c8960c]">
+                            its heads tie — set it here
+                          </span>
+                        : r.owner_source === "derived"
+                          ? <span className="text-[#2e7d32]">
+                              follows the KAMs below · {r.owner_heads} of {r.node_heads} heads
+                            </span>
+                          : r.owner_source === "selected"
+                            ? `set here on ${r.effective_from ? onDay(r.effective_from) : "—"}`
+                            : "no loss heads under it — set it here"}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+
+          <p className="mt-2 text-[10px] text-txt-muted leading-relaxed">
+            A node marked <span className="text-[#2e7d32] font-semibold">follows
+            the KAMs below</span> needs nothing here — change a head&rsquo;s KAM in
+            the table and the card changes with it. Setting one here
+            <strong> overrides</strong> that for good, from the effective date
+            above, so use it only where the heads cannot answer. Either way this
+            renames a card and <strong>moves no money</strong> — which node a
+            head&rsquo;s loss rolls up to is <em>Rolls up to</em> in the table below.
           </p>
         </div>
       )}
@@ -357,8 +547,17 @@ export default function LcmKamSelector({ onSaved }: {
                   <td className={TD}>
                     <select
                       value={(shown(h, "kam_name", h.kam_name) as string) ?? ""}
-                      onChange={(e) => set(h.column_name, "kam_name",
-                        e.target.value === "" ? null : e.target.value)}
+                      onChange={(e) => {
+                        // Same rule as the node owners above: a name that is
+                        // not on the list is added FROM THE SAP REGISTER and
+                        // then chosen, never typed.
+                        if (e.target.value === ADD_FROM_SAP) {
+                          setPicker({ mode: "add", forHead: h.column_name });
+                          return;
+                        }
+                        set(h.column_name, "kam_name",
+                          e.target.value === "" ? null : e.target.value);
+                      }}
                       className="border border-border rounded px-1.5 py-1 text-[11px] bg-white"
                     >
                       <option value="">— none —</option>
@@ -368,6 +567,7 @@ export default function LcmKamSelector({ onSaved }: {
                           {k.designation ? ` — ${k.designation}` : k.in_sap ? "" : " (not linked)"}
                         </option>
                       ))}
+                      <option value={ADD_FROM_SAP}>+ Add from SAP…</option>
                     </select>
                   </td>
                   <td className={TD}>
@@ -379,7 +579,16 @@ export default function LcmKamSelector({ onSaved }: {
                     >
                       <option value="">— unmapped —</option>
                       {roles.map((r) => (
-                        <option key={r.role_code} value={r.role_code}>{r.title}</option>
+                        <option key={r.role_code} value={r.role_code}>
+                          {r.title}
+                          {/* Only the three that sit under another HEAD say so.
+                              Every other node reports to the Chief, and
+                              printing that on all of them would bury the one
+                              distinction this line exists to make. */}
+                          {r.parent_role_code && r.parent_role_code !== "CHIEF"
+                            ? ` — under ${parentOf(r.parent_role_code)}`
+                            : ""}
+                        </option>
                       ))}
                     </select>
                   </td>
@@ -441,12 +650,17 @@ export default function LcmKamSelector({ onSaved }: {
           </p>
         )}
         <span className="ml-auto text-[11px] text-txt-muted">
-          {changed.length === 0 ? "No changes"
-            : `${changed.length} loss head${changed.length === 1 ? "" : "s"} changed`}
+          {changed.length === 0 && roleChanged.length === 0 ? "No changes"
+            : [changed.length
+                 ? `${changed.length} loss head${changed.length === 1 ? "" : "s"}`
+                 : null,
+               roleChanged.length
+                 ? `${roleChanged.length} node owner${roleChanged.length === 1 ? "" : "s"}`
+                 : null].filter(Boolean).join(" and ") + " changed"}
         </span>
         <button
           onClick={save}
-          disabled={busy || changed.length === 0}
+          disabled={busy || (changed.length === 0 && roleChanged.length === 0)}
           className="px-4 py-1.5 rounded bg-navy text-white text-[12px] font-semibold
                      disabled:opacity-40 disabled:cursor-not-allowed hover:bg-navy/90"
         >

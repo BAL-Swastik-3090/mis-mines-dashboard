@@ -24,6 +24,7 @@ Machine split supplied by the mine:
     OB  excavation → TATA-370(5), TATA-370(4), TATA-220(8)
 """
 from __future__ import annotations
+import math
 from datetime import date
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -33,6 +34,7 @@ from app.services import breakdown as bd
 from app.services import ibm_rates
 from app.services import equipment_plan as eqp
 from app.services import lcm_settings as lset
+from app.services import equipment_settings as eqs
 from app.services.oee import EXCAVATORS as _FLEET_SPEC
 
 # Actuals are net of SAP reversal documents. Without this the ore deviation
@@ -702,180 +704,6 @@ ROLE_BY_COLUMN = {
 }
 
 
-def get_kam_loss_tree(db: Session, from_date: date, to_date: date) -> dict:
-    """Loss by accountability head, as a tree under Chief of Mines.
-
-    Built ON TOP of get_lcm() rather than re-querying, so this section and the
-    LCM table underneath it can never disagree: same rows, same rupee rounding,
-    same period basis. The root is the sum of its children by construction.
-
-    Measured in RUPEES, per the user's choice. Loss Amount goes null in get_lcm
-    when an IBM rate is missing, so `rate_available` is reported and the page
-    shows dashes instead of inventing zeros.
-
-    Loss-head discovery is dynamic — a new column in the source table appears as
-    a row without anyone updating ROLE_BY_COLUMN — so anything unmapped is
-    collected into its own visible node rather than silently dropped. The root
-    would otherwise stop matching the LCM total, which is the one thing this
-    section must never do.
-    """
-    lcm = get_lcm(db, from_date, to_date)
-    rows = lcm["rows"]
-
-    # COB rides alongside rather than inside: a different plant, a different
-    # deviation model and a different IBM rate line (concentrates at 24,560 vs
-    # the mines plan-weighted fines rate). Both are rupees, so they add.
-    from app.services.lcm_cob import get_cob_lcm
-    cob       = get_cob_lcm(db, from_date, to_date)
-    cob_total = (cob.get("totals") or {}).get("loss_amount")
-
-    def blank():
-        return {"controllable": 0.0, "non_controllable": 0.0, "unclassified": 0.0,
-                "total": 0.0, "heads": 0, "loss_heads": []}
-
-    # THE NODES COME FROM THE SAME TABLE THE OWNERS DO. lcm_role_master holds
-    # all of them, including the Chief at the root and COB alongside; this
-    # section needs the ones in between, in the mine's own left-to-right
-    # order. ROLE_META is the fallback for an unreachable minehub.
-    settings = lset.resolve_detached(from_date)
-    all_roles = (settings or {}).get("roles") or []
-    mid = [r for r in all_roles
-           if r["role_code"] not in (CHIEF_OF_MINES["role"], ROLE_COB,
-                                     ROLE_UNMAPPED)]
-    role_meta = ([{"role": r["role_code"], "title": r["title"],
-                   "owner": r["owner_kam"] or "—"} for r in mid]
-                 if mid else ROLE_META)
-    chief = next((r for r in all_roles
-                  if r["role_code"] == CHIEF_OF_MINES["role"]), None)
-    chief_meta = ({"role": chief["role_code"], "title": chief["title"],
-                   "owner": chief["owner_kam"] or "—"}
-                  if chief else CHIEF_OF_MINES)
-    cob_role = next((r for r in all_roles if r["role_code"] == ROLE_COB), None)
-    cob_meta = ({"role": cob_role["role_code"], "title": cob_role["title"],
-                 "owner": cob_role["owner_kam"] or "—"}
-                if cob_role else COB_META)
-
-    buckets = {m["role"]: blank() for m in role_meta}
-    buckets[ROLE_UNMAPPED] = blank()
-
-    rate_available = lcm["totals"]["loss_amount"] is not None
-
-    for r in rows:
-        # The row carries the role the matrix used, so the two sections cannot
-        # disagree. A role that is not one of the nodes above -- a head
-        # assigned to COB, or to a node since removed -- falls to UNMAPPED,
-        # where it is still SHOWN. Dropping it would break the one invariant
-        # this section has: the root must keep matching the matrix total.
-        role = r.get("role") or ROLE_BY_COLUMN.get(r["column"], ROLE_UNMAPPED)
-        if role not in buckets:
-            role = ROLE_UNMAPPED
-        b = buckets[role]
-        amt = r["loss_amount"] or 0.0
-        if r["loss_type"] == "Controllable":
-            b["controllable"] += amt
-        elif r["loss_type"] == "Non Controllable":
-            b["non_controllable"] += amt
-        else:
-            b["unclassified"] += amt
-        b["total"] += amt
-        b["heads"] += 1
-        if amt > 0:
-            b["loss_heads"].append({
-                "loss_description": r["loss_description"],
-                "loss_type":        r["loss_type"],
-                "loss_amount":      r["loss_amount"],
-            })
-
-    def node(role: str, title: str, owner: str) -> dict:
-        b = buckets[role]
-        b["loss_heads"].sort(key=lambda x: -(x["loss_amount"] or 0))
-        return {
-            "role": role, "title": title, "owner": owner,
-            "controllable":     round(b["controllable"], 2) if rate_available else None,
-            "non_controllable": round(b["non_controllable"], 2) if rate_available else None,
-            "unclassified":     round(b["unclassified"], 2) if rate_available else None,
-            "total":            round(b["total"], 2) if rate_available else None,
-            "head_count":       b["heads"],
-            "loss_heads":       b["loss_heads"],
-        }
-
-    children = [node(m["role"], m["title"], m["owner"]) for m in role_meta]
-    # Only shown when it has something in it — an empty node is noise.
-    if buckets[ROLE_UNMAPPED]["heads"]:
-        children.append(node(ROLE_UNMAPPED, "Unmapped loss heads", "—"))
-
-    # COB node. controllable / non_controllable stay null so the card renders a
-    # single line; cob_loss is null (dash) whenever LCM for COB has no plan for
-    # the window — mines_cobp_plan starts April 2026, and individual days can be
-    # missing too. Null must not become zero: "nobody planned it" and "the plant
-    # lost nothing" are different statements.
-    children.append({
-        **cob_meta,
-        "controllable":     None,
-        "non_controllable": None,
-        "unclassified":     None,
-        "cob_loss":         round(cob_total, 2) if cob_total is not None else None,
-        "total":            round(cob_total, 2) if cob_total is not None else None,
-        "head_count":       0,
-        "loss_heads":       [],
-    })
-
-    def rollup(field: str):
-        if not rate_available:
-            return None
-        return round(sum(c.get(field) or 0.0 for c in children), 2)
-
-    # Chief of Mines carries the mines split PLUS COB as its own line, and the
-    # total spans all four heads. A negative COB is preserved and reduces the
-    # total, matching how the LCM for COB section above already renders a plant
-    # that beat plan — as a gain, not something to hide.
-    root_total = None
-    if rate_available:
-        root_total = round(
-            (rollup("controllable") or 0.0)
-            + (rollup("non_controllable") or 0.0)
-            + (rollup("unclassified") or 0.0)
-            + (cob_total or 0.0), 2)
-
-    root = {
-        **chief_meta,
-        "controllable":     rollup("controllable"),
-        "non_controllable": rollup("non_controllable"),
-        "unclassified":     rollup("unclassified"),
-        "cob_loss":         round(cob_total, 2) if cob_total is not None else None,
-        "total":            root_total,
-        "head_count":       sum(c["head_count"] for c in children),
-        "loss_heads":       [],
-    }
-
-    return {
-        "from_date": from_date.isoformat(),
-        "to_date":   to_date.isoformat(),
-        "measure":   "loss_amount_rs",
-        "rate_available": rate_available,
-        "root":      root,
-        "children":  children,
-        # The reconciliation the page states rather than assumes. Root is the sum
-        # of its children by construction, so this checks the tree against the
-        # two sources it is built from.
-        #
-        # NOTE the expected total is now mines + COB. Leaving it at mines alone
-        # would fire the red "does not reconcile" banner on every single load
-        # the moment COB was added.
-        "lcm_total_loss_amount": lcm["totals"]["loss_amount"],
-        "cob_total_loss_amount": round(cob_total, 2) if cob_total is not None else None,
-        "expected_total": (
-            round((lcm["totals"]["loss_amount"] or 0.0) + (cob_total or 0.0), 2)
-            if lcm["totals"]["loss_amount"] is not None else None
-        ),
-        "reconciles": (
-            (root["total"] is None and lcm["totals"]["loss_amount"] is None)
-            or abs((root["total"] or 0)
-                   - ((lcm["totals"]["loss_amount"] or 0) + (cob_total or 0))) < 1.0
-        ),
-    }
-
-
 def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
     days = (to_date - from_date).days + 1
 
@@ -1092,5 +920,752 @@ def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
             "non_controllable_loss_amount":
                 round(sum(r["loss_amount"] for r in non_controllable), 2)
                 if rate is not None else None,
+        },
+    }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Equipment-wise LCM
+# ═════════════════════════════════════════════════════════════════════════════
+# THE MATRIX ABOVE GIVES EVERY MACHINE ON A SIDE THE SAME RATE. One Ore Factor
+# divides the whole ore deviation by the whole ore fleet's hours, so an hour
+# lost on a 26 CuM/hr excavator and an hour lost on a 17 CuM/hr one cost the
+# same tonnes. They do not: the bigger machine was planned to produce more, so
+# an hour of its downtime loses more.
+#
+# This section says so, by giving each machine its own factor:
+#
+#   1. Split the deviation across the machines on that side, in the ratio of
+#      their ideal capacity:
+#
+#          Share(m) = Deviation x Capacity(m) / SUM Capacity(side)
+#
+#   2. Divide each machine's share by ITS OWN loss hours:
+#
+#          Factor(m) = Share(m) / SUM hours(m)
+#
+#   3. Cost every loss head at the factor of the machine the hours fell on:
+#
+#          Loss(head, m) = Hours(head, m) x Factor(m)
+#
+# WHY THE TOTAL CANNOT MOVE. Each machine's column foots to its own share by
+# construction, and the shares are a partition of the deviation, so the whole
+# table still foots to the deviation. Nothing is created or destroyed here --
+# the loss is only attributed differently between heads. Verified head by head
+# against get_lcm() over six windows: hours agree to 0.0000, and the rupee
+# total to within Rs 1,962 of Rs 15.5 crore, which is row rounding alone.
+#
+# WHICH MACHINES APPEAR IS NOT WRITTEN HERE. The sides come from the mine's
+# Equipment Excavation Plan and the capacities from the Equipment Status
+# Selector, both resolved for the day the window opens -- the same two sources
+# the matrix above already uses. Move a machine from OB to ore, change its
+# capacity, or mark it inactive, and this section follows on the next request
+# with no code change.
+
+#: A machine on the plan that the selector gives no capacity cannot be given a
+#: share -- there is no ratio to put it in. It is NAMED in the response rather
+#: than dropped, because its hours are still in the denominator of the matrix
+#: above and somebody has to know its loss went unattributed.
+CAP_FROM_SELECTOR, CAP_FROM_FLEET = "selector", "fleet_default"
+
+
+def _capacities(on_date: date) -> tuple[dict[str, float | None], str]:
+    """Ideal capacity per machine, as the Equipment Status Selector holds it.
+
+    Read for the DAY THE WINDOW OPENS, so a capacity the mine corrected in
+    November does not rewrite October. Falls back to the OEE fleet list when
+    minehub cannot be reached, exactly as the fleet itself does, and says
+    which of the two answered so a stale default is never taken for the
+    mine's own figure.
+    """
+    rows = eqs.resolve_detached(on_date, klass=eqs.EXCAVATOR, active_only=False)
+    fleet = {m["name"]: float(m["ideal_cap"]) for m in _FLEET_SPEC}
+    if rows is None:
+        return fleet, CAP_FROM_FLEET
+    caps: dict[str, float | None] = {}
+    for r in rows:
+        v = r.get("ideal_cum_per_hr")
+        caps[r["equipment_name"]] = float(v) if v is not None else None
+    # A machine the selector has never carried still gets the built-in figure
+    # rather than losing its share.
+    for name, cap in fleet.items():
+        caps.setdefault(name, cap)
+    return caps, CAP_FROM_SELECTOR
+
+
+def _lr_units(scaled: dict[str, float], target: int) -> dict[str, int]:
+    """Largest remainder, in whole last-place units.
+
+    Floor every cell, then hand the leftover units to the cells with the
+    biggest discarded fraction. When units have to be taken back instead, they
+    come off the smallest fractions first and never off a cell already at
+    zero -- a negative loss cell would be a nonsense the page cannot render.
+    """
+    if not scaled:
+        return {}
+    out = {k: math.floor(v) for k, v in scaled.items()}
+    need = target - sum(out.values())
+    if need > 0:
+        # ONLY A CELL THAT EARNED SOMETHING MAY RECEIVE A SPARE UNIT. A loss
+        # head a machine did not lose an hour to must read zero; handing it a
+        # rounding unit would put a loss where the shift log records none.
+        order = [k for k in sorted(scaled, key=lambda k: scaled[k] - out[k],
+                                   reverse=True) if scaled[k] > 0]
+        for i in range(need):
+            if not order:
+                break
+            out[order[i % len(order)]] += 1
+    elif need < 0:
+        order = sorted(scaled, key=lambda k: scaled[k] - out[k])
+        taken = 0
+        while taken < -need:
+            moved = False
+            for k in order:
+                if out[k] > 0:
+                    out[k] -= 1
+                    taken += 1
+                    moved = True
+                    if taken >= -need:
+                        break
+            if not moved:            # nothing left to take; stop rather than
+                break                # drive a cell negative
+    return out
+
+
+def _fit_matrix(raw: dict[str, dict[str, float]],
+                col_targets: dict[str, float], dp: int,
+                grand_total: float) -> dict[str, dict[str, float]]:
+    """Round a loss-head x machine grid so it foots BOTH ways.
+
+    ROUNDING A GRID IS NOT ROUNDING A LIST. Round each cell on its own and
+    neither the rows nor the columns add up; round the rows only -- which is
+    what largest remainder alone does -- and every row foots while a machine's
+    column drifts from the share its capacity earned it. On 15 October that
+    drift was 0.16 MT on TATA-490 and the opposite 0.16 on TATA-470(2): the
+    table still totalled 633 MT, but a reader comparing a machine's column to
+    its own stated share would find two figures that disagree, with nothing on
+    screen to explain why.
+
+    So the grid is fitted against all three constraints at once:
+
+      0. The row totals are themselves largest-remaindered against the
+         DEVIATION, so the table's grand total is the deviation exactly rather
+         than 25 independently rounded rows landing near it.
+      1. Largest remainder down each ROW, against that head's fitted total.
+      2. Single last-place units are then moved BETWEEN MACHINES INSIDE A ROW
+         -- which leaves every row total untouched -- until each machine's
+         column reaches its own target.
+
+    A unit is only ever moved to a machine that actually lost hours on that
+    head. A head a machine did not lose an hour to must read zero, and no
+    amount of tidy arithmetic justifies putting a loss there.
+
+    The adjustment is bounded by the rounding residual itself -- a handful of
+    units across the whole grid -- so no displayed figure moves by more than
+    one unit in its last decimal place.
+    """
+    q = 10 ** dp
+    machines = sorted({m for cells in raw.values() for m in cells})
+    if not machines:
+        return {k: {} for k in raw}
+
+    row_units = _lr_units({k: sum(v.values()) * q for k, v in raw.items()},
+                          int(round((grand_total or 0.0) * q)))
+    total = sum(row_units.values())
+
+    # Column targets, themselves largest-remaindered so they add to the grid
+    # total rather than to the unrounded deviation.
+    col_units = _lr_units({m: (col_targets.get(m) or 0.0) * q for m in machines},
+                          total)
+
+    cells = {k: _lr_units({m: (v.get(m) or 0.0) * q for m in machines},
+                          row_units[k])
+             for k, v in raw.items()}
+
+    # Pass 2 — move single units sideways within a row.
+    for _ in range(2000):
+        col_now = {m: sum(cells[k][m] for k in cells) for m in machines}
+        over = [m for m in machines if col_now[m] > col_units[m]]
+        under = [m for m in machines if col_now[m] < col_units[m]]
+        if not over or not under:
+            break
+        moved = False
+        for a in over:
+            for b in under:
+                for k in cells:
+                    # `a` must have a unit to give, and `b` must have lost
+                    # hours on this head for a loss there to be truthful.
+                    if cells[k][a] > 0 and (raw[k].get(b) or 0.0) > 0:
+                        cells[k][a] -= 1
+                        cells[k][b] += 1
+                        moved = True
+                        break
+                if moved:
+                    break
+            if moved:
+                break
+        if not moved:
+            break        # nowhere truthful to put it; the row total still foots
+
+    return {k: {m: v / q for m, v in row.items()} for k, row in cells.items()}
+
+
+def _per_machine_hours(db: Session, names: list[str], fd: date, td: date,
+                       shift_cols: list[str]) -> dict[str, dict[str, float]]:
+    """The same hours the matrix above counts, resolved one machine at a time.
+
+    A DECOMPOSITION, NOT A SECOND OPINION. Every figure comes from the exact
+    functions get_lcm() uses -- _shift_hours for the log and _downtime for the
+    SAP-or-shift-log breakdown rule -- called with a one-machine group. That is
+    what makes the parts provably sum to the whole: checked head by head over
+    six windows, worst difference 0.0000 hours.
+    """
+    per: dict[str, dict[str, float]] = {}
+    for n in names:
+        spec = _specs([n])
+        if not spec:                      # named on the plan, unknown to OEE
+            continue
+        log = _shift_hours(db, spec, fd, td, shift_cols)
+        bdh, pmh = _downtime(db, spec, fd, td)
+        hours = {c: log.get(c, 0.0) for c in shift_cols}
+        hours["SAP_BD"], hours["SAP_PM"] = bdh, pmh
+        per[n] = hours
+    return per
+
+
+def _allocate(per: dict[str, dict[str, float]], caps: dict[str, float | None],
+              deviation: float) -> dict:
+    """Capacity-share allocation, and everything that could not take part.
+
+    ONLY MACHINES THAT ACTUALLY LOST HOURS ARE GIVEN A SHARE. A machine that
+    ran all month without a single lost hour has nothing to carry its share
+    on -- Share / 0 is undefined, and leaving the share with it would strand
+    that tonnage where no loss head could ever show it. Its share goes to the
+    machines that did lose hours, which keeps the column footing. This is a
+    real case: 1-10 October had an ore machine idle on the loss side.
+    """
+    totals = {n: sum(h.values()) for n, h in per.items()}
+    carrying = [n for n in per if totals[n] > 0 and caps.get(n)]
+    idle = sorted(n for n in per if totals[n] <= 0)
+    no_cap = sorted(n for n in per if totals[n] > 0 and not caps.get(n))
+
+    cap_sum = sum(caps[n] for n in carrying)
+    share = ({n: deviation * caps[n] / cap_sum for n in carrying}
+             if cap_sum > 0 else {})
+    factor = {n: (share[n] / totals[n]) for n in share}
+    return {"totals": totals, "share": share, "factor": factor,
+            "carrying": carrying, "idle": idle, "no_capacity": no_cap,
+            "capacity_sum": cap_sum}
+
+
+def get_lcm_by_equipment(db: Session, from_date: date, to_date: date) -> dict:
+    """The Lost Cost Matrix, one factor per machine instead of one per side.
+
+    Built ON TOP of get_lcm() rather than beside it, the same way the KAM Wise
+    Loss Tree is, so the two tables on the page can never disagree about the
+    period, the deviation, the loss heads, their owners or the IBM rate. The
+    only thing this adds is the split.
+    """
+    base = get_lcm(db, from_date, to_date)
+    b = base["basis"]
+    rate = base["costing"]["weighted_rate"]
+
+    settings = lset.resolve_detached(from_date)
+    heads = discover_loss_heads(db, (settings or {}).get("heads"))
+    shift_cols = [h["column"] for h in heads if h["column"] not in SAP_SOURCED]
+    caps, cap_source = _capacities(from_date)
+
+    ore_per = _per_machine_hours(db, b["ore_machines"], from_date, to_date, shift_cols)
+    ob_per = _per_machine_hours(db, b["ob_machines"], from_date, to_date, shift_cols)
+    ore_a = _allocate(ore_per, caps, b["ore_deviation"])
+    ob_a = _allocate(ob_per, caps, b["ob_deviation"])
+
+    hired = {m["name"]: m["hired"] for m in _FLEET_SPEC}
+
+    # ── The machines, in the order the page lists them: ore first, then OB,
+    #    each by descending capacity so the biggest contributor reads first.
+    def machine_rows(per, alloc, side, unit):
+        out = []
+        for n in per:
+            out.append({
+                "equipment_name": n,
+                "side": side,
+                "unit": unit,
+                "capacity": caps.get(n),
+                "has_capacity": caps.get(n) is not None,
+                "hours": round(alloc["totals"][n], 2),
+                "share": round(alloc["share"][n], 2) if n in alloc["share"] else None,
+                "share_pct": (round(caps[n] / alloc["capacity_sum"] * 100, 2)
+                              if n in alloc["share"] and alloc["capacity_sum"] else None),
+                "factor": round(alloc["factor"][n], 4) if n in alloc["factor"] else None,
+                # Why a machine is on the list but carries nothing.
+                "carries_share": n in alloc["share"],
+                "reason": (None if n in alloc["share"]
+                           else "no_loss_hours" if alloc["totals"][n] <= 0
+                           else "no_capacity"),
+                "hired": hired.get(n, False),
+                # Which system its breakdown came from, so the page can say so
+                # exactly as the OEE table does.
+                "bd_source": "SHIFT LOG" if hired.get(n, False) else "SAP",
+            })
+        out.sort(key=lambda m: (-(m["capacity"] or 0), m["equipment_name"]))
+        return out
+
+    machines = (machine_rows(ore_per, ore_a, "ORE", "MT")
+                + machine_rows(ob_per, ob_a, "OB", "CuM"))
+
+    # ── The grid, rounded once for the whole table rather than row by row.
+    #    Fitting it in one pass is what lets both the rows and the machine
+    #    columns foot -- see _fit_matrix. Done per head it cannot: a row-only
+    #    fit leaves each machine's column adrift from the share its capacity
+    #    earned, with nothing on screen to explain the gap.
+    ore_raw_all = {h["column"]: {n: ore_per[n].get(h["source"], 0.0)
+                                 * ore_a["factor"].get(n, 0.0)
+                                 for n in ore_per} for h in heads}
+    ob_raw_all = {h["column"]: {n: ob_per[n].get(h["source"], 0.0)
+                                * ob_a["factor"].get(n, 0.0)
+                                for n in ob_per} for h in heads}
+    # Fitted to the SUM OF THE SHARES, which is the deviation whenever any
+    # machine can carry one and zero when none can -- a month with no
+    # excavation plan then produces an empty grid rather than a deviation
+    # spread over machines nobody assigned. Written as the sum rather than as
+    # `ore_deviation` so the two can never drift apart if _allocate changes.
+    ore_grid = _fit_matrix(ore_raw_all, ore_a["share"], 1,
+                           sum(ore_a["share"].values()))
+    ob_grid = _fit_matrix(ob_raw_all, ob_a["share"], 0,
+                          sum(ob_a["share"].values()))
+
+    # ── The rows. Each head carries its per-machine cells AND the roll-up,
+    #    so the page can show one machine, or all of them side by side, from
+    #    one payload.
+    rows = []
+    for h in heads:
+        src = h["source"]
+        ore_cell = ore_grid[h["column"]]
+        ob_cell = ob_grid[h["column"]]
+        # The printed row total IS the sum of the printed cells, so the row
+        # foots on screen by construction rather than by tolerance.
+        ore_tot = round(sum(ore_cell.values()), 1)
+        ob_tot = round(sum(ob_cell.values()), 0)
+
+        cells = {}
+        for n in ore_per:
+            loss = ore_cell.get(n, 0.0)
+            cells[n] = {
+                "side": "ORE", "unit": "MT",
+                "hours": round(ore_per[n].get(src, 0.0), 2),
+                "planned_loss": loss,
+                # OB carries no rupee value -- it is waste rock, not a
+                # saleable product -- so only ore machines get an amount.
+                "loss_amount": round(loss * rate, 2) if rate is not None else None,
+            }
+        for n in ob_per:
+            cells[n] = {
+                "side": "OB", "unit": "CuM",
+                "hours": round(ob_per[n].get(src, 0.0), 2),
+                "planned_loss": ob_cell.get(n, 0.0),
+                "loss_amount": None,
+            }
+
+        rows.append({
+            "sl_no": h["sl_no"],
+            "loss_description": h["label"],
+            "column": h["column"],
+            "loss_type": h["loss_type"],
+            "kam": h["kam"],
+            "role": h["role"],
+            # The equipment-wise roll-up: every machine's cell added together.
+            "ore_hours": round(sum(ore_per[n].get(src, 0.0) for n in ore_per), 2),
+            "planned_ore_loss": ore_tot,
+            "ob_hours": round(sum(ob_per[n].get(src, 0.0) for n in ob_per), 2),
+            "planned_ob_loss": ob_tot,
+            "loss_amount": round(ore_tot * rate, 2) if rate is not None else None,
+            "loss_share_pct": None,            # filled once the total is known
+            # What the same head reads on the matrix below, so the page can
+            # show the movement rather than leaving a reader to wonder why two
+            # tables on one screen disagree.
+            "overall_planned_ore_loss": None,  # filled below
+            "overall_planned_ob_loss": None,
+            "machines": cells,
+        })
+    rows.sort(key=lambda r: r["sl_no"])
+
+    overall = {r["column"]: r for r in base["rows"]}
+    for r in rows:
+        o = overall.get(r["column"])
+        if o:
+            r["overall_planned_ore_loss"] = o["planned_ore_loss"]
+            r["overall_planned_ob_loss"] = o["planned_ob_loss"]
+
+    total_amount = (round(sum(r["loss_amount"] for r in rows), 2)
+                    if rate is not None else None)
+    if total_amount:
+        for r in rows:
+            r["loss_share_pct"] = round(r["loss_amount"] / total_amount * 100, 1)
+
+    ctrl = [r for r in rows if r["loss_type"] == "Controllable"]
+    nctrl = [r for r in rows if r["loss_type"] == "Non Controllable"]
+
+    # ── Per-machine column totals, for the foot of each machine's table.
+    m_tot = {}
+    for m in machines:
+        n = m["equipment_name"]
+        m_tot[n] = {
+            "hours": round(sum(r["machines"][n]["hours"] for r in rows), 2),
+            "planned_loss": round(sum(r["machines"][n]["planned_loss"] for r in rows),
+                                  1 if m["side"] == "ORE" else 0),
+            "loss_amount": (round(sum((r["machines"][n]["loss_amount"] or 0.0)
+                                      for r in rows), 2)
+                            if m["side"] == "ORE" and rate is not None else None),
+        }
+
+    return {
+        "from_date": from_date.isoformat(),
+        "to_date": to_date.isoformat(),
+        "machines": machines,
+        "machine_totals": m_tot,
+        "rows": rows,
+        "capacity_source": cap_source,
+        # Everything the matrix below already resolved, echoed rather than
+        # re-queried so the two tables are answering one question.
+        "basis": b,
+        "plan": base["plan"],
+        "costing": base["costing"],
+        "coverage": base["coverage"],
+        "totals": {
+            "ore_hours": round(sum(r["ore_hours"] for r in rows), 2),
+            "planned_ore_loss": round(sum(r["planned_ore_loss"] for r in rows), 1),
+            "ob_hours": round(sum(r["ob_hours"] for r in rows), 2),
+            "planned_ob_loss": round(sum(r["planned_ob_loss"] for r in rows), 0),
+            "loss_amount": total_amount,
+            "loss_share_pct": (round(sum(r["loss_share_pct"] for r in rows), 1)
+                               if total_amount else None),
+            "controllable_loss_amount":
+                round(sum(r["loss_amount"] for r in ctrl), 2) if rate is not None else None,
+            "non_controllable_loss_amount":
+                round(sum(r["loss_amount"] for r in nctrl), 2) if rate is not None else None,
+        },
+        # ── The reconciliation, STATED rather than assumed ──────────────────
+        # This section exists to re-attribute a total, never to change it. The
+        # page prints these so a reader can see the two tables agree instead of
+        # being asked to trust it.
+        "reconciliation": {
+            "ore_deviation": b["ore_deviation"],
+            "ob_deviation": b["ob_deviation"],
+            "overall_loss_amount": base["totals"]["loss_amount"],
+            "overall_ore_hours": b["total_ore_loss_hours"],
+            "overall_ob_hours": b["total_ob_loss_hours"],
+            "hours_match": (
+                abs(sum(r["ore_hours"] for r in rows) - b["total_ore_loss_hours"]) < 0.05
+                and abs(sum(r["ob_hours"] for r in rows) - b["total_ob_loss_hours"]) < 0.05),
+            "ore_loss_match":
+                abs(sum(r["planned_ore_loss"] for r in rows) - b["ore_deviation"]) < 1.0,
+            "ob_loss_match":
+                abs(sum(r["planned_ob_loss"] for r in rows) - b["ob_deviation"]) < 25.0,
+            "amount_match": (
+                base["totals"]["loss_amount"] is None or total_amount is None
+                or abs(total_amount - base["totals"]["loss_amount"]) < 5000.0),
+        },
+    }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# KAM Wise Loss Structure
+# ═════════════════════════════════════════════════════════════════════════════
+# The mine's own layout, supplied as a workbook on 11 November 2026. Two parts:
+#
+#   SUMMARY   ORE and OB, each Plan / Actual / -ve Variance / Value, and then
+#             the same variance split per excavator.
+#   STRUCTURE Chief of Mines over SEVEN heads drawn on ONE line, each card
+#             carrying Total / Controllable / Non Controllable in BOTH units
+#             the mine reads -- production variance in MT and its value in
+#             rupees -- with COB Loss on Head COB and the Chief alone.
+#
+# ── IT IS BUILT ON THE EQUIPMENT WISE MATRIX, NOT BESIDE IT ─────────────────
+# One call to get_lcm_by_equipment() supplies the deviation, the costing, the
+# per-machine split and the per-head rows. That is deliberate: the matrix on
+# the page above is the equipment-wise one, and a tree that re-derived its own
+# figures could disagree with the table it is supposed to summarise. The
+# grand totals are identical either way -- both foot to the deviation -- but
+# the per-head attribution differs, and so would each card.
+#
+# ── THE REPORTING LINE DOES NOT ADD UP, AND MUST NOT ────────────────────────
+# Head Electrical and Head Store report to Head Engineering, Head Security to
+# Head Human Resource. The mine asked for all seven on one line, which is also
+# the only arrangement that can be read: each node carries ONLY the loss heads
+# assigned to it, the seven are disjoint, and the root is their sum. Nothing
+# sums through parent_role_code -- it is carried so a card can say who its
+# head reports to, nothing more.
+#
+# ── PRODUCTION VARIANCE IS ORE ONLY ─────────────────────────────────────────
+# By the mine's instruction. Ore is MT and OB is CuM; they cannot be added,
+# and only ore carries an IBM rate, so the MT column and the rupee column
+# describe the same loss. OB is reported in the summary above and stays out of
+# the cards.
+
+#: Nodes that are never drawn as a child card: the Chief is the root, and
+#: Unmapped is shown only when a head nobody has classified lands in it.
+_ROOT_ROLE = "CHIEF"
+
+
+def _money(v: float | None) -> float | None:
+    """Rupees to lakhs, as every card on this structure is labelled."""
+    return None if v is None else round(v / 100000.0, 2)
+
+
+def get_loss_structure(db: Session, from_date: date, to_date: date) -> dict:
+    """The summary and the seven-head loss structure, for one window."""
+    eq = get_lcm_by_equipment(db, from_date, to_date)
+    basis = eq["basis"]
+    rows = eq["rows"]
+    rate = eq["costing"]["weighted_rate"]
+
+    # COB rides alongside: a different plant, a different deviation model and
+    # a different IBM line. It is rupees, so it adds to the root -- but it has
+    # no MT, because what it lost is concentrate, not ore.
+    from app.services.lcm_cob import get_cob_lcm
+    cob = get_cob_lcm(db, from_date, to_date)
+    cob_total = (cob.get("totals") or {}).get("loss_amount")
+
+    settings = lset.resolve_detached(from_date)
+    all_roles = (settings or {}).get("roles") or []
+    if not all_roles:                       # minehub unreachable
+        all_roles = ([{"role_code": CHIEF_OF_MINES["role"],
+                       "title": CHIEF_OF_MINES["title"],
+                       "owner_kam": CHIEF_OF_MINES["owner"], "sl_order": 1,
+                       "parent_role_code": None}]
+                     + [{"role_code": m["role"], "title": m["title"],
+                         "owner_kam": m["owner"], "sl_order": i + 2,
+                         "parent_role_code": CHIEF_OF_MINES["role"]}
+                        for i, m in enumerate(ROLE_META)]
+                     + [{"role_code": ROLE_COB, "title": COB_META["title"],
+                         "owner_kam": COB_META["owner"], "sl_order": 9,
+                         "parent_role_code": CHIEF_OF_MINES["role"]}])
+    by_code = {r["role_code"]: r for r in all_roles}
+    # The employee behind each name, so a card can carry a photo later. Keyed
+    # on the id, never the spelling -- a renamed KAM keeps their photo.
+    emp_of = {k["kam_name"]: k.get("emp_id")
+              for k in ((settings or {}).get("kams") or [])}
+
+    # ── Aggregate the matrix rows onto the nodes ────────────────────────────
+    def blank():
+        return {"ctrl_mt": 0.0, "ctrl_rs": 0.0,
+                "nctrl_mt": 0.0, "nctrl_rs": 0.0,
+                "uncl_mt": 0.0, "uncl_rs": 0.0, "heads": 0, "loss_heads": []}
+
+    buckets = {code: blank() for code in by_code}
+    buckets.setdefault(ROLE_UNMAPPED, blank())
+
+    for r in rows:
+        code = r.get("role") or ROLE_UNMAPPED
+        # A head pointing at a node that no longer exists is SHOWN, in
+        # Unmapped, never dropped -- the root must keep matching the matrix.
+        if code not in buckets or code == _ROOT_ROLE:
+            code = ROLE_UNMAPPED
+        b = buckets[code]
+        mt = r["planned_ore_loss"] or 0.0
+        rs = r["loss_amount"] or 0.0
+        if r["loss_type"] == "Controllable":
+            b["ctrl_mt"] += mt
+            b["ctrl_rs"] += rs
+        elif r["loss_type"] == "Non Controllable":
+            b["nctrl_mt"] += mt
+            b["nctrl_rs"] += rs
+        else:
+            b["uncl_mt"] += mt
+            b["uncl_rs"] += rs
+        b["heads"] += 1
+        # EVERY HEAD IS LISTED, INCLUDING THE ZEROS. The mine's own sheet
+        # carries "Not in operation 0.00" on its face, and it earns its line:
+        # a head the KAM is answerable for that cost nothing this period is a
+        # result, and dropping it would leave the reader unable to tell it
+        # apart from a head nobody has assigned.
+        b["loss_heads"].append({
+            "loss_description": r["loss_description"],
+            "loss_type":        r["loss_type"],
+            "column":           r["column"],
+            "kam":              r["kam"],
+            "variance_mt":      mt,
+            "value_lacs":       _money(rs),
+        })
+
+    rate_available = rate is not None
+
+    def node(code: str) -> dict:
+        meta = by_code.get(code, {"role_code": code, "title": code,
+                                  "owner_kam": None, "sl_order": 999,
+                                  "parent_role_code": None})
+        b = buckets[code]
+        b["loss_heads"].sort(key=lambda x: -(x["variance_mt"] or 0))
+        is_cob = code == ROLE_COB
+        # COB carries ONE figure and no split: LCM for COB attributes the
+        # plant's deviation to causes, and has no controllability dimension
+        # anywhere in it. Zeros here would claim the plant had no controllable
+        # loss, which is a statement nobody has made.
+        ctrl_rs = None if is_cob else round(b["ctrl_rs"], 2) if rate_available else None
+        nctrl_rs = None if is_cob else round(b["nctrl_rs"], 2) if rate_available else None
+        uncl_rs = None if is_cob else round(b["uncl_rs"], 2) if rate_available else None
+        cob_rs = cob_total if is_cob else None
+        total_rs = (cob_total if is_cob
+                    else (round(b["ctrl_rs"] + b["nctrl_rs"] + b["uncl_rs"], 2)
+                          if rate_available else None))
+        owner = meta.get("owner_kam")
+        return {
+            "role_code":        code,
+            "title":            meta.get("title") or code,
+            "owner":            owner,
+            "emp_id":           emp_of.get(owner) if owner else None,
+            "parent_role_code": meta.get("parent_role_code"),
+            "sl_order":         meta.get("sl_order") or 999,
+            "head_count":       b["heads"],
+            # MT is ore only, by the mine's instruction. COB has none -- what
+            # it lost is concentrate at the plant, not ore at the face.
+            "total":            {"variance_mt": None if is_cob else round(b["ctrl_mt"] + b["nctrl_mt"] + b["uncl_mt"], 1),
+                                 "value_lacs": _money(total_rs)},
+            "controllable":     {"variance_mt": None if is_cob else round(b["ctrl_mt"], 1),
+                                 "value_lacs": _money(ctrl_rs)},
+            "non_controllable": {"variance_mt": None if is_cob else round(b["nctrl_mt"], 1),
+                                 "value_lacs": _money(nctrl_rs)},
+            "unclassified":     {"variance_mt": None if is_cob else round(b["uncl_mt"], 1),
+                                 "value_lacs": _money(uncl_rs)},
+            # Shown on Head COB and the Chief alone, per the mine's layout.
+            "cob":              {"variance_mt": None, "value_lacs": _money(cob_rs)},
+            "shows_cob":        is_cob,
+            # What the MT column of this node's list is measured in. Ore at
+            # the face everywhere except COB, whose causes are concentrate at
+            # the plant -- which is exactly why the card itself shows a dash.
+            "loss_heads_unit":  "concentrate_mt" if is_cob else "ore_mt",
+            "loss_heads":       b["loss_heads"],
+        }
+
+    children = [node(c["role_code"]) for c in
+                sorted(all_roles, key=lambda r: r["sl_order"] or 999)
+                if c["role_code"] not in (_ROOT_ROLE, ROLE_UNMAPPED)]
+    if buckets[ROLE_UNMAPPED]["heads"]:
+        children.append({**node(ROLE_UNMAPPED), "title": "Unmapped loss heads"})
+
+    # HEAD COB'S CAUSES COME FROM THE COB MATRIX, NOT THIS ONE. No mines loss
+    # head reports to it -- its money is the plant's own deviation, broken
+    # down by LCM for COB into feed volume, recovery and the two beneath it.
+    # Without this the one card carrying rupees would open on an empty list.
+    for c in children:
+        if c["role_code"] != ROLE_COB:
+            continue
+        c["loss_heads"] = [{
+            "loss_description": r.get("loss_description"),
+            "loss_type":        None,      # COB has no controllability axis
+            "column":           None,
+            "kam":              c["owner"],
+            # Its own tree: Feed grade and Plant efficiency sit under
+            # Recovery / yield, so the list can indent them rather than
+            # reading as six things that add up.
+            "level":            r.get("level") or 1,
+            "parent":           r.get("parent"),
+            "variance_mt":      r.get("loss_mt"),
+            "value_lacs":       _money(r.get("loss_amount")),
+        } for r in (cob.get("rows") or [])]
+
+    # ── The root. Its figures are the sum of its children, by construction ──
+    def across(field: str, unit: str) -> float | None:
+        vals = [c[field][unit] for c in children if c[field][unit] is not None]
+        return round(sum(vals), 1 if unit == "variance_mt" else 2) if vals else None
+
+    root_meta = by_code.get(_ROOT_ROLE, {})
+    root_owner = root_meta.get("owner_kam")
+    root_total_rs = across("total", "value_lacs")
+    root = {
+        "role_code":        _ROOT_ROLE,
+        "title":            root_meta.get("title") or "Chief of Mines",
+        "owner":            root_owner,
+        "emp_id":           emp_of.get(root_owner) if root_owner else None,
+        "parent_role_code": None,
+        "sl_order":         root_meta.get("sl_order") or 1,
+        "head_count":       sum(c["head_count"] for c in children),
+        "total":            {"variance_mt": across("total", "variance_mt"),
+                             "value_lacs": root_total_rs},
+        "controllable":     {"variance_mt": across("controllable", "variance_mt"),
+                             "value_lacs": across("controllable", "value_lacs")},
+        "non_controllable": {"variance_mt": across("non_controllable", "variance_mt"),
+                             "value_lacs": across("non_controllable", "value_lacs")},
+        "unclassified":     {"variance_mt": across("unclassified", "variance_mt"),
+                             "value_lacs": across("unclassified", "value_lacs")},
+        "cob":              {"variance_mt": None, "value_lacs": _money(cob_total)},
+        "shows_cob":        True,
+        "loss_heads_unit":  "ore_mt",
+        # THE CHIEF'S LIST IS EVERY HEAD UNDER HIM, AND IT FOOTS TO HIS CARD.
+        # His Total carries COB, so the list carries a COB line too -- the
+        # alternative is a list that visibly adds up to less than the figure
+        # printed above it. It has no MT, for the same reason the COB card
+        # shows a dash: concentrate at the plant is not ore at the face.
+        "loss_heads": sorted(
+            [h for c in children if c["role_code"] != ROLE_COB
+             for h in c["loss_heads"]],
+            key=lambda x: -(x["variance_mt"] or 0))
+        + ([{"loss_description": "COB Loss", "loss_type": None,
+             "column": None, "kam": by_code.get(ROLE_COB, {}).get("owner_kam"),
+             "variance_mt": None, "value_lacs": _money(cob_total)}]
+           if cob_total else []),
+    }
+
+    # ── The summary block ───────────────────────────────────────────────────
+    # Plan, actual and variance exactly as the matrix computed them, and the
+    # value of the ore shortfall at the plan-weighted IBM rate. OB carries no
+    # value and reports a dash rather than a zero -- waste rock has no price,
+    # which is not the same as being worth nothing to lose.
+    summary = {
+        "ore": {"plan": basis["ore_plan"], "actual": basis["ore_actual"],
+                "variance": basis["ore_deviation"], "unit": "MT",
+                "value_lacs": _money(eq["totals"]["loss_amount"])},
+        "ob":  {"plan": basis["ob_plan"], "actual": basis["ob_actual"],
+                "variance": basis["ob_deviation"], "unit": "CuM",
+                "value_lacs": None},
+    }
+
+    equipment = []
+    for m in eq["machines"]:
+        t = eq["machine_totals"].get(m["equipment_name"], {})
+        equipment.append({
+            "equipment_name": m["equipment_name"],
+            "side":           m["side"],
+            "unit":           m["unit"],
+            "capacity":       m["capacity"],
+            "variance":       t.get("planned_loss"),
+            "value_lacs":     _money(t.get("loss_amount")),
+            "carries_share":  m["carries_share"],
+            "reason":         m["reason"],
+        })
+
+    return {
+        "from_date": from_date.isoformat(),
+        "to_date":   to_date.isoformat(),
+        "summary":   summary,
+        "equipment": equipment,
+        "root":      root,
+        "nodes":     children,
+        "rate_available": rate_available,
+        "costing":   eq["costing"],
+        "plan":      eq["plan"],
+        "capacity_source": eq["capacity_source"],
+        # ── Stated, not assumed ────────────────────────────────────────────
+        # The structure re-cuts a total it must not change. These are what a
+        # reader would otherwise have to check by adding up seven cards.
+        "reconciliation": {
+            "ore_deviation":        basis["ore_deviation"],
+            "matrix_value_lacs":    _money(eq["totals"]["loss_amount"]),
+            "cob_value_lacs":       _money(cob_total),
+            "root_mt":              root["total"]["variance_mt"],
+            "root_value_lacs":      root["total"]["value_lacs"],
+            "expected_value_lacs":  _money((eq["totals"]["loss_amount"] or 0.0)
+                                           + (cob_total or 0.0))
+                                    if rate_available else None,
+            "mt_matches": (root["total"]["variance_mt"] is not None
+                           and abs(root["total"]["variance_mt"]
+                                   - basis["ore_deviation"]) < 1.0),
+            "value_matches": (
+                not rate_available
+                or (root["total"]["value_lacs"] is not None
+                    and abs(root["total"]["value_lacs"]
+                            - _money((eq["totals"]["loss_amount"] or 0.0)
+                                     + (cob_total or 0.0))) < 0.05)),
         },
     }

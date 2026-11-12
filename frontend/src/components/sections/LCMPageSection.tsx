@@ -4,9 +4,10 @@ import { Check, Download, Factory, Info, Layers } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import FormulaModal from "@/components/sections/FormulaModal";
-import KamLossTreeSection from "@/components/sections/KamLossTreeSection";
+import LCMByEquipmentSection from "@/components/sections/LCMByEquipmentSection";
 import LCMCobSection from "@/components/sections/LCMCobSection";
 import LCMSection from "@/components/sections/LCMSection";
+import LossStructureSection from "@/components/sections/LossStructureSection";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import { withExportMode } from "@/contexts/useExportMode";
 import { useLCM } from "@/hooks/useLCM";
@@ -163,9 +164,18 @@ export default function LCMPageSection() {
         </div>
       </div>
 
-      {/* The mines matrix: the deviation, the loss heads it is distributed
-          across, and what each one cost. */}
-      <LCMSection />
+      {/* The mines block: the deviation, the basis it was computed on, what
+          it cost, and the loss heads it is distributed across.
+
+          THE MATRIX ITSELF IS THE EQUIPMENT WISE ONE, passed in here. There
+          were two until 11 November 2026 — the same 25 heads and the same ten
+          columns, one giving every machine on a side a single rate and one
+          giving each machine its own — and the mine asked for the weaker of
+          the two to go. LCMSection still OWNS the calculation: the cards, the
+          plan provenance, the costing basis and the loss pie are all built on
+          get_lcm(), and the equipment-wise figures are a decomposition of its
+          deviation rather than a separate measurement. */}
+      <LCMSection beforeMatrix={<LCMByEquipmentSection />} />
 
       {/* ── LCM for COB — the beneficiation plant, below the mines matrix ──
           A separate block rather than extra columns on the matrix above: the
@@ -187,9 +197,25 @@ export default function LCMPageSection() {
 
       <LCMCobSection />
 
-      {/* Re-cut of the LCM figures by accountability head. Sits after both
-          blocks because it is derived from them, not a new measurement. */}
-      <KamLossTreeSection />
+      {/* ── KAM Wise Loss Structure — the mine's own layout ───────────────
+          Sits ABOVE the existing tree, which it will eventually replace. Both
+          re-cut the same loss by accountability head and both are derived
+          rather than measured; this one follows the workbook the mine
+          supplied on 11 November 2026 — seven heads on one line, production
+          variance in MT beside its value in rupees, and the ORE/OB and
+          per-excavator summary above it.
+
+          It reads the EQUIPMENT WISE matrix, so it agrees with the table on
+          this page.
+
+          THE OLD "KAM WISE LOSS TREE" STOOD BELOW THIS and was removed on the
+          mine's instruction, 12 November 2026. It re-cut the same deviation
+          from the OVERALL matrix rather than the equipment-wise one, so the
+          two agreed on the root and differed slightly per node — two answers
+          to one question, which is worse than one. Its component, its hook
+          and its /api/oee/lcm/kam-tree endpoint went with it; this section is
+          its successor. */}
+      <LossStructureSection />
 
     </div>
   );

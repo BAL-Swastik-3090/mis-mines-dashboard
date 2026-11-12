@@ -40,7 +40,10 @@ export default function KamPicker({ mode, linkTo, onClose, onDone }: {
   mode: "add" | "link";
   linkTo?: string;
   onClose: () => void;
-  onDone: () => void | Promise<void>;
+  /** Handed the KAM name that was added or linked, so a caller that opened
+   *  this to fill a particular field can select it without the user hunting
+   *  for the name they just typed in a dropdown of nine. */
+  onDone: (kamName?: string) => void | Promise<void>;
 }) {
   const [term, setTerm] = useState("");
   const [rows, setRows] = useState<Employee[]>([]);
@@ -84,14 +87,19 @@ export default function KamPicker({ mode, linkTo, onClose, onDone }: {
     if (!picked) return;
     setBusy(true); setError(null);
     try {
+      let saved: string | undefined;
       if (mode === "link") {
         await api.patch("/oee-settings/kams",
           { kam_name: linkTo, emp_id: picked.emp_id });
+        saved = linkTo;
       } else {
-        await api.post("/oee-settings/kams",
+        const r = await api.post("/oee-settings/kams",
           { emp_id: picked.emp_id, kam_name: name.trim() });
+        // The server has the last word on the stored name — it falls back to
+        // a title-cased SAP name when the box is left empty.
+        saved = r.data?.kam_name ?? name.trim();
       }
-      await onDone();
+      await onDone(saved);
       onClose();
     } catch (e) {
       const d = (e as { response?: { data?: { detail?: unknown } } })
