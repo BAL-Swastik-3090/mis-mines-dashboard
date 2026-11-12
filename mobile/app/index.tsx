@@ -12,6 +12,7 @@ import { useCallback, useState } from 'react';
 import { View, Text, Pressable, ScrollView, StyleSheet, RefreshControl } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCapture } from '@/ui/useCapture';
+import { useSync } from '@/ui/useSync';
 import * as session from '@/core/capture/session';
 import * as masters from '@/core/capture/masters';
 import {
@@ -31,6 +32,11 @@ export default function Home() {
   const [refreshing, setRefreshing] = useState(false);
   const [track, setTrack] = useState<{ wanted: boolean; running: boolean; queued: number } | null>(null);
   const [trackProblem, setTrackProblem] = useState<string | null>(null);
+
+  const runSync = useSync((s) => s.run);
+  const syncing = useSync((s) => s.running);
+  const lastReport = useSync((s) => s.lastReport);
+  const [sendNote, setSendNote] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!store) return;
@@ -84,6 +90,42 @@ export default function Home() {
           </Text>
         )}
       </Pressable>
+
+      {/* ── sending by hand, when sending by itself has not worked ───────
+          The app syncs on open, on reconnect and after a capture, and most of
+          the time nobody needs this. But "most of the time" is not a plan: a
+          tablet that has quietly failed to send for two days needs somebody
+          able to DO something about it where they are standing, not a screen
+          telling them to bring it within signal when it already is.
+          So the button is here, on the first screen, whenever anything is
+          waiting -- and it says what the server actually said when it fails,
+          because "sync failed" is not something anybody can act on. */}
+      {waiting + (outbox?.photos ?? 0) > 0 && (
+        <View style={styles.sendBox}>
+          <Pressable
+            testID="send-now"
+            disabled={syncing}
+            style={[styles.send, syncing && styles.sendOff]}
+            onPress={async () => {
+              setSendNote(null);
+              const r = await runSync({ force: true, refreshMasters: true });
+              await load();
+              if (!r) { setSendNote('Could not reach the office. Try again within signal.'); return; }
+              const sent = r.sessionsSent + r.photosSent;
+              setSendNote(
+                r.problems.length > 0 ? r.problems.join(' ')
+                : sent > 0 ? `Sent ${r.sessionsSent} handover(s) and ${r.photosSent} photo(s).`
+                : 'Nothing could be sent. The office could not be reached.');
+            }}
+          >
+            <Text style={styles.sendText}>{syncing ? 'Sending…' : 'Send now'}</Text>
+          </Pressable>
+          {sendNote && <Text style={styles.sendNote}>{sendNote}</Text>}
+          {!sendNote && lastReport && lastReport.problems.length > 0 && (
+            <Text style={styles.sendNote}>{lastReport.problems[0]}</Text>
+          )}
+        </View>
+      )}
 
       {/* ── position reporting ───────────────────────────────────────────
           Shown only when the office has asked for it AND Android is not
@@ -157,6 +199,12 @@ export default function Home() {
 }
 
 const styles = StyleSheet.create({
+  sendBox: { gap: 6 },
+  send: { minHeight: 64, borderRadius: 10, backgroundColor: '#1e5f8a',
+          alignItems: 'center', justifyContent: 'center' },
+  sendOff: { backgroundColor: '#aeb8c4' },
+  sendText: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  sendNote: { fontSize: 13, color: '#5b6a7a', textAlign: 'center' },
   screen: { flex: 1, backgroundColor: '#f3f6f9' },
   content: { padding: 16, gap: 14 },
 
