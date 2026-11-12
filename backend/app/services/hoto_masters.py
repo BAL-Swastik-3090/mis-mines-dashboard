@@ -140,6 +140,11 @@ def assets(db: Session, *, plant_id: int | None = None) -> list[dict[str, Any]]:
     """
     rows = db.execute(text("""
         SELECT a.asset_id, a.fleet_code, a.nickname,
+               -- What is painted on the vehicle. The number a person at the
+               -- gate or in a yard actually recognises, and the one a cab
+               -- sticker has to carry so somebody can tell at a glance that
+               -- the sticker belongs to the machine it is stuck to.
+               a.registration_no,
                a.asset_type_id, at.name AS asset_type_name,
                a.asset_ref AS qr_code,
                a.reading_uom AS meter_uom,

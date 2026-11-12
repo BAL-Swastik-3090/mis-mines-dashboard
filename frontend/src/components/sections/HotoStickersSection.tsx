@@ -35,9 +35,27 @@ import api from "@/lib/api";
 interface Asset {
   asset_id: number;
   fleet_code: string;
+  nickname: string | null;
+  /** What is painted on the vehicle. Null on the machines that never go on a road. */
+  registration_no: string | null;
   asset_type_name: string;
   qr_code: string | null;
   plant_name?: string | null;
+}
+
+/**
+ * The nickname, only when it says something the fleet code does not.
+ *
+ * Most of this fleet's nicknames are the fleet code with the punctuation
+ * changed -- "AL-1" is nicknamed "AL 1", "BD-80-15306" is nicknamed
+ * "BD-80-15306". Printing both would put the same word twice on a sticker the
+ * size of a postcard and teach an operator to stop reading it.
+ */
+function usefulNickname(a: Asset): string | null {
+  const n = (a.nickname ?? "").trim();
+  if (!n) return null;
+  const flat = (x: string) => x.toUpperCase().replace(/[^A-Z0-9]+/g, "");
+  return flat(n) === flat(a.fleet_code) ? null : n;
 }
 
 /** Error correction M: a sticker in a cab gets scratched and greasy. */
@@ -78,7 +96,11 @@ export default function HotoStickersSection() {
     const q = norm(search);
     return assets.filter((a) =>
       (!type || a.asset_type_name === type) &&
-      (!q || norm(a.fleet_code).includes(q) || norm(a.qr_code ?? "").includes(q)));
+      (!q || norm(a.fleet_code).includes(q) || norm(a.qr_code ?? "").includes(q)
+           || norm(a.nickname ?? "").includes(q)
+           // By the number painted on it, which is how somebody in a yard
+           // knows which machine they are looking at.
+           || norm(a.registration_no ?? "").includes(q)));
   }, [assets, search, type]);
 
   const sheet = useMemo(
@@ -155,7 +177,7 @@ export default function HotoStickersSection() {
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
             <input
               value={search} onChange={(e) => setSearch(e.target.value)}
-              placeholder="man 11, EQP-2026…"
+              placeholder="man 11, OD 04 H…, EQP-2026…"
               className="pl-7 pr-2 py-1.5 text-sm rounded-md border border-border bg-background w-56"
             />
           </div>
@@ -208,8 +230,18 @@ export default function HotoStickersSection() {
                       <input type="checkbox" readOnly disabled={!a.qr_code}
                              checked={picked.has(a.asset_id)} />
                     </td>
-                    <td className="px-2 py-1.5 font-medium">{a.fleet_code}</td>
+                    <td className="px-2 py-1.5 font-medium">
+                      {a.fleet_code}
+                      {usefulNickname(a) && (
+                        <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+                          {usefulNickname(a)}
+                        </span>
+                      )}
+                    </td>
                     <td className="px-2 py-1.5 text-xs text-muted-foreground">{a.asset_type_name}</td>
+                    <td className="px-2 py-1.5 text-xs font-medium">
+                      {a.registration_no ?? <span className="opacity-40">—</span>}
+                    </td>
                     <td className="px-2 py-1.5 text-xs text-muted-foreground font-mono">
                       {a.qr_code ?? "no reference"}
                     </td>
@@ -234,9 +266,27 @@ export default function HotoStickersSection() {
               <div className="text-xl font-extrabold tracking-tight text-center leading-tight">
                 {a.fleet_code}
               </div>
-              <div className="text-[10px] uppercase tracking-wide text-center -mt-1">
+              {usefulNickname(a) && (
+                <div className="text-[11px] font-medium text-center -mt-1 leading-tight">
+                  {usefulNickname(a)}
+                </div>
+              )}
+              <div className="text-[10px] uppercase tracking-wide text-center -mt-0.5">
                 {a.asset_type_name}
               </div>
+              {/* The number painted on the vehicle, boxed so it reads as the
+                  one thing to check against the machine you are standing at.
+                  Absent on the machines that never go on a road, and saying
+                  so beats leaving a blank that looks like a printing fault. */}
+              {a.registration_no ? (
+                <div className="text-[13px] font-bold tracking-wide text-center border border-black/70 rounded px-2 py-0.5">
+                  {a.registration_no}
+                </div>
+              ) : (
+                <div className="text-[9px] uppercase tracking-wide text-center opacity-60">
+                  not road registered
+                </div>
+              )}
               {codes.get(a.asset_id) ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={codes.get(a.asset_id)} alt={`QR for ${a.fleet_code}`}
