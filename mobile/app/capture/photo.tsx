@@ -27,6 +27,7 @@ import * as Crypto from 'expo-crypto';
 import * as Location from 'expo-location';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCapture } from '@/ui/useCapture';
+import { hashPhotoFile } from '@/core/capture/photoHash';
 
 const LONG_EDGE = 1600;
 const QUALITY = 0.7;
@@ -86,12 +87,9 @@ export default function Photo() {
       const info = await FileSystem.getInfoAsync(small.uri, { size: true });
       const bytes = info.exists && 'size' in info ? info.size : 0;
 
-      const base64 = await FileSystem.readAsStringAsync(small.uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      const sha256 = await Crypto.digestStringAsync(
-        Crypto.CryptoDigestAlgorithm.SHA256, base64,
-      );
+      // The BYTES, not the base64 text. See core/capture/photoHash.ts for what
+      // hashing the wrong thing here cost.
+      const sha256 = await hashPhotoFile(small.uri);
 
       // WHERE IT WAS TAKEN. The server has had columns for this since
       // migration 109 and this app never once filled them, so every photo

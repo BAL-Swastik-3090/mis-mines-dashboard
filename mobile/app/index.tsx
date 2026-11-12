@@ -112,10 +112,15 @@ export default function Home() {
               await load();
               if (!r) { setSendNote('Could not reach the office. Try again within signal.'); return; }
               const sent = r.sessionsSent + r.photosSent;
+              // "Nothing was due" and "could not be reached" are different
+              // facts. Saying the second when the first is true sends somebody
+              // looking for a network problem that is not there.
               setSendNote(
                 r.problems.length > 0 ? r.problems.join(' ')
                 : sent > 0 ? `Sent ${r.sessionsSent} handover(s) and ${r.photosSent} photo(s).`
-                : 'Nothing could be sent. The office could not be reached.');
+                : r.stillQueued > 0
+                  ? 'Could not reach the office. It is still waiting here.'
+                  : 'Nothing was waiting to be sent.');
             }}
           >
             <Text style={styles.sendText}>{syncing ? 'Sending…' : 'Send now'}</Text>

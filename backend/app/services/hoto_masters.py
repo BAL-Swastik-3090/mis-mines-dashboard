@@ -141,7 +141,28 @@ def assets(db: Session, *, plant_id: int | None = None) -> list[dict[str, Any]]:
                a.asset_type_id, at.name AS asset_type_name,
                a.asset_ref AS qr_code,
                a.reading_uom AS meter_uom,
-               a.current_reading AS last_meter_reading,
+               -- THE HIGHEST READING ANYBODY HAS RECORDED, not just the
+               -- fleet's own column.
+               --
+               -- `asset.current_reading` is maintained by other parts of the
+               -- platform and is null for most of this fleet, so a device that
+               -- trusted it alone had no previous value to compare against --
+               -- and the check that refuses a meter running backwards,
+               -- which exists on both sides, could never fire. A tablet
+               -- cheerfully filed MAN-11 at 50 hours the day after it was
+               -- recorded at 7650. Found on a tablet, 12 Nov 2026.
+               --
+               -- GREATEST, because a meter only goes up: whichever source is
+               -- further ahead is the one that has seen the machine more
+               -- recently. Read-only -- nothing here writes to the fleet's
+               -- own column, which another platform owns.
+               GREATEST(
+                 a.current_reading,
+                 (SELECT max(s.meter_reading) FROM hoto_session s
+                   WHERE s.asset_id = a.asset_id
+                     AND s.meter_reading IS NOT NULL
+                     AND s.status <> 'CANCELLED')
+               ) AS last_meter_reading,
                a.reading_as_on AS last_meter_at,
                a.home_location_id, a.plant_id,
                a.status,

@@ -20,7 +20,8 @@ import { useSync } from '@/ui/useSync';
 import Enrol from './enrol';
 import { BACKGROUND_TASK, registerBackgroundSync, useSyncTriggers } from '@/ui/syncTriggers';
 import { httpTransport } from '@/core/sync/transport';
-import { syncNow } from '@/core/sync/engine';
+import { setRehash, syncNow } from '@/core/sync/engine';
+import { hashPhotoFile } from '@/core/capture/photoHash';
 import { storedBaseUrl, storedToken } from '@/core/sync/enrolment';
 import { applyTrackingSettings } from '@/core/location/tracker';
 
@@ -57,6 +58,10 @@ TaskManager.defineTask(BACKGROUND_TASK, async () => {
                '(expected in Expo Go). Sync on open, on reconnect, after a ' +
                'capture and the Sync now button all still work.');
 }
+
+// The engine re-hashes a refused photo from its file; this is where the real
+// implementation is supplied (the tests supply their own).
+setRehash(hashPhotoFile);
 
 export default function RootLayout() {
   const attach = useCapture((s) => s.attach);

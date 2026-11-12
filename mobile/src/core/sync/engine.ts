@@ -301,7 +301,19 @@ interface PhotoRow {
   sync_attempts: number; last_attempt_at?: string | null;
   kind?: string | null;
   lat?: number | null; lon?: number | null; accuracy_m?: number | null;
+  /** When this photo's hash was recomputed after a mismatch. Once only. */
+  rehashed_at?: string | null;
 }
+
+/**
+ * Re-read a photo and hash its bytes.
+ *
+ * Injected rather than imported so the engine stays testable without a file
+ * system -- the tests supply their own, the app supplies the real one.
+ */
+let rehash: (uri: string) => Promise<string> =
+  async () => { throw new Error('no re-hash function has been installed'); };
+export function setRehash(fn: (uri: string) => Promise<string>): void { rehash = fn; }
 
 /**
  * Photos whose session has already synced.
@@ -316,7 +328,8 @@ export async function duePhotos(
 ): Promise<PhotoRow[]> {
   const rows = await store.getAllAsync<PhotoRow>(
     `SELECT p.photo_uuid, p.session_uuid, p.item_id, p.local_path, p.sha256,
-            p.captured_at, p.sync_attempts, p.kind, p.lat, p.lon, p.accuracy_m
+            p.captured_at, p.sync_attempts, p.kind, p.lat, p.lon, p.accuracy_m,
+            p.rehashed_at
        FROM photo p
        JOIN session s ON s.client_uuid = p.session_uuid
       WHERE p.sync_state IN ('queued', 'sending')
@@ -371,11 +384,47 @@ async function sendPhoto(store: Store, transport: Transport, p: PhotoRow,
       await log(store, 'PHOTO', p.photo_uuid, false, 409, 'session not filed yet');
       return;
     }
-    // The bytes did not survive. Queued again: the file on disk is still
-    // intact, and the next attempt re-reads it.
+    // The hash the server computed does not match the one sent. Re-reading
+    // the file and hashing it again is the whole remedy when the stored hash
+    // was computed wrongly -- which, for every photo taken before 12 Nov
+    // 2026, it was (see core/capture/photoHash.ts). Without this those rows
+    // retry for ever and the queue never drains.
+    //
+    // Done once per photo, guarded by rehashed_at, because if the file really
+    // has gone bad then re-hashing it just produces a new wrong answer and
+    // the loop is the same loop.
+    if (!p.rehashed_at) {
+      try {
+        const fresh = await rehash(p.local_path);
+        await store.runAsync(
+          `UPDATE photo SET sha256 = ?, rehashed_at = ?, sync_state = 'queued',
+                            sync_attempts = sync_attempts + 1
+            WHERE photo_uuid = ?`,
+          [fresh, now.toISOString(), p.photo_uuid]);
+        await log(store, 'PHOTO', p.photo_uuid, false, 409,
+                  'hash did not match; recomputed from the file');
+        return;
+      } catch {
+        // Could not read it back at all -- no re-hash function installed, or
+        // the file is unreadable this moment. Keep it queued, which is the
+        // old behaviour and the safe one: a photo is evidence, and refusing
+        // it because this device could not open it once is worse than
+        // carrying it.
+        await store.runAsync(
+          `UPDATE photo SET sync_state = 'queued', sync_attempts = sync_attempts + 1
+            WHERE photo_uuid = ?`, [p.photo_uuid]);
+        await log(store, 'PHOTO', p.photo_uuid, false, 409, why);
+        return;
+      }
+    }
+
+    // Re-hashed once already and still refused. The bytes really are not what
+    // the device thinks they are, and sending them again gets the same answer.
     await store.runAsync(
-      `UPDATE photo SET sync_state = 'queued', sync_attempts = sync_attempts + 1
-        WHERE photo_uuid = ?`, [p.photo_uuid]);
+      `UPDATE photo SET sync_state = 'rejected', sync_error = ?
+        WHERE photo_uuid = ?`, [why, p.photo_uuid]);
+    report.photosRefused++;
+    report.problems.push('A photo could not be sent: ' + why);
     await log(store, 'PHOTO', p.photo_uuid, false, 409, why);
     return;
   }

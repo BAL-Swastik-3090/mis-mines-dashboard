@@ -23,7 +23,7 @@
  * unsynced handovers, and it lives in a cab.
  */
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /** Run in order, inside one transaction, on first open and on upgrade. */
 export const MIGRATIONS: readonly string[][] = [
@@ -306,5 +306,16 @@ export const MIGRATIONS: readonly string[][] = [
     // Whether the routine checks were answered together rather than one at a
     // time. Travels with the handover so the office can see it on the record.
     `ALTER TABLE session ADD COLUMN bulk_answered INTEGER NOT NULL DEFAULT 0;`,
+  ],
+
+  // ── 4 · a photo whose hash was computed wrongly can be put right ─────────
+  // Every photo taken before 12 Nov 2026 carries the sha256 of its base64
+  // TEXT rather than of its bytes, so the server refuses it as corrupt and
+  // the device retries for ever. The engine now re-reads and re-hashes such a
+  // photo ONCE; this records that it did, so a photo whose bytes really have
+  // gone bad is refused honestly instead of looping.
+  [
+    `ALTER TABLE photo ADD COLUMN rehashed_at TEXT;`,
+    `ALTER TABLE photo ADD COLUMN sync_error TEXT;`,
   ],
 ];
