@@ -118,6 +118,9 @@ export default function Home() {
               setSendNote(
                 r.problems.length > 0 ? r.problems.join(' ')
                 : sent > 0 ? `Sent ${r.sessionsSent} handover(s) and ${r.photosSent} photo(s).`
+                : r.photosAwaitingSession > 0 && r.stillQueued === r.photosAwaitingSession
+                  ? `${r.photosAwaitingSession} photo(s) belong to a handover `
+                    + 'nobody has confirmed yet. Finish it and they go with it.'
                 : r.stillQueued > 0
                   ? 'Could not reach the office. It is still waiting here.'
                   : 'Nothing was waiting to be sent.');

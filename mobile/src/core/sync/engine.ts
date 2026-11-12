@@ -60,6 +60,9 @@ export interface SyncReport {
   photosSent: number;
   photosRefused: number;
   locationsSent: number;
+  /** Photos held back because the handover they belong to is still a draft.
+   *  Not a failure: nothing was attempted for them. */
+  photosAwaitingSession: number;
   /** How many machines this device now holds. Null when masters were not refreshed. */
   machinesCached: number | null;
   /** The device's clock against the server's, in seconds. */
@@ -140,7 +143,8 @@ export async function syncNow(args: {
 
   const report: SyncReport = {
     sessionsSent: 0, sessionsRefused: 0, photosSent: 0, photosRefused: 0,
-    locationsSent: 0, machinesCached: null, clockDriftSeconds: null,
+    locationsSent: 0, photosAwaitingSession: 0,
+    machinesCached: null, clockDriftSeconds: null,
     stillQueued: 0, mastersRefreshed: false, problems: [], retryAfterSeconds: null,
   };
 
@@ -199,6 +203,15 @@ export async function syncNow(args: {
       await log(store, 'MASTERS', null, false, r.status, null);
     }
   }
+
+  // A photo on an unconfirmed draft is not waiting on the network -- it is
+  // waiting on somebody to finish the handover. Counted separately so the
+  // screen does not send them hunting a connection problem that is not there.
+  const held = await store.getFirstAsync<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM photo p
+       JOIN session s ON s.client_uuid = p.session_uuid
+      WHERE p.sync_state IN ('queued','sending') AND s.sync_state <> 'synced'`);
+  report.photosAwaitingSession = held?.n ?? 0;
 
   const left = await store.getFirstAsync<{ n: number }>(
     `SELECT COUNT(*) AS n FROM session WHERE sync_state IN ('queued','sending')`);
