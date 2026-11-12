@@ -17,6 +17,7 @@ import * as session from '@/core/capture/session';
 import type { Advisory, SessionRow } from '@/core/capture/session';
 import type { ChecklistItem, RawResponse, SessionVerdict } from '@/core/evaluation';
 import type { IdentificationMethod, SessionType } from '@/core/enums';
+import { planRoutineAnswers } from '@/core/routine';
 
 interface CaptureState {
   store: Store | null;
@@ -26,6 +27,8 @@ interface CaptureState {
   template: ResolvedTemplate | null;
   row: SessionRow | null;
   answers: Map<number, RawResponse>;
+  /** The routine checks were answered together rather than one at a time. */
+  bulkAnswered: boolean;
   advisories: Advisory[];
   verdict: SessionVerdict | null;
   blockers: string[];
@@ -36,6 +39,8 @@ interface CaptureState {
   resume: (uuid: string) => Promise<boolean>;
   identify: (op: CachedOperator, how: IdentificationMethod) => Promise<void>;
   setAnswer: (item: ChecklistItem, raw: RawResponse) => Promise<void>;
+  /** Answer every routine check at once. Returns how many it filled. */
+  answerRoutineChecks: () => Promise<number>;
   setReadings: (r: { meterReading?: number; fuelLevel?: number; remarks?: string }) => Promise<void>;
   refreshVerdict: () => Promise<void>;
   confirm: (by: string) => Promise<{ queued: boolean; status: string; problems: string[] }>;
@@ -50,6 +55,7 @@ const need = (s: Store | null): Store => {
 export const useCapture = create<CaptureState>()((set, get) => ({
   store: null, uuid: null, asset: null, operator: null, template: null,
   row: null, answers: new Map(), advisories: [], verdict: null, blockers: [],
+  bulkAnswered: false,
   busy: false,
 
   attach: (store) => set({ store }),
@@ -113,6 +119,45 @@ export const useCapture = create<CaptureState>()((set, get) => ({
     });
   },
 
+  /**
+   * Mark the routine checks OK in one action.
+   *
+   * ── WHAT IT DELIBERATELY WILL NOT TOUCH ────────────────────────────────
+   * Anything critical -- the checks that stop a machine -- and anything that
+   * takes a reading. A button that could pass a brake test nobody made is not
+   * a convenience, it is the failure a checklist exists to prevent. Those are
+   * answered one at a time or not at all.
+   *
+   * The rest is drudgery: twenty-odd taps on a shift where nothing is wrong,
+   * which is most shifts. Friction there is what sends a section back to
+   * paper, and paper records nothing at all.
+   *
+   * The handover records that this was used (`bulk_answered`), so a record
+   * filled in one tap is not indistinguishable from a walk-round. See
+   * migration 111.
+   */
+  answerRoutineChecks: async () => {
+    const { template, answers, setAnswer } = get();
+    if (!template) return 0;
+    // The rule itself lives in core/routine.ts, with tests against it. This
+    // only carries out the plan.
+    const plan = planRoutineAnswers(template.items, answers);
+    for (const { item, answer } of plan.fill) {
+      const existing = answers.get(item.itemId) ?? { itemId: item.itemId };
+      await setAnswer(item, { ...existing, answer });
+    }
+    const filled = plan.fill.length;
+    if (filled > 0) {
+      const { store, uuid } = get();
+      if (store && uuid) {
+        await store.runAsync(
+          `UPDATE session SET bulk_answered = 1 WHERE client_uuid = ?`, [uuid]);
+      }
+      set({ bulkAnswered: true });
+    }
+    return filled;
+  },
+
   setAnswer: async (item, raw) => {
     const { store, uuid } = get();
     if (!uuid) return;
@@ -156,5 +201,6 @@ export const useCapture = create<CaptureState>()((set, get) => ({
   discard: () => set({
     uuid: null, asset: null, operator: null, template: null, row: null,
     answers: new Map(), advisories: [], verdict: null, blockers: [],
+    bulkAnswered: false,
   }),
 }));

@@ -24,6 +24,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system';
 import * as Crypto from 'expo-crypto';
+import * as Location from 'expo-location';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCapture } from '@/ui/useCapture';
 
@@ -32,7 +33,8 @@ const QUALITY = 0.7;
 
 export default function Photo() {
   const router = useRouter();
-  const { itemId } = useLocalSearchParams<{ itemId?: string }>();
+  const { itemId, kind } = useLocalSearchParams<{ itemId?: string; kind?: string }>();
+  const isOperator = kind === 'operator';
   const store = useCapture((s) => s.store);
   const uuid = useCapture((s) => s.uuid);
   const answers = useCapture((s) => s.answers);
@@ -45,6 +47,9 @@ export default function Photo() {
   const [error, setError] = useState<string | null>(null);
 
   const item = template?.items.find((i) => String(i.itemId) === itemId);
+  // An operator photo belongs to the handover, not to a check, so it has no
+  // item and must not be gated on finding one.
+  const ready = isOperator ? Boolean(uuid && store) : Boolean(uuid && store && item);
 
   if (!permission) return <View style={styles.screen}><ActivityIndicator /></View>;
 
@@ -53,8 +58,9 @@ export default function Photo() {
       <View style={[styles.screen, styles.centre]}>
         <Text style={styles.title}>The camera is not allowed</Text>
         <Text style={styles.note}>
-          A photo is required for this check. Without the camera it cannot be
-          completed on the tablet.
+          {isOperator
+            ? 'A photo of the operator is required before a handover can start.'
+            : 'A photo is required for this check. Without the camera it cannot be completed on the tablet.'}
         </Text>
         <Pressable style={styles.primary} onPress={() => void requestPermission()}>
           <Text style={styles.primaryText}>Allow the camera</Text>
@@ -64,7 +70,7 @@ export default function Photo() {
   }
 
   const take = async () => {
-    if (!camera.current || !uuid || !store || !item) return;
+    if (!camera.current || !ready) return;
     setSaving(true);
     setError(null);
     try {
@@ -87,18 +93,44 @@ export default function Photo() {
         Crypto.CryptoDigestAlgorithm.SHA256, base64,
       );
 
+      // WHERE IT WAS TAKEN. The server has had columns for this since
+      // migration 109 and this app never once filled them, so every photo
+      // filed so far says nothing about where it was. For a picture of a
+      // machine in a pit that is most of what makes it evidence.
+      //
+      // Best effort, and never a reason to lose the photo: a fix can take
+      // several seconds under a tipper body, and a photo without coordinates
+      // is worth far more than no photo at all.
+      let lat: number | null = null;
+      let lon: number | null = null;
+      let acc: number | null = null;
+      try {
+        const fix = await Promise.race([
+          Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+          new Promise<null>((r) => setTimeout(() => r(null), 6000)),
+        ]);
+        if (fix) {
+          lat = fix.coords.latitude;
+          lon = fix.coords.longitude;
+          acc = fix.coords.accuracy ?? null;
+        }
+      } catch { /* no fix; the photo still stands */ }
+
       const photoUuid = Crypto.randomUUID();
-      await store.runAsync(
+      await store!.runAsync(
         `INSERT INTO photo (photo_uuid, session_uuid, item_id, local_path, bytes,
-                            sha256, sync_state, captured_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'queued', ?)`,
-        [photoUuid, uuid, item.itemId, small.uri, bytes, sha256, new Date().toISOString()],
+                            sha256, sync_state, captured_at, kind, lat, lon, accuracy_m)
+         VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
+        [photoUuid, uuid, isOperator ? null : item!.itemId, small.uri, bytes, sha256,
+         new Date().toISOString(), isOperator ? 'OPERATOR' : 'ITEM', lat, lon, acc],
       );
 
-      // Re-evaluate the item now that it has evidence, so the checklist stops
-      // asking for a photo the moment one exists.
-      const raw = answers.get(item.itemId) ?? { itemId: item.itemId };
-      await setAnswer(item, { ...raw, photoCount: (raw.photoCount ?? 0) + 1 });
+      if (!isOperator && item) {
+        // Re-evaluate the item now that it has evidence, so the checklist stops
+        // asking for a photo the moment one exists.
+        const raw = answers.get(item.itemId) ?? { itemId: item.itemId };
+        await setAnswer(item, { ...raw, photoCount: (raw.photoCount ?? 0) + 1 });
+      }
 
       router.back();
     } catch (e) {
@@ -110,9 +142,12 @@ export default function Photo() {
 
   return (
     <View style={styles.screen}>
-      <CameraView ref={camera} style={StyleSheet.absoluteFill} facing="back" />
+      <CameraView ref={camera} style={StyleSheet.absoluteFill}
+                  facing={isOperator ? 'front' : 'back'} />
       <View style={styles.overlay}>
-        <Text style={styles.what}>{item?.label ?? 'Evidence'}</Text>
+        <Text style={styles.what}>
+          {isOperator ? 'Photo of the operator' : (item?.label ?? 'Evidence')}
+        </Text>
         {error && <Text style={styles.error}>{error}</Text>}
         <Pressable testID="shutter" style={styles.shutter} disabled={saving}
                    onPress={() => void take()}>

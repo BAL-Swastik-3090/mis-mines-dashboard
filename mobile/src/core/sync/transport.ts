@@ -91,7 +91,8 @@ export function httpTransport(cfg: TransportConfig): Transport {
       body: JSON.stringify({ fixes }),
     }),
 
-    postPhoto: async ({ photoUuid, clientUuid, itemId, localPath, sha256, capturedAt }) => {
+    postPhoto: async ({ photoUuid, clientUuid, itemId, localPath, sha256, capturedAt,
+                        kind, lat, lon, accuracyM }) => {
       const base = await cfg.baseUrl();
       if (!base) throw new Error('this tablet has not been set up yet');
       const token = await cfg.deviceToken();
@@ -108,6 +109,12 @@ export function httpTransport(cfg: TransportConfig): Transport {
           sha256,
           captured_at: capturedAt,
           ...(itemId != null ? { item_id: String(itemId) } : {}),
+          kind: kind ?? 'ITEM',
+          // Omitted rather than sent empty: "no fix" and "at the equator" are
+          // different facts and a blank string reads as the second.
+          ...(lat != null ? { lat: String(lat) } : {}),
+          ...(lon != null ? { lon: String(lon) } : {}),
+          ...(accuracyM != null ? { accuracy_m: String(accuracyM) } : {}),
         },
       });
       let body: any = null;

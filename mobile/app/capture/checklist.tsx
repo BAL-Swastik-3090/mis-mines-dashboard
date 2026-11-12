@@ -13,7 +13,7 @@
  * the confirm screen is telling him after the decision he needed it for.
  */
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { View, Text, Pressable, SectionList, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useCapture } from '@/ui/useCapture';
@@ -27,6 +27,8 @@ export default function Checklist() {
   const template = useCapture((s) => s.template);
   const answers = useCapture((s) => s.answers);
   const setAnswer = useCapture((s) => s.setAnswer);
+  const answerRoutineChecks = useCapture((s) => s.answerRoutineChecks);
+  const bulkAnswered = useCapture((s) => s.bulkAnswered);
 
   const verdict = useMemo(() => {
     if (!template) return null;
@@ -34,6 +36,8 @@ export default function Checklist() {
       items: template.items, answers, sessionType: 'START_HANDOVER',
     });
   }, [template, answers]);
+
+  const [bulkNote, setBulkNote] = useState<string | null>(null);
 
   const sections = useMemo(
     () => (template?.sections ?? []).map((s) => ({ title: s.name, data: s.items })),
@@ -50,6 +54,13 @@ export default function Checklist() {
     );
   }
 
+  const routineLeft = template.items.filter(
+    (i) => !i.isCritical && i.responseType !== 'NUMERIC'
+           && answers.get(i.itemId)?.answer == null).length;
+  const criticalLeft = template.items.filter(
+    (i) => i.isCritical && answers.get(i.itemId)?.answer == null
+           && answers.get(i.itemId)?.numericValue == null).length;
+
   const total = template.items.length;
   const done = verdict ? total - verdict.unanswered.length : 0;
   const findings = verdict?.adverseCount ?? 0;
@@ -63,6 +74,45 @@ export default function Checklist() {
           {findings > 0 ? ` · ${findings} finding${findings === 1 ? '' : 's'}` : ''}
         </Text>
       </View>
+
+      {/* ── one tap for the routine checks ──────────────────────────────
+          Offered only while there are routine checks left, and it never
+          touches the ones that stop a machine or the ones that take a
+          reading. Twenty taps on a shift where nothing is wrong is what
+          sends a section back to paper; a button that could pass a brake
+          test nobody made is what a checklist exists to prevent. Both are
+          true, so it does one and not the other. */}
+      {routineLeft > 0 && (
+        <Pressable
+          testID="all-routine-ok"
+          style={styles.bulk}
+          onPress={async () => {
+            const n = await answerRoutineChecks();
+            setBulkNote(
+              `${n} routine check${n === 1 ? '' : 's'} marked OK.` +
+              (criticalLeft > 0
+                ? ` The ${criticalLeft} that can stop this machine still need answering, one at a time.`
+                : ''));
+          }}
+        >
+          <Text style={styles.bulkText}>
+            Mark the {routineLeft} routine check{routineLeft === 1 ? '' : 's'} OK
+          </Text>
+          <Text style={styles.bulkNote}>
+            Does not touch the checks that stop the machine, or any reading.
+          </Text>
+        </Pressable>
+      )}
+
+      {bulkNote && (
+        <View style={styles.bulkDone}><Text style={styles.bulkDoneText}>{bulkNote}</Text></View>
+      )}
+
+      {bulkAnswered && routineLeft === 0 && (
+        <Text style={styles.bulkFlag}>
+          The routine checks were marked OK together. The office sees this on the record.
+        </Text>
+      )}
 
       {verdict?.isBlocked && (
         <View style={styles.blocked} testID="blocked-banner">
@@ -108,6 +158,13 @@ export default function Checklist() {
 }
 
 const styles = StyleSheet.create({
+  bulk: { backgroundColor: '#1e5f8a', borderRadius: 10, padding: 14, gap: 3 },
+  bulkText: { color: '#fff', fontSize: 17, fontWeight: '700', textAlign: 'center' },
+  bulkNote: { color: '#cfe0ec', fontSize: 12, textAlign: 'center' },
+  bulkDone: { backgroundColor: '#eaf6ee', borderColor: '#1e8a4f', borderWidth: 1,
+              borderRadius: 8, padding: 10 },
+  bulkDoneText: { fontSize: 14, color: '#16202b' },
+  bulkFlag: { fontSize: 12, color: '#8a97a5', textAlign: 'center' },
   screen: { flex: 1, backgroundColor: '#f3f6f9' },
   bar: { backgroundColor: '#16202b', paddingHorizontal: 16, paddingVertical: 12 },
   barCode: { color: '#fff', fontSize: 18, fontWeight: '700' },

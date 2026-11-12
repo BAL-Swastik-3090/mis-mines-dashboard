@@ -28,7 +28,11 @@
         "android.permission.READ_MEDIA_IMAGES",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE"
-      ]
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#16202b"
+      }
     },
     "plugins": [
       "expo-router",
@@ -69,6 +73,13 @@
         "projectId": "9a050ab6-6e15-4952-a7a6-8bd97ebe1643"
       }
     },
-    "owner": "balasore-alloys-limited"
+    "owner": "balasore-alloys-limited",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#16202b"
+    },
+    "primaryColor": "#1e5f8a"
   }
 }

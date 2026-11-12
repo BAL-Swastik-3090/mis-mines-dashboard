@@ -17,11 +17,11 @@
  * awkward one.
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   View, Text, TextInput, Pressable, FlatList, StyleSheet,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useCapture } from '@/ui/useCapture';
 import * as masters from '@/core/capture/masters';
 import type { CachedOperator } from '@/core/capture/masters';
@@ -37,6 +37,34 @@ export default function Identify() {
 
   const [search, setSearch] = useState('');
   const [found, setFound] = useState<CachedOperator[]>([]);
+
+  // Names that appear more than once in what the search returned.
+  const duplicated = useMemo(() => {
+    const seen = new Map<string, number>();
+    for (const o of found) {
+      const k = o.name.trim().toUpperCase();
+      seen.set(k, (seen.get(k) ?? 0) + 1);
+    }
+    return new Set([...seen].filter(([, n]) => n > 1).map(([k]) => k));
+  }, [found]);
+  const isDuplicated = (n: string) => duplicated.has(n.trim().toUpperCase());
+  const sameName = useMemo(
+    () => found.filter((o) => isDuplicated(o.name)), [found, duplicated]);
+  const [hasPhoto, setHasPhoto] = useState(false);
+  const [photoSkipped, setPhotoSkipped] = useState(false);
+
+  // Re-read on focus, because the camera screen is pushed on top of this one
+  // and returns to it: the photo exists only after it comes back.
+  const uuid = useCapture((s) => s.uuid);
+  useFocusEffect(useCallback(() => {
+    void (async () => {
+      if (!store || !uuid) { setHasPhoto(false); return; }
+      const r = await store.getFirstAsync<{ n: number }>(
+        `SELECT count(*) AS n FROM photo
+          WHERE session_uuid = ? AND kind = 'OPERATOR'`, [uuid]);
+      setHasPhoto((r?.n ?? 0) > 0);
+    })();
+  }, [store, uuid]));
 
   const look = useCallback(async (q: string) => {
     if (!store || q.trim().length < 2) { setFound([]); return; }
@@ -89,6 +117,21 @@ export default function Identify() {
             placeholder="Employee number or name"
             autoCorrect={false}
           />
+          {/* ── two men with the same name ───────────────────────────────
+              A mine of 269 operators has repeated names, and a handover filed
+              against the wrong man is worse than none: it says somebody
+              checked a machine who never saw it, and it is his name on the
+              record. So when the search cannot tell them apart, the screen
+              says so and makes the employee number the thing to read. */}
+          {sameName.length > 0 && (
+            <View style={styles.clash} testID="name-clash">
+              <Text style={styles.clashText}>
+                {sameName.length} people here are called {sameName[0]!.name}.
+                Check the employee number before you pick one.
+              </Text>
+            </View>
+          )}
+
           <FlatList
             data={found}
             keyExtractor={(o) => String(o.operator_id)}
@@ -101,7 +144,10 @@ export default function Identify() {
               <Pressable testID={`operator-${o.operator_id}`} style={styles.row}
                          onPress={() => void pick(o)}>
                 <Text style={styles.name}>{o.name}</Text>
-                <Text style={styles.emp}>{o.emp_id ?? '—'}</Text>
+                <Text style={[styles.emp,
+                              isDuplicated(o.name) && styles.empLoud]}>
+                  {o.emp_id ?? 'no employee number on record'}
+                </Text>
               </Pressable>
             )}
           />
@@ -122,14 +168,55 @@ export default function Identify() {
         </View>
       )}
 
+      {/* ── the operator's photo ─────────────────────────────────────────
+          Taken before the walk-round, not after, because it is a record of
+          WHO took the machine on and the point of it is that the person was
+          standing there. A photo offered at the end can be taken by anybody,
+          anywhere, once the machine has already moved. */}
+      {chosen && (
+        <View style={styles.photoBox}>
+          {hasPhoto ? (
+            <Text style={styles.photoDone}>✓ Operator photographed</Text>
+          ) : (
+            <>
+              <Text style={styles.photoAsk}>
+                Take a photo of {chosen.name.split(' ')[0]} before starting.
+                It is kept with the handover.
+              </Text>
+              <Pressable
+                testID="operator-photo"
+                style={styles.photoBtn}
+                onPress={() => router.push('/capture/photo?kind=operator')}
+              >
+                <Text style={styles.photoBtnText}>Take the photo</Text>
+              </Pressable>
+              {/* A broken camera must not stop a shift. Recorded, not hidden:
+                  the handover goes without a photo and says so. */}
+              {!photoSkipped ? (
+                <Pressable testID="skip-photo" onPress={() => setPhotoSkipped(true)}>
+                  <Text style={styles.photoSkip}>The camera is not working</Text>
+                </Pressable>
+              ) : (
+                <Text style={styles.photoSkipped}>
+                  Going on without a photo. The office will see that none was taken.
+                </Text>
+              )}
+            </>
+          )}
+        </View>
+      )}
+
       <Pressable
         testID="to-checklist"
-        disabled={!chosen}
-        style={[styles.primary, !chosen && styles.primaryOff]}
+        disabled={!chosen || !(hasPhoto || photoSkipped)}
+        style={[styles.primary,
+                (!chosen || !(hasPhoto || photoSkipped)) && styles.primaryOff]}
         onPress={() => router.push('/capture/checklist')}
       >
         <Text style={styles.primaryText}>
-          {chosen ? 'Start the walk-round' : 'Identify the operator first'}
+          {!chosen ? 'Identify the operator first'
+                   : !(hasPhoto || photoSkipped) ? 'Photograph the operator first'
+                   : 'Start the walk-round'}
         </Text>
       </Pressable>
     </View>
@@ -138,6 +225,21 @@ export default function Identify() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#f3f6f9', padding: 16, gap: 12 },
+
+  clash: { backgroundColor: '#fff8e6', borderColor: '#e0bf6a', borderWidth: 1,
+           borderRadius: 8, padding: 12 },
+  clashText: { fontSize: 14, color: '#16202b', fontWeight: '600' },
+  empLoud: { color: '#16202b', fontWeight: '800' },
+
+  photoBox: { backgroundColor: '#fff', borderRadius: 10, padding: 14, gap: 10,
+              borderWidth: 1, borderColor: '#d8dee6' },
+  photoAsk: { fontSize: 15, color: '#16202b' },
+  photoDone: { fontSize: 16, fontWeight: '700', color: '#1e8a4f' },
+  photoBtn: { minHeight: 56, borderRadius: 8, backgroundColor: '#1e5f8a',
+              alignItems: 'center', justifyContent: 'center' },
+  photoBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  photoSkip: { fontSize: 13, color: '#8a97a5', textAlign: 'center' },
+  photoSkipped: { fontSize: 13, color: '#d98300', fontWeight: '600' },
   machine: { backgroundColor: '#16202b', borderRadius: 10, padding: 14 },
   machineCode: { color: '#fff', fontSize: 20, fontWeight: '700' },
   machineType: { color: '#aeb8c4', fontSize: 13 },

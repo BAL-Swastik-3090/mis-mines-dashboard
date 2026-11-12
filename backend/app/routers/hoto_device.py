@@ -122,6 +122,7 @@ async def device_photo(photo_uuid: str = Form(...),
                        lat: float | None = Form(default=None),
                        lon: float | None = Form(default=None),
                        accuracy_m: float | None = Form(default=None),
+                       kind: str = Form(default='ITEM'),
                        file: UploadFile = File(...),
                        device: dict = Depends(_device),
                        db: Session = Depends(get_minehub_db)) -> dict:
@@ -132,7 +133,7 @@ async def device_photo(photo_uuid: str = Form(...),
             db, photo_uuid=photo_uuid, client_uuid=client_uuid, content=content,
             actor=f"device:{device['device_code']}", item_id=item_id,
             captured_at=captured_at, content_type=file.content_type or "image/jpeg",
-            sha256=sha256, lat=lat, lon=lon, accuracy_m=accuracy_m)
+            sha256=sha256, lat=lat, lon=lon, accuracy_m=accuracy_m, kind=kind)
     except pho.PhotoError as e:
         raise HTTPException(e.status, {"message": "The photo was not stored.",
                                        "problems": e.problems})

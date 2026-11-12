@@ -23,7 +23,7 @@
  * unsynced handovers, and it lives in a cab.
  */
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /** Run in order, inside one transaction, on first open and on upgrade. */
 export const MIGRATIONS: readonly string[][] = [
@@ -284,5 +284,27 @@ export const MIGRATIONS: readonly string[][] = [
      );`,
     `CREATE INDEX IF NOT EXISTS location_queue_order_idx
        ON location_queue (recorded_at);`,
+  ],
+
+  // ── 3 · what a photo is, and where it was taken ──────────────────────────
+  // KIND, because a photograph of the person taking a machine on is not
+  // evidence against a checklist item. It has no item, it must never appear
+  // in a defect's photo list, and the server refuses one that pretends
+  // otherwise (migration 111).
+  //
+  // THE FIX, because the server has had captured_lat/captured_lon/
+  // gps_accuracy_m since migration 109 and this app has never once sent them.
+  // Every photo filed so far says nothing about where it was taken, which for
+  // a photograph of a machine in a pit is most of what makes it evidence.
+  [
+    `ALTER TABLE photo ADD COLUMN kind TEXT NOT NULL DEFAULT 'ITEM';`,
+    `ALTER TABLE photo ADD COLUMN lat REAL;`,
+    `ALTER TABLE photo ADD COLUMN lon REAL;`,
+    `ALTER TABLE photo ADD COLUMN accuracy_m REAL;`,
+    `CREATE INDEX IF NOT EXISTS photo_kind_idx ON photo (session_uuid, kind);`,
+
+    // Whether the routine checks were answered together rather than one at a
+    // time. Travels with the handover so the office can see it on the record.
+    `ALTER TABLE session ADD COLUMN bulk_answered INTEGER NOT NULL DEFAULT 0;`,
   ],
 ];

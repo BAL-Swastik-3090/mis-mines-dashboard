@@ -54,13 +54,22 @@ def receive(db: Session, *, photo_uuid: str, client_uuid: str, content: bytes,
             actor: str, item_id: int | None = None,
             captured_at: str | None = None, content_type: str = "image/jpeg",
             sha256: str | None = None, lat: float | None = None,
-            lon: float | None = None, accuracy_m: float | None = None) -> dict[str, Any]:
+            lon: float | None = None, accuracy_m: float | None = None,
+            kind: str = 'ITEM') -> dict[str, Any]:
     """Store one photo against a handover the device has already filed.
 
     `client_uuid` is the SESSION's id, not the photo's. The device does not know
     the server's session_id -- it never has one until the session has synced --
     so a photo is addressed by the same key the session was filed under.
     """
+    kind = (kind or 'ITEM').upper()
+    if kind not in ('ITEM', 'OPERATOR'):
+        kind = 'ITEM'
+    if kind == 'OPERATOR':
+        # A photograph of a person is not evidence against a check, and the
+        # database will not let it pretend to be.
+        item_id = None
+
     problems: list[str] = []
     if not photo_uuid:
         problems.append("photo_uuid is required — it is what makes a retry safe")
@@ -126,16 +135,17 @@ def receive(db: Session, *, photo_uuid: str, client_uuid: str, content: bytes,
         INSERT INTO hoto_photo
             (photo_uuid, session_id, response_id, item_id, item_label,
              sha256, size_bytes, content_type, content, captured_at,
-             captured_lat, captured_lon, gps_accuracy_m, uploaded_by)
+             captured_lat, captured_lon, gps_accuracy_m, uploaded_by, kind)
         VALUES (CAST(:pu AS uuid), :s, :r, :i, :lbl, :h, :n, :ct, :blob,
                 COALESCE(CAST(:cap AS timestamptz), now()),
-                :lat, :lon, :acc, :by)
+                :lat, :lon, :acc, :by, :kind)
         ON CONFLICT (session_id, COALESCE(item_id, -1), sha256) DO NOTHING
         RETURNING photo_id, photo_uuid, received_at
     """), {"pu": photo_uuid, "s": session["session_id"], "r": response_id,
            "i": item_id, "lbl": label, "h": digest, "n": len(content),
            "ct": content_type, "blob": content, "cap": captured_at,
-           "lat": lat, "lon": lon, "acc": accuracy_m, "by": actor}).mappings().first()
+           "lat": lat, "lon": lon, "acc": accuracy_m, "by": actor,
+           "kind": kind}).mappings().first()
 
     if row is None:
         # These exact bytes are already attached to this check under a different

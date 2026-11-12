@@ -459,6 +459,8 @@ export async function payloadFor(store: Store, uuid: string): Promise<Record<str
     captured_at: s.captured_at,
     production_day: s.captured_at.slice(0, 10),
     captured_offline: s.captured_offline === 1,
+    // So the office can tell a one-tap record from a walk-round.
+    bulk_answered: (s as any).bulk_answered === 1,
     captured_lat: s.captured_lat,
     captured_lon: s.captured_lon,
     gps_accuracy_m: s.gps_accuracy_m,

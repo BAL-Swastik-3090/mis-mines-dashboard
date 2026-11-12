@@ -44,6 +44,10 @@ export interface Transport {
   postPhoto(args: {
     photoUuid: string; clientUuid: string; itemId: number | null;
     localPath: string; sha256: string; capturedAt: string;
+    /** ITEM (evidence against a check) or OPERATOR (who took the machine on). */
+    kind?: string | null;
+    /** Where the photo was taken. Null when no fix was available in time. */
+    lat?: number | null; lon?: number | null; accuracyM?: number | null;
   }): Promise<{ status: number; body: any }>;
   getBundle(): Promise<{ status: number; body: any }>;
   /** A batch of position fixes. Idempotent per fix on the server. */
@@ -295,6 +299,8 @@ interface PhotoRow {
   photo_uuid: string; session_uuid: string; item_id: number | null;
   local_path: string; sha256: string; captured_at: string;
   sync_attempts: number; last_attempt_at?: string | null;
+  kind?: string | null;
+  lat?: number | null; lon?: number | null; accuracy_m?: number | null;
 }
 
 /**
@@ -310,7 +316,7 @@ export async function duePhotos(
 ): Promise<PhotoRow[]> {
   const rows = await store.getAllAsync<PhotoRow>(
     `SELECT p.photo_uuid, p.session_uuid, p.item_id, p.local_path, p.sha256,
-            p.captured_at, p.sync_attempts
+            p.captured_at, p.sync_attempts, p.kind, p.lat, p.lon, p.accuracy_m
        FROM photo p
        JOIN session s ON s.client_uuid = p.session_uuid
       WHERE p.sync_state IN ('queued', 'sending')
@@ -331,6 +337,8 @@ async function sendPhoto(store: Store, transport: Transport, p: PhotoRow,
     answer = await transport.postPhoto({
       photoUuid: p.photo_uuid, clientUuid: p.session_uuid, itemId: p.item_id,
       localPath: p.local_path, sha256: p.sha256, capturedAt: p.captured_at,
+      kind: p.kind ?? 'ITEM',
+      lat: p.lat ?? null, lon: p.lon ?? null, accuracyM: p.accuracy_m ?? null,
     });
   } catch {
     await store.runAsync(

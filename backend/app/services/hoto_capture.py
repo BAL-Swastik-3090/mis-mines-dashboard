@@ -300,12 +300,14 @@ def submit(db: Session, payload: dict[str, Any], actor: str) -> dict[str, Any]:
              meter_reading, meter_uom, fuel_level, location_id, status, blocked_reason,
              reject_reason, confirmed_by, confirmed_at, device_id, captured_at,
              captured_offline, captured_lat, captured_lon, gps_accuracy_m, gps_status,
-             remarks, created_by)
+             remarks, created_by, bulk_answered)
         VALUES (CAST(:u AS uuid), :a, :si, :dep, :st, :seq, :op, :emp, :tpl, :ver,
                 :meter, :uom, :fuel, :loc, :status, :blocked, :reject, :by, :at,
-                :dev, CAST(:cap AS timestamptz), :off, :lat, :lon, :acc, :gps, :rem, :by)
+                :dev, CAST(:cap AS timestamptz), :off, :lat, :lon, :acc, :gps, :rem, :by,
+                :bulk)
         RETURNING session_id
     """), {
+        "bulk": bool(payload.get("bulk_answered")),
         "u": client_uuid, "a": asset_id, "si": payload.get("shift_instance_id"),
         "dep": payload.get("deployment_id"), "st": session_type, "seq": seq,
         "op": payload.get("operator_id"), "emp": payload.get("operator_emp_id"),
