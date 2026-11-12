@@ -253,8 +253,7 @@ def add_item(db: Session, section_id: int, d: dict, actor: str) -> dict:
            "c": d.get("category"), "crit": bool(d.get("is_critical")),
            "photo": bool(d.get("requires_photo_if_not_ok", True)),
            "adv": d.get("adverse_answer"),
-           "sev": d["default_severity"], "o": order, "by": actor,
-           "adv": d.get("adverse_answer")}).scalar()
+           "sev": d["default_severity"], "o": order, "by": actor}).scalar()
     db.commit()
     return {"item_id": iid, "display_order": order}
 
@@ -285,6 +284,7 @@ def update_item(db: Session, item_id: int, d: dict, actor: str) -> dict:
            "u": d.get("unit"), "lo": d.get("min_value"), "hi": d.get("max_value"),
            "c": d.get("category"), "crit": bool(d.get("is_critical")),
            "photo": bool(d.get("requires_photo_if_not_ok", True)),
+           "adv": d.get("adverse_answer"),
            "sev": d["default_severity"], "by": actor})
     db.commit()
     return {"item_id": item_id, "updated": True}
@@ -470,3 +470,64 @@ def create_template(db: Session, *, asset_type_id: int, name: str, actor: str,
             "name": name,
             "note": ("Empty on purpose. Add the sections and checks this machine "
                      "actually needs, then publish it.")}
+
+
+# ── editing a section ───────────────────────────────────────────────────────
+# add_section has existed since phase 6 with nothing to pair it with: a
+# section could be created and then neither renamed nor removed. A typo in a
+# heading was permanent, and a section added by mistake stayed in the draft
+# for ever. Both of these only ever touch a DRAFT, which is what makes them
+# safe to offer at all.
+
+def rename_section(db: Session, section_id: int, name: str, actor: str) -> dict[str, Any]:
+    name = (name or "").strip()
+    if not name:
+        raise AdminError(["the section needs a name"])
+    if len(name) > 80:
+        raise AdminError(["the section name is longer than 80 characters"])
+
+    row = db.execute(text("""
+        SELECT template_id, name FROM hoto_checklist_section WHERE section_id = :s
+    """), {"s": section_id}).mappings().first()
+    if not row:
+        raise AdminError([f"no such section: {section_id}"], status=404)
+    _require_draft(db, row["template_id"])
+
+    db.execute(text("""
+        UPDATE hoto_checklist_section SET name = :n WHERE section_id = :s
+    """), {"n": name, "s": section_id})
+    db.commit()
+    logger.info("section %s renamed to %s by %s", section_id, name, actor)
+    return {"section_id": section_id, "name": name, "was": row["name"]}
+
+
+def delete_section(db: Session, section_id: int, actor: str) -> dict[str, Any]:
+    """Remove a section from a draft, and the checks in it.
+
+    Refused while it still holds checks, rather than cascading. On a draft a
+    cascade would be safe -- nothing has answered them -- but "remove the
+    section" and "remove the eleven checks inside it" are different intentions
+    and a heading tapped by mistake should not take a morning's work with it.
+    Empty it first, deliberately, and then it goes.
+    """
+    row = db.execute(text("""
+        SELECT s.template_id, s.name,
+               (SELECT count(*) FROM hoto_checklist_item i
+                 WHERE i.section_id = s.section_id AND i.status = 'ACTIVE') AS items
+          FROM hoto_checklist_section s WHERE s.section_id = :s
+    """), {"s": section_id}).mappings().first()
+    if not row:
+        raise AdminError([f"no such section: {section_id}"], status=404)
+    _require_draft(db, row["template_id"])
+
+    if row["items"]:
+        raise AdminError(
+            [f"{row['name']} still holds {row['items']} check"
+             f"{'' if row['items'] == 1 else 's'}. Remove them first — a heading "
+             f"tapped by mistake should not take them with it."], status=409)
+
+    db.execute(text("DELETE FROM hoto_checklist_section WHERE section_id = :s"),
+               {"s": section_id})
+    db.commit()
+    logger.info("section %s (%s) removed by %s", section_id, row["name"], actor)
+    return {"section_id": section_id, "removed": row["name"]}

@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle, Check, ChevronDown, ChevronRight, Copy, Loader2,
-  Plus, Send, Trash2, X,
+  Pencil, Plus, Send, Trash2, X,
 } from "lucide-react";
 import api from "@/lib/api";
 
@@ -62,6 +62,7 @@ interface Item {
   is_critical: boolean;
   requires_photo_if_not_ok: boolean;
   default_severity: Severity;
+  adverse_answer?: "YES" | "NO" | null;
   display_order: number;
 }
 interface Section {
@@ -109,6 +110,7 @@ export default function HotoChecklistsSection() {
   const [error, setError] = useState<string[] | null>(null);
   const [open, setOpen] = useState<Set<number>>(new Set());
   const [showRetired, setShowRetired] = useState(false);
+  const [editing, setEditing] = useState<number | null>(null);
   const [coverage, setCoverage] = useState<AssetTypeCoverage[]>([]);
   const [starting, setStarting] = useState<AssetTypeCoverage | null>(null);
   const [newName, setNewName] = useState("");
@@ -423,14 +425,50 @@ export default function HotoChecklistsSection() {
                         </span>
                       </button>
 
+                      {/* A heading could be created and then neither renamed
+                          nor removed: a typo in one was permanent. Removal
+                          refuses while checks are still inside it, because a
+                          heading tapped by mistake should not take a morning's
+                          work with it. */}
+                      {isDraft && (
+                        <SectionTools
+                          section={s}
+                          busy={busy}
+                          act={act}
+                        />
+                      )}
+
                       {isOpen && (
                         <ul className="pb-2">
                           {s.items.map((i) => (
+                            editing === i.item_id ? (
+                              <ItemForm
+                                key={i.item_id}
+                                sectionId={s.section_id}
+                                existing={i}
+                                busy={busy}
+                                act={act}
+                                onDone={() => setEditing(null)}
+                              />
+                            ) : (
                             <li key={i.item_id}
                                 className="px-4 py-1.5 pl-9 flex items-start gap-2 hover:bg-muted/30">
                               <div className="min-w-0 flex-1">
                                 <div className="flex items-center gap-1.5 flex-wrap">
                                   <span className="text-xs">{i.label}</span>
+                                  {i.response_type === "YES_NO" && (
+                                    <span className={`text-[9px] px-1 py-0.5 rounded ${
+                                      i.adverse_answer
+                                        ? "bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200"
+                                        : "bg-amber-200 text-amber-900 dark:bg-amber-900/50 dark:text-amber-200"}`}
+                                      title={i.adverse_answer
+                                        ? `A problem is reported when answered ${i.adverse_answer}`
+                                        : "Nobody has said which answer reports a problem, so this check raises nothing"}>
+                                      {i.adverse_answer
+                                        ? `problem on ${i.adverse_answer}`
+                                        : "RAISES NOTHING"}
+                                    </span>
+                                  )}
                                   {i.is_critical && (
                                     <span className="text-[9px] px-1 py-0.5 rounded bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200">
                                       BLOCKS
@@ -447,19 +485,35 @@ export default function HotoChecklistsSection() {
                                 {i.default_severity}
                               </span>
                               {isDraft && (
-                                <button
-                                  title="Retire this item"
-                                  disabled={busy !== null}
-                                  onClick={() => void act(`retire-${i.item_id}`, () =>
-                                    api.delete(`/hoto/admin/items/${i.item_id}`))}
-                                  className="text-muted-foreground hover:text-red-600 shrink-0"
-                                >
-                                  <Trash2 size={12} />
-                                </button>
+                                <>
+                                  {/* EDIT, which this screen never offered.
+                                      PUT /admin/items/{id} has existed since
+                                      phase 6 and nothing called it, so fixing
+                                      a typo or a range meant deleting the
+                                      check and typing it again. */}
+                                  <button
+                                    title="Edit this check"
+                                    disabled={busy !== null}
+                                    onClick={() => setEditing(i.item_id)}
+                                    className="text-muted-foreground hover:text-foreground shrink-0"
+                                  >
+                                    <Pencil size={12} />
+                                  </button>
+                                  <button
+                                    title="Retire this item"
+                                    disabled={busy !== null}
+                                    onClick={() => void act(`retire-${i.item_id}`, () =>
+                                      api.delete(`/hoto/admin/items/${i.item_id}`))}
+                                    className="text-muted-foreground hover:text-red-600 shrink-0"
+                                  >
+                                    <Trash2 size={12} />
+                                  </button>
+                                </>
                               )}
                             </li>
+                            )
                           ))}
-                          {isDraft && <AddItem sectionId={s.section_id} busy={busy} act={act} />}
+                          {isDraft && <ItemForm sectionId={s.section_id} busy={busy} act={act} />}
                         </ul>
                       )}
                     </section>
@@ -534,17 +588,31 @@ function AddSection({ templateId, busy, act }: {
   );
 }
 
-function AddItem({ sectionId, busy, act }: {
-  sectionId: number; busy: string | null;
+/**
+ * One check, being written or corrected.
+ *
+ * The same form for both, because they are the same decision: a check that
+ * cannot be corrected has to be deleted and typed again, and the second
+ * typing is where the range gets lost.
+ */
+function ItemForm({ sectionId, existing, busy, act, onDone }: {
+  sectionId: number;
+  existing?: Item;
+  busy: string | null;
   act: (k: string, fn: () => Promise<unknown>) => Promise<void>;
+  onDone?: () => void;
 }) {
-  const [adding, setAdding] = useState(false);
+  const [adding, setAdding] = useState(Boolean(existing));
   const [f, setF] = useState({
-    label: "", response_type: "OK_CAUTION_NOTOK" as ResponseType,
-    unit: "", min_value: "", max_value: "",
-    is_critical: false, requires_photo_if_not_ok: true,
-    default_severity: "MEDIUM" as Severity,
-    adverse_answer: "YES" as "YES" | "NO",
+    label: existing?.label ?? "",
+    response_type: (existing?.response_type ?? "OK_CAUTION_NOTOK") as ResponseType,
+    unit: existing?.unit ?? "",
+    min_value: existing?.min_value != null ? String(existing.min_value) : "",
+    max_value: existing?.max_value != null ? String(existing.max_value) : "",
+    is_critical: existing?.is_critical ?? false,
+    requires_photo_if_not_ok: existing?.requires_photo_if_not_ok ?? true,
+    default_severity: (existing?.default_severity ?? "MEDIUM") as Severity,
+    adverse_answer: (existing?.adverse_answer ?? "YES") as "YES" | "NO",
   });
 
   if (!adding) {
@@ -637,8 +705,8 @@ function AddItem({ sectionId, busy, act }: {
       <div className="flex items-center gap-1.5">
         <button
           disabled={busy !== null || !f.label.trim()}
-          onClick={() => void act("add-item", async () => {
-            await api.post(`/hoto/admin/sections/${sectionId}/items`, {
+          onClick={() => void act(existing ? `edit-${existing.item_id}` : "add-item", async () => {
+            const body = {
               label: f.label,
               response_type: f.response_type,
               unit: numeric ? f.unit || null : null,
@@ -648,19 +716,87 @@ function AddItem({ sectionId, busy, act }: {
               requires_photo_if_not_ok: f.requires_photo_if_not_ok,
               default_severity: f.default_severity,
               adverse_answer: f.response_type === "YES_NO" ? f.adverse_answer : null,
-            });
-            setAdding(false);
-            setF({ ...f, label: "", unit: "", min_value: "", max_value: "" });
+            };
+            if (existing) {
+              await api.put(`/hoto/admin/items/${existing.item_id}`, body);
+              onDone?.();
+            } else {
+              await api.post(`/hoto/admin/sections/${sectionId}/items`, body);
+              setAdding(false);
+              setF({ ...f, label: "", unit: "", min_value: "", max_value: "" });
+            }
           })}
           className="flex items-center gap-1 text-[11px] px-2 py-1 rounded bg-foreground text-background disabled:opacity-40"
         >
-          <Check size={12} /> Add
+          <Check size={12} /> {existing ? "Save" : "Add"}
         </button>
-        <button onClick={() => setAdding(false)}
+        <button onClick={() => { setAdding(false); onDone?.(); }}
                 className="text-[11px] px-2 py-1 rounded border border-border hover:bg-muted">
           Cancel
         </button>
       </div>
     </li>
+  );
+}
+
+/**
+ * Renaming or removing a section heading.
+ *
+ * Neither was possible: add_section had no pair, so a typo in a heading was
+ * permanent and a section added by mistake stayed in the draft for ever.
+ * Removal refuses while checks are still inside, because "remove the section"
+ * and "remove the eleven checks in it" are different intentions.
+ */
+function SectionTools({ section, busy, act }: {
+  section: Section;
+  busy: string | null;
+  act: (k: string, fn: () => Promise<unknown>) => Promise<void>;
+}) {
+  const [renaming, setRenaming] = useState(false);
+  const [name, setName] = useState(section.name);
+  const empty = section.items.length === 0;
+
+  if (renaming) {
+    return (
+      <div className="flex items-center gap-1.5 px-4 pb-2 pl-9">
+        <input
+          autoFocus value={name} onChange={(e) => setName(e.target.value)}
+          className="text-[11px] px-2 py-1 rounded border border-border bg-background flex-1 max-w-xs"
+        />
+        <button
+          disabled={busy !== null || !name.trim()}
+          onClick={() => void act(`rename-${section.section_id}`, async () => {
+            await api.put(`/hoto/admin/sections/${section.section_id}`, { name });
+            setRenaming(false);
+          })}
+          className="text-[11px] px-2 py-1 rounded bg-foreground text-background disabled:opacity-40"
+        >
+          Save
+        </button>
+        <button onClick={() => { setName(section.name); setRenaming(false); }}
+                className="text-[11px] px-2 py-1 rounded border border-border hover:bg-muted">
+          Cancel
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-3 px-4 pb-1.5 pl-9">
+      <button onClick={() => setRenaming(true)}
+              className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground">
+        <Pencil size={10} /> Rename section
+      </button>
+      <button
+        disabled={busy !== null || !empty}
+        title={empty ? "Remove this section"
+                     : "Remove the checks inside it first"}
+        onClick={() => void act(`del-sec-${section.section_id}`, () =>
+          api.delete(`/hoto/admin/sections/${section.section_id}`))}
+        className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-red-600 disabled:opacity-30 disabled:hover:text-muted-foreground"
+      >
+        <Trash2 size={10} /> Remove section
+      </button>
+    </div>
   );
 }

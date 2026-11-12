@@ -317,6 +317,22 @@ def admin_add_section(template_id: int, request: Request, payload: dict,
     return _admin(adm.add_section, db, template_id, name, actor)
 
 
+@router.put("/admin/sections/{section_id}")
+def admin_rename_section(section_id: int, request: Request, payload: dict,
+                         db: Session = Depends(get_minehub_db)) -> dict:
+    """Rename a section of a draft."""
+    actor = _admin_guard(request, db)
+    return _admin(adm.rename_section, db, section_id, payload.get("name", ""), actor)
+
+
+@router.delete("/admin/sections/{section_id}")
+def admin_delete_section(section_id: int, request: Request,
+                         db: Session = Depends(get_minehub_db)) -> dict:
+    """Remove an EMPTY section from a draft."""
+    actor = _admin_guard(request, db)
+    return _admin(adm.delete_section, db, section_id, actor)
+
+
 @router.post("/admin/sections/{section_id}/items", status_code=201)
 def admin_add_item(section_id: int, request: Request, payload: dict,
                    db: Session = Depends(get_minehub_db)) -> dict:
