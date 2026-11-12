@@ -131,6 +131,38 @@ const hardware = (d: Device | { manufacturer: string | null; model: string | nul
   return [make || "unknown hardware", os].filter(Boolean).join(" · ");
 };
 
+/**
+ * A device that was told to report its position and has stopped.
+ *
+ * ── WHY THIS IS THE ANSWER TO "NOBODY MAY TURN IT OFF" ───────────────────────
+ * Android does not let an app stop a person uninstalling it or revoking a
+ * permission, by design, and no amount of code here changes that — it needs
+ * the device to be enrolled as company-owned (see docs/hoto-device-lockdown.md).
+ * What this CAN do is make it loud. A tablet whose location was switched off in
+ * the cab looks, on every other screen, exactly like one sitting in a shed with
+ * no signal. Naming the difference is what turns "somebody disabled it" from
+ * something discovered in a month into something seen the same shift.
+ *
+ * Three missed reports rather than one: a device in a pit misses a report
+ * routinely, and crying wolf on the first is how a warning gets ignored.
+ */
+const MISSED_REPORTS_BEFORE_ALARM = 3;
+
+function notReporting(d: Device): false | { minutes: number; never: boolean } {
+  if (!d.track_location) return false;
+  if (d.status !== "ACTIVE") return false;
+  const graceMs = Math.max(d.location_interval_s, 60) * 1000 * MISSED_REPORTS_BEFORE_ALARM;
+  if (!d.last_location_at) {
+    // Never reported at all. Only an alarm once it has had time to: a device
+    // approved a minute ago has not failed at anything yet.
+    if (!d.approved_at) return false;
+    const since = Date.now() - Date.parse(d.approved_at);
+    return since > graceMs ? { minutes: Math.round(since / 60000), never: true } : false;
+  }
+  const since = Date.now() - Date.parse(d.last_location_at);
+  return since > graceMs ? { minutes: Math.round(since / 60000), never: false } : false;
+}
+
 export default function HotoDevicesSection() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [loading, setLoading] = useState(true);
@@ -161,6 +193,11 @@ export default function HotoDevicesSection() {
 
   const waiting = useMemo(() => devices.filter((d) => d.status === "PENDING"), [devices]);
   const rest = useMemo(() => devices.filter((d) => d.status !== "PENDING"), [devices]);
+  const silent = useMemo(
+    () => rest.map((d) => ({ d, why: notReporting(d) }))
+             .filter((x): x is { d: Device; why: { minutes: number; never: boolean } } =>
+               x.why !== false),
+    [rest]);
 
   if (picked) {
     return (
@@ -223,6 +260,29 @@ export default function HotoDevicesSection() {
       </section>
 
       {/* ── everything else ──────────────────────────────────────────────── */}
+      {silent.length > 0 && (
+        <div className="rounded-lg border-2 border-red-400 bg-red-50 p-4 dark:border-red-800 dark:bg-red-950/30">
+          <h3 className="font-semibold text-red-900 dark:text-red-200">
+            {silent.length} device{silent.length === 1 ? " has" : "s have"} stopped reporting position
+          </h3>
+          <ul className="mt-2 space-y-1 text-sm text-red-900 dark:text-red-200">
+            {silent.map(({ d, why }) => (
+              <li key={d.device_id}>
+                <strong>{d.device_code}</strong> ({d.label}) —{" "}
+                {why.never
+                  ? `has never sent a position, ${why.minutes} min since it was allowed`
+                  : `nothing for ${why.minutes} min`}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-red-800 dark:text-red-300">
+            Either it has no signal, or location was switched off on the device.
+            Android cannot stop somebody doing that — see the lockdown note if
+            these need to be company-managed.
+          </p>
+        </div>
+      )}
+
       <section className="space-y-3">
         <h2 className="text-sm font-bold uppercase tracking-wide text-muted-foreground">
           Devices ({rest.length})
@@ -277,14 +337,20 @@ export default function HotoDevicesSection() {
                     <td className="px-3 py-2.5 text-xs">
                       {d.last_location_at ? (
                         <>
-                          <div className="flex items-center gap-1">
+                          <div className={`flex items-center gap-1 ${
+                            notReporting(d) ? "font-semibold text-red-700 dark:text-red-300" : ""}`}>
                             <MapPin className="h-3 w-3" />
                             {ago(d.last_location_at)}
+                            {notReporting(d) && " · not reporting"}
                           </div>
                           <Battery pct={d.last_battery_pct} charging={d.last_is_charging} />
                         </>
                       ) : d.track_location ? (
-                        <span className="text-muted-foreground">no fix yet</span>
+                        <span className={notReporting(d)
+                          ? "font-semibold text-red-700 dark:text-red-300"
+                          : "text-muted-foreground"}>
+                          {notReporting(d) ? "not reporting" : "no fix yet"}
+                        </span>
                       ) : (
                         <span className="text-muted-foreground">tracking off</span>
                       )}
