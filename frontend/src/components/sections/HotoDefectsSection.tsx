@@ -18,15 +18,18 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle, Check, ChevronLeft, Clock, Eye, Loader2, Lock, Wrench, X,
+  AlertTriangle, Check, ChevronLeft, Clock, Eye, Loader2, Lock, Wrench, X, Camera,
 } from "lucide-react";
 import api from "@/lib/api";
+import { HotoPhotos } from "@/components/hoto/HotoPhotos";
 import { useAuth } from "@/contexts/useAuth";
 
 type State = "RAISED" | "ACKNOWLEDGED" | "RECTIFIED" | "VERIFIED" | "CLOSED" | "CANCELLED";
 type Severity = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
 
 interface Defect {
+  raised_session_id?: number | null;
+  item_id?: number | null;
   defect_id: number;
   defect_ref: string;
   state: State;
@@ -449,6 +452,24 @@ function DetailView({ d, me, busy, onBack, onMove, error, clearError }: {
               })}
             </div>
           )}
+        </section>
+      )}
+
+      {/* ── what it looks like ────────────────────────────────────────────
+          The photograph is the reason the operator was made to take one. A
+          workshop reading "brakes not OK, pedal goes to the floor" acts on it
+          differently when it can see the pedal, and until now the picture
+          reached the server and stopped there. Filtered to THIS check: a
+          defect is about one item, and the operator's own portrait is never
+          evidence of a fault. */}
+      {d.raised_session_id && (
+        <section className="rounded border border-border">
+          <h3 className="px-3 py-2 text-xs font-semibold border-b border-border flex items-center gap-1.5">
+            <Camera size={13} /> What the operator photographed
+          </h3>
+          <div className="p-3">
+            <HotoPhotos sessionId={d.raised_session_id} itemId={d.item_id} compact />
+          </div>
         </section>
       )}
 

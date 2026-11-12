@@ -12,9 +12,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle, Camera, ChevronLeft, CloudOff, Loader2, MapPinOff, Search, X,
+  AlertTriangle, Camera, ChevronLeft, CloudOff, Loader2, MapPin, MapPinOff, Search, X,
 } from "lucide-react";
 import api from "@/lib/api";
+import { HotoPhotos } from "@/components/hoto/HotoPhotos";
 
 type Status = "DRAFT" | "SUBMITTED" | "BLOCKED" | "ACCEPTED" | "REJECTED" | "CANCELLED";
 type Severity = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
@@ -29,6 +30,13 @@ interface Row {
   received_at: string;
   captured_offline: boolean;
   sync_delay_minutes: number | null;
+  shift_code?: string | null;
+  production_day?: string | null;
+  bulk_answered?: boolean;
+  captured_lat?: number | null;
+  captured_lon?: number | null;
+  gps_accuracy_m?: number | null;
+  confirmed_at?: string | null;
   confirmed_by: string | null;
   blocked_reason: string | null;
   reject_reason: string | null;
@@ -393,8 +401,16 @@ function DetailView({ d, onBack }: { d: Detail; onBack: () => void }) {
 
         <dl className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-1.5 text-[11px]">
           <Field label="Operator" value={d.operator_name ?? d.operator_emp_id} />
-          <Field label="Confirmed by" value={d.confirmed_by} />
-          <Field label="Captured" value={fmt(d.captured_at)} />
+          <Field label="Confirmed by" value={
+            d.confirmed_by
+              ? `${d.confirmed_by}${d.confirmed_at ? ` · ${fmt(d.confirmed_at)}` : ""}`
+              : null} />
+          {/* WHICH SHIFT, resolved from the device's own clock when the record
+              was filed rather than from whoever is reading it now. */}
+          <Field label="Shift" value={d.shift_code
+            ? `${d.shift_code}${d.production_day ? ` · ${d.production_day}` : ""}` : null} />
+          <Field label="Captured" value={
+            `${fmt(d.captured_at)}${d.captured_offline ? " (no signal)" : ""}`} />
           <Field label="Reached the server" value={
             d.sync_delay_minutes != null && d.sync_delay_minutes > 2
               ? `${fmt(d.received_at)} (+${d.sync_delay_minutes} min)`
@@ -410,12 +426,36 @@ function DetailView({ d, onBack }: { d: Detail; onBack: () => void }) {
               from the checklist as it stands today. */}
           <Field label="Checklist" value={d.template_name
             ? `${d.template_name} v${d.template_version}` : null} />
-          <Field label="GPS" value={d.gps_status} />
+          {/* Where it was signed, not merely whether a fix was had. */}
+          <Field label="Where" value={
+            d.captured_lat != null && d.captured_lon != null
+              ? `${d.captured_lat.toFixed(5)}, ${d.captured_lon.toFixed(5)}`
+              : (d.gps_status ?? null)} />
           {d.counterpart_ref && (
             <Field label="Paired with"
                    value={`${d.counterpart_ref} (${TYPE_LABEL[d.counterpart_type ?? ""] ?? d.counterpart_type}, ${d.counterpart_status})`} />
           )}
         </dl>
+
+        {/* HOW IT WAS ANSWERED. A record filled with one tap is otherwise
+            indistinguishable from a walk-round, and the whole reason that flag
+            is stored is so a supervisor can tell. */}
+        {d.bulk_answered && (
+          <p className="text-[11px] rounded border border-amber-300 bg-amber-50 px-2.5 py-1.5 dark:border-amber-800 dark:bg-amber-950/30">
+            The routine checks on this handover were answered together with one
+            action. The checks that can stop the machine were answered
+            individually.
+          </p>
+        )}
+
+        {d.captured_lat != null && d.captured_lon != null && (
+          <a href={`https://www.google.com/maps?q=${d.captured_lat},${d.captured_lon}`}
+             target="_blank" rel="noreferrer"
+             className="inline-flex items-center gap-1 text-[11px] text-sky-700 hover:underline dark:text-sky-300">
+            <MapPin size={11} /> Where this handover was signed
+            {d.gps_accuracy_m != null && ` (±${Math.round(d.gps_accuracy_m)} m)`}
+          </a>
+        )}
 
         {d.remarks && (
           <p className="text-[11px] border-t border-border pt-2">
@@ -423,6 +463,17 @@ function DetailView({ d, onBack }: { d: Detail; onBack: () => void }) {
           </p>
         )}
       </header>
+
+      {/* ── the photographs ───────────────────────────────────────────────
+          The endpoints have existed since phase 11 and nothing called them,
+          so every photograph an operator took reached the office and nobody
+          could look at it. */}
+      <section className="rounded border border-border p-3 space-y-2">
+        <h3 className="text-xs font-semibold flex items-center gap-1.5">
+          <Camera size={13} /> Photographs
+        </h3>
+        <HotoPhotos sessionId={d.session_id} />
+      </section>
 
       {d.adverse.length > 0 && (
         <section className="rounded border border-border">

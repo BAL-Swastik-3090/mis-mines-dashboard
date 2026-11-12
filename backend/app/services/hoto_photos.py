@@ -183,11 +183,26 @@ def listing(db: Session, session_id: int) -> list[dict[str, Any]]:
     """What has arrived for this handover. Metadata only — never the bytes."""
     rows = db.execute(text("""
         SELECT photo_id, photo_uuid, item_id, item_label, sha256, size_bytes,
-               content_type, captured_at, received_at, uploaded_by
+               content_type, captured_at, received_at, uploaded_by,
+               -- ITEM evidence or the OPERATOR's own photo: a screen has to
+               -- tell them apart, and a defect's photo list must never show a
+               -- photograph of a person as evidence of a fault.
+               kind,
+               -- Where it was taken. For a picture of a machine in a pit this
+               -- is most of what makes it evidence.
+               captured_lat, captured_lon, gps_accuracy_m
           FROM hoto_photo WHERE session_id = :s
          ORDER BY captured_at, photo_id
     """), {"s": session_id}).mappings().all()
-    return [{**dict(r), "photo_uuid": str(r["photo_uuid"])} for r in rows]
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["photo_uuid"] = str(d["photo_uuid"])
+        for k in ("captured_lat", "captured_lon", "gps_accuracy_m"):
+            if d.get(k) is not None:
+                d[k] = float(d[k])
+        out.append(d)
+    return out
 
 
 def content_of(db: Session, photo_id: int) -> tuple[bytes, str] | None:
