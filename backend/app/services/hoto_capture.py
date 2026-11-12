@@ -35,6 +35,9 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
+#: Adverse regardless of the question, because the words carry their own
+#: meaning. A yes/no answer does not -- see `adverse_answer` on the item and
+#: migration 112.
 ADVERSE_ANSWERS = {"NOT_OK", "CAUTION"}
 VALID_ANSWERS = {
     "OK_CAUTION_NOTOK": {"OK", "CAUTION", "NOT_OK", "NA"},
@@ -112,6 +115,11 @@ def _evaluate_one(item: dict, raw: dict) -> dict:
                 problems.append("A critical item cannot be marked Not applicable")
         else:
             adverse = answer in ADVERSE_ANSWERS
+            # A yes/no item says which of its two answers is the finding.
+            # Unclassified items raise nothing, which is the safe default:
+            # guessing would report a greased machine as ungreased.
+            if item.get("adverse_answer") and answer == item["adverse_answer"]:
+                adverse = True
 
     if adverse:
         if not (raw.get("remark") or "").strip():

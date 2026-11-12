@@ -23,7 +23,7 @@
  * unsynced handovers, and it lives in a cab.
  */
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 /** Run in order, inside one transaction, on first open and on upgrade. */
 export const MIGRATIONS: readonly string[][] = [
@@ -317,5 +317,15 @@ export const MIGRATIONS: readonly string[][] = [
   [
     `ALTER TABLE photo ADD COLUMN rehashed_at TEXT;`,
     `ALTER TABLE photo ADD COLUMN sync_error TEXT;`,
+  ],
+
+  // ── 5 · which answer a yes/no item treats as a finding ──────────────────
+  // "Exhaust smoke (excessive)" reports a problem when answered YES;
+  // "Grease points done" reports one when answered NO. Without this the
+  // device cannot tell them apart, so it raised nothing for either -- and
+  // the one-tap routine answer would have recorded every machine as
+  // ungreased. See migration 112.
+  [
+    `ALTER TABLE cached_item ADD COLUMN adverse_answer TEXT;`,
   ],
 ];

@@ -24,20 +24,33 @@ import type { Answer, ResponseType } from './enums';
 import type { ChecklistItem, RawResponse } from './evaluation';
 
 /**
- * What "nothing wrong" is for each kind of routine check.
+ * What "nothing wrong" is for a three-way or level check.
  *
- * YES_NO maps to NO because the mine phrases these as problems -- "Exhaust
- * smoke (excessive)", "Leaks", "Unusual noise" -- so NO is the clean answer.
- * A template that ever asks one the other way round ("Fire extinguisher
- * present?") would be passed wrongly by this. That is a reason to phrase such
- * an item as a problem, or to mark it critical, and the comment is here so
- * whoever writes the next template knows it.
+ * A yes/no item is NOT here, and that is the point. It used to map to NO on
+ * the assumption that the mine phrases these as problems. Five of the six in
+ * the fleet's templates are phrased that way; "Grease points done" is the
+ * sixth, and under that assumption one tap would have recorded every machine
+ * as ungreased, every shift. A rule that is wrong one time in six is worse
+ * than no rule, because it is wrong quietly.
+ *
+ * So a yes/no item is answered from its own `adverseAnswer` -- the opposite of
+ * whichever answer reports a problem -- and an item nobody has classified is
+ * left for a person. See migration 112.
  */
 export const ROUTINE_PASS: Partial<Record<ResponseType, Answer>> = {
   OK_CAUTION_NOTOK: 'OK',
-  YES_NO: 'NO',
   LEVEL: 'NORMAL',
 };
+
+/** The clean answer for one item, or null when it cannot be known. */
+export function cleanAnswerFor(item: ChecklistItem): Answer | null {
+  if (item.responseType === 'YES_NO') {
+    if (item.adverseAnswer === 'YES') return 'NO';
+    if (item.adverseAnswer === 'NO') return 'YES';
+    return null;                       // unclassified: a person answers it
+  }
+  return ROUTINE_PASS[item.responseType] ?? null;
+}
 
 export interface BulkPlan {
   /** The items that would be answered, and with what. */
@@ -46,6 +59,8 @@ export interface BulkPlan {
   criticalLeft: ChecklistItem[];
   /** Readings still unanswered. These are never filled either. */
   readingsLeft: ChecklistItem[];
+  /** Yes/no items with no classification, so no answer can be assumed safe. */
+  unclassified: ChecklistItem[];
 }
 
 /**
@@ -61,6 +76,7 @@ export function planRoutineAnswers(
   const fill: { item: ChecklistItem; answer: Answer }[] = [];
   const criticalLeft: ChecklistItem[] = [];
   const readingsLeft: ChecklistItem[] = [];
+  const unclassified: ChecklistItem[] = [];
 
   for (const item of items) {
     const a = answers.get(item.itemId);
@@ -76,9 +92,10 @@ export function planRoutineAnswers(
     }
     if (answered) continue;           // never overwrite somebody's own answer
 
-    const good = ROUTINE_PASS[item.responseType];
+    const good = cleanAnswerFor(item);
     if (good) fill.push({ item, answer: good });
+    else unclassified.push(item);
   }
 
-  return { fill, criticalLeft, readingsLeft };
+  return { fill, criticalLeft, readingsLeft, unclassified };
 }

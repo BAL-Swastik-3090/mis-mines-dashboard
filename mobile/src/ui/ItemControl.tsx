@@ -22,7 +22,7 @@ import { useState } from 'react';
 import { View, Text, Pressable, TextInput, StyleSheet } from 'react-native';
 import type { ChecklistItem, RawResponse } from '@/core/evaluation';
 import { evaluateOne, rangeLabel } from '@/core/evaluation';
-import { answersFor, type Answer } from '@/core/enums';
+import { answersFor, isAdverse, type Answer } from '@/core/enums';
 
 const ANSWER_LABEL: Record<Answer, string> = {
   OK: 'OK', CAUTION: 'Caution', NOT_OK: 'Not OK', NA: 'N/A',
@@ -51,12 +51,68 @@ export function ItemControl({ item, value, photoCount, onChange, onAddPhoto }: I
   const put = (patch: Partial<RawResponse>) =>
     onChange({ ...current, itemId: item.itemId, ...patch });
 
+  /**
+   * Changing a finding back to a clean answer asks first.
+   *
+   * ── WHY THIS IS NOT FUSSY ──────────────────────────────────────────────
+   * An adverse answer carries a remark somebody typed and often a photograph
+   * somebody took, and it may be the reason the machine is held. One stray
+   * tap on OK cleared all of it silently: the finding, the banner, the
+   * defect it would have raised. The record then showed a clean machine, and
+   * nothing anywhere said a fault had been entered and removed. Done by
+   * accident during testing on a tablet, 12 Nov 2026 -- which is exactly how
+   * it would happen in a cab with gloves on.
+   *
+   * Only in this direction. Marking something NOT OK is never questioned.
+   */
+  const [confirmClear, setConfirmClear] = useState<Answer | null>(null);
+
+  const choose = (a: Answer) => {
+    const losingAFinding =
+      adverse && !isAdverse(a) && a !== item.adverseAnswer
+      && ((current.remark ?? '').trim() !== '' || (photoCount ?? 0) > 0);
+    if (losingAFinding) { setConfirmClear(a); return; }
+    put({ answer: a, numericValue: null });
+  };
+
   // A problem the screen is already stating is noise, not help. "Add a photo"
   // is the label on the button sitting right above it, and printing it twice
   // reads as two separate things to do.
   const photoButtonShown = adverse && item.requiresPhotoIfNotOk;
   const unsaid = ev.problems.filter(
     (p) => !(photoButtonShown && p === 'Add a photo'));
+
+  const clearPrompt = confirmClear ? (
+    <View style={styles.confirmBox} testID={`confirm-clear-${item.itemId}`}>
+      <Text style={styles.confirmText}>
+        This removes the finding{(current.remark ?? '').trim() ? ', what you wrote about it' : ''}
+        {(photoCount ?? 0) > 0 ? ` and ${photoCount} photo(s)` : ''}. The workshop
+        will not be told about it.
+      </Text>
+      <View style={styles.confirmRow}>
+        <Pressable
+          testID={`confirm-clear-yes-${item.itemId}`}
+          style={[styles.confirmBtn, styles.confirmBtnBad]}
+          onPress={() => {
+            // The remark and photos are kept on the row: an answer that is no
+            // longer adverse does not use them, but deleting what somebody
+            // wrote because of a tap is the same mistake again.
+            put({ answer: confirmClear, numericValue: null });
+            setConfirmClear(null);
+          }}
+        >
+          <Text style={styles.confirmBtnText}>Yes, remove it</Text>
+        </Pressable>
+        <Pressable
+          testID={`confirm-clear-no-${item.itemId}`}
+          style={[styles.confirmBtn, styles.confirmBtnKeep]}
+          onPress={() => setConfirmClear(null)}
+        >
+          <Text style={styles.confirmBtnText}>Keep the finding</Text>
+        </Pressable>
+      </View>
+    </View>
+  ) : null;
 
   return (
     <View style={[styles.card, adverse && styles.cardAdverse]} testID={`item-${item.itemId}`}>
@@ -111,7 +167,7 @@ export function ItemControl({ item, value, photoCount, onChange, onAddPhoto }: I
                 style={[styles.answer, picked && styles.answerPicked,
                         picked && a === 'NOT_OK' && styles.answerNotOk,
                         picked && a === 'CAUTION' && styles.answerCaution]}
-                onPress={() => put({ answer: a, numericValue: null })}
+                onPress={() => choose(a)}
               >
                 <Text style={[styles.answerText, picked && styles.answerTextPicked]}>
                   {ANSWER_LABEL[a]}
@@ -122,9 +178,15 @@ export function ItemControl({ item, value, photoCount, onChange, onAddPhoto }: I
         </View>
       )}
 
+      {/* Asked BEFORE the answer changes, so the finding is still there to
+          keep. Outside the adverse block: by the time it renders the answer
+          has not changed yet, and inside it would vanish on the very tap it
+          exists to question. */}
+      {clearPrompt}
+
       {/* The consequences, the moment the answer is given. */}
       {adverse && (
-        <View style={styles.consequences}>
+          <View style={styles.consequences}>
           <TextInput
             testID={`remark-${item.itemId}`}
             style={styles.remark}
@@ -164,6 +226,15 @@ export function ItemControl({ item, value, photoCount, onChange, onAddPhoto }: I
 }
 
 const styles = StyleSheet.create({
+  confirmBox: { backgroundColor: '#fff8e6', borderColor: '#e0bf6a', borderWidth: 1.5,
+                borderRadius: 8, padding: 12, gap: 10 },
+  confirmText: { fontSize: 14, color: '#16202b' },
+  confirmRow: { flexDirection: 'row', gap: 8 },
+  confirmBtn: { flex: 1, minHeight: 52, borderRadius: 8,
+                alignItems: 'center', justifyContent: 'center' },
+  confirmBtnBad: { backgroundColor: '#c0392b' },
+  confirmBtnKeep: { backgroundColor: '#1e5f8a' },
+  confirmBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
   card: { backgroundColor: '#fff', borderRadius: 10, padding: 14, marginBottom: 10,
           borderWidth: 1, borderColor: '#d8dee6' },
   cardAdverse: { borderColor: '#c0392b', borderWidth: 2, backgroundColor: '#fff6f5' },

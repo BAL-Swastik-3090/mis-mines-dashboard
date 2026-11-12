@@ -38,6 +38,7 @@ export default function Checklist() {
   }, [template, answers]);
 
   const [bulkNote, setBulkNote] = useState<string | null>(null);
+  const [footerHeight, setFooterHeight] = useState(110);
 
   const sections = useMemo(
     () => (template?.sections ?? []).map((s) => ({ title: s.name, data: s.items })),
@@ -128,7 +129,14 @@ export default function Checklist() {
       <SectionList
         sections={sections}
         keyExtractor={(i: ChecklistItem) => String(i.itemId)}
-        contentContainerStyle={{ padding: 16, paddingBottom: 110 }}
+        // MEASURED, not guessed. The footer is absolutely positioned, so the
+        // list has to leave room for it by hand -- and the fixed 110 it used
+        // to leave was not enough on a tablet, where the gesture bar makes
+        // the footer taller. The last check on the list sat UNDER the button,
+        // so tapping it pressed Readings instead. Found on a Lenovo tablet,
+        // 12 Nov 2026, by answering the last item and landing on the next
+        // screen.
+        contentContainerStyle={{ padding: 16, paddingBottom: footerHeight + 24 }}
         stickySectionHeadersEnabled={false}
         renderSectionHeader={({ section }) => (
           <Text style={styles.section}>{section.title}</Text>
@@ -145,7 +153,8 @@ export default function Checklist() {
         )}
       />
 
-      <View style={styles.footer}>
+      <View style={styles.footer}
+            onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}>
         <Pressable testID="to-readings" style={styles.primary}
                    onPress={() => router.push('/capture/readings')}>
           <Text style={styles.primaryText}>

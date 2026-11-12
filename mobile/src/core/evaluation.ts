@@ -31,6 +31,8 @@ export interface ChecklistItem {
   responseType: ResponseType;
   isCritical: boolean;
   requiresPhotoIfNotOk: boolean;
+  /** For a YES_NO item, which answer is a finding. Null: neither is. */
+  adverseAnswer?: Answer | null;
   defaultSeverity: Severity;
   unit?: string | null;
   minValue?: number | null;
@@ -129,7 +131,12 @@ export function evaluateOne(item: ChecklistItem, raw: RawResponse): EvaluatedRes
       // correction in the admin panel, not a tap in a cab.
       if (item.isCritical) problems.push('A critical item cannot be marked Not applicable');
     } else {
-      adverse = isAdverse(a);
+      // NOT_OK and CAUTION carry their own meaning. A yes/no answer does
+      // not: "Exhaust smoke (excessive) = YES" is a finding and "Grease
+      // points done = YES" is the opposite, so the ITEM says which of its
+      // two answers reports a problem. An item nobody has classified
+      // raises nothing, rather than guessing and raising the wrong thing.
+      adverse = isAdverse(a) || (item.adverseAnswer != null && a === item.adverseAnswer);
     }
   }
 

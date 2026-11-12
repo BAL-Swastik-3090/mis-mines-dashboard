@@ -87,6 +87,7 @@ def template_payload(db: Session, template_id: int) -> dict[str, Any]:
         SELECT s.section_id, s.name AS section_name, s.display_order AS section_order,
                i.item_id, i.label, i.response_type, i.unit, i.min_value, i.max_value,
                i.category, i.is_critical, i.requires_photo_if_not_ok,
+               i.adverse_answer,
                i.default_severity, i.display_order
           FROM hoto_checklist_section s
           LEFT JOIN hoto_checklist_item i
@@ -112,6 +113,7 @@ def template_payload(db: Session, template_id: int) -> dict[str, Any]:
             "category": r["category"],
             "is_critical": r["is_critical"],
             "requires_photo_if_not_ok": r["requires_photo_if_not_ok"],
+            "adverse_answer": r["adverse_answer"],
             "default_severity": r["default_severity"],
             "display_order": r["display_order"],
         })

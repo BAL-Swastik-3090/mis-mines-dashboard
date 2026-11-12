@@ -171,3 +171,92 @@ describe('the photo button', () => {
     expect(onAddPhoto).toHaveBeenCalled();
   });
 });
+
+/* ── losing a finding to one tap ───────────────────────────────────────────
+   The whole point of a walk-round is the thing somebody found. A stray tap on
+   OK used to clear the finding, the remark and the photo count without a word,
+   and the record then showed a clean machine. */
+
+test('changing a finding back to OK asks first when something would be lost', () => {
+  const item: ChecklistItem = {
+    itemId: 1, label: 'Service brake response', responseType: 'OK_CAUTION_NOTOK',
+    isCritical: true, requiresPhotoIfNotOk: true, defaultSeverity: 'CRITICAL',
+  };
+  const onChange = jest.fn();
+  const { getByTestId, queryByTestId } = render(
+    <ItemControl
+      item={item}
+      value={{ itemId: 1, answer: 'NOT_OK', remark: 'pedal to the floor' }}
+      photoCount={1}
+      onChange={onChange}
+      onAddPhoto={() => {}}
+    />,
+  );
+
+  fireEvent.press(getByTestId('answer-1-OK'));
+
+  // Nothing changed yet — it asked.
+  expect(onChange).not.toHaveBeenCalled();
+  expect(queryByTestId('confirm-clear-1')).not.toBeNull();
+
+  fireEvent.press(getByTestId('confirm-clear-no-1'));
+  expect(onChange).not.toHaveBeenCalled();
+});
+
+test('confirming the removal does change the answer, and keeps what was written', () => {
+  const item: ChecklistItem = {
+    itemId: 1, label: 'Service brake response', responseType: 'OK_CAUTION_NOTOK',
+    isCritical: true, requiresPhotoIfNotOk: true, defaultSeverity: 'CRITICAL',
+  };
+  const onChange = jest.fn();
+  const { getByTestId } = render(
+    <ItemControl
+      item={item}
+      value={{ itemId: 1, answer: 'NOT_OK', remark: 'pedal to the floor' }}
+      photoCount={1}
+      onChange={onChange}
+      onAddPhoto={() => {}}
+    />,
+  );
+
+  fireEvent.press(getByTestId('answer-1-OK'));
+  fireEvent.press(getByTestId('confirm-clear-yes-1'));
+
+  expect(onChange).toHaveBeenCalledTimes(1);
+  const sent = onChange.mock.calls[0]![0];
+  expect(sent.answer).toBe('OK');
+  // Deleting what somebody wrote because of a tap is the same mistake again.
+  expect(sent.remark).toBe('pedal to the floor');
+});
+
+test('a finding with nothing attached changes without being questioned', () => {
+  const item: ChecklistItem = {
+    itemId: 2, label: 'Mirror', responseType: 'OK_CAUTION_NOTOK',
+    isCritical: false, requiresPhotoIfNotOk: false, defaultSeverity: 'LOW',
+  };
+  const onChange = jest.fn();
+  const { getByTestId, queryByTestId } = render(
+    <ItemControl item={item} value={{ itemId: 2, answer: 'NOT_OK' }}
+                 photoCount={0} onChange={onChange} onAddPhoto={() => {}} />,
+  );
+
+  fireEvent.press(getByTestId('answer-2-OK'));
+  expect(queryByTestId('confirm-clear-2')).toBeNull();
+  expect(onChange).toHaveBeenCalledTimes(1);
+});
+
+test('marking something NOT OK is never questioned', () => {
+  const item: ChecklistItem = {
+    itemId: 3, label: 'Tyres', responseType: 'OK_CAUTION_NOTOK',
+    isCritical: false, requiresPhotoIfNotOk: false, defaultSeverity: 'MEDIUM',
+  };
+  const onChange = jest.fn();
+  const { getByTestId, queryByTestId } = render(
+    <ItemControl item={item} value={{ itemId: 3, answer: 'OK' }}
+                 photoCount={0} onChange={onChange} onAddPhoto={() => {}} />,
+  );
+
+  fireEvent.press(getByTestId('answer-3-NOT_OK'));
+  expect(queryByTestId('confirm-clear-3')).toBeNull();
+  expect(onChange).toHaveBeenCalledTimes(1);
+});

@@ -6,12 +6,13 @@
  * stops meaning anything.
  */
 
-import { planRoutineAnswers, ROUTINE_PASS } from './routine';
+import { cleanAnswerFor, planRoutineAnswers, ROUTINE_PASS } from './routine';
 import type { ChecklistItem, RawResponse } from './evaluation';
 import type { ResponseType } from './enums';
 
 const item = (
   itemId: number, responseType: ResponseType, isCritical = false,
+  adverseAnswer: 'YES' | 'NO' | null = null,
 ): ChecklistItem => ({
   itemId,
   label: `item ${itemId}`,
@@ -19,6 +20,7 @@ const item = (
   isCritical,
   requiresPhotoIfNotOk: false,
   defaultSeverity: 'MEDIUM',
+  adverseAnswer,
 });
 
 const none = new Map<number, RawResponse>();
@@ -55,16 +57,38 @@ test('an answer the operator already gave is never overwritten', () => {
 
 test('each kind of routine check gets its clean answer', () => {
   const items = [
-    item(1, 'OK_CAUTION_NOTOK'), item(2, 'YES_NO'), item(3, 'LEVEL'),
+    item(1, 'OK_CAUTION_NOTOK'), item(2, 'YES_NO', false, 'YES'), item(3, 'LEVEL'),
   ];
   const plan = planRoutineAnswers(items, none);
 
   expect(plan.fill.map((f) => f.answer)).toEqual(['OK', 'NO', 'NORMAL']);
 });
 
-test('YES_NO passes as NO, because the mine phrases these as problems', () => {
-  // "Exhaust smoke (excessive)" — NO is the clean answer, YES is the finding.
-  expect(ROUTINE_PASS.YES_NO).toBe('NO');
+test('a yes/no item is answered from ITS OWN classification, not a guess', () => {
+  // "Exhaust smoke (excessive)" — YES is the finding, so NO is clean.
+  // "Grease points done"        — NO is the finding, so YES is clean.
+  // Assuming NO for both would have recorded every machine as ungreased.
+  const smoke = item(1, 'YES_NO', false, 'YES');
+  const grease = item(2, 'YES_NO', false, 'NO');
+  const plan = planRoutineAnswers([smoke, grease], none);
+
+  expect(cleanAnswerFor(smoke)).toBe('NO');
+  expect(cleanAnswerFor(grease)).toBe('YES');
+  expect(plan.fill.map((f) => f.answer)).toEqual(['NO', 'YES']);
+});
+
+test('an unclassified yes/no item is left for a person, not guessed', () => {
+  const unknown = item(1, 'YES_NO', false, null);
+  const plan = planRoutineAnswers([unknown], none);
+
+  expect(plan.fill).toHaveLength(0);
+  expect(plan.unclassified.map((i) => i.itemId)).toEqual([1]);
+  expect(cleanAnswerFor(unknown)).toBeNull();
+});
+
+test('ROUTINE_PASS no longer carries a yes/no answer at all', () => {
+  // It cannot: the clean answer depends on the question, not the type.
+  expect(ROUTINE_PASS.YES_NO).toBeUndefined();
 });
 
 test('a critical check that was already answered is not reported as left', () => {
@@ -80,7 +104,7 @@ test('a whole tipper checklist leaves exactly the critical items and the gauges'
   const items = [
     item(1, 'NUMERIC'),                  // oil pressure
     item(2, 'NUMERIC'),                  // water temperature
-    item(3, 'YES_NO'),                   // exhaust smoke
+    item(3, 'YES_NO', false, 'YES'),     // exhaust smoke
     item(4, 'NUMERIC', true),            // air pressure — stops the machine
     item(5, 'OK_CAUTION_NOTOK', true),   // service brake — stops the machine
     item(6, 'OK_CAUTION_NOTOK', true),   // parking brake — stops the machine
@@ -95,7 +119,7 @@ test('a whole tipper checklist leaves exactly the critical items and the gauges'
 });
 
 test('nothing to do on an already-complete checklist', () => {
-  const items = [item(1, 'OK_CAUTION_NOTOK'), item(2, 'YES_NO')];
+  const items = [item(1, 'OK_CAUTION_NOTOK'), item(2, 'YES_NO', false, 'YES')];
   const answers = new Map<number, RawResponse>([
     [1, { itemId: 1, answer: 'OK' }],
     [2, { itemId: 2, answer: 'NO' }],

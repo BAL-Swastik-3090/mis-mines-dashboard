@@ -42,6 +42,7 @@ export interface SyncBundle {
         unit?: string | null; min_value?: number | null; max_value?: number | null;
         category?: string | null; is_critical: boolean | number;
         requires_photo_if_not_ok: boolean | number;
+        adverse_answer?: string | null;
         default_severity: string; display_order: number;
       }[];
     }[];
@@ -120,12 +121,12 @@ export async function cacheBundle(
             `INSERT INTO cached_item
                (item_id, section_id, label, response_type, unit, min_value, max_value,
                 category, is_critical, requires_photo_if_not_ok, default_severity,
-                display_order)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+                display_order, adverse_answer)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
             [i.item_id, s.section_id, i.label, i.response_type, i.unit ?? null,
              i.min_value ?? null, i.max_value ?? null, i.category ?? null,
              bit(i.is_critical), bit(i.requires_photo_if_not_ok),
-             i.default_severity, i.display_order]);
+             i.default_severity, i.display_order, i.adverse_answer ?? null]);
           items++;
         }
       }

@@ -10,6 +10,7 @@
  */
 
 import { create } from 'zustand';
+import * as Location from 'expo-location';
 import type { Store } from '@/core/capture/store';
 import type { CachedAsset, CachedOperator, ResolvedTemplate } from '@/core/capture/masters';
 import * as masters from '@/core/capture/masters';
@@ -187,6 +188,32 @@ export const useCapture = create<CaptureState>()((set, get) => ({
     if (!uuid || !asset) return { queued: false, status: 'DRAFT', problems: ['nothing to confirm'] };
     set({ busy: true });
     try {
+      // WHERE THE HANDOVER WAS SIGNED.
+      //
+      // session.setPosition has existed since phase 4 and was never once
+      // called, so captured_lat and captured_lon were null on every record
+      // ever filed -- while the photos attached to the same handover carried
+      // a position. Taken at confirm rather than at the start, because that
+      // is the moment somebody puts their name to it, and recorded as found
+      // rather than as hoped: a refusal or a timeout is stored as such.
+      try {
+        const perm = await Location.getForegroundPermissionsAsync();
+        if (!perm.granted) {
+          await session.setPosition(need(store), uuid, { status: 'DENIED' });
+        } else {
+          const fix = await Promise.race([
+            Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+            new Promise<null>((r) => setTimeout(() => r(null), 8000)),
+          ]);
+          await session.setPosition(need(store), uuid, fix
+            ? { lat: fix.coords.latitude, lon: fix.coords.longitude,
+                accuracyM: fix.coords.accuracy ?? null, status: 'OK' }
+            : { status: 'UNAVAILABLE' });
+        }
+      } catch {
+        await session.setPosition(need(store), uuid, { status: 'UNAVAILABLE' });
+      }
+
       const out = await session.confirm({
         store: need(store), uuid, items: template?.items ?? [], asset, confirmedBy: by,
       });

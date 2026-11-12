@@ -16,7 +16,7 @@
 
 import type { Store } from './store';
 import type { ChecklistItem } from '../evaluation';
-import type { ResponseType, Severity } from '../enums';
+import type { Answer, ResponseType, Severity } from '../enums';
 
 export interface CachedAsset {
   asset_id: number;
@@ -68,6 +68,7 @@ interface ItemRow {
   category: string | null;
   is_critical: number;
   requires_photo_if_not_ok: number;
+  adverse_answer: string | null;
   default_severity: Severity;
   display_order: number;
 }
@@ -211,6 +212,7 @@ function toItem(r: ItemRow): ChecklistItem {
     responseType: r.response_type,
     isCritical: r.is_critical === 1,
     requiresPhotoIfNotOk: r.requires_photo_if_not_ok === 1,
+    adverseAnswer: (r.adverse_answer as Answer | null) ?? null,
     defaultSeverity: r.default_severity,
     unit: r.unit,
     minValue: r.min_value,
