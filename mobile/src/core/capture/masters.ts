@@ -111,11 +111,52 @@ export async function assetCount(store: Store): Promise<number> {
   return r?.n ?? 0;
 }
 
-/** A machine by the QR sticker on its cab, which is how it is meant to be picked. */
+/**
+ * A machine by the sticker on its cab, which is how it is meant to be picked.
+ *
+ * ── THREE THINGS A SCAN CAN LEGITIMATELY CARRY ───────────────────────────────
+ * The reference the mine prints (EQP-2026-0008) is the first and the intended
+ * one. But a sticker is a physical object with a long life:
+ *
+ *   * somebody prints a batch carrying the FLEET CODE instead, because that is
+ *     what a person would put on a label;
+ *   * a stores or OEM barcode already on the machine gets scanned by mistake;
+ *   * a code is wrapped in a URL by whatever tool made it.
+ *
+ * Refusing a scan the operator believes in sends him to the search box, which
+ * is the path this exists to avoid. So the reference is tried exactly first,
+ * then the fleet code with separators ignored -- and anything still unmatched
+ * is refused rather than guessed, because picking the wrong machine is worse
+ * than picking none.
+ */
 export async function assetByQr(store: Store, qr: string): Promise<CachedAsset | null> {
-  return store.getFirstAsync<CachedAsset>(
-    `SELECT * FROM cached_asset WHERE qr_code = ?`, [qr.trim()],
-  );
+  const raw = qr.trim();
+  if (!raw) return null;
+
+  // The reference, exactly as printed. The common case.
+  const exact = await store.getFirstAsync<CachedAsset>(
+    `SELECT * FROM cached_asset WHERE qr_code = ?`, [raw]);
+  if (exact) return exact;
+
+  // A code wrapped in a URL by the tool that made it: take the last segment.
+  const tail = raw.split(/[/?#]/).filter(Boolean).pop() ?? raw;
+  if (tail !== raw) {
+    const viaUrl = await store.getFirstAsync<CachedAsset>(
+      `SELECT * FROM cached_asset WHERE qr_code = ?`, [tail]);
+    if (viaUrl) return viaUrl;
+  }
+
+  // A sticker carrying the fleet code, separators ignored -- the same rule the
+  // search box uses, so "MAN 11", "man-11" and "MAN11" all reach MAN-11.
+  const q = normaliseCode(tail);
+  if (!q) return null;
+  const rows = await store.getAllAsync<CachedAsset>(
+    `SELECT * FROM cached_asset
+      WHERE ${SQL_NORM('fleet_code')} = ?1 OR ${SQL_NORM('qr_code')} = ?1
+      LIMIT 2`, [q]);
+  // Exactly one, or none. Two machines answering to one sticker is a fleet
+  // problem, and choosing between them here would hide it.
+  return rows.length === 1 ? rows[0]! : null;
 }
 
 export async function asset(store: Store, assetId: number): Promise<CachedAsset | null> {

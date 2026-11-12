@@ -91,6 +91,9 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   // one is admin only -- unlike every other HOTO screen, which a supervisor
   // needs in order to do the job.
   "hoto-devices": ["hoto.admin"],
+  // Printing the cab stickers is setting the fleet up, which is the same
+  // job as editing a checklist.
+  "hoto-stickers": ["hoto.admin"],
   "minehub": ["platform.registry.browse"],
   "manpower": ["platform.operators.view"],
   "operations": ["ops.shift.view"],
@@ -185,6 +188,8 @@ const LANDING_RANK: Record<AppPage, number> = {
   // Below the operational screens: this is set up once and visited when a
   // device is waiting, not every shift.
   "hoto-devices": 88,
+  // Next to Devices: both are things done once when the fleet is set up.
+  "hoto-stickers": 89,
   // Above MIS, where the mine asked for it: the one-screen management view
   // comes before the operational detail it summarises.
   "executive-summary": 5,
