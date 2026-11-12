@@ -32,6 +32,10 @@ export interface SyncBundle {
     competent_type_ids?: number[] | null; competency_valid_to?: string | null;
   }[];
   locations: { location_id: number; name: string }[];
+  shifts?: {
+    shift_id: number; code: string; name: string;
+    start_time: string; end_time: string; crosses_midnight: boolean | number;
+  }[];
   templates?: {
     template_id: number; asset_type_id: number; name: string; version: number;
     plant_id?: number | null; org_unit_id?: number | null; effective_from?: string | null;
@@ -67,6 +71,7 @@ export async function cacheBundle(
     await store.runAsync(`DELETE FROM cached_asset`);
     await store.runAsync(`DELETE FROM cached_operator`);
     await store.runAsync(`DELETE FROM cached_location`);
+    await store.runAsync(`DELETE FROM cached_shift`);
 
     for (const a of bundle.assets) {
       await store.runAsync(
@@ -99,6 +104,15 @@ export async function cacheBundle(
       await store.runAsync(
         `INSERT INTO cached_location (location_id, name, cached_at) VALUES (?,?,?)`,
         [l.location_id, l.name, at]);
+    }
+
+    for (const sh of bundle.shifts ?? []) {
+      await store.runAsync(
+        `INSERT INTO cached_shift
+           (shift_id, code, name, start_time, end_time, crosses_midnight)
+         VALUES (?,?,?,?,?,?)`,
+        [sh.shift_id, sh.code, sh.name, sh.start_time, sh.end_time,
+         bit(sh.crosses_midnight)]);
     }
 
     for (const t of bundle.templates ?? []) {

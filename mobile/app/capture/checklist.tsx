@@ -136,7 +136,8 @@ export default function Checklist() {
         // so tapping it pressed Readings instead. Found on a Lenovo tablet,
         // 12 Nov 2026, by answering the last item and landing on the next
         // screen.
-        contentContainerStyle={{ padding: 16, paddingBottom: footerHeight + 24 }}
+        contentContainerStyle={{ padding: 16, paddingBottom: footerHeight + 24,
+                                 width: '100%', maxWidth: 820, alignSelf: 'center' }}
         stickySectionHeadersEnabled={false}
         renderSectionHeader={({ section }) => (
           <Text style={styles.section}>{section.title}</Text>
@@ -175,7 +176,7 @@ const styles = StyleSheet.create({
   bulkDoneText: { fontSize: 14, color: '#16202b' },
   bulkFlag: { fontSize: 12, color: '#8a97a5', textAlign: 'center' },
   screen: { flex: 1, backgroundColor: '#f3f6f9' },
-  bar: { backgroundColor: '#16202b', paddingHorizontal: 16, paddingVertical: 12 },
+  bar: { width: '100%', maxWidth: 820, alignSelf: 'center', backgroundColor: '#16202b', paddingHorizontal: 16, paddingVertical: 12 },
   barCode: { color: '#fff', fontSize: 18, fontWeight: '700' },
   barCount: { color: '#aeb8c4', fontSize: 13 },
 
@@ -188,9 +189,11 @@ const styles = StyleSheet.create({
              marginTop: 10, marginBottom: 8 },
 
   footer: { position: 'absolute', left: 0, right: 0, bottom: 0, padding: 16,
+            alignItems: 'center',
             backgroundColor: '#f3f6f9', borderTopWidth: 1, borderTopColor: '#d8dee6' },
   primary: { minHeight: 64, borderRadius: 10, backgroundColor: '#16202b',
-             alignItems: 'center', justifyContent: 'center' },
+             alignItems: 'center', justifyContent: 'center',
+             width: '100%', maxWidth: 788 },
   primaryText: { color: '#fff', fontSize: 18, fontWeight: '700' },
 
   empty: { textAlign: 'center', color: '#5b6a7a', fontSize: 15, marginTop: 40, padding: 20 },

@@ -38,6 +38,37 @@ logger = logging.getLogger(__name__)
 #: Adverse regardless of the question, because the words carry their own
 #: meaning. A yes/no answer does not -- see `adverse_answer` on the item and
 #: migration 112.
+def _shift_for(db: Session, captured_at: Any) -> dict[str, Any]:
+    """Which shift a capture belongs to, from its own timestamp.
+
+    Best-effort: a mine with no shift calendar still files handovers, and a
+    missing shift is a gap in a report rather than a reason to refuse a record
+    of something that actually happened.
+    """
+    from datetime import datetime as _dtm
+    try:
+        at = captured_at
+        if isinstance(at, str):
+            at = _dtm.fromisoformat(at.replace("Z", "+00:00"))
+        if at is None:
+            at = _dtm.now().astimezone()
+        # ALWAYS to local time, not only when it is naive.
+        #
+        # A device sends captured_at in UTC. Resolving the shift against the
+        # UTC hour put a handover captured at 15:16 IST -- B shift -- into A
+        # shift, because 09:46 UTC is a morning. astimezone() on an aware
+        # value converts it; on a naive one it assumes local, which is what a
+        # bare timestamp from this server means anyway.
+        at = at.astimezone()
+        from app.services.hoto_board import current_shift
+        sh = current_shift(db, at)
+        if sh:
+            return {"shift_code": sh["code"], "prod_day": sh["production_day"]}
+    except Exception:                                        # noqa: BLE001
+        logger.exception("could not resolve the shift for a handover")
+    return {"shift_code": None, "prod_day": None}
+
+
 ADVERSE_ANSWERS = {"NOT_OK", "CAUTION"}
 VALID_ANSWERS = {
     "OK_CAUTION_NOTOK": {"OK", "CAUTION", "NOT_OK", "NA"},
@@ -308,14 +339,22 @@ def submit(db: Session, payload: dict[str, Any], actor: str) -> dict[str, Any]:
              meter_reading, meter_uom, fuel_level, location_id, status, blocked_reason,
              reject_reason, confirmed_by, confirmed_at, device_id, captured_at,
              captured_offline, captured_lat, captured_lon, gps_accuracy_m, gps_status,
-             remarks, created_by, bulk_answered)
+             remarks, created_by, bulk_answered, shift_code, production_day)
         VALUES (CAST(:u AS uuid), :a, :si, :dep, :st, :seq, :op, :emp, :tpl, :ver,
                 :meter, :uom, :fuel, :loc, :status, :blocked, :reject, :by, :at,
                 :dev, CAST(:cap AS timestamptz), :off, :lat, :lon, :acc, :gps, :rem, :by,
-                :bulk)
+                :bulk, :shift_code, CAST(:prod_day AS date))
         RETURNING session_id
     """), {
         "bulk": bool(payload.get("bulk_answered")),
+        # RESOLVED ONCE, FROM THE DEVICE'S OWN CLOCK, and stored.
+        #
+        # A handover captured at 22:40 and synced at 09:00 the next morning
+        # belongs to the night shift, not the morning one it happened to
+        # arrive in. Deriving it at read time -- which is all anything did
+        # before migration 113 -- gets that backwards, and re-buckets every
+        # old record whenever a shift timing is edited.
+        **_shift_for(db, payload.get("captured_at")),
         "u": client_uuid, "a": asset_id, "si": payload.get("shift_instance_id"),
         "dep": payload.get("deployment_id"), "st": session_type, "seq": seq,
         "op": payload.get("operator_id"), "emp": payload.get("operator_emp_id"),

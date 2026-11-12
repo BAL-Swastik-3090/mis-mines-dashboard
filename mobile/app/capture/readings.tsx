@@ -121,8 +121,20 @@ export default function Readings() {
 }
 
 const styles = StyleSheet.create({
+  /* ── READABLE ON A TABLET ─────────────────────────────────────────────
+     This is a phone layout, and on a 1600px tablet in a dock every row
+     stretched the full width: a checklist item's label sat at the far left
+     and its three buttons at the far right, with a hand's width of nothing
+     between them. An operator in a cab reads across that gap for every one
+     of twenty-four checks.
+
+     One column, capped and centred. Nothing changes on a phone, where the
+     screen is narrower than the cap. See app/capture/checklist.tsx for the
+     same cap applied to a list. */
+
   screen: { flex: 1, backgroundColor: '#f3f6f9' },
-  content: { padding: 16, gap: 18, paddingBottom: 40 },
+  content: { padding: 16, gap: 18, paddingBottom: 40,
+             width: '100%', maxWidth: 820, alignSelf: 'center' },
   field: { gap: 6 },
   label: { fontSize: 16, fontWeight: '700', color: '#16202b' },
   hint: { fontSize: 13, color: '#5b6a7a' },

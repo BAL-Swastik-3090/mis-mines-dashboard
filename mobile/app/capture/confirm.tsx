@@ -14,10 +14,11 @@
  * is the thing that gets the machine repaired.
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCapture } from '@/ui/useCapture';
+import { shiftAt, type ResolvedShift } from '@/core/capture/shifts';
 
 export default function Confirm() {
   const router = useRouter();
@@ -30,6 +31,18 @@ export default function Confirm() {
   const confirm = useCapture((s) => s.confirm);
   const discard = useCapture((s) => s.discard);
   const busy = useCapture((s) => s.busy);
+  const store = useCapture((s) => s.store);
+
+  // From the mine's own calendar, cached by the last sync. Null is said out
+  // loud rather than guessed: a device that has never synced cannot name a
+  // shift, and inventing one on a confirm screen is worse than admitting it.
+  const [shift, setShift] = useState<ResolvedShift | null>(null);
+  useEffect(() => {
+    void (async () => {
+      if (!store || !row?.captured_at) return;
+      setShift(await shiftAt(store, new Date(row.captured_at)));
+    })();
+  }, [store, row?.captured_at]);
 
   const [done, setDone] = useState<{ status: string } | null>(null);
   const [refused, setRefused] = useState<string[]>([]);
@@ -74,6 +87,15 @@ export default function Confirm() {
         <Text style={styles.meta}>
           {row.session_type.replace(/_/g, ' ').toLowerCase()} · meter {row.meter_reading ?? '—'}{' '}
           {row.meter_uom ?? ''}
+        </Text>
+        {/* WHICH SHIFT. The office resolves this from the time of capture and
+            stores it on the record (migration 113), but the person signing
+            should see which shift they are filing against -- near a shift
+            boundary it is the difference between their shift and the next
+            one, and they are the only person who can say it is wrong. */}
+        <Text style={styles.meta}>
+          {shift ? `shift ${shift.code} · ${shift.productionDay}`
+                 : 'shift not known on this device — the office will set it'}
         </Text>
         <Text style={styles.meta}>
           {operator ? `${operator.name} (${operator.emp_id ?? 'no number'})`
@@ -152,8 +174,20 @@ export default function Confirm() {
 }
 
 const styles = StyleSheet.create({
+  /* ── READABLE ON A TABLET ─────────────────────────────────────────────
+     This is a phone layout, and on a 1600px tablet in a dock every row
+     stretched the full width: a checklist item's label sat at the far left
+     and its three buttons at the far right, with a hand's width of nothing
+     between them. An operator in a cab reads across that gap for every one
+     of twenty-four checks.
+
+     One column, capped and centred. Nothing changes on a phone, where the
+     screen is narrower than the cap. See app/capture/checklist.tsx for the
+     same cap applied to a list. */
+
   screen: { flex: 1, backgroundColor: '#f3f6f9' },
-  content: { padding: 16, gap: 14, paddingBottom: 40 },
+  content: { padding: 16, gap: 14, paddingBottom: 40,
+             width: '100%', maxWidth: 820, alignSelf: 'center' },
   centre: { alignItems: 'center', justifyContent: 'center', padding: 28, gap: 10 },
 
   summary: { backgroundColor: '#16202b', borderRadius: 10, padding: 16, gap: 2 },

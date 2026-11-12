@@ -204,6 +204,17 @@ export default function Home() {
 }
 
 const styles = StyleSheet.create({
+  /* ── READABLE ON A TABLET ─────────────────────────────────────────────
+     This is a phone layout, and on a 1600px tablet in a dock every row
+     stretched the full width: a checklist item's label sat at the far left
+     and its three buttons at the far right, with a hand's width of nothing
+     between them. An operator in a cab reads across that gap for every one
+     of twenty-four checks.
+
+     One column, capped and centred. Nothing changes on a phone, where the
+     screen is narrower than the cap. See app/capture/checklist.tsx for the
+     same cap applied to a list. */
+
   sendBox: { gap: 6 },
   send: { minHeight: 64, borderRadius: 10, backgroundColor: '#1e5f8a',
           alignItems: 'center', justifyContent: 'center' },
@@ -211,7 +222,8 @@ const styles = StyleSheet.create({
   sendText: { color: '#fff', fontSize: 18, fontWeight: '700' },
   sendNote: { fontSize: 13, color: '#5b6a7a', textAlign: 'center' },
   screen: { flex: 1, backgroundColor: '#f3f6f9' },
-  content: { padding: 16, gap: 14 },
+  content: { padding: 16, gap: 14,
+             width: '100%', maxWidth: 820, alignSelf: 'center' },
 
   banner: { borderRadius: 10, padding: 14, borderWidth: 1, gap: 4 },
   bannerClear: { backgroundColor: '#eefaf1', borderColor: '#9ad6ac' },

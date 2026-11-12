@@ -23,7 +23,7 @@
  * unsynced handovers, and it lives in a cab.
  */
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 /** Run in order, inside one transaction, on first open and on upgrade. */
 export const MIGRATIONS: readonly string[][] = [
@@ -327,5 +327,22 @@ export const MIGRATIONS: readonly string[][] = [
   // ungreased. See migration 112.
   [
     `ALTER TABLE cached_item ADD COLUMN adverse_answer TEXT;`,
+  ],
+
+  // ── 6 · the mine's own shift hours ──────────────────────────────────────
+  // The server has sent these in every sync bundle since phase 4 and the
+  // device threw them away, so the one screen that needed to name a shift
+  // had the mine's hours written into it as a constant. That is a copy of a
+  // business rule in the place least able to be updated, and it would be
+  // quietly wrong the day the mine moved a shift by an hour.
+  [
+    `CREATE TABLE IF NOT EXISTS cached_shift (
+       shift_id         INTEGER PRIMARY KEY,
+       code             TEXT    NOT NULL,
+       name             TEXT    NOT NULL,
+       start_time       TEXT    NOT NULL,
+       end_time         TEXT    NOT NULL,
+       crosses_midnight INTEGER NOT NULL DEFAULT 0
+     );`,
   ],
 ];
