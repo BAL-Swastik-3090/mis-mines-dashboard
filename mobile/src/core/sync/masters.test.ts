@@ -42,9 +42,19 @@ const bundle = (over: Record<string, unknown> = {}) => ({
     sections: [{
       section_id: 50, name: 'Brakes', display_order: 1,
       items: [{
-        item_id: 500, label: 'Parking brake', response_type: 'OK_NOT_OK',
+        item_id: 500, label: 'Parking brake', response_type: 'OK_CAUTION_NOTOK',
         is_critical: true, requires_photo_if_not_ok: true,
         default_severity: 'HIGH', display_order: 1,
+      }, {
+        // Phrased as a fault: YES reports it.
+        item_id: 501, label: 'Exhaust smoke (excessive)', response_type: 'YES_NO',
+        is_critical: false, requires_photo_if_not_ok: false,
+        adverse_answer: 'YES', default_severity: 'MEDIUM', display_order: 2,
+      }, {
+        // Phrased as a task: NO reports it was not done.
+        item_id: 502, label: 'Grease points done', response_type: 'YES_NO',
+        is_critical: false, requires_photo_if_not_ok: false,
+        adverse_answer: 'NO', default_severity: 'LOW', display_order: 3,
       }],
     }],
   }],
@@ -90,8 +100,44 @@ test('a checklist arrives with the machine it belongs to', async () => {
 
   const t = await masters.resolveTemplate(store, 7);
   expect(t).not.toBeNull();
-  expect(t!.items).toHaveLength(1);
+  expect(t!.items).toHaveLength(3);
   expect(t!.items[0]!.label).toBe('Parking brake');
+});
+
+test('a yes/no check keeps which answer is the finding, all the way to the screen',
+  async () => {
+    // The server sends it, the cache stores it, and for one build the read
+    // query simply did not select it -- so every yes/no check on every device
+    // read as unclassified and raised nothing. Asserted at the far end, where
+    // a screen actually uses it, because that is the only place it was wrong.
+    await syncNow({ store, transport: transport(), force: true, refreshMasters: true });
+
+    const t = await masters.resolveTemplate(store, 7);
+    const smoke = t!.items.find((i) => i.label.startsWith('Exhaust'));
+    const grease = t!.items.find((i) => i.label.startsWith('Grease'));
+
+    expect(smoke!.adverseAnswer).toBe('YES');
+    expect(grease!.adverseAnswer).toBe('NO');
+  });
+
+test('an unclassified yes/no check comes through as null, not undefined', async () => {
+  const bundle = {
+    ...transport(), getBundle: async () => ({ status: 200, body: {
+      server_time: new Date().toISOString(), assets: [], operators: [],
+      locations: [], templates: [{
+        template_id: 9, asset_type_id: 7, name: 'T', version: 1,
+        sections: [{ section_id: 90, name: 'S', display_order: 1, items: [{
+          item_id: 900, label: 'Unclassified', response_type: 'YES_NO',
+          is_critical: false, requires_photo_if_not_ok: false,
+          default_severity: 'LOW', display_order: 1,
+        }] }],
+      }] },
+    }),
+  };
+  await syncNow({ store, transport: bundle, force: true, refreshMasters: true });
+
+  const t = await masters.resolveTemplate(store, 7);
+  expect(t!.items[0]!.adverseAnswer).toBeNull();
 });
 
 test('mastersRefreshed means STORED, not fetched', async () => {

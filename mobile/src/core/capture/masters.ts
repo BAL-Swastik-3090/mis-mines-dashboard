@@ -182,6 +182,12 @@ export async function resolveTemplate(
             s.display_order AS section_order,
             i.label, i.response_type, i.unit, i.min_value, i.max_value,
             i.category, i.is_critical, i.requires_photo_if_not_ok,
+            -- Which answer is the finding. Stored by the cache and mapped by
+            -- toItem, and for one build simply not selected here -- so every
+            -- yes/no check on every device read as unclassified, raised
+            -- nothing, and was skipped by the one-tap routine answer. Caught
+            -- on a tablet: "Mark the 18 routine checks OK" filled 13.
+            i.adverse_answer,
             i.default_severity, i.display_order
        FROM cached_item i
        JOIN cached_section s ON s.section_id = i.section_id
