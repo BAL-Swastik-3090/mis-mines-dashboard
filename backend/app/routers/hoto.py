@@ -271,6 +271,33 @@ def admin_templates(request: Request,
     return {"count": len(rows), "templates": rows}
 
 
+@router.get("/admin/asset-types")
+def admin_asset_types(request: Request,
+                      db: Session = Depends(get_minehub_db)) -> dict:
+    """Every machine type in the fleet and whether it has a checklist.
+
+    The question an administrator actually has, which a list of templates
+    cannot answer: it shows what exists, not what is missing.
+    """
+    _admin_guard(request, db)
+    rows = adm.asset_types_needing_a_checklist(db)
+    return {"count": len(rows), "asset_types": rows,
+            "without_a_checklist": sum(1 for r in rows if not r["published"])}
+
+
+@router.post("/admin/templates", status_code=201)
+def admin_create_template(request: Request, payload: dict,
+                          db: Session = Depends(get_minehub_db)) -> dict:
+    """Start a checklist for a machine type that has none."""
+    actor = _admin_guard(request, db)
+    return _admin(adm.create_template, db,
+                  asset_type_id=payload.get("asset_type_id"),
+                  name=payload.get("name", ""),
+                  actor=actor,
+                  plant_id=payload.get("plant_id"),
+                  org_unit_id=payload.get("org_unit_id"))
+
+
 @router.post("/admin/templates/{template_id}/clone", status_code=201)
 def admin_clone(template_id: int, request: Request, payload: dict | None = None,
                 db: Session = Depends(get_minehub_db)) -> dict:

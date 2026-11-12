@@ -23,11 +23,14 @@ different and rarer intention than "there is a newer version".
 """
 from __future__ import annotations
 
+import logging
 from datetime import date
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 RESPONSE_TYPES = ("OK_CAUTION_NOTOK", "NUMERIC", "YES_NO", "LEVEL")
 SEVERITIES = ("LOW", "MEDIUM", "HIGH", "CRITICAL")
@@ -142,9 +145,11 @@ def clone(db: Session, template_id: int, actor: str,
         INSERT INTO hoto_checklist_item
             (section_id, label, response_type, unit, min_value, max_value, category,
              is_critical, requires_photo_if_not_ok, default_severity, display_order,
+             adverse_answer,
              status, created_by)
         SELECT ns.section_id, i.label, i.response_type, i.unit, i.min_value, i.max_value,
                i.category, i.is_critical, i.requires_photo_if_not_ok,
+               i.adverse_answer,
                i.default_severity, i.display_order, 'ACTIVE', :by
           FROM hoto_checklist_item i
           JOIN hoto_checklist_section os ON os.section_id = i.section_id
@@ -190,6 +195,22 @@ def _validate_item(d: dict) -> list[str]:
     if not (d.get("label") or "").strip():
         problems.append("the item needs a label")
 
+    # A yes/no item that does not say which of its two answers reports a
+    # problem records answers and raises nothing -- which is how a fleet ran
+    # with excessive exhaust smoke, cuts in tyres and tread below the limit
+    # all invisible to the workshop. Asked for here rather than left to
+    # default, because the answer depends entirely on how the question is
+    # worded and only the person writing it knows. See migration 112.
+    adv = d.get("adverse_answer")
+    if rt == "YES_NO":
+        if adv not in ("YES", "NO"):
+            problems.append(
+                "say which answer reports a problem: YES for a question phrased "
+                "as a fault (\"Exhaust smoke (excessive)\"), NO for one phrased "
+                "as a task (\"Grease points done\")")
+    elif adv is not None:
+        problems.append("only a yes/no item says which answer is the finding")
+
     lo, hi = d.get("min_value"), d.get("max_value")
     if rt == "NUMERIC":
         if not (d.get("unit") or "").strip():
@@ -224,14 +245,16 @@ def add_item(db: Session, section_id: int, d: dict, actor: str) -> dict:
         INSERT INTO hoto_checklist_item
             (section_id, label, response_type, unit, min_value, max_value, category,
              is_critical, requires_photo_if_not_ok, default_severity, display_order,
-             created_by)
-        VALUES (:s, :l, :rt, :u, :lo, :hi, :c, :crit, :photo, :sev, :o, :by)
+             created_by, adverse_answer)
+        VALUES (:s, :l, :rt, :u, :lo, :hi, :c, :crit, :photo, :sev, :o, :by, :adv)
         RETURNING item_id
     """), {"s": section_id, "l": d["label"].strip(), "rt": d["response_type"],
            "u": d.get("unit"), "lo": d.get("min_value"), "hi": d.get("max_value"),
            "c": d.get("category"), "crit": bool(d.get("is_critical")),
            "photo": bool(d.get("requires_photo_if_not_ok", True)),
-           "sev": d["default_severity"], "o": order, "by": actor}).scalar()
+           "adv": d.get("adverse_answer"),
+           "sev": d["default_severity"], "o": order, "by": actor,
+           "adv": d.get("adverse_answer")}).scalar()
     db.commit()
     return {"item_id": iid, "display_order": order}
 
@@ -255,6 +278,7 @@ def update_item(db: Session, item_id: int, d: dict, actor: str) -> dict:
            SET label = :l, response_type = :rt, unit = :u,
                min_value = :lo, max_value = :hi, category = :c,
                is_critical = :crit, requires_photo_if_not_ok = :photo,
+               adverse_answer = :adv,
                default_severity = :sev, updated_by = :by, updated_at = now()
          WHERE item_id = :i
     """), {"i": item_id, "l": d["label"].strip(), "rt": d["response_type"],
@@ -358,3 +382,91 @@ def retire(db: Session, template_id: int, actor: str) -> dict:
     """), {"t": template_id, "by": actor})
     db.commit()
     return {"template_id": template_id, "status": "RETIRED"}
+
+
+def asset_types_needing_a_checklist(db: Session) -> list[dict]:
+    """Every machine type in the fleet, and whether it has a checklist.
+
+    The screen leads with this because it is the question an administrator
+    actually has: ten of this mine's thirteen machine types have no checklist
+    at all, so a handover on an ambulance or a crane stops at "this device
+    holds no checklist for a Crane". A list of templates does not show that --
+    it shows what exists, not what is missing.
+    """
+    rows = db.execute(text("""
+        SELECT at.asset_type_id, at.name AS asset_type_name,
+               count(DISTINCT a.asset_id) AS machines,
+               count(DISTINCT t.template_id) FILTER (WHERE t.status = 'ACTIVE') AS published,
+               count(DISTINCT t.template_id) FILTER (WHERE t.status = 'DRAFT')  AS drafts
+          FROM asset_type at
+          LEFT JOIN asset a ON a.asset_type_id = at.asset_type_id
+          LEFT JOIN hoto_checklist_template t ON t.asset_type_id = at.asset_type_id
+         GROUP BY at.asset_type_id, at.name
+        HAVING count(DISTINCT a.asset_id) > 0
+         ORDER BY (count(DISTINCT t.template_id) FILTER (WHERE t.status = 'ACTIVE')) ASC,
+                  count(DISTINCT a.asset_id) DESC
+    """)).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def create_template(db: Session, *, asset_type_id: int, name: str, actor: str,
+                    plant_id: int | None = None,
+                    org_unit_id: int | None = None) -> dict[str, Any]:
+    """Start a checklist for a machine type that has none.
+
+    ── WHY THIS IS NOT `clone` ──────────────────────────────────────────────
+    Cloning was the only way to get a draft, which works perfectly for the
+    three types that already had a checklist and not at all for the ten that
+    did not: there was nothing to clone from. An administrator could not
+    create a checklist for a crane without first inventing one for a crane.
+
+    It starts EMPTY rather than with a copied set of checks. A dozer's
+    walk-round is not a crane's, and a template pre-filled from the nearest
+    thing is how an ambulance ends up with a check for its blade.
+    """
+    problems: list[str] = []
+    name = (name or "").strip()
+    if not name:
+        problems.append("the checklist needs a name — what it will be called on a tablet")
+    if len(name) > 120:
+        problems.append("the name is longer than 120 characters")
+
+    at = db.execute(text("""
+        SELECT asset_type_id, name FROM asset_type WHERE asset_type_id = :a
+    """), {"a": asset_type_id}).mappings().first()
+    if not at:
+        problems.append(f"no such machine type: {asset_type_id}")
+    if problems:
+        raise AdminError(problems)
+
+    # A second ACTIVE template for the same scope is the ambiguity the
+    # resolver would have to break arbitrarily, so it is refused here where
+    # the person can still pick a different scope.
+    clash = db.execute(text("""
+        SELECT template_id, name, version FROM hoto_checklist_template
+         WHERE asset_type_id = :a AND status = 'ACTIVE'
+           AND plant_id IS NOT DISTINCT FROM :p
+           AND org_unit_id IS NOT DISTINCT FROM :o
+    """), {"a": asset_type_id, "p": plant_id, "o": org_unit_id}).mappings().first()
+    if clash:
+        raise AdminError(
+            [f"{at['name']} already has a published checklist "
+             f"({clash['name']} v{clash['version']}). Clone that to a draft "
+             f"instead, so handovers already signed against it still mean "
+             f"what they said."], status=409)
+
+    tid = db.execute(text("""
+        INSERT INTO hoto_checklist_template
+            (asset_type_id, plant_id, org_unit_id, name, version, status, created_by)
+        VALUES (:a, :p, :o, :n, 1, 'DRAFT', :by)
+        RETURNING template_id
+    """), {"a": asset_type_id, "p": plant_id, "o": org_unit_id,
+           "n": name, "by": actor}).scalar()
+    db.commit()
+    logger.info("checklist %s started for %s by %s", tid, at["name"], actor)
+
+    return {"template_id": tid, "version": 1, "status": "DRAFT",
+            "asset_type_id": asset_type_id, "asset_type_name": at["name"],
+            "name": name,
+            "note": ("Empty on purpose. Add the sections and checks this machine "
+                     "actually needs, then publish it.")}

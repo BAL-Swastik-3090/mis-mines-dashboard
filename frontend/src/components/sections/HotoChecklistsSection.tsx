@@ -25,6 +25,14 @@ type Status = "DRAFT" | "ACTIVE" | "RETIRED";
 type ResponseType = "OK_CAUTION_NOTOK" | "NUMERIC" | "YES_NO" | "LEVEL";
 type Severity = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
 
+interface AssetTypeCoverage {
+  asset_type_id: number;
+  asset_type_name: string;
+  machines: number;
+  published: number;
+  drafts: number;
+}
+
 interface TemplateRow {
   template_id: number;
   name: string;
@@ -101,6 +109,9 @@ export default function HotoChecklistsSection() {
   const [error, setError] = useState<string[] | null>(null);
   const [open, setOpen] = useState<Set<number>>(new Set());
   const [showRetired, setShowRetired] = useState(false);
+  const [coverage, setCoverage] = useState<AssetTypeCoverage[]>([]);
+  const [starting, setStarting] = useState<AssetTypeCoverage | null>(null);
+  const [newName, setNewName] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -117,7 +128,18 @@ export default function HotoChecklistsSection() {
     }
   }, [showRetired]);
 
-  useEffect(() => { void load(); }, [load]);
+  // What is MISSING, which a list of templates cannot show: it shows what
+  // exists. Eleven of this mine's fourteen machine types have no checklist,
+  // so a handover on a crane stops at "this device holds no checklist for a
+  // Crane" — and nothing on this screen said so.
+  const loadCoverage = useCallback(async () => {
+    try {
+      const r = await api.get("/hoto/admin/asset-types");
+      setCoverage(r.data.asset_types ?? []);
+    } catch { /* the templates list is still usable without it */ }
+  }, []);
+
+  useEffect(() => { void load(); void loadCoverage(); }, [load, loadCoverage]);
 
   const loadDetail = useCallback(async (id: number) => {
     setSelected(id);
@@ -157,6 +179,8 @@ export default function HotoChecklistsSection() {
   }, [rows]);
 
   const isDraft = detail?.status === "DRAFT";
+  const uncovered = useMemo(
+    () => coverage.filter((t) => t.published === 0), [coverage]);
 
   return (
     <div className="p-4 space-y-4">
@@ -175,6 +199,87 @@ export default function HotoChecklistsSection() {
           Show retired
         </label>
       </header>
+
+      {/* ── what has no checklist ────────────────────────────────────────
+          Led with, because it is the question an administrator actually has
+          and the one a list of templates cannot answer. A machine type with
+          no checklist cannot be handed over at all: the tablet stops at
+          "this device holds no checklist for a Crane", and an operator at
+          the face reads that as the app being broken. */}
+      {uncovered.length > 0 && (
+        <div className="rounded-lg border-2 border-amber-300 bg-amber-50/60 p-4 dark:border-amber-800 dark:bg-amber-950/20">
+          <h3 className="font-semibold text-sm">
+            {uncovered.length} machine type{uncovered.length === 1 ? "" : "s"} cannot be
+            handed over — {uncovered.reduce((n, t) => n + t.machines, 0)} machines
+          </h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            No published checklist, so a handover on one stops on the tablet.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {uncovered.map((t) => (
+              <button
+                key={t.asset_type_id}
+                onClick={() => { setStarting(t); setNewName(`${t.asset_type_name} handover`); }}
+                className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2.5 py-1.5 text-xs hover:bg-accent"
+              >
+                <Plus size={12} />
+                {t.asset_type_name}
+                <span className="text-muted-foreground">
+                  · {t.machines}{t.drafts > 0 ? ` · ${t.drafts} draft` : ""}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* starting one */}
+      {starting && (
+        <div className="rounded-lg border p-4 space-y-3">
+          <h3 className="font-semibold text-sm">
+            Start a checklist for {starting.asset_type_name}
+          </h3>
+          <input
+            autoFocus value={newName} onChange={(e) => setNewName(e.target.value)}
+            placeholder={`${starting.asset_type_name} handover`}
+            className="w-full max-w-md text-sm px-2 py-1.5 rounded border border-border bg-background"
+          />
+          <p className="text-xs text-muted-foreground max-w-prose">
+            It starts empty and as a draft. A dozer&apos;s walk-round is not a
+            crane&apos;s, so nothing is copied in — add the sections and checks this
+            machine actually needs, then publish it. Nothing reaches a tablet
+            until you do.
+          </p>
+          <div className="flex gap-2">
+            <button
+              disabled={!newName.trim() || busy === "create"}
+              onClick={async () => {
+                setBusy("create");
+                try {
+                  const r = await api.post("/hoto/admin/templates", {
+                    asset_type_id: starting.asset_type_id, name: newName.trim(),
+                  });
+                  setStarting(null);
+                  await load();
+                  await loadCoverage();
+                  await loadDetail(r.data.template_id);
+                  setError(null);
+                } catch (e: any) {
+                  const d = e?.response?.data?.detail;
+                  setError(d?.problems ?? [d?.message ?? "Could not start it."]);
+                } finally { setBusy(null); }
+              }}
+              className="rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800 disabled:opacity-50"
+            >
+              {busy === "create" ? "Starting…" : "Start it"}
+            </button>
+            <button onClick={() => setStarting(null)}
+                    className="rounded-md border px-3 py-1.5 text-xs hover:bg-accent">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="rounded border border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40 px-3 py-2">
@@ -439,6 +544,7 @@ function AddItem({ sectionId, busy, act }: {
     unit: "", min_value: "", max_value: "",
     is_critical: false, requires_photo_if_not_ok: true,
     default_severity: "MEDIUM" as Severity,
+    adverse_answer: "YES" as "YES" | "NO",
   });
 
   if (!adding) {
@@ -453,6 +559,7 @@ function AddItem({ sectionId, busy, act }: {
   }
 
   const numeric = f.response_type === "NUMERIC";
+  const yesNo = f.response_type === "YES_NO";
 
   return (
     <li className="px-4 pl-9 py-2 space-y-1.5 bg-muted/30">
@@ -484,6 +591,26 @@ function AddItem({ sectionId, busy, act }: {
                    placeholder="max" inputMode="decimal"
                    className="text-[11px] px-1.5 py-1 rounded border border-border bg-background w-16" />
           </>
+        )}
+
+        {/* WHICH ANSWER REPORTS A PROBLEM.
+            Asked, never assumed. "Exhaust smoke (excessive)" reports one when
+            answered YES; "Grease points done" reports one when answered NO.
+            A default would be wrong roughly one item in six, quietly — and a
+            yes/no check nobody classifies records answers and raises nothing,
+            which is how a fleet ran with cuts in its tyres invisible to the
+            workshop. */}
+        {yesNo && (
+          <label className="flex items-center gap-1 text-[11px]"
+                 title="Which answer means something is wrong">
+            <span className="text-muted-foreground">problem when</span>
+            <select value={f.adverse_answer}
+                    onChange={(e) => setF({ ...f, adverse_answer: e.target.value as "YES" | "NO" })}
+                    className="text-[11px] px-1.5 py-1 rounded border border-amber-400 bg-background font-semibold">
+              <option value="YES">YES — phrased as a fault</option>
+              <option value="NO">NO — phrased as a task</option>
+            </select>
+          </label>
         )}
 
         <select value={f.default_severity}
@@ -520,6 +647,7 @@ function AddItem({ sectionId, busy, act }: {
               is_critical: f.is_critical,
               requires_photo_if_not_ok: f.requires_photo_if_not_ok,
               default_severity: f.default_severity,
+              adverse_answer: f.response_type === "YES_NO" ? f.adverse_answer : null,
             });
             setAdding(false);
             setF({ ...f, label: "", unit: "", min_value: "", max_value: "" });
