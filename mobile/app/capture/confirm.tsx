@@ -83,6 +83,10 @@ export default function Confirm() {
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <View style={styles.summary}>
         <Text style={styles.code}>{asset.fleet_code}</Text>
+        {/* On the record somebody is putting their name to. */}
+        {asset.registration_no ? (
+          <Text style={styles.reg}>{asset.registration_no}</Text>
+        ) : null}
         <Text style={styles.meta}>{asset.asset_type_name}</Text>
         <Text style={styles.meta}>
           {row.session_type.replace(/_/g, ' ').toLowerCase()} · meter {row.meter_reading ?? '—'}{' '}
@@ -174,6 +178,8 @@ export default function Confirm() {
 }
 
 const styles = StyleSheet.create({
+  reg: { fontSize: 15, fontWeight: '700', color: '#16202b', textAlign: 'center',
+         letterSpacing: 0.4 },
   /* ── READABLE ON A TABLET ─────────────────────────────────────────────
      This is a phone layout, and on a 1600px tablet in a dock every row
      stretched the full width: a checklist item's label sat at the far left

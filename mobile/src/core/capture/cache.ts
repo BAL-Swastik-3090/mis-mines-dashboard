@@ -21,6 +21,7 @@ export interface SyncBundle {
   server_time: string;
   assets: {
     asset_id: number; fleet_code: string; nickname?: string | null;
+    registration_no?: string | null;
     asset_type_id: number; asset_type_name: string; qr_code?: string | null;
     meter_uom?: string | null; last_meter_reading?: number | null;
     last_meter_at?: string | null; operational_state?: string | null;
@@ -78,13 +79,15 @@ export async function cacheBundle(
         `INSERT INTO cached_asset
            (asset_id, fleet_code, nickname, asset_type_id, asset_type_name, qr_code,
             meter_uom, last_meter_reading, last_meter_at, operational_state,
-            open_defect_count, has_critical_defect, home_location_id, cached_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            open_defect_count, has_critical_defect, home_location_id, cached_at,
+            registration_no)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [a.asset_id, a.fleet_code, a.nickname ?? null, a.asset_type_id,
          a.asset_type_name, a.qr_code ?? null, a.meter_uom ?? null,
          a.last_meter_reading ?? null, a.last_meter_at ?? null,
          a.operational_state ?? null, a.open_defect_count ?? 0,
-         bit(a.has_critical_defect), a.home_location_id ?? null, at],
+         bit(a.has_critical_defect), a.home_location_id ?? null, at,
+         a.registration_no ?? null],
       );
     }
 

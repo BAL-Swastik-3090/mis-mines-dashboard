@@ -30,7 +30,7 @@ const bundle = (over: Record<string, unknown> = {}) => ({
   assets: [
     { asset_id: 1, fleet_code: 'TIP-77', asset_type_id: 7,
       asset_type_name: 'Tipper', meter_uom: 'km', open_defect_count: 0,
-      has_critical_defect: false },
+      has_critical_defect: false, registration_no: 'OD 04 H 9448' },
     { asset_id: 2, fleet_code: 'DOZ-99', asset_type_id: 8,
       asset_type_name: 'Dozer', meter_uom: 'hr', open_defect_count: 2,
       has_critical_defect: true },
@@ -222,4 +222,32 @@ test('not asking for masters leaves them alone', async () => {
 
   expect(report.machinesCached).toBeNull();
   expect(await masters.assetCount(store)).toBe(2);
+});
+
+test('the number painted on the machine reaches the picker', async () => {
+  // Stored, read back and searchable -- asserted at the far end, because the
+  // far end is where cacheBundle, setPosition, the shift calendar and
+  // adverse_answer were each quietly broken.
+  await syncNow({ store, transport: transport(), force: true, refreshMasters: true });
+
+  const found = await masters.assets(store, 'TIP-77');
+  expect(found[0]!.registration_no).toBe('OD 04 H 9448');
+});
+
+test('a machine can be found by the number painted on it', async () => {
+  await syncNow({ store, transport: transport(), force: true, refreshMasters: true });
+
+  // Typed the way an operator reads it off the machine, and without spaces.
+  expect((await masters.assets(store, 'OD 04 H 9448'))[0]?.fleet_code).toBe('TIP-77');
+  expect((await masters.assets(store, 'od04h9448'))[0]?.fleet_code).toBe('TIP-77');
+  // A partial still works here: this IS the search box.
+  expect((await masters.assets(store, '9448'))[0]?.fleet_code).toBe('TIP-77');
+});
+
+test('a machine with no registration is not broken by its absence', async () => {
+  await syncNow({ store, transport: transport(), force: true, refreshMasters: true });
+
+  const doz = (await masters.assets(store, 'DOZ-99'))[0];
+  expect(doz).toBeDefined();
+  expect(doz!.registration_no).toBeNull();
 });

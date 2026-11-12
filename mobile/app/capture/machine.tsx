@@ -94,7 +94,7 @@ export default function PickMachine() {
         style={styles.search}
         value={search}
         onChangeText={(t) => { setSearch(t); void load(t); }}
-        placeholder="…or find it by number"
+        placeholder="…or find it by number or registration"
         autoCapitalize="characters"
         autoCorrect={false}
       />
@@ -133,6 +133,12 @@ export default function PickMachine() {
           >
             <View style={{ flex: 1 }}>
               <Text style={styles.code}>{a.fleet_code}</Text>
+              {/* The number painted on the machine. What an operator reads to
+                  know he is at the right one -- MAN-50 and MAN-51 look alike
+                  across a yard and their registrations do not. */}
+              {a.registration_no ? (
+                <Text style={styles.reg}>{a.registration_no}</Text>
+              ) : null}
               <Text style={styles.type2}>{a.asset_type_name}</Text>
             </View>
             <View style={styles.flags}>
@@ -194,6 +200,7 @@ const styles = StyleSheet.create({
          borderWidth: 1, borderColor: '#d8dee6' },
   code: { fontSize: 19, fontWeight: '700', color: '#16202b' },
   type2: { fontSize: 13, color: '#5b6a7a' },
+  reg: { fontSize: 14, fontWeight: '700', color: '#16202b', letterSpacing: 0.4 },
   flags: { alignItems: 'flex-end', gap: 2 },
   held: { fontSize: 11, fontWeight: '800', color: '#fff', backgroundColor: '#c0392b',
           paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4, overflow: 'hidden' },

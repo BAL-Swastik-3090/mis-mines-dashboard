@@ -94,6 +94,11 @@ export default function Identify() {
     <View style={styles.screen}>
       <View style={styles.machine}>
         <Text style={styles.machineCode}>{asset.fleet_code}</Text>
+        {/* Shown here too: this is the last screen before the walk-round,
+            and the cheapest moment to notice the wrong machine. */}
+        {asset.registration_no ? (
+          <Text style={styles.machineReg}>{asset.registration_no}</Text>
+        ) : null}
         <Text style={styles.machineType}>{asset.asset_type_name}</Text>
       </View>
 
@@ -224,6 +229,7 @@ export default function Identify() {
 }
 
 const styles = StyleSheet.create({
+  machineReg: { fontSize: 14, fontWeight: '700', color: '#cfe0ec', letterSpacing: 0.4 },
   /* ── READABLE ON A TABLET ─────────────────────────────────────────────
      This is a phone layout, and on a 1600px tablet in a dock every row
      stretched the full width: a checklist item's label sat at the far left

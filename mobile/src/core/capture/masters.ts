@@ -22,6 +22,8 @@ export interface CachedAsset {
   asset_id: number;
   fleet_code: string;
   nickname: string | null;
+  /** What is painted on the vehicle. Null on anything that never goes on a road. */
+  registration_no: string | null;
   asset_type_id: number;
   asset_type_name: string;
   qr_code: string | null;
@@ -99,7 +101,10 @@ export async function assets(store: Store, search?: string): Promise<CachedAsset
     `SELECT * FROM cached_asset
       WHERE (?1 IS NULL
              OR ${SQL_NORM('fleet_code')} LIKE ?1
-             OR ${SQL_NORM("COALESCE(nickname,'')")} LIKE ?1)
+             OR ${SQL_NORM("COALESCE(nickname,'')")} LIKE ?1
+             -- By the number painted on it: an operator reading a machine in
+             -- front of him reads the registration, not our fleet code.
+             OR ${SQL_NORM("COALESCE(registration_no,'')")} LIKE ?1)
       ORDER BY has_critical_defect DESC, open_defect_count DESC, fleet_code`,
     [like],
   );

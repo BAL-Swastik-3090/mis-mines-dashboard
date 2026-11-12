@@ -23,7 +23,7 @@
  * unsynced handovers, and it lives in a cab.
  */
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 /** Run in order, inside one transaction, on first open and on upgrade. */
 export const MIGRATIONS: readonly string[][] = [
@@ -344,5 +344,14 @@ export const MIGRATIONS: readonly string[][] = [
        end_time         TEXT    NOT NULL,
        crosses_midnight INTEGER NOT NULL DEFAULT 0
      );`,
+  ],
+
+  // ── 7 · the number painted on the vehicle ───────────────────────────────
+  // What an operator standing at a machine actually reads to know it is the
+  // right one. The fleet code is ours; "OD 04 H 9448" is the machine's, and
+  // when the cab sticker is too greasy to scan it is the only thing that
+  // tells him apart MAN-50 from MAN-51.
+  [
+    `ALTER TABLE cached_asset ADD COLUMN registration_no TEXT;`,
   ],
 ];
