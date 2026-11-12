@@ -3,7 +3,7 @@
     "name": "Kaliapani HOTO",
     "slug": "kaliapani-hoto",
     "version": "0.1.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "scheme": "kaliapanihoto",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,

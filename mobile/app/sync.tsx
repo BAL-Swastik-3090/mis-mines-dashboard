@@ -113,7 +113,14 @@ export default function Sync() {
         testID="sync-now"
         disabled={running}
         style={[styles.primary, running && styles.primaryOff]}
-        onPress={() => void run({ force: true, refreshMasters: true })}
+        // Reload AFTER the run. Without this the list still shows the
+        // handovers that have just gone -- the engine updated the rows
+        // underneath it, but this screen read them once on focus. A
+        // supervisor sees 'Sent 1 handover' above a list that still says
+        // it is waiting, and presses Sync again. Seen on a tablet,
+        // 12 Nov 2026.
+        onPress={async () => { await run({ force: true, refreshMasters: true });
+                               await load(); }}
       >
         {running ? <ActivityIndicator color="#fff" />
                  : <Text style={styles.primaryText}>Sync now</Text>}
