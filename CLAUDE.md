@@ -87,6 +87,31 @@ A reload line with no startup line after it means nothing was reloaded.
 proves the file is right, not that the process serving the page has it.
 Either restart first, or check the response the browser actually received.
 
+## Deploying: replace the tree, never extract over it
+
+`tar -xf` into the live directory adds and overwrites. It never DELETES, so a
+file the commit removed stays on disk. Next.js compiles everything under
+`frontend/src`, so one orphan importing a type the commit deleted fails the
+whole build.
+
+This happened on 12 November 2026. `KamLossTreeSection.tsx` and
+`useKamLossTree.ts` were deleted by the commit, survived the extract, and
+broke `npm run build` on an import of `KamLossNode` — which no longer
+existed. The pre-build had passed minutes earlier because it extracted into
+an EMPTY directory.
+
+It failed loudly, which was luck. A stale file that still compiles would have
+shipped silently and gone on serving a page the commit removed.
+
+So: build the new tree somewhere clean, carry the untracked files over
+(`.env`, the `.env.bak-*`, `.deployed_commit`, the stray HTML and MD), then
+swap directories. Keep the compose project name — it comes from the directory
+name, so the directory has to stay `mines_dashboard`.
+
+And write `.deployed_commit` AFTER the build succeeds, not before. Written
+first, it claims a commit that is not running, which is worse than no marker
+at all.
+
 ## Related
 
 - Migrations are applied by hand by a DBA role, not by the application. The
