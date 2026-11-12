@@ -14,7 +14,8 @@ from app.schemas.oee import OEEResponse, TipperOEEResponse
 import app.services.oee as svc
 from app.services.report_window import clamp
 from app.services.tipper_oee import get_tipper_oee
-from app.services.lcm import get_lcm, get_kam_loss_tree
+from app.services.lcm import (get_lcm, get_lcm_by_equipment,
+                              get_loss_structure)
 from app.services.lcm_cob import get_cob_lcm
 
 router = APIRouter(prefix="/api/oee", tags=["OEE"])
@@ -87,6 +88,23 @@ def lcm(
     return get_lcm(db, from_date, to_date)
 
 
+@router.get("/lcm/by-equipment")
+def lcm_by_equipment(
+    from_date: date = Query(default=None),
+    to_date:   date = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    """Equipment Wise Lost Cost Matrix — the same loss heads, one factor per machine.
+
+    Which machines appear comes from the mine's Equipment Excavation Plan
+    (which excavator dug ore, which dug OB) and their capacity from the
+    Equipment Status Selector. Both are resolved for the day the window opens,
+    so this answers one period with one version, exactly as /lcm does.
+    """
+    from_date, to_date = _window(from_date, to_date)
+    return get_lcm_by_equipment(db, from_date, to_date)
+
+
 @router.get("/lcm/cob")
 def lcm_cob(
     from_date: date = Query(default=None),
@@ -98,12 +116,24 @@ def lcm_cob(
     return get_cob_lcm(db, from_date, to_date)
 
 
-@router.get("/lcm/kam-tree")
-def lcm_kam_tree(
+@router.get("/lcm/loss-structure")
+def lcm_loss_structure(
     from_date: date = Query(default=None),
     to_date:   date = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    """KAM Wise Loss Tree — loss in rupees by accountability head, under Chief of Mines."""
+    """KAM Wise Loss Structure — the summary, and the loss under seven heads.
+
+    The mine's own layout: ORE and OB plan/actual/variance with the ore
+    shortfall valued, the same variance split per excavator, then Chief of
+    Mines over seven heads drawn on one line. Production variance is ore only;
+    COB Loss appears on Head COB and the Chief alone.
+    """
     from_date, to_date = _window(from_date, to_date)
-    return get_kam_loss_tree(db, from_date, to_date)
+    return get_loss_structure(db, from_date, to_date)
+
+
+# The KAM Wise Loss Tree endpoint stood here. The mine replaced that section
+# with the KAM Wise Loss Structure on 12 November 2026 and asked for the old
+# one to go; /lcm/loss-structure above is its successor and nothing else ever
+# called this.

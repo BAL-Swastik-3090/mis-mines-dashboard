@@ -110,7 +110,8 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   // The sidebar is the convenience; the enforcement is on /api/amira in
   // auth.py, which now maps to this page rather than to mis.
   // THE SAME PERMISSION AS THE OEE SCREEN IT CAME OUT OF. The LCM reads
-  // /api/oee/lcm, /api/oee/lcm/cob and /api/oee/lcm/kam-tree -- all of them
+  // /api/oee/lcm, /api/oee/lcm/by-equipment, /api/oee/lcm/cob and
+  // /api/oee/lcm/loss-structure -- all of them
   // already gated on dashboard.oee at the API. Inventing dashboard.lcm would
   // mean seeding a row per role in mines_role_page_access before a single
   // person could open a page they can already reach by scrolling, and

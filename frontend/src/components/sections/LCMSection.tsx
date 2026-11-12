@@ -1,7 +1,7 @@
 "use client";
-import { useState, useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import dynamic from "next/dynamic";
-import { AlertTriangle, Calculator, TrendingDown, Layers, IndianRupee, ArrowUpDown } from "lucide-react";
+import { AlertTriangle, Calculator, TrendingDown, IndianRupee } from "lucide-react";
 import { useLCM } from "@/hooks/useLCM";
 import { formatIndian } from "@/lib/utils";
 import type { LCMRow } from "@/types";
@@ -48,13 +48,6 @@ function lossColor(v: number | null | undefined) {
   return v < 0 ? "text-[#2e7d32]" : "text-[#c62828]";
 }
 
-/** Same rule for the navy total row, lightened — #c62828 on navy is unreadable,
- *  so the sign is conveyed without sacrificing contrast. */
-function lossColorOnNavy(v: number | null | undefined) {
-  if (v == null) return "text-white/60";
-  return v < 0 ? "text-[#a5d6a7]" : "text-[#ff8a80]";
-}
-
 function Shimmer({ w = "w-20", h = "h-5" }: { w?: string; h?: string }) {
   return <div className={`${h} ${w} bg-bg-section animate-pulse rounded`} />;
 }
@@ -70,21 +63,19 @@ function monthName(iso: string | null | undefined): string {
   return PLAN_MONTHS[i] ? `${PLAN_MONTHS[i]} ${y}` : iso;
 }
 
-export default function LCMSection() {
+export default function LCMSection({ beforeMatrix }: {
+  /** Rendered between the KPI cards and the matrix. The LCM page passes the
+   *  Equipment Wise matrix, which reads the same deviation and the same loss
+   *  heads and must sit with the table it splits, not above the cards that
+   *  give both of them their context. */
+  beforeMatrix?: ReactNode;
+} = {}) {
   const { data, isLoading, isError, error } = useLCM();
   const b = data?.basis;
   const t = data?.totals;
   const c = data?.coverage;
   const p = data?.plan;
   const cost = data?.costing;
-  // Default is the reporting sequence the server returns (Sl order); the toggle
-  // re-sorts by share client-side without touching that order server-side.
-  const [sortByShare, setSortByShare] = useState(false);
-  const matrixRows = useMemo(() => {
-    const rows = data?.rows ?? [];
-    if (!sortByShare) return rows;
-    return [...rows].sort((a, b) => (b.loss_share_pct ?? 0) - (a.loss_share_pct ?? 0));
-  }, [data?.rows, sortByShare]);
 
   if (isError) {
     return (
@@ -467,111 +458,24 @@ export default function LCMSection() {
         </div>
       )}
 
-      {/* The matrix */}
-      <div className="bg-white border border-border rounded-lg shadow-sm overflow-hidden">
-        <div className="px-4 pt-3 pb-2.5 border-b border-border-light flex items-center justify-between flex-wrap gap-2">
-          <div className="flex items-center gap-2">
-            <Layers size={14} className="text-[#6a1b9a]" />
-            <span className="font-condensed font-bold text-[13px] text-navy tracking-widest uppercase">
-              Lost Cost Matrix — Loss Heads
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setSortByShare((v) => !v)}
-              title={sortByShare ? "Back to Sl. order" : "Sort by loss share, high to low"}
-              className={`flex items-center gap-1 px-2 py-1 rounded border text-[9.5px] font-condensed font-bold
-                          tracking-widest uppercase transition-colors ${
-                sortByShare
-                  ? "border-[#ad1457] bg-[#fce4ec] text-[#ad1457]"
-                  : "border-border bg-white text-txt-secondary hover:bg-bg-section"
-              }`}
-            >
-              <ArrowUpDown size={11} />
-              {sortByShare ? "Loss share ↓" : "Sl. order"}
-            </button>
-            <span className="text-[10px] font-mono text-txt-light">own equipment only</span>
-          </div>
-        </div>
+      {/* The matrix. The LCM page passes the Equipment Wise one, which is now
+          the only matrix the page draws — it sits here, under the cards and
+          the basis that explain it, and above the loss pie cut from the same
+          rows. Left as a prop rather than imported so this component keeps
+          owning the calculation and nothing else. */}
+      {beforeMatrix}
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-[12px] font-mono">
-            <thead>
-              <tr className="bg-bg-section border-b border-border-light">
-                <th className="px-3 py-2 text-left text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary">Sl.</th>
-                <th className="px-3 py-2 text-left text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary">Loss Description</th>
-                <th className="px-3 py-2 text-left text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary">KAM</th>
-                <th className="px-3 py-2 text-left text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-secondary">Loss Type</th>
-                <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#1565c0]">Production<br/>Hour Loss</th>
-                <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#1565c0]">Planned Ore<br/>Loss (MT)</th>
-                <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#2e7d32]">OB Production<br/>Hour Loss</th>
-                <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#2e7d32]">Planned OB<br/>Loss (CuM)</th>
-                <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#ad1457]">Loss Amount<br/>(₹ Lakh)</th>
-                <th className="px-3 py-2 text-right text-[10px] font-condensed font-bold tracking-widest uppercase text-[#ad1457]">Loss<br/>Share</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border-light/60">
-              {isLoading ? (
-                Array.from({ length: 8 }).map((_, i) => (
-                  <tr key={i}>{Array.from({ length: 10 }).map((__, j) => (
-                    <td key={j} className="px-3 py-2.5"><Shimmer w="w-14" h="h-4" /></td>
-                  ))}</tr>
-                ))
-              ) : matrixRows.map((r) => {
-                const idle = r.ore_hours === 0 && r.ob_hours === 0;
-                return (
-                  <tr key={r.sl_no} className={`hover:bg-bg-section/50 transition-colors ${idle ? "opacity-45" : ""}`}>
-                    <td className="px-3 py-2 text-txt-light">{r.sl_no}</td>
-                    <td className="px-3 py-2 font-condensed font-bold text-[12px] text-navy whitespace-nowrap">
-                      {r.loss_description}
-                    </td>
-                    <td className="px-3 py-2 text-txt-secondary whitespace-nowrap">{r.kam}</td>
-                    <td className="px-3 py-2 whitespace-nowrap">
-                      <span className={`inline-block px-1.5 py-0.5 rounded text-[9.5px] font-condensed font-bold tracking-wider uppercase ${
-                        r.loss_type === "Controllable"     ? "bg-[#fdecea] text-[#c62828]"
-                        : r.loss_type === "Non Controllable" ? "bg-bg-section text-txt-light"
-                        : "bg-[#fff8e1] text-[#8d6e00]"
-                      }`}>
-                        {r.loss_type === "Controllable" ? "Controllable"
-                         : r.loss_type === "Non Controllable" ? "Non Ctrl" : "Unclassified"}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-right text-navy">{fmt(r.ore_hours, 2)}</td>
-                    <td className="px-3 py-2 text-right font-semibold text-[#1565c0]">{fmt(r.planned_ore_loss, 1)}</td>
-                    <td className="px-3 py-2 text-right text-navy">{fmt(r.ob_hours, 2)}</td>
-                    <td className="px-3 py-2 text-right font-semibold text-[#2e7d32]">{f0(r.planned_ob_loss)}</td>
-                    <td className={`px-3 py-2 text-right font-semibold ${lossColor(r.loss_amount)}`}>{rsLakh(r.loss_amount)}</td>
-                    <td className="px-3 py-2 text-right text-txt-secondary tabular-nums">
-                      {r.loss_share_pct != null && r.loss_share_pct > 0
-                        ? `${r.loss_share_pct.toFixed(1)}%` : "—"}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-            {!isLoading && t && (
-              <tfoot>
-                <tr className="bg-navy text-white border-t-2 border-navy font-bold">
-                  <td className="px-3 py-2.5" />
-                  <td className="px-3 py-2.5 font-condensed tracking-widest uppercase text-[11px]">Total</td>
-                  <td className="px-3 py-2.5" />
-                  <td className="px-3 py-2.5" />
-                  <td className="px-3 py-2.5 text-right">{fmt(t.ore_hours, 2)}</td>
-                  <td className="px-3 py-2.5 text-right">{fmt(t.planned_ore_loss, 1)}</td>
-                  <td className="px-3 py-2.5 text-right">{fmt(t.ob_hours, 2)}</td>
-                  <td className="px-3 py-2.5 text-right">{f0(t.planned_ob_loss)}</td>
-                  <td className={`px-3 py-2.5 text-right ${lossColorOnNavy(t.loss_amount)}`}>{rsLakh(t.loss_amount)}</td>
-                  <td className="px-3 py-2.5 text-right">
-                    {t.loss_share_pct != null ? `${t.loss_share_pct.toFixed(1)}%` : "—"}
-                  </td>
-                </tr>
-              </tfoot>
-            )}
-          </table>
-        </div>
+      {/* THE OVERALL MATRIX USED TO BE HERE, and was removed on 11 November
+          2026. It printed the same 25 loss heads and the same ten columns as
+          the Equipment Wise matrix above, differing only in giving every
+          machine on a side one rate -- so it was the same table twice, and the
+          one that said less.
 
-      </div>
+          get_lcm() IS STILL THE SOURCE and nothing about it changed. The cards
+          and the basis panel above, the loss pie below, the KAM Wise Loss Tree
+          and the Equipment Wise matrix itself are all built on it; the
+          equipment-wise figures are a decomposition of its deviation, not a
+          second opinion. Only this rendering of it is gone. */}
 
       {/* Composition of the ore loss — pie rather than bars, so the split
           reads as parts of one whole. Slices are grouped and coloured to stay

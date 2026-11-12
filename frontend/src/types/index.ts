@@ -1257,6 +1257,211 @@ export interface LCMResponse {
   totals:    LCMTotals;
 }
 
+// ── Equipment Wise LCM ─────────────────────────────────────────
+/** One excavator on this period's excavation plan, and the share of the
+ *  deviation its ideal capacity earns it.
+ *
+ *  `carries_share` is false — with `reason` saying which — when a machine is
+ *  on the plan but cannot take a share: it lost no hours at all (nothing to
+ *  divide by), or the Equipment Status Selector holds no capacity for it.
+ *  Such a machine is still LISTED, because its hours are in the denominator
+ *  of the matrix below and silently dropping it would hide that. */
+export interface LCMEquipment {
+  equipment_name: string;
+  side:           "ORE" | "OB";
+  unit:           "MT" | "CuM";
+  capacity:       number | null;   // ideal CuM/hr, from the selector
+  has_capacity:   boolean;
+  hours:          number;          // this machine's own loss hours
+  share:          number | null;   // its slice of the deviation
+  share_pct:      number | null;   // its slice of the side's capacity
+  factor:         number | null;   // share / hours — MT or CuM per hour
+  carries_share:  boolean;
+  reason:         "no_loss_hours" | "no_capacity" | null;
+  hired:          boolean;
+  bd_source:      "SAP" | "SHIFT LOG";
+}
+
+/** One loss head on one machine. */
+export interface LCMEquipmentCell {
+  side:         "ORE" | "OB";
+  unit:         "MT" | "CuM";
+  hours:        number;
+  planned_loss: number;
+  /** Rs — ore machines only. OB is waste rock and carries no IBM rate, so an
+   *  OB machine's amount is null, never zero. */
+  loss_amount:  number | null;
+}
+
+export interface LCMEquipmentRow {
+  sl_no:            number;
+  loss_description: string;
+  column:           string;
+  loss_type:        "Controllable" | "Non Controllable" | "Unclassified";
+  kam:              string;
+  role:             string;
+  /** The roll-up: every machine's cell for this head, added together. */
+  ore_hours:        number;
+  planned_ore_loss: number;
+  ob_hours:         number;
+  planned_ob_loss:  number;
+  loss_amount:      number | null;
+  loss_share_pct:   number | null;
+  /** What the same head reads on the overall matrix below, so the page can
+   *  show the movement instead of leaving two tables to disagree in silence. */
+  overall_planned_ore_loss: number | null;
+  overall_planned_ob_loss:  number | null;
+  machines:         Record<string, LCMEquipmentCell>;
+}
+
+export interface LCMEquipmentTotals {
+  ore_hours:        number;
+  planned_ore_loss: number;
+  ob_hours:         number;
+  planned_ob_loss:  number;
+  loss_amount:      number | null;
+  loss_share_pct:   number | null;
+  controllable_loss_amount:     number | null;
+  non_controllable_loss_amount: number | null;
+}
+
+/** The page states this rather than assuming it: splitting the matrix by
+ *  machine re-attributes a total, it never changes one. */
+export interface LCMEquipmentReconciliation {
+  ore_deviation:       number;
+  ob_deviation:        number;
+  overall_loss_amount: number | null;
+  overall_ore_hours:   number;
+  overall_ob_hours:    number;
+  hours_match:    boolean;
+  ore_loss_match: boolean;
+  ob_loss_match:  boolean;
+  amount_match:   boolean;
+}
+
+export interface LCMByEquipmentResponse {
+  from_date: string;
+  to_date:   string;
+  machines:  LCMEquipment[];
+  machine_totals: Record<string, {
+    hours: number; planned_loss: number; loss_amount: number | null;
+  }>;
+  rows:     LCMEquipmentRow[];
+  /** "selector" = the mine's own capacities; "fleet_default" = minehub was
+   *  unreachable and these are the built-in figures. */
+  capacity_source: "selector" | "fleet_default";
+  basis:    LCMBasis;
+  plan:     LCMPlan;
+  costing:  LCMCosting;
+  coverage: LCMCoverage;
+  totals:   LCMEquipmentTotals;
+  reconciliation: LCMEquipmentReconciliation;
+}
+
+
+// ── KAM Wise Loss Structure (the mine's seven-head layout) ─────
+/** One measure on a card. Production variance is ORE ONLY — ore is MT and OB
+ *  is CuM, so they cannot be added, and only ore carries an IBM rate. Null is
+ *  "does not apply here", never zero: Head COB has no MT because what the
+ *  plant lost is concentrate, not ore at the face. */
+export interface LossMeasure {
+  variance_mt: number | null;
+  value_lacs:  number | null;
+}
+
+export interface LossStructureNode {
+  role_code: string;
+  title:     string;
+  /** From the KAM Selector — derived from the loss heads under the node, or
+   *  an explicit dated override. Null is a vacant post. */
+  owner:     string | null;
+  /** The employee behind the name. Photos key on this, not the spelling, so a
+   *  renamed KAM keeps their picture. */
+  emp_id:    string | null;
+  /** Who this head reports to. RECORDED, NEVER SUMMED — all seven nodes are
+   *  drawn on one line and each carries only its own loss heads. */
+  parent_role_code: string | null;
+  sl_order:   number;
+  head_count: number;
+  total:            LossMeasure;
+  controllable:     LossMeasure;
+  non_controllable: LossMeasure;
+  /** Heads nobody has classified. Zero today; carried so the card can warn
+   *  rather than let the three rows quietly stop adding to the total. */
+  unclassified:     LossMeasure;
+  cob:              LossMeasure;
+  /** COB Loss is drawn on Head COB and the Chief alone, per the mine. */
+  shows_cob:  boolean;
+  /** What the MT column of `loss_heads` is measured in. Ore at the face on
+   *  every node but COB, whose causes are concentrate at the plant — which is
+   *  why the COB card itself shows a dash where the others show tonnes. */
+  loss_heads_unit: "ore_mt" | "concentrate_mt";
+  /** Every loss head this KAM answers for, biggest first, INCLUDING the ones
+   *  that cost nothing this period — a zero is a result, and dropping it
+   *  would make an unworked head look like an unassigned one. */
+  loss_heads: LossStructureHead[];
+}
+
+export interface LossStructureHead {
+  loss_description: string;
+  /** Null on COB's causes: LCM for COB has no controllability dimension. */
+  loss_type: string | null;
+  column: string | null;
+  kam: string | null;
+  /** COB's causes form their own small tree — Feed grade and Plant efficiency
+   *  sit under Recovery / yield. Absent (level 1) on a mines loss head.
+   *  ONLY LEVEL 1 TOTALS: summing both levels would count them twice. */
+  level?: number;
+  parent?: string | null;
+  /** Null where the row carries rupees but no tonnes, as COB Loss does on the
+   *  Chief's list. */
+  variance_mt: number | null;
+  value_lacs: number | null;
+}
+
+export interface LossStructureSide {
+  plan: number; actual: number; variance: number;
+  unit: "MT" | "CuM";
+  /** Null for OB: waste rock has no IBM rate. A dash, not a zero. */
+  value_lacs: number | null;
+}
+
+export interface LossStructureEquipment {
+  equipment_name: string;
+  side: "ORE" | "OB";
+  unit: "MT" | "CuM";
+  capacity: number | null;
+  variance: number;
+  value_lacs: number | null;
+  carries_share: boolean;
+  reason: "no_loss_hours" | "no_capacity" | null;
+}
+
+export interface LossStructureResponse {
+  from_date: string;
+  to_date:   string;
+  summary:   { ore: LossStructureSide; ob: LossStructureSide };
+  equipment: LossStructureEquipment[];
+  root:      LossStructureNode;
+  nodes:     LossStructureNode[];
+  rate_available: boolean;
+  costing:   LCMCosting;
+  plan:      LCMPlan;
+  capacity_source: "selector" | "fleet_default";
+  /** The structure re-cuts a total it must not change; the page prints the
+   *  check rather than asking a reader to add seven cards up. */
+  reconciliation: {
+    ore_deviation: number;
+    matrix_value_lacs: number | null;
+    cob_value_lacs: number | null;
+    root_mt: number | null;
+    root_value_lacs: number | null;
+    expected_value_lacs: number | null;
+    mt_matches: boolean;
+    value_matches: boolean;
+  };
+}
+
 
 // ── Ore grade weighted average (SAP quality inspection, ROM1) ──
 export interface OreGradeDetail {
@@ -1503,44 +1708,6 @@ export interface GradeDespatchResponse {
     assayed_pct:       number | null;
     po_count:          number;
   };
-}
-
-/* ── KAM Wise Loss Tree ───────────────────────────────────────────────────── */
-
-/** One node of the accountability tree. Amounts are RUPEES and go null together
- *  when an IBM rate is missing — never 0, which would read as "no loss". */
-export interface KamLossNode {
-  role:             string;
-  title:            string;
-  owner:            string;
-  /** null on the COB node — the COB model has no controllability dimension at
-   *  all, so these are "not a concept here", not "zero". */
-  controllable:     number | null;
-  non_controllable: number | null;
-  unclassified:     number | null;
-  /** Only the COB node and the root carry this. null elsewhere, and null on
-   *  COB itself when LCM for COB has no plan for the window. */
-  cob_loss:         number | null;
-  total:            number | null;
-  head_count:       number;
-  loss_heads:       Array<{ loss_description: string; loss_type: string;
-                            loss_amount: number | null }>;
-}
-
-export interface KamLossTreeResponse {
-  from_date:      string;
-  to_date:        string;
-  measure:        "loss_amount_rs";
-  rate_available: boolean;
-  root:           KamLossNode;
-  children:       KamLossNode[];
-  lcm_total_loss_amount: number | null;
-  cob_total_loss_amount: number | null;
-  /** mines + COB. What root.total is checked against. */
-  expected_total:        number | null;
-  /** Whether the tree total equals the LCM table's own total. Stated on the
-   *  page rather than assumed. */
-  reconciles:     boolean;
 }
 
 /* ── Why-Why analysis (Intelligence) ─────────────────────────────────────────
