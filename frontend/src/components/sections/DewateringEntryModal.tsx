@@ -144,9 +144,47 @@ export default function DewateringEntryModal({
     return v === null || v === undefined ? "" : String(v);
   }, [stored]);
 
+  /** Typed, else stored. No fill-ins -- this is what `shown` builds on, and
+      what the rain-water figure below is computed from, so the two cannot
+      chase each other. */
+  const rawStr = useCallback((f: string): string => {
+    if (typed[f] !== undefined) return typed[f];
+    return storedStr(f);
+  }, [typed, storedStr]);
+
+  /** RAIN WATER FOLLOWS RAINFALL, as the mine's own sheet does: millimetres
+      times the day's factor (280 by default, 300 on the days the mine set it
+      so). It is a real figure on the row rather than a greyed-out reading --
+      it was a generated column until migration 108, and the mine's workbook
+      types it directly on more than half its days -- so this fills the box
+      and the mine may still type over it. */
+  const rainAuto = useMemo(() => {
+    const t = rawStr("rainfall_mm").trim();
+    if (t === "") return null;
+    const mm = Number(t);
+    if (!Number.isFinite(mm)) return null;
+    return mm * (q.data?.rain_factor ?? 280);
+  }, [rawStr, q.data]);
+
   /** What the box shows: typed first, then stored, then — for opening stock
-      on a day not yet entered — the figure carried from the previous day. */
+      on a day not yet entered — the figure carried from the previous day,
+      and for rain water the figure rainfall implies. */
   const shown = useCallback((f: string): string => {
+    if (f === "rain_water_m3") {
+      const t = typed[f];
+      // A figure the mine typed wins, as it does on the spreadsheet.
+      if (t !== undefined && t.trim() !== "") return t;
+      const sv = storedStr(f);
+      // Otherwise the formula shows through: on a day with nothing stored,
+      // the moment the rainfall is moved, and when an override is cleared --
+      // emptying the box restores the calculation rather than leaving a hole
+      // where a figure the rainfall implies ought to be.
+      if (rainAuto !== null
+          && (sv === "" || typed["rainfall_mm"] !== undefined || t !== undefined)) {
+        return String(Number(rainAuto.toFixed(3)));
+      }
+      return sv;
+    }
     if (typed[f] !== undefined) return typed[f];
     const s = storedStr(f);
     if (s !== "") return s;
@@ -155,7 +193,7 @@ export default function DewateringEntryModal({
       return String(q.data.suggested_opening);
     }
     return "";
-  }, [typed, storedStr, entered, q.data]);
+  }, [typed, storedStr, entered, q.data, rainAuto]);
 
   const num = useCallback((f: string): number | null => {
     const v = shown(f).trim();
@@ -168,17 +206,18 @@ export default function DewateringEntryModal({
      type. The stored values come from the database's generated columns, in
      exactly these forms — October 2026's. */
   const derived = useMemo(() => {
-    const rf = q.data?.rain_factor ?? 280;
-    const mm = num("rainfall_mm"), cap = num("pump_capacity_m3_hr");
+    const cap = num("pump_capacity_m3_hr");
     const open_ = num("opening_stock_m3"), seep = num("seepage_m3");
     const ph = num("plan_pump_hr"), ah = num("actual_pump_hr");
     const mul = (a: number | null, b: number | null) =>
       a == null || b == null || Number.isNaN(a) || Number.isNaN(b) ? null : a * b;
-    const rain = mul(mm, rf);
+    // The water the row is actually carrying -- the auto figure, or what the
+    // mine typed over it. Recomputing it from millimetres here would ignore
+    // an override and show a closing stock the save would not produce.
+    const rain = num("rain_water_m3");
     const planD = mul(ph, cap);
     const actD = mul(ah, cap);
     return {
-      rain_water_m3: rain,
       plan_disposal_m3: planD,
       actual_disposal_m3: actD,
       variance_m3: actD == null || planD == null ? null : actD - planD,
@@ -384,6 +423,12 @@ export default function DewateringEntryModal({
                     const carried = m.field === "opening_stock_m3" && !entered
                       && typed[m.field] === undefined
                       && q.data?.suggested_opening != null;
+                    const fromRain = m.field === "rain_water_m3"
+                      && rainAuto !== null
+                      && (typed[m.field] ?? "").trim() === ""
+                      && (storedStr(m.field) === ""
+                          || typed["rainfall_mm"] !== undefined
+                          || typed[m.field] !== undefined);
                     return (
                       <tr key={m.field} className="border-b border-border-light/50">
                         <td className="py-1.5 pr-3 align-top">
@@ -400,6 +445,13 @@ export default function DewateringEntryModal({
                             <span className="block text-[10px] text-amber-700">
                               carried from {niceDay(q.data!.suggested_opening_from)}
                               &rsquo;s closing stock — edit if the mine re-measured
+                            </span>
+                          )}
+                          {fromRain && (
+                            <span className="block text-[10px] text-amber-700">
+                              {shown("rainfall_mm").trim() || 0} mm &times;{" "}
+                              {q.data?.rain_factor ?? 280} — edit if the mine
+                              measured the water
                             </span>
                           )}
                           {moved && storedStr(m.field) !== "" && (
