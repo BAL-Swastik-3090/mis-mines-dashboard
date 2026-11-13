@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS dewatering_daily_data (
 
     -- ── typed: slurry ──────────────────────────────────────────────────
     slurry_pump_east_1_hr    numeric(8,2)  CHECK (slurry_pump_east_1_hr >= 0),
-    slurry_pump_east_2_hr    numeric(8,2)  CHECK (slurry_pump_east_2_hr >= 0),
+    slurry_pump_west_1_hr    numeric(8,2)  CHECK (slurry_pump_west_1_hr >= 0),
     east_pit_water_level_mrl numeric(8,2),
     slurry_challenges        text,
 

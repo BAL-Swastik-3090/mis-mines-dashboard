@@ -83,7 +83,13 @@ FIELDS: list[tuple[str, str, str, str, str, str]] = [
     ("east_silt_level_mrl", "Present Mud/Silt level - East middle (Imfa Side) Dewatering pond", "Mrl", "levels", INPUT, NUMBER),
     ("dewatering_reason", "Reason for Variances in Dewatering", "", "levels", INPUT, TEXT),
     ("slurry_pump_east_1_hr", "Slurry Pump-1 (East Side - 40HP GOODWIN)", "Hrs", "slurry", INPUT, NUMBER),
-    ("slurry_pump_east_2_hr", "Slurry Pump (East)-2", "Hrs", "slurry", INPUT, NUMBER),
+    # Labelled "Slurry Pump (East)-2" until 12 November 2026, when the mine
+    # said the second slurry pump is on the WEST side, not the east -- which
+    # their own master workbook had said all along, on the row headed
+    # "Slurry Pump (Weast)-1". The column was renamed to match in migration
+    # 107; the figures under it did not move, because they were already this
+    # pump's. See that migration for the day-by-day check against the sheet.
+    ("slurry_pump_west_1_hr", "Slurry Pump (West)-1", "Hrs", "slurry", INPUT, NUMBER),
     ("east_pit_water_level_mrl", "Water Level (East Pit Imfa side)", "Mrl", "slurry", INPUT, NUMBER),
     ("slurry_challenges", "Challenges in SLURRY discharge by SLURRY PUMP", "", "slurry", INPUT, TEXT),
     ("eddy_a_shift_min", "EDDY PUMP Operation - A shift", "Mins", "silt", INPUT, NUMBER),
@@ -111,7 +117,7 @@ RAIN_FACTOR = "rain_factor_m3_per_mm"
 #: mine's own sheet has -3.5 Mrl) and so can a stock after an over-pump.
 NON_NEGATIVE = {"rainfall_mm", "pump_capacity_m3_hr", "seepage_m3",
                 "plan_pump_hr", "actual_pump_hr", "slurry_pump_east_1_hr",
-                "slurry_pump_east_2_hr", "eddy_a_shift_min",
+                "slurry_pump_west_1_hr", "eddy_a_shift_min",
                 "eddy_b_shift_min", "eddy_day_min", "eddy_discharge_m3",
                 "total_slurry_discharge_m3"}
 
