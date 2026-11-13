@@ -21,6 +21,7 @@ import {
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSync } from '@/ui/useSync';
 import { useCapture } from '@/ui/useCapture';
+import { plural, verb } from '../src/core/words';
 import {
   setBaseUrlOverride, storedBaseUrl, storedCode, storedLabel,
 } from '@/core/sync/enrolment';
@@ -97,7 +98,7 @@ export default function Sync() {
             ? 'Nothing is waiting'
             : `${waiting.length} handover${waiting.length === 1 ? '' : 's'}` +
               `${(status?.photosQueued ?? 0) > 0
-                  ? ` and ${status?.photosQueued} photo(s)` : ''} waiting`}
+                  ? ` and ${plural(status?.photosQueued ?? 0, 'photograph')}` : ''} waiting`}
         </Text>
         {status?.lastSyncAt && (
           <Text style={styles.summaryNote}>Machine list last refreshed {when(status.lastSyncAt)}</Text>
@@ -129,7 +130,7 @@ export default function Sync() {
       {report && !running && (
         <View style={styles.report}>
           <Text style={styles.reportLine}>
-            Sent {report.sessionsSent} handover(s) and {report.photosSent} photo(s).
+            Sent {plural(report.sessionsSent, 'handover')} and {plural(report.photosSent, 'photograph')}.
             {report.stillQueued > 0 ? ` ${report.stillQueued} still waiting.` : ''}
           </Text>
           {report.problems.map((p) => (
@@ -191,7 +192,7 @@ export default function Sync() {
       {(status?.photosRejected ?? 0) > 0 && (
         <Section title="Photos the office refused">
           <Text style={styles.note}>
-            {status?.photosRejected} photo(s). The handovers they belong to are
+            {plural(status?.photosRejected ?? 0, 'photograph')}. The handovers they belong to are
             filed; only the pictures were refused.
           </Text>
         </Section>

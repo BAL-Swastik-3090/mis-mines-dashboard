@@ -19,6 +19,7 @@ import {
   applyTrackingSettings, isTracking, queuedCount,
 } from '@/core/location/tracker';
 import { trackingSettings } from '@/core/sync/enrolment';
+import { plural, verb } from '../src/core/words';
 
 export default function Home() {
   const router = useRouter();
@@ -52,6 +53,14 @@ export default function Home() {
   const stale = cacheAge != null && cacheAge >= masters.STALE_AFTER_HOURS;
   const waiting = (outbox?.queued ?? 0) + (outbox?.sending ?? 0);
 
+  /* "EVERYTHING HAS REACHED THE OFFICE" MUST MEAN EVERYTHING.
+     This counted handovers only, so the green banner sat directly above the
+     line "6 photos waiting to upload" and claimed the tablet was clear. A
+     photograph is the evidence behind a defect; a handover that arrived
+     without its photographs has not arrived. */
+  const photosWaiting = outbox?.photos ?? 0;
+  const allClear = waiting === 0 && photosWaiting === 0;
+
   return (
     <ScrollView
       style={styles.screen}
@@ -64,20 +73,26 @@ export default function Home() {
     >
       {/* ── what is still here ───────────────────────────────────────────── */}
       <Pressable testID="open-sync" onPress={() => router.push('/sync')}
-                 style={[styles.banner, waiting > 0 ? styles.bannerWaiting : styles.bannerClear]}>
+                 style={[styles.banner, allClear ? styles.bannerClear : styles.bannerWaiting]}>
         <Text style={styles.bannerTitle}>
-          {waiting === 0
+          {allClear
             ? 'Everything on this tablet has reached the office'
-            : `${waiting} handover${waiting === 1 ? '' : 's'} still on this tablet`}
+            : waiting > 0
+              ? `${plural(waiting, 'handover')} still on this tablet`
+              : `${plural(photosWaiting, 'photograph')} still on this tablet`}
         </Text>
         {waiting > 0 && (
           <Text style={styles.bannerNote}>
-            They are safe here but not filed. Bring the tablet within signal to
-            send them.
+            {photosWaiting > 0
+              ? `With ${plural(photosWaiting, 'photograph')}. They are safe here but not filed — bring the tablet within signal.`
+              : 'They are safe here but not filed. Bring the tablet within signal to send them.'}
           </Text>
         )}
-        {(outbox?.photos ?? 0) > 0 && (
-          <Text style={styles.bannerNote}>{outbox?.photos} photo(s) waiting to upload.</Text>
+        {waiting === 0 && photosWaiting > 0 && (
+          <Text style={styles.bannerNote}>
+            The handovers have been filed. Their photographs have not, so the
+            evidence behind any fault is still on this tablet.
+          </Text>
         )}
         {(outbox?.rejected ?? 0) > 0 && (
           <Text style={styles.bannerBad}>
@@ -117,9 +132,9 @@ export default function Home() {
               // looking for a network problem that is not there.
               setSendNote(
                 r.problems.length > 0 ? r.problems.join(' ')
-                : sent > 0 ? `Sent ${r.sessionsSent} handover(s) and ${r.photosSent} photo(s).`
+                : sent > 0 ? `Sent ${plural(r.sessionsSent, 'handover')} and ${plural(r.photosSent, 'photograph')}.`
                 : r.photosAwaitingSession > 0 && r.stillQueued === r.photosAwaitingSession
-                  ? `${r.photosAwaitingSession} photo(s) belong to a handover `
+                  ? `${plural(r.photosAwaitingSession, 'photograph')} ${verb(r.photosAwaitingSession, 'belongs', 'belong')} to a handover `
                     + 'nobody has confirmed yet. Finish it and they go with it.'
                 : r.stillQueued > 0
                   ? 'Could not reach the office. It is still waiting here.'
@@ -161,7 +176,7 @@ export default function Home() {
       {stale && (
         <View style={[styles.banner, styles.bannerStale]}>
           <Text style={styles.bannerTitle}>
-            This tablet last synced {Math.floor((cacheAge ?? 0) / 24)} day(s) ago
+            This tablet last synced {plural(Math.floor((cacheAge ?? 0) / 24), 'day')} ago
           </Text>
           <Text style={styles.bannerNote}>
             Machine and operator details may have changed. Handovers can still

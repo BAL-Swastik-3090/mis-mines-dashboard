@@ -54,19 +54,36 @@ export default function Confirm() {
   }
 
   if (done) {
+    const held = done.status === 'BLOCKED';
     return (
-      <View style={[styles.screen, styles.centre]}>
-        <Text style={styles.doneTitle}>
-          {done.status === 'BLOCKED' ? 'Recorded — the machine is held' : 'Recorded'}
-        </Text>
-        <Text style={styles.doneNote}>
-          {asset.fleet_code}, signed by {operator?.name ?? 'the operator'}.
-        </Text>
-        {/* The honest sentence. */}
-        <Text style={styles.doneWaiting}>
-          It is saved on this tablet and will reach the office when there is
-          signal. It is not filed yet.
-        </Text>
+      /* Anchored rather than floating. This was a screen of white with four
+         lines adrift in the middle of it: a card holds the outcome, the
+         button sits under it at full width, and the screen has a top and a
+         bottom instead of a centre. */
+      <View style={[styles.screen, styles.doneScreen]}>
+        <View style={styles.doneCard}>
+          <View style={[styles.doneMark, held && styles.doneMarkHeld]}>
+            <Text style={styles.doneMarkText}>{held ? '!' : '✓'}</Text>
+          </View>
+
+          <Text style={styles.doneTitle}>
+            {held ? 'Recorded — the machine is held' : 'Recorded'}
+          </Text>
+          <Text style={styles.doneNote}>
+            {asset.fleet_code}, signed by {operator?.name ?? 'the operator'}.
+          </Text>
+
+          {/* THE HONEST SENTENCE, as a labelled fact rather than a paragraph.
+              It was three lines of amber prose saying one thing, which is
+              how a warning stops being read. */}
+          <View style={styles.doneState}>
+            <Text style={styles.doneStateTitle}>Saved on this tablet</Text>
+            <Text style={styles.doneStateNote}>
+              It reaches the office at the next signal. Not filed yet.
+            </Text>
+          </View>
+        </View>
+
         <Pressable testID="done" style={styles.primary}
                    onPress={() => { discard(); router.replace('/'); }}>
           <Text style={styles.primaryText}>Done</Text>
@@ -217,16 +234,35 @@ const styles = StyleSheet.create({
   stoppingTitle: { fontSize: 15, fontWeight: '800', color: '#16202b' },
   stoppingItem: { fontSize: 14, color: '#16202b' },
 
+  /* WIDTH, not just height. `centre` sets alignItems: 'center', which makes
+     every child shrink to its content -- so on the Done screen this button
+     became as wide as the word "Done" and clipped it. alignSelf: 'stretch'
+     makes it fill the column it is in wherever it is used, and the padding
+     keeps it a real target on a tablet in a cab with gloves on. */
   primary: { minHeight: 72, borderRadius: 10, backgroundColor: '#1e8449',
-             alignItems: 'center', justifyContent: 'center' },
+             alignItems: 'center', justifyContent: 'center',
+             alignSelf: 'stretch', paddingHorizontal: 24,
+             /* A pressed button that does not move does not feel pressed. */
+             shadowColor: '#0b3d23', shadowOpacity: 0.18, shadowRadius: 6,
+             shadowOffset: { width: 0, height: 2 }, elevation: 2 },
   primaryOff: { backgroundColor: '#aeb8c4' },
   primaryText: { color: '#fff', fontSize: 18, fontWeight: '700', textAlign: 'center' },
   footnote: { fontSize: 13, color: '#5b6a7a', textAlign: 'center' },
 
+  doneScreen: { padding: 16, gap: 16, justifyContent: 'center',
+                width: '100%', maxWidth: 820, alignSelf: 'center' },
+  doneCard: { backgroundColor: '#fff', borderRadius: 14, padding: 24, gap: 8,
+              alignItems: 'center', borderWidth: 1, borderColor: '#d8dee6' },
+  doneMark: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#1e8449',
+              alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
+  doneMarkHeld: { backgroundColor: '#c0392b' },
+  doneMarkText: { color: '#fff', fontSize: 28, fontWeight: '800', lineHeight: 34 },
   doneTitle: { fontSize: 24, fontWeight: '800', color: '#16202b', textAlign: 'center' },
   doneNote: { fontSize: 16, color: '#5b6a7a', textAlign: 'center' },
-  doneWaiting: { fontSize: 15, color: '#d98300', textAlign: 'center', fontWeight: '600',
-                 marginTop: 8 },
+  doneState: { alignSelf: 'stretch', marginTop: 12, borderRadius: 10, padding: 12,
+               backgroundColor: '#fff8e6', borderWidth: 1, borderColor: '#e0bf6a' },
+  doneStateTitle: { fontSize: 15, fontWeight: '800', color: '#8a5a00' },
+  doneStateNote: { fontSize: 14, color: '#8a5a00', marginTop: 2 },
 
   empty: { textAlign: 'center', color: '#5b6a7a', fontSize: 15, marginTop: 40 },
 });
