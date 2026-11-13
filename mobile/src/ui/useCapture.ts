@@ -11,6 +11,7 @@
 
 import { create } from 'zustand';
 import * as Location from 'expo-location';
+import { positionNow } from '../core/location/positionNow';
 import type { Store } from '@/core/capture/store';
 import type { CachedAsset, CachedOperator, ResolvedTemplate } from '@/core/capture/masters';
 import * as masters from '@/core/capture/masters';
@@ -196,18 +197,19 @@ export const useCapture = create<CaptureState>()((set, get) => ({
       // a position. Taken at confirm rather than at the start, because that
       // is the moment somebody puts their name to it, and recorded as found
       // rather than as hoped: a refusal or a timeout is stored as such.
+      // Same fault as the camera had: this asked only for a LIVE fix and
+      // recorded UNAVAILABLE when none arrived within eight seconds, which is
+      // why every handover before the twelfth says nothing about where it was
+      // signed. positionNow falls back to the recent fix the tracker already
+      // holds, so a confirm pressed in a workshop still records a place.
       try {
         const perm = await Location.getForegroundPermissionsAsync();
         if (!perm.granted) {
           await session.setPosition(need(store), uuid, { status: 'DENIED' });
         } else {
-          const fix = await Promise.race([
-            Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
-            new Promise<null>((r) => setTimeout(() => r(null), 8000)),
-          ]);
+          const fix = await positionNow(need(store));
           await session.setPosition(need(store), uuid, fix
-            ? { lat: fix.coords.latitude, lon: fix.coords.longitude,
-                accuracyM: fix.coords.accuracy ?? null, status: 'OK' }
+            ? { lat: fix.lat, lon: fix.lon, accuracyM: fix.accuracyM, status: 'OK' }
             : { status: 'UNAVAILABLE' });
         }
       } catch {

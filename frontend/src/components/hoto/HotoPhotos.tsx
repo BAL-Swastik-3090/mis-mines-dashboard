@@ -96,6 +96,20 @@ export function HotoPhotos({ sessionId, itemId, compact }: {
     return () => { alive = false; };
   }, [sessionId, itemId]);
 
+  // Escape closes it, because a reader whose first instinct is the keyboard
+  // should not have to hunt for a button.
+  useEffect(() => {
+    if (!big) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setBig(null); };
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [big]);
+
   if (error) return <p className="text-xs text-red-700">{error}</p>;
   if (!photos) return (
     <p className="text-xs text-muted-foreground flex items-center gap-1.5">
@@ -157,47 +171,81 @@ export function HotoPhotos({ sessionId, itemId, compact }: {
         </div>
       )}
 
-      {/* full size, with everything that makes it evidence */}
+      {/* ── full size ────────────────────────────────────────────────────
+          A real panel, not a floating caption. The first version leaned on
+          a theme token for its background and the token painted nothing, so
+          the metadata and the Close button sat transparently over the dimmed
+          page behind and could barely be read. An overlay that cannot be
+          read is worse than no overlay: the reader cannot tell whether the
+          photograph has a position or the screen has simply failed. */}
       {big && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6"
-             onClick={() => setBig(null)}>
-          <div className="bg-background rounded-lg max-w-3xl w-full max-h-full overflow-auto"
-               onClick={(e) => e.stopPropagation()}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={`/api/hoto/photos/${big.photo_id}`}
-                 alt={big.item_label ?? "photograph"}
-                 className="w-full object-contain max-h-[70vh] bg-black" />
-            <div className="p-3 space-y-1 text-xs">
-              <div className="font-semibold">
-                {big.item_label ?? (big.kind === "OPERATOR" ? "The operator" : "The machine")}
-              </div>
-              <div className="text-muted-foreground">
-                Taken {new Date(big.captured_at).toLocaleString("en-IN", {
-                  day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false })}
-                {" · "}{Math.round(big.size_bytes / 1024)} kB
-              </div>
-              {num(big.captured_lat) != null ? (
-                <a href={`https://www.google.com/maps?q=${big.captured_lat},${big.captured_lon}`}
-                   target="_blank" rel="noreferrer"
-                   className="inline-flex items-center gap-1 text-sky-700 hover:underline dark:text-sky-300">
-                  <MapPin size={11} />
-                  {num(big.captured_lat)!.toFixed(6)}, {num(big.captured_lon)?.toFixed(6)}
-                  {num(big.gps_accuracy_m) != null && ` (±${Math.round(num(big.gps_accuracy_m)!)} m)`}
-                </a>
-              ) : (
-                <div className="text-muted-foreground">
-                  No position — taken before the app recorded one, or no fix was
-                  available at the machine.
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={big.item_label ?? "Photograph"}
+          className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4 sm:p-8"
+          onClick={() => setBig(null)}
+        >
+          <div
+            className="flex flex-col max-w-4xl w-full max-h-full rounded-lg overflow-hidden
+                       bg-white text-black dark:bg-neutral-900 dark:text-neutral-100
+                       shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* The picture gets the room; the facts keep a fixed strip, so a
+                tall photograph can never push them off the screen. */}
+            <div className="flex-1 min-h-0 bg-black flex items-center justify-center">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={`/api/hoto/photos/${big.photo_id}`}
+                alt={big.item_label ?? "photograph"}
+                className="max-h-full max-w-full object-contain"
+              />
+            </div>
+
+            <div className="shrink-0 border-t border-black/10 dark:border-white/10 p-3
+                            flex items-start justify-between gap-4">
+              <div className="space-y-0.5 text-xs min-w-0">
+                <div className="font-semibold text-sm">
+                  {big.item_label
+                    ?? (big.kind === "OPERATOR" ? "The operator" : "The machine")}
                 </div>
-              )}
-              <button onClick={() => setBig(null)}
-                      className="mt-1 rounded border px-2 py-1 text-[11px] hover:bg-accent">
+                <div className="opacity-70">
+                  Taken {new Date(big.captured_at).toLocaleString("en-IN", {
+                    day: "2-digit", month: "short", hour: "2-digit",
+                    minute: "2-digit", hour12: false })}
+                  {" · "}{Math.round(big.size_bytes / 1024)} kB
+                </div>
+                {num(big.captured_lat) != null ? (
+                  <a
+                    href={`https://www.google.com/maps?q=${num(big.captured_lat)},${num(big.captured_lon)}`}
+                    target="_blank" rel="noreferrer"
+                    className="inline-flex items-center gap-1 text-sky-700 dark:text-sky-300 hover:underline"
+                  >
+                    <MapPin size={11} />
+                    {num(big.captured_lat)!.toFixed(6)}, {num(big.captured_lon)?.toFixed(6)}
+                    {num(big.gps_accuracy_m) != null
+                      && ` (±${Math.round(num(big.gps_accuracy_m)!)} m)`}
+                  </a>
+                ) : (
+                  <div className="opacity-70">
+                    No position — taken before the app recorded one, or no fix
+                    was available at the machine.
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={() => setBig(null)}
+                className="shrink-0 rounded border border-black/20 dark:border-white/20
+                           px-3 py-1.5 text-xs hover:bg-black/5 dark:hover:bg-white/10"
+              >
                 Close
               </button>
             </div>
           </div>
         </div>
       )}
+
     </div>
   );
 }

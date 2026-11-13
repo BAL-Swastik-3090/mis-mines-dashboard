@@ -24,10 +24,10 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system';
 import * as Crypto from 'expo-crypto';
-import * as Location from 'expo-location';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCapture } from '@/ui/useCapture';
 import { hashPhotoFile } from '@/core/capture/photoHash';
+import { positionNow } from '../../src/core/location/positionNow';
 
 const LONG_EDGE = 1600;
 const QUALITY = 0.7;
@@ -96,23 +96,17 @@ export default function Photo() {
       // filed so far says nothing about where it was. For a picture of a
       // machine in a pit that is most of what makes it evidence.
       //
-      // Best effort, and never a reason to lose the photo: a fix can take
-      // several seconds under a tipper body, and a photo without coordinates
-      // is worth far more than no photo at all.
-      let lat: number | null = null;
-      let lon: number | null = null;
-      let acc: number | null = null;
-      try {
-        const fix = await Promise.race([
-          Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
-          new Promise<null>((r) => setTimeout(() => r(null), 6000)),
-        ]);
-        if (fix) {
-          lat = fix.coords.latitude;
-          lon = fix.coords.longitude;
-          acc = fix.coords.accuracy ?? null;
-        }
-      } catch { /* no fix; the photo still stands */ }
+      // This used to ask only for a LIVE fix and take null for an answer after
+      // six seconds, which is how half the photographs on record ended up with
+      // no position: under a tipper body, or in the first half-minute after the
+      // app opens, no live fix arrives. positionNow falls back to the recent
+      // fix the tracker already holds. Still best effort, and still never a
+      // reason to lose the photo -- a photo without coordinates is worth far
+      // more than no photo at all.
+      const fix = await positionNow(store);
+      const lat = fix?.lat ?? null;
+      const lon = fix?.lon ?? null;
+      const acc = fix?.accuracyM ?? null;
 
       const photoUuid = Crypto.randomUUID();
       await store!.runAsync(
