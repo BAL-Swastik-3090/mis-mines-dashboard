@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { Activity, BarChart3, Boxes, Database, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, Calculator, ClipboardCheck, ClipboardList, CloudSun, DoorOpen, ExternalLink, Gauge, LayoutDashboard, LineChart, Network, Radar, Receipt, QrCode, Scale, ShieldCheck, Smartphone, Sparkles, Users, Wrench, Zap } from "lucide-react";
+import { Activity, BarChart3, Boxes, Database, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, Calculator, ClipboardCheck, ClipboardList, CloudSun, DoorOpen, ExternalLink, Gauge, LayoutDashboard, LineChart, Network, Radar, Receipt, Scale, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { canOpen } from "@/contexts/pageAccess";
 import { useSidebar }               from "@/contexts/useSidebar";
@@ -48,7 +48,7 @@ export type NavItem =
    *  where they belong, and a second column of icons in a 200px rail turns a
    *  short list into a pattern to decode. */
   | { kind: "group"; id: string; label: string; icon: React.ElementType;
-      children: { id: AppPage; label: string }[] };
+      tag?: string; children: { id: AppPage; label: string }[] };
 
 const NAV_ITEMS: NavItem[] = [
   { kind: "page", id: "executive-summary", label: "Executive Summary",        icon: ClipboardCheck  },
@@ -72,21 +72,34 @@ const NAV_ITEMS: NavItem[] = [
   { kind: "page", id: "pr-po",           label: "PR to Payment",              icon: Receipt,
     tag: "UAT" },
 
-  // The checklists an operator answers at a handover. Admin-edited, which is
-  // the whole point of migration 105 -- a new check is a change here, not a
-  // release. Marked UAT until the mine has signed off what it asks.
-  { kind: "page", id: "hoto-checklists", label: "HOTO Checklists",            icon: ClipboardList,
-    tag: "UAT" },
-  { kind: "page", id: "hoto-register",   label: "HOTO Register",              icon: ClipboardList,
-    tag: "UAT" },
-  { kind: "page", id: "hoto-defects",    label: "HOTO Defects",               icon: Wrench,
-    tag: "UAT" },
-  { kind: "page", id: "hoto-board",      label: "Shift Board",                icon: ClipboardCheck,
-    tag: "UAT" },
-  { kind: "page", id: "hoto-devices",    label: "HOTO Devices",               icon: Smartphone,
-    tag: "UAT" },
-  { kind: "page", id: "hoto-stickers",   label: "HOTO Cab Stickers",          icon: QrCode,
-    tag: "UAT" },
+  /* ── Handover, as one thing ────────────────────────────────────────────
+     Six flat entries took a quarter of the rail and put "approve a tablet",
+     done a handful of times a year, in the same list as "what is happening
+     this shift", read every morning. One heading, and the children ordered
+     by how often somebody actually opens them: the running shift, then the
+     record of what happened, then the workshop's queue, and the setup
+     screens last.
+
+     The children drop the "HOTO" prefix. The heading already says it, and
+     repeating it six times down an indented list is six words of noise in a
+     200px rail.
+
+     UAT moves to the heading. The whole module is under acceptance, not six
+     separate things, and six identical badges say less than one. */
+  { kind: "group", id: "hoto", label: "HOTO", icon: DoorOpen, tag: "UAT",
+    children: [
+      // Daily, and the first thing opened in the morning.
+      { id: "hoto-board",      label: "Shift Board" },
+      { id: "hoto-register",   label: "Register" },
+      { id: "hoto-defects",    label: "Defects" },
+      // Changed when a check changes -- weeks apart, not days.
+      { id: "hoto-checklists", label: "Checklists" },
+      // Setup. A tablet is approved once, and a sticker printed once per
+      // machine, so these sit at the bottom where a rarely used thing
+      // belongs rather than in the path of daily work.
+      { id: "hoto-devices",    label: "Devices" },
+      { id: "hoto-stickers",   label: "Cab Stickers" },
+    ] },
   { kind: "link", href: PRPO_URL,        label: "PR/PO Status",               icon: ClipboardList,
     need: "link.prpo.view" },
 ];
