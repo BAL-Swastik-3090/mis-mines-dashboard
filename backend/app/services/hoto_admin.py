@@ -531,3 +531,71 @@ def delete_section(db: Session, section_id: int, actor: str) -> dict[str, Any]:
     db.commit()
     logger.info("section %s (%s) removed by %s", section_id, row["name"], actor)
     return {"section_id": section_id, "removed": row["name"]}
+
+
+def item_performance(db: Session, template_id: int, *,
+                     days: int = 90) -> list[dict[str, Any]]:
+    """How often each check on this template has actually found something.
+
+    ── WHY THIS IS THE MOST USEFUL NUMBER IN THE MODULE ──────────────────────
+    A checklist is a cost paid by every operator at every handover, and until
+    now nobody could see what any single question bought. The system has been
+    recording the answers all along: this reads them back the other way round,
+    per question.
+
+    Two kinds of question earn their place differently, so both are reported
+    and neither is scored:
+
+      A check that NEVER finds anything may be worthless -- or it may be the
+      one everybody passes precisely because it is asked. Brakes are checked
+      every shift and almost always fine; dropping that question because it
+      rarely fires would be the worst possible reading of this table.
+
+      A check that ALWAYS finds something is usually a question worded so
+      that the normal state of the machine is an exception, and it trains
+      operators to answer without looking.
+
+    So this returns counts and leaves the judgement to the people who know
+    the machines. No ranking, no recommendation, no traffic light.
+    """
+    rows = db.execute(text("""
+        SELECT i.item_id, i.label, i.response_type, i.default_severity,
+               sec.name AS section_name,
+               count(r.response_id) AS answered,
+               -- A YES/NO check's finding is whichever answer the item says
+               -- is adverse, which is the whole point of migration 112. The
+               -- obvious NOT_OK/CAUTION test alone would report every greasing
+               -- and fire-extinguisher check as having never once found
+               -- anything, which is exactly backwards.
+               count(*) FILTER (
+                 WHERE r.answer IN ('NOT_OK','CAUTION')
+                    OR r.in_range = false
+                    OR (i.adverse_answer IS NOT NULL
+                        AND r.answer = i.adverse_answer)
+               ) AS found,
+               max(s.captured_at) AS last_answered
+          FROM hoto_checklist_item i
+          JOIN hoto_checklist_section sec ON sec.section_id = i.section_id
+          LEFT JOIN hoto_response r ON r.item_id = i.item_id
+          LEFT JOIN hoto_session s  ON s.session_id = r.session_id
+               AND s.captured_at > now() - CAST(:d || ' days' AS interval)
+               AND s.status <> 'REJECTED'
+         WHERE sec.template_id = :t AND i.status <> 'RETIRED'
+         GROUP BY i.item_id, i.label, i.response_type, i.default_severity,
+                  sec.name, i.display_order, sec.display_order
+         ORDER BY sec.display_order, i.display_order
+    """), {"t": template_id, "d": days}).mappings().all()
+
+    out = []
+    for r in rows:
+        d = dict(r)
+        answered = int(d["answered"] or 0)
+        found = int(d["found"] or 0)
+        d["answered"] = answered
+        d["found"] = found
+        # Deliberately null rather than 0 when nothing has been answered: a
+        # question nobody has reached yet is not a question that never fires,
+        # and 0% would say the opposite of the truth.
+        d["found_rate"] = round(found / answered, 4) if answered else None
+        out.append(d)
+    return out

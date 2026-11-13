@@ -18,7 +18,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle, Check, ChevronLeft, Clock, Eye, Loader2, Filter, Lock, Wrench, X, Camera,
+  AlertTriangle, Check, ChevronLeft, Clock, Eye, Loader2, Filter, Lock, Search, Wrench, X, Camera,
 } from "lucide-react";
 import api from "@/lib/api";
 import { HotoPhotos } from "@/components/hoto/HotoPhotos";
@@ -187,6 +187,9 @@ export default function HotoDefectsSection() {
      once: see useHotoFocus for why a linked filter must not persist. */
   const goTo = useHotoFocus((st) => st.goTo);
   const [machineFilter, setMachineFilter] = useState<string | null>(null);
+  const [sevFilter, setSevFilter] = useState("");
+  const [stageFilter, setStageFilter] = useState("");
+  const [q, setQ] = useState("");
   useEffect(() => {
     const f = useHotoFocus.getState().take();
     if (f?.fleetCode) setMachineFilter(f.fleetCode);
@@ -203,9 +206,31 @@ export default function HotoDefectsSection() {
     return byMachine;
   }, [rows]);
 
-  const shown = machineFilter
-    ? rows.filter((r) => r.fleet_code === machineFilter)
-    : rows;
+  /* OVERDUE, BY WHAT THE DEFECT IS.
+     A raw age in days put a critical brake fault and a horn on the same
+     footing at three days old. These are the intervals the mine would use if
+     anybody asked it: a critical fault is overdue the day after it is
+     raised, a horn can wait a fortnight. Shown as a flag, not as a column of
+     dates nobody set -- the system has no target date to promise, so it must
+     not pretend to one. */
+  const OVERDUE_AFTER_DAYS: Record<string, number> = {
+    CRITICAL: 1, HIGH: 3, MEDIUM: 7, LOW: 14,
+  };
+  const isOverdue = (r: Defect) =>
+    r.state !== "VERIFIED" && r.state !== "CLOSED"
+    && r.age_days > (OVERDUE_AFTER_DAYS[r.severity] ?? 7);
+
+  const shown = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return rows.filter((r) =>
+      (!machineFilter || r.fleet_code === machineFilter)
+      && (!sevFilter || r.severity === sevFilter)
+      && (!stageFilter || r.state === stageFilter)
+      && (!needle || [r.fleet_code, r.item_label, r.description, r.defect_ref]
+            .filter(Boolean).some((v) => String(v).toLowerCase().includes(needle))));
+  }, [rows, machineFilter, sevFilter, stageFilter, q]);
+
+  const overdueCount = shown.filter(isOverdue).length;
 
   if (detail) {
     return <DetailView d={detail} me={me} busy={busy} onBack={() => setDetail(null)}
@@ -233,6 +258,39 @@ export default function HotoDefectsSection() {
           Include closed
         </label>
       </header>
+
+      <div className="flex items-end gap-2 flex-wrap">
+        <label className="text-[11px]">
+          <span className="block text-muted-foreground mb-0.5">Severity</span>
+          <select value={sevFilter} onChange={(e) => setSevFilter(e.target.value)}
+                  className="px-1.5 py-1 rounded border border-border bg-background">
+            <option value="">Any</option>
+            {["CRITICAL", "HIGH", "MEDIUM", "LOW"].map((v) =>
+              <option key={v} value={v}>{v}</option>)}
+          </select>
+        </label>
+        <label className="text-[11px]">
+          <span className="block text-muted-foreground mb-0.5">Stage</span>
+          <select value={stageFilter} onChange={(e) => setStageFilter(e.target.value)}
+                  className="px-1.5 py-1 rounded border border-border bg-background">
+            <option value="">Any</option>
+            {["RAISED", "ACKNOWLEDGED", "RECTIFIED", "VERIFIED", "CLOSED"].map((v) =>
+              <option key={v} value={v}>{v}</option>)}
+          </select>
+        </label>
+        {overdueCount > 0 && (
+          <span className="text-[11px] px-2 py-1 mb-px rounded
+                           bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200">
+            {overdueCount} past the interval for its severity
+          </span>
+        )}
+        <div className="relative ml-auto">
+          <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          <input value={q} onChange={(e) => setQ(e.target.value)}
+                 placeholder="machine, check, reference"
+                 className="text-[11px] pl-7 pr-2 py-1 rounded border border-border bg-background w-56" />
+        </div>
+      </div>
 
       {held.size > 0 && (
         <div className="rounded border border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40 px-3 py-2">
@@ -320,9 +378,17 @@ export default function HotoDefectsSection() {
                       <span className="text-[10px] text-muted-foreground italic"> — {r.description}</span>
                     )}
                   </td>
-                  {/* The number the morning meeting asks for. */}
+                  {/* The number the morning meeting asks for, read against
+                      what the defect is: seven days was the threshold for
+                      everything, which let a critical brake fault look as
+                      calm as a horn. */}
                   <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">
-                    <span className={r.age_days >= 7 ? "text-red-700 dark:text-red-300 font-medium" : ""}>
+                    <span
+                      title={isOverdue(r)
+                        ? `Past the ${OVERDUE_AFTER_DAYS[r.severity] ?? 7}-day interval for a ${r.severity} defect`
+                        : undefined}
+                      className={isOverdue(r) ? "text-red-700 dark:text-red-300 font-medium" : ""}
+                    >
                       {r.age_days}d
                     </span>
                   </td>

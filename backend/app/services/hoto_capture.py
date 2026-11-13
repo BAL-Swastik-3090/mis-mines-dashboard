@@ -219,7 +219,20 @@ def evaluate(items: list[dict], answers: dict[int, dict]) -> dict:
 def _items_for(db: Session, template_id: int) -> list[dict]:
     rows = db.execute(text("""
         SELECT i.item_id, i.label, i.response_type, i.unit, i.min_value, i.max_value,
-               i.is_critical, i.requires_photo_if_not_ok, i.default_severity
+               i.is_critical, i.requires_photo_if_not_ok, i.default_severity,
+               -- WITHOUT THIS COLUMN EVERY YES/NO FINDING IS SILENTLY LOST.
+               -- _evaluate_one reads item["adverse_answer"] to decide whether YES
+               -- or NO is the answer that reports a fault (migration 112).
+               -- It was never selected, so the key was always absent, the
+               -- branch never fired, and a yes/no check could not raise
+               -- anything however it was answered: "ROPS / FOPS visible
+               -- damage" was answered YES on seventeen handovers and the
+               -- system recorded no finding, no severity and no defect.
+               --
+               -- The identical omission existed in the device's own item
+               -- query and was fixed there. Fixing one end of a two-ended
+               -- bug is how it survives.
+               i.adverse_answer
           FROM hoto_checklist_item i
           JOIN hoto_checklist_section s ON s.section_id = i.section_id
          WHERE s.template_id = :t AND i.status = 'ACTIVE'
