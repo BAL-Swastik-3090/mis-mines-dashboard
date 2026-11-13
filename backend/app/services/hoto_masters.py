@@ -202,8 +202,27 @@ def _asset_row(r) -> dict[str, Any]:
     return d
 
 
-def operators(db: Session) -> list[dict[str, Any]]:
-    """The operators, with what each is signed off to drive.
+def operators(db: Session, *, plant_id: int | None = None) -> list[dict[str, Any]]:
+    """The operators a device at this site may identify, and what each drives.
+
+    ── SCOPED, BECAUSE A DEVICE TOKEN IS NOT A DASHBOARD LOGIN ───────────────
+    This took no scope at all and returned every ACTIVE operator in the
+    company -- name, employee reference, plant, department, competency list
+    and expiry -- to any enrolled tablet. `sync_bundle` already had the
+    device's plant in hand and was passing it to `assets()`; the operator
+    query simply never asked for it. One stolen or cloned tablet read the
+    whole register of every site, while section 5 of the architecture document
+    said it could not.
+
+    An operator with no plant of their own is available everywhere: that is
+    what NULL means on this column elsewhere in the schema, and a relief
+    driver who covers two sites has to be reachable from both.
+
+    A DEVICE WITH NO PLANT gets the unscoped list, deliberately and visibly.
+    Returning nothing would leave a tablet unable to name anybody, which is a
+    worse failure than the one being fixed; so the breadth is reported to the
+    caller instead and shown on the Devices screen, where somebody can assign
+    the site and close it. Silence was the actual bug here, not breadth.
 
     Competency is sent down so the device can *say* an operator is taking a
     machine he is not signed off on. It does not refuse him: the mine has not
@@ -227,8 +246,13 @@ def operators(db: Session) -> list[dict[str, Any]]:
           FROM operator o
           LEFT JOIN party p ON p.party_id = o.party_id
          WHERE o.profile_status = 'ACTIVE'
+           -- NULL plant on the device means "not configured", and is handled
+           -- by the caller; NULL plant on an operator means "any site".
+           AND (CAST(:plant AS int) IS NULL
+                OR o.plant_id IS NULL
+                OR o.plant_id = CAST(:plant AS int))
          ORDER BY 3
-    """)).mappings().all()
+    """), {"plant": plant_id}).mappings().all()
     return [dict(r) for r in rows]
 
 
@@ -273,8 +297,14 @@ def sync_bundle(db: Session, *, plant_id: int | None = None) -> dict[str, Any]:
     """
     bundle = {
         "server_time": datetime.now().astimezone().isoformat(),
+        # Says plainly how wide this bundle is. A device with no site gets
+        # every site's operators, and the dashboard turns this into a visible
+        # warning rather than letting it pass unnoticed again.
+        "operator_scope": ("plant" if plant_id is not None else "UNSCOPED"),
         "assets": assets(db, plant_id=plant_id),
-        "operators": operators(db),
+        # Scoped to the device's own site. See operators() for what an
+        # unscoped device gets and why it is reported rather than refused.
+        "operators": operators(db, plant_id=plant_id),
         "locations": locations(db),
         "shifts": shifts(db),
         "templates": [],

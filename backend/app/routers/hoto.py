@@ -780,6 +780,16 @@ def device_tracking(device_code: str, request: Request, payload: dict,
                     location_interval_s=payload.get("location_interval_s"))
 
 
+@router.post("/admin/devices/{device_code}/site")
+def device_site(device_code: str, request: Request, payload: dict,
+                db: Session = Depends(get_minehub_db)) -> dict:
+    """Set which site a device belongs to, and so whose operators it may read."""
+    actor = _admin_guard(request, db)
+    pl = payload.get("plant_id")
+    return _devices(dvc.set_site, db, device_code, actor,
+                    plant_id=int(pl) if pl not in (None, "") else None)
+
+
 @router.get("/admin/devices/{device_code}/track")
 def device_track(device_code: str, request: Request, hours: int = 24,
                  limit: int = 500, db: Session = Depends(get_minehub_db)) -> dict:

@@ -38,6 +38,7 @@ interface Device {
   label: string;
   profile: "COMPANY" | "PERSONAL";
   status: Status;
+  plant_id: number | null;
   plant_name: string | null;
   location_name: string | null;
 
@@ -194,6 +195,24 @@ export default function HotoDevicesSection() {
 
   const waiting = useMemo(() => devices.filter((d) => d.status === "PENDING"), [devices]);
   const rest = useMemo(() => devices.filter((d) => d.status !== "PENDING"), [devices]);
+
+  /* Devices that can read every site's operator register, because nothing
+     ever set their site. Only the ones still in service: a revoked device
+     reads nothing at all. */
+  const siteless = useMemo(
+    () => rest.filter((d) => d.plant_id == null && d.status === "ACTIVE"),
+    [rest]);
+
+  const [plants, setPlants] = useState<{ plant_id: number; name: string }[]>([]);
+  const [plantsFailed, setPlantsFailed] = useState(false);
+  useEffect(() => {
+    // /api/minehub/plants, and it returns a bare array rather than an
+    // envelope. Getting either wrong would leave the picker empty and
+    // disabled with nothing on screen to say why.
+    api.get("/minehub/plants")
+      .then((r) => setPlants(Array.isArray(r.data) ? r.data : (r.data?.plants ?? [])))
+      .catch(() => setPlantsFailed(true));
+  }, []);
   const silent = useMemo(
     () => rest.map((d) => ({ d, why: notReporting(d) }))
              .filter((x): x is { d: Device; why: { minutes: number; never: boolean } } =>
@@ -308,6 +327,12 @@ export default function HotoDevicesSection() {
                 <tr>
                   <th className="px-3 py-2">Device</th>
                   <th className="px-3 py-2">Hardware</th>
+                  {/* A DEVICE'S SITE DECIDES WHOSE OPERATORS IT MAY READ.
+                      It did nothing until the operator query was scoped, so
+                      nobody ever set it and every tablet had it empty. It is
+                      a column now so an empty one is visible rather than
+                      buried in a record nobody opens. */}
+                  <th className="px-3 py-2">Site</th>
                   <th className="px-3 py-2">Last seen</th>
                   <th className="px-3 py-2">Where</th>
                   <th className="px-3 py-2 text-right">Handovers</th>
@@ -334,6 +359,9 @@ export default function HotoDevicesSection() {
                     <td className="px-3 py-2.5 text-xs text-muted-foreground">
                       {hardware(d)}
                       {d.app_version && <div>app {d.app_version}</div>}
+                    </td>
+                    <td className="px-3 py-2.5 text-xs">
+                      <SitePicker d={d} plants={plants} failed={plantsFailed} onDone={load} />
                     </td>
                     <td className="px-3 py-2.5 text-xs">
                       {ago(d.last_seen_at)}
@@ -732,6 +760,77 @@ function Tile({ title, value, sub, icon: Icon }:
       </div>
       <div className="mt-1 text-lg font-semibold">{value}</div>
       <div className="text-xs text-muted-foreground">{sub}</div>
+    </div>
+  );
+}
+
+
+/* ── which site a device belongs to ───────────────────────────────────────── */
+
+/**
+ * Editable in place, because the alternative is a screen nobody opens.
+ *
+ * The site is not decoration: it decides whose operator register the tablet
+ * receives. It sat unused for the whole life of the feature, so it is set
+ * here, in the row, next to the warning that says why it matters.
+ */
+function SitePicker({ d, plants, failed, onDone }: {
+  d: Device;
+  plants: { plant_id: number; name: string }[];
+  failed: boolean;
+  onDone: () => void | Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function set(value: string) {
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.post(`/hoto/admin/devices/${d.device_code}/site`,
+                     { plant_id: value === "" ? null : Number(value) });
+      await onDone();
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail ?? "Could not set the site.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (d.status !== "ACTIVE") {
+    return <span className="text-muted-foreground">{d.plant_name ?? "—"}</span>;
+  }
+
+  /* A disabled control with no explanation is the failure this project keeps
+     repeating. If the site list did not load, say so. */
+  if (failed || plants.length === 0) {
+    return (
+      <span className="text-muted-foreground">
+        {d.plant_name ?? "no site"}
+        <span className="block text-[11px] text-amber-700 dark:text-amber-300">
+          site list unavailable
+        </span>
+      </span>
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      <select
+        disabled={busy || plants.length === 0}
+        value={d.plant_id ?? ""}
+        onChange={(e) => void set(e.target.value)}
+        className={`rounded border bg-background px-1.5 py-1 text-xs ${
+          d.plant_id == null
+            ? "border-amber-400 text-amber-900 dark:text-amber-200"
+            : "border-border"}`}
+      >
+        <option value="">no site — reads every site</option>
+        {plants.map((p) => (
+          <option key={p.plant_id} value={p.plant_id}>{p.name}</option>
+        ))}
+      </select>
+      {err && <div className="text-[11px] text-red-700">{err}</div>}
     </div>
   );
 }

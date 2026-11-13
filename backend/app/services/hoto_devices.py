@@ -740,3 +740,49 @@ def tracking_settings(db: Session, device_id: int) -> dict[str, Any]:
     if not row:
         return {"track_location": False, "location_interval_s": 300}
     return dict(row)
+
+
+def set_site(db: Session, device_code: str, actor: str, *,
+             plant_id: int | None) -> dict[str, Any]:
+    """Assign the site a device belongs to.
+
+    ── WHY THIS EXISTS ──────────────────────────────────────────────────────
+    A device's plant decides which operators it may identify. Until the
+    operator query was scoped, that column did nothing, so nobody ever set it
+    and every enrolled tablet now has it NULL -- which is exactly why the
+    unscoped case has to stay usable rather than returning nothing.
+
+    Setting it here is what closes the hole for an existing device. New
+    devices take it at approval.
+    """
+    row = db.execute(text("""
+        SELECT device_id, device_code, status FROM hoto_device
+         WHERE device_code = :c
+    """), {"c": device_code}).mappings().first()
+    if not row:
+        raise DeviceError([f"no such device: {device_code}"], status=404)
+
+    if plant_id is not None:
+        exists = db.execute(text("SELECT 1 FROM plant WHERE plant_id = :p"),
+                            {"p": plant_id}).scalar()
+        if not exists:
+            raise DeviceError([f"no such site: {plant_id}"])
+
+    db.execute(text("""
+        UPDATE hoto_device
+           -- hoto_device has no updated_by/updated_at columns; the change is
+           -- recorded in remarks rather than inventing a schema change for it.
+           SET plant_id = :p,
+               remarks = concat_ws(' | ', remarks,
+                                   concat('site set by ', CAST(:by AS text), ' on ',
+                                          to_char(now(), 'DD Mon YYYY')))
+         WHERE device_id = :d
+    """), {"p": plant_id, "by": actor, "d": row["device_id"]})
+    db.commit()
+
+    # The device does not learn this until its next sync, and its cache still
+    # holds whatever it was given before. Said out loud rather than implied:
+    # revoking breadth does not reach back into a tablet already carrying it.
+    return {"device_code": device_code, "plant_id": plant_id,
+            "note": ("The device applies this at its next sync. Operators it "
+                     "already cached stay on it until then.")}
