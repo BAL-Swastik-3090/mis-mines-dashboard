@@ -125,8 +125,23 @@ function rangeText(a: Answer): string | null {
 }
 
 export default function HotoRegisterSection() {
+  /**
+   * A WEEK, not today.
+   *
+   * Both dates defaulted to today, so the register opened empty on any day
+   * nobody had yet filed a handover -- and said "An empty register is not the
+   * same as a clean one", which is true and, there, actively misleading: the
+   * records existed, yesterday. Somebody opening this screen for the first
+   * time was told the system had nothing in it while it held twenty-six
+   * handovers.
+   *
+   * A week back is what a supervisor is actually asking about ("has this
+   * machine been handed over properly lately"), and it is wide enough that an
+   * empty answer means something.
+   */
   const today = new Date().toISOString().slice(0, 10);
-  const [from, setFrom] = useState(today);
+  const weekAgo = new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10);
+  const [from, setFrom] = useState(weekAgo);
   const [to, setTo] = useState(today);
   const [onlyAdverse, setOnlyAdverse] = useState(false);
   const [statusFilter, setStatusFilter] = useState("");
@@ -253,7 +268,7 @@ export default function HotoRegisterSection() {
 
       {!loading && shown.length === 0 && (
         <p className="text-xs text-muted-foreground">
-          No handovers recorded for this period.{" "}
+          No handovers recorded between {from} and {to}.{" "}
           <span className="text-amber-700 dark:text-amber-300">
             An empty register is not the same as a clean one — it may mean nobody
             filled anything in.
