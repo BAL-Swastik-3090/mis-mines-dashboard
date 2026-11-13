@@ -13,29 +13,46 @@ Status is **checked in the source today**, not carried over from the documents.
 
 ---
 
-## Part 1 · Architecture fix plan — none of the four are done
+## Part 1 · Architecture fix plan — one of four done
 
-I checked each one. One is half-addressed; three are untouched.
+I checked each one. **One is substantially done; three are untouched.**
 
-### P1 · Preserve the checklist actually answered — ⚠️ HALF DONE
+### P1 · Preserve the checklist actually answered — ✅ SUBSTANTIALLY DONE
 
-**What is there.** `submit()` compares the device's `template_id` /
-`template_version` against the one in force and raises an `ops_exception` when
-they differ (`hoto_capture.py:314-317`, `:405-414`). That is better than the
-silent substitution the review found: the divergence is no longer invisible.
+**Corrected 13 Nov, later the same day.** An earlier version of this register
+said acceptance checks 1 and 2 still failed. That was wrong, and the error was
+mine: I read `submit()` resolving a template and concluded it resolved today's.
+It does not.
 
-**What is still wrong.** The capture is still *evaluated and stored* against
-the current template, not the one answered:
+`resolve_template(..., on_date=)` resolves the checklist in force **on the
+production day the handover belongs to**:
 
-```python
-items = _items_for(db, head["template_id"])     # head, not what was answered
-... "tpl": head["template_id"], "ver": head["version"]
+```sql
+WHERE status = 'ACTIVE' AND effective_from <= :on
+ORDER BY ... effective_from DESC, version DESC
 ```
 
-`claimed_tpl` and `claimed_ver` are used only to write the exception text —
-they are never stored on the session. So acceptance checks 1 and 2 from the
-plan both still fail: a v1 capture synced after v2 publishes is recorded as
-v2, and severities come from v2.
+and `publish()` **deliberately leaves the previous version ACTIVE**, with a
+comment saying exactly why — the date resolver needs earlier versions present
+so a late capture still finds what was genuinely in force. So a v1 capture that
+syncs after v2 is published resolves to v1 and keeps v1's severities.
+Acceptance checks 1 and 2 pass.
+
+Three residual gaps remain, all narrower than the original finding:
+
+- **1a** — when the device's *claimed* version differs from the resolved one,
+  the server stores the resolved one and records the divergence only in the
+  exception text. The answered version is not persisted as evidence.
+- **1b** — `session.ts:460` sends `production_day: captured_at.slice(0, 10)`
+  from a UTC timestamp. In IST every capture between 00:00 and 05:29 local
+  reports the **previous day** — precisely the night shift. The *stored*
+  production day is recomputed server-side and is correct; only template
+  resolution uses the device's value, so this bites only on a day a template
+  changed. A one-line fix.
+- **1c** — no quarantine path for an unknown or inapplicable template. Lower
+  severity than it reads: the server never *uses* the claimed template, so a
+  wrong-machine-type claim cannot mis-evaluate a capture; it raises drift. The
+  gap is about preserving evidence, not about safety.
 
 ### P2 · Define what an immediate machine block means — ❌ NOT DONE
 
