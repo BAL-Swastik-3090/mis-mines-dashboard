@@ -42,6 +42,7 @@ import { downloadDashboard } from "@/utils/downloadDashboard";
 import { withExportMode } from "@/contexts/useExportMode";
 import QualityTrendCharts from "@/components/charts/QualityTrendCharts";
 import PlantOutputTrendChart from "@/components/charts/PlantOutputTrendChart";
+import { useRainImpact } from "@/hooks/useRainImpact";
 import { formatIndian } from "@/lib/utils";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import type {
@@ -292,7 +293,7 @@ function StockBlock({ d }: { d: ExecutiveSummaryResponse }) {
 /* ── Blocks 2-4 · a grade table, TD beside MTD ─────────────────────────── */
 function GradeTable({ icon, title, sub, qtyLabel, tdLabel, mtdLabel,
                      td, mtd, tdTotal, mtdTotal, showPlan = false,
-                     qtyDp = 2 }: {
+                     qtyDp = 2, rainImpactMt }: {
   icon: React.ReactNode; title: string; sub: string; qtyLabel: string;
   /* The heading says WHICH day and WHICH span, not just "Today". The page is
      read a day or two in arrears — the mine files in arrears — so "Today" on a
@@ -305,6 +306,12 @@ function GradeTable({ icon, title, sub, qtyLabel, tdLabel, mtdLabel,
      show the two extra columns. A row whose plan is null still prints a dash
      there: no plan was written for that grade, which is not a plan of zero. */
   showPlan?: boolean;
+  /* MT of ore the mine lost to rain this month, from the LCM's Equipment Wise
+     matrix. Given only by Mines Production: the deduction is an ore figure and
+     means nothing against concentrate or despatch. Undefined means "this table
+     does not carry the rows at all"; null means it does, and the figure has
+     not arrived or could not be read. */
+  rainImpactMt?: number | null;
   /* Decimal places for the TONNAGE columns only — Plan and the quantity, in
      the body and in the footer. Every tonnage table on this page passes 0:
      the mine books and reads whole tonnes, and a column of 1,177.84 /
@@ -436,6 +443,71 @@ function GradeTable({ icon, title, sub, qtyLabel, tdLabel, mtdLabel,
               <N v={mtdTotal?.cr2o3} strong /><Est pct={mtdTotal?.estimated_pct} qty={mtdTotal?.estimated_qty} />
             </td>
           </tr>
+
+          {/* ── Rain Impact, and the plan net of it ─────────────────────────
+              MTD ONLY, and that is not a simplification. The deduction is a
+              month's loss hours priced into tonnes; there is no day-sized
+              version of it to put in the TD half, and printing the month's
+              figure there would say the mine lost 1,346 MT to rain on the
+              12th. The TD cells are left blank for the same reason the Plan
+              column prints a dash where no plan was written.
+
+              IT IS NOT A GRADE, so it sits in the footer below the Weighted
+              Avg rather than among HG / MG / LG: rain is not something the
+              mine produced, and a row in the body would be picked up by
+              anything reading the grade list.
+
+              ONLY THE PLAN MOVES. Production is what was dug and does not
+              change because of why it was not more, so the Revised row
+              repeats the same tonnage and divides it by the smaller plan --
+              which is the whole point of the row, and is why Ach % is
+              recomputed here rather than carried from the server. */}
+          {rainImpactMt !== undefined && showPlan && (() => {
+            const plan = mtdTotal?.plan ?? null;
+            const qty  = mtdTotal?.qty ?? null;
+            const net  = plan != null && rainImpactMt != null
+              ? plan - rainImpactMt : null;
+            // No percentage against a revised plan of nothing, and none
+            // against a plan rain has wiped out entirely -- a dash, never a
+            // division nobody can read.
+            const ach = qty != null && net != null && net > 0
+              ? Math.round(qty / net * 1000) / 10 : null;
+            return (
+              <>
+                <tr className="bg-bg-section border-t border-border-light">
+                  <td className={`${TD} font-condensed font-bold tracking-wider uppercase text-[11px] text-txt-secondary`}>
+                    Rain Impact (Non-Controllable)
+                  </td>
+                  <td className={`${TD} text-right border-l border-border-light`} />
+                  <td className={TD} /><td className={TD} />
+                  <td className={TD} /><td className={TD} />
+                  <td className={GAP} aria-hidden />
+                  <td className={`${TD} text-right border-l border-border text-amber-700 font-semibold ${MTD_BG}`}>
+                    {rainImpactMt == null ? "—" : `− ${formatIndian(rainImpactMt, qtyDp)}`}
+                  </td>
+                  <td className={`${TD} ${MTD_BG}`} /><td className={`${TD} ${MTD_BG}`} />
+                  <td className={`${TD} ${MTD_BG}`} /><td className={`${TD} ${MTD_BG}`} />
+                </tr>
+                <tr className="bg-bg-section border-b-2 border-border">
+                  <td className={`${TD} font-condensed font-extrabold tracking-widest uppercase text-[11px] text-navy`}>
+                    Revised Plan (Net rain impact)
+                  </td>
+                  <td className={`${TD} text-right border-l border-border-light`} />
+                  <td className={TD} /><td className={TD} />
+                  <td className={TD} /><td className={TD} />
+                  <td className={GAP} aria-hidden />
+                  <td className={`${TD} text-right border-l border-border text-txt-secondary font-semibold ${MTD_BG}`}>
+                    <N v={net} dp={qtyDp} />
+                  </td>
+                  <td className={`${TD} text-right whitespace-nowrap ${MTD_BG}`}>
+                    <N v={net == null ? null : qty} dp={qtyDp} strong />
+                  </td>
+                  <td className={`${TD} text-right ${MTD_BG}`}><Ach v={ach} strong /></td>
+                  <td className={`${TD} ${MTD_BG}`} /><td className={`${TD} ${MTD_BG}`} />
+                </tr>
+              </>
+            );
+          })()}
         </tfoot>
       </table>
 
@@ -1066,6 +1138,11 @@ export default function ExecutiveSummarySection() {
   });
   const d = q.data;
 
+  /* THE SUMMARY'S OWN WINDOW, not the global filter -- see useRainImpact. The
+     server derives the month from the end date, so this must ask for the same
+     span the Plan it is deducted from was built over. */
+  const rain = useRainImpact(d?.mtd_from, d?.report_day);
+
   /* Every performance card is cut off at the same day, so each header says
      which day rather than repeating the column names printed inside it. */
   const statusTill = d ? `Status till ${niceDate(d.report_day)}` : "";
@@ -1288,11 +1365,15 @@ export default function ExecutiveSummarySection() {
 
           <StockBlock d={d} />
 
+          {/* MINES PRODUCTION ALONE CARRIES THE RAIN ROWS. The deduction is
+              ore at the face; against COB concentrate or a despatch it would
+              be a figure borrowed from another question. */}
           <GradeTable icon={<Pickaxe size={14} />} title="Mines Production"
             sub={statusTill} qtyLabel="Production (MT)" showPlan qtyDp={0}
             tdLabel={tdLabel} mtdLabel={mtdLabel}
             td={d.td.production} mtd={d.mtd.production}
-            tdTotal={d.td.production_total} mtdTotal={d.mtd.production_total} />
+            tdTotal={d.td.production_total} mtdTotal={d.mtd.production_total}
+            rainImpactMt={rain.mt} />
 
           {/* Concentrate, not ore, and reported apart from the grades above:
               it is beneficiated at plant 1210 against its own plan, and a
