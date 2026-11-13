@@ -224,48 +224,47 @@ export function HotoPhotos({ sessionId, itemId, compact }: {
       )}
 
       {/* ── full size ────────────────────────────────────────────────────
-          A real panel, not a floating caption. The first version leaned on
-          a theme token for its background and the token painted nothing, so
-          the metadata and the Close button sat transparently over the dimmed
-          page behind and could barely be read. An overlay that cannot be
-          read is worse than no overlay: the reader cannot tell whether the
-          photograph has a position or the screen has simply failed. */}
+          The picture is the point, so it gets the screen and the facts get
+          one short strip beneath it -- read along, not scrolled through.
+          Two columns: what the photograph IS on the left, where it came
+          from on the right.
+
+          The strip is a sibling in normal flow, never sharing a flex sizing
+          track with the image. An earlier version let the image overflow
+          such a track and paint straight over these facts, and the version
+          before that leaned on a theme token that painted nothing. An
+          overlay that cannot be read is worse than no overlay. */}
       {big && (
         <div
           role="dialog"
           aria-modal="true"
           aria-label={big.item_label ?? "Photograph"}
-          className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4 sm:p-8"
+          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-2 sm:p-4"
           onClick={() => setBig(null)}
         >
           <div
-            className="w-fit max-w-full min-w-[min(22rem,100%)] max-h-full
-                       overflow-y-auto rounded-lg
+            className="w-fit max-w-full max-h-full overflow-y-auto rounded-lg
                        bg-white text-black dark:bg-neutral-900 dark:text-neutral-100
                        shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* The picture gets the room; the facts keep a fixed strip, so a
-                tall photograph can never push them off the screen. */}
             <div className="bg-black flex items-center justify-center
                             rounded-t-lg overflow-hidden">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={`/api/hoto/photos/${big.photo_id}`}
                 alt={big.item_label ?? "photograph"}
-                className="block w-auto max-w-[min(56rem,90vw)] max-h-[65vh]
-                           object-contain"
+                className="block w-auto max-w-[96vw] max-h-[82vh] object-contain"
               />
             </div>
 
-            {/* Its own opaque strip, below the picture in the flow and not
-                sharing a sizing track with it: the previous version let the
-                image overflow a flex track and paint straight over these
-                facts, which is the same unreadable-overlay fault twice. */}
             <div className="relative z-10 bg-white dark:bg-neutral-900
                             border-t border-black/10 dark:border-white/10
-                            px-3 py-2 flex items-start justify-between gap-3">
-              <div className="space-y-0.5 text-[11px] leading-snug min-w-0">
+                            px-3 py-2 flex items-center justify-between
+                            gap-4 flex-wrap">
+
+              {/* What it is, and where it was taken. */}
+              <div className="text-[11px] leading-snug min-w-0">
                 <div className="font-semibold text-[13px]">
                   {big.item_label
                     ?? (big.kind === "OPERATOR" ? "The operator" : "The machine")}
@@ -288,67 +287,62 @@ export function HotoPhotos({ sessionId, itemId, compact }: {
                       && ` (±${Math.round(num(big.gps_accuracy_m)!)} m)`}
                   </a>
                 ) : (
-                  <div className="opacity-70">
-                    No position — taken before the app recorded one, or no fix
-                    was available at the machine.
-                  </div>
+                  <div className="opacity-70">No position recorded</div>
                 )}
-
-                {/* WHO AND WHAT. A photograph is worth what its provenance is
-                    worth: months later, somebody disputing a defect wants to
-                    know whose shift it was and which tablet took it, and all
-                    of this has been recorded since enrolment without ever
-                    reaching a screen. Kept as a labelled list rather than
-                    another run-on line, because these are facts to be read
-                    off one at a time, not prose. */}
-                <dl className="pt-1.5 mt-1.5 border-t border-black/10 dark:border-white/10
-                               grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5
-                               text-[10px] leading-tight">
-                  {big.operator_name && (
-                    <>
-                      <dt className="opacity-60">Operator</dt>
-                      <dd className="min-w-0 truncate">
-                        {big.operator_name}
-                        {big.operator_emp_id && (
-                          <span className="opacity-60"> · {big.operator_emp_id}</span>
-                        )}
-                      </dd>
-                    </>
-                  )}
-                  {device && (
-                    <>
-                      <dt className="opacity-60">Tablet</dt>
-                      <dd className="min-w-0">
-                        <span className="font-medium">{device.code}</span>
-                        {big.device_profile === "PERSONAL" && (
-                          /* Worth saying out loud: a company tablet and
-                             somebody's own phone are not equal evidence. */
-                          <span className="ml-1 rounded bg-amber-100 dark:bg-amber-900/50
-                                           px-1 py-px text-[9px] align-middle">
-                            personal device
-                          </span>
-                        )}
-                        {device.detail && (
-                          <div className="opacity-60">{device.detail}</div>
-                        )}
-                      </dd>
-                    </>
-                  )}
-                  <dt className="opacity-60">Reached office</dt>
-                  <dd>
-                    {new Date(big.received_at).toLocaleString("en-IN", {
-                      day: "2-digit", month: "short", hour: "2-digit",
-                      minute: "2-digit", hour12: false })}
-                    {/* The gap between shutter and arrival is the offline
-                        story: a photo that took two hours to arrive was taken
-                        somewhere with no signal, which is most of this mine. */}
-                    {heldFor && <span className="opacity-60"> · held {heldFor}</span>}
-                  </dd>
-                </dl>
               </div>
+
+              {/* WHERE IT CAME FROM. A photograph is worth what its
+                  provenance is worth: months later, somebody disputing a
+                  defect wants to know whose shift it was and which tablet
+                  took it. All of this has been recorded since enrolment and
+                  never reached a screen. */}
+              <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5
+                             text-[10px] leading-tight min-w-0">
+                {big.operator_name && (
+                  <>
+                    <dt className="opacity-60">Operator</dt>
+                    <dd className="min-w-0 truncate">
+                      {big.operator_name}
+                      {big.operator_emp_id && (
+                        <span className="opacity-60"> · {big.operator_emp_id}</span>
+                      )}
+                    </dd>
+                  </>
+                )}
+                {device && (
+                  <>
+                    <dt className="opacity-60">Tablet</dt>
+                    <dd className="min-w-0 truncate">
+                      <span className="font-medium">{device.code}</span>
+                      {big.device_profile === "PERSONAL" && (
+                        /* Worth saying out loud: a company tablet and
+                           somebody's own phone are not equal evidence. */
+                        <span className="ml-1 rounded bg-amber-100 dark:bg-amber-900/50
+                                         px-1 py-px text-[9px] align-middle">
+                          personal device
+                        </span>
+                      )}
+                      {device.detail && (
+                        <span className="opacity-60"> · {device.detail}</span>
+                      )}
+                    </dd>
+                  </>
+                )}
+                <dt className="opacity-60">Reached office</dt>
+                <dd className="min-w-0 truncate">
+                  {new Date(big.received_at).toLocaleString("en-IN", {
+                    day: "2-digit", month: "short", hour: "2-digit",
+                    minute: "2-digit", hour12: false })}
+                  {/* The gap between shutter and arrival is the offline
+                      story: a photo held two hours was taken somewhere with
+                      no signal, which is most of this mine. */}
+                  {heldFor && <span className="opacity-60"> · held {heldFor}</span>}
+                </dd>
+              </dl>
+
               <button
                 onClick={() => setBig(null)}
-                className="shrink-0 rounded border border-black/20 dark:border-white/20
+                className="shrink-0 ml-auto rounded border border-black/20 dark:border-white/20
                            px-2.5 py-1 text-[11px] hover:bg-black/5 dark:hover:bg-white/10"
               >
                 Close
@@ -357,7 +351,6 @@ export function HotoPhotos({ sessionId, itemId, compact }: {
           </div>
         </div>
       )}
-
     </div>
   );
 }
