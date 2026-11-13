@@ -24,6 +24,7 @@ import {
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
 import Explainer from "@/components/hoto/Explainer";
+import { useHotoFocus } from "@/contexts/useHotoFocus";
 
 type MachineState =
   | "AVAILABLE" | "RUNNING" | "CAUTION" | "RESTRICTED"
@@ -138,6 +139,7 @@ export default function HotoBoardSection() {
   const [error, setError] = useState<string[] | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [attentionOnly, setAttentionOnly] = useState(true);
+  const goTo = useHotoFocus((st) => st.goTo);
   const [picked, setPicked] = useState<Machine | null>(null);
 
   const load = useCallback(async () => {
@@ -252,6 +254,7 @@ export default function HotoBoardSection() {
                 <th className="text-left px-2 py-1.5 font-medium">Operator</th>
                 <th className="text-right px-2 py-1.5 font-medium">Open</th>
                 <th className="text-left px-2 py-1.5 font-medium">Flags</th>
+                <th className="text-right px-2 py-1.5 font-medium">Go to</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -302,6 +305,48 @@ export default function HotoBoardSection() {
                         <span title="The handover itself was blocked">
                           <FileWarning size={11} className="text-amber-600" />
                         </span>
+                      )}
+                    </span>
+                  </td>
+
+                  {/* OUT OF THE BOARD AND INTO THE RECORD. Until now a foreman
+                      who saw something here read the machine name off the
+                      screen, opened the register by hand, set the dates and
+                      searched for it. The board is where a problem is noticed;
+                      it should also be where it is followed.
+
+                      stopPropagation because the row itself opens the machine
+                      panel -- without it one click would do two things. */}
+                  <td className="px-2 py-1.5 text-right whitespace-nowrap">
+                    <span className="inline-flex gap-1.5">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          goTo("hoto-register", {
+                            assetId: m.asset_id, fleetCode: m.fleet_code,
+                            onDate: board?.shift.production_day,
+                            because: m.fleet_code,
+                          });
+                        }}
+                        className="text-[10px] px-1.5 py-0.5 rounded border border-border
+                                   text-muted-foreground hover:text-foreground hover:bg-muted"
+                      >
+                        Register
+                      </button>
+                      {m.open_defects > 0 && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            goTo("hoto-defects", {
+                              assetId: m.asset_id, fleetCode: m.fleet_code,
+                              because: m.fleet_code,
+                            });
+                          }}
+                          className="text-[10px] px-1.5 py-0.5 rounded border border-border
+                                     text-muted-foreground hover:text-foreground hover:bg-muted"
+                        >
+                          Defects
+                        </button>
                       )}
                     </span>
                   </td>

@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle, Camera, ChevronLeft, CloudOff, Loader2, MapPin, MapPinOff, Search, X,
+  AlertTriangle, Camera, ChevronLeft, CloudOff, Loader2, MapPin, MapPinOff, Filter, Search, TrendingDown, X,
 } from "lucide-react";
 import api from "@/lib/api";
 
@@ -32,6 +32,7 @@ const num = (v: unknown): number | null => {
 };
 import { HotoPhotos } from "@/components/hoto/HotoPhotos";
 import Explainer from "@/components/hoto/Explainer";
+import { useHotoFocus } from "@/contexts/useHotoFocus";
 
 type Status = "DRAFT" | "SUBMITTED" | "BLOCKED" | "ACCEPTED" | "REJECTED" | "CANCELLED";
 type Severity = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
@@ -46,6 +47,9 @@ interface Row {
   received_at: string;
   captured_offline: boolean;
   sync_delay_minutes: number | null;
+  /* Sent by the API since the register was written and never declared here,
+     so nothing could link out to a machine by anything but its printed code. */
+  asset_id: number;
   shift_code?: string | null;
   production_day?: string | null;
   bulk_answered?: boolean;
@@ -163,6 +167,32 @@ export default function HotoRegisterSection() {
   const [statusFilter, setStatusFilter] = useState("");
   const [q, setQ] = useState("");
 
+  /* ARRIVING FROM ANOTHER SCREEN. A link from the shift board or a defect
+     carries the machine it is about, and the date that machine's row sits on
+     -- the commonest way a link lands on an empty screen is a default range
+     that does not include the thing the link points at.
+
+     Taken once and cleared: a filter that arrived by a link describes this
+     journey, not a preference, and one that survived would leave somebody
+     next week staring at a register narrowed to a machine for no reason they
+     can see. Hence the banner too -- a narrowed screen must say so, or it
+     looks like a screen that has lost its data. */
+  const goTo = useHotoFocus((st) => st.goTo);
+  const [arrivedFor, setArrivedFor] = useState<string | null>(null);
+  useEffect(() => {
+    const f = useHotoFocus.getState().take();
+    if (!f) return;
+    if (f.fleetCode) setQ(f.fleetCode);
+    if (f.onDate) {
+      if (f.onDate < from) setFrom(f.onDate);
+      if (f.onDate > to) setTo(f.onDate);
+    }
+    if (f.sessionId) void open(f.sessionId);
+    setArrivedFor(f.because ?? f.fleetCode ?? null);
+    // Deliberately on mount only: this is a handoff, not a subscription.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const [rows, setRows] = useState<Row[]>([]);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -212,6 +242,34 @@ export default function HotoRegisterSection() {
 
   const blocked = rows.filter((r) => r.status === "BLOCKED").length;
 
+  /* A METER THAT RUNS BACKWARDS. Across consecutive handovers of ONE machine
+     the reading can only rise: an hour meter does not unwind. BD-80-15306
+     currently reads 8335, 8339, 8334, 8328 on successive handovers, which is
+     either a typed digit or a handover filed against the wrong machine -- and
+     the second is the failure that makes the right machine look checked.
+     Nothing in the system was looking, because each row is correct on its own
+     and only the sequence is wrong. */
+  const wentBackwards = useMemo(() => {
+    const bad = new Set<number>();
+    const byMachine = new Map<number, Row[]>();
+    for (const r of rows) {
+      if (r.meter_reading == null) continue;
+      const list = byMachine.get(r.asset_id) ?? [];
+      list.push(r);
+      byMachine.set(r.asset_id, list);
+    }
+    for (const list of byMachine.values()) {
+      // Oldest first, whatever order the table is sorted in.
+      const seq = [...list].sort((a, b) => a.captured_at.localeCompare(b.captured_at));
+      for (let i = 1; i < seq.length; i++) {
+        if (Number(seq[i]!.meter_reading) < Number(seq[i - 1]!.meter_reading)) {
+          bad.add(seq[i]!.session_id);
+        }
+      }
+    }
+    return bad;
+  }, [rows]);
+
   if (detail) {
     return <DetailView d={detail} onBack={() => setDetail(null)} />;
   }
@@ -237,6 +295,21 @@ export default function HotoRegisterSection() {
           </div>
         )}
       </header>
+
+      {arrivedFor && (
+        <div className="flex items-center gap-2 text-[11px] px-2.5 py-1.5 rounded
+                        border border-sky-200 bg-sky-50 text-sky-900
+                        dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-200">
+          <Filter size={12} className="shrink-0" />
+          <span>Narrowed to <strong>{arrivedFor}</strong>.</span>
+          <button
+            onClick={() => { setQ(""); setArrivedFor(null); }}
+            className="ml-auto underline hover:no-underline"
+          >
+            Show everything
+          </button>
+        </div>
+      )}
 
       <div className="flex items-end gap-2 flex-wrap">
         <label className="text-[11px]">
@@ -304,12 +377,17 @@ export default function HotoRegisterSection() {
                 <th className="text-left px-2 py-1.5 font-medium">Reference</th>
                 <th className="text-left px-2 py-1.5 font-medium">Machine</th>
                 <th className="text-left px-2 py-1.5 font-medium">What</th>
+                {/* Recorded since migration 113 and shown only in the detail
+                    panel until now, though it is the second thing anybody
+                    filters by after the date. */}
+                <th className="text-left px-2 py-1.5 font-medium">Shift</th>
                 <th className="text-left px-2 py-1.5 font-medium">Operator</th>
                 <th className="text-left px-2 py-1.5 font-medium">Captured</th>
                 <th className="text-right px-2 py-1.5 font-medium">Meter</th>
                 <th className="text-right px-2 py-1.5 font-medium">Fuel</th>
                 <th className="text-left px-2 py-1.5 font-medium">Found</th>
                 <th className="text-left px-2 py-1.5 font-medium">Status</th>
+                <th className="text-right px-2 py-1.5 font-medium">Go to</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -326,6 +404,18 @@ export default function HotoRegisterSection() {
                   </td>
                   <td className="px-2 py-1.5 whitespace-nowrap">
                     {TYPE_LABEL[r.session_type] ?? r.session_type}
+                  </td>
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    {r.shift_code
+                      ? <>
+                          <span className="font-medium">{r.shift_code}</span>
+                          {r.production_day && (
+                            <span className="text-[10px] text-muted-foreground ml-1">
+                              {r.production_day.slice(5)}
+                            </span>
+                          )}
+                        </>
+                      : <span className="text-muted-foreground">—</span>}
                   </td>
                   <td className="px-2 py-1.5 whitespace-nowrap">
                     {r.operator_name ?? r.operator_emp_id ?? "—"}
@@ -353,9 +443,19 @@ export default function HotoRegisterSection() {
                     </span>
                   </td>
                   <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">
-                    {r.meter_reading != null
-                      ? `${r.meter_reading}${r.meter_uom ? ` ${r.meter_uom}` : ""}`
-                      : "—"}
+                    {r.meter_reading != null ? (
+                      <span className={`inline-flex items-center gap-1 ${
+                        wentBackwards.has(r.session_id)
+                          ? "text-red-700 dark:text-red-300 font-medium" : ""}`}>
+                        {wentBackwards.has(r.session_id) && (
+                          <TrendingDown
+                            size={11}
+                            aria-label="lower than this machine's previous handover"
+                          />
+                        )}
+                        {r.meter_reading}{r.meter_uom ? ` ${r.meter_uom}` : ""}
+                      </span>
+                    ) : "—"}
                   </td>
                   <td className="px-2 py-1.5 text-right tabular-nums">
                     {r.fuel_level != null ? `${r.fuel_level}%` : "—"}
@@ -383,6 +483,21 @@ export default function HotoRegisterSection() {
                     <span className={`text-[10px] px-1.5 py-0.5 rounded ${STATUS_STYLE[r.status]}`}>
                       {r.status}
                     </span>
+                  </td>
+                  <td className="px-2 py-1.5 text-right whitespace-nowrap">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        goTo("hoto-defects", {
+                          assetId: r.asset_id, fleetCode: r.fleet_code,
+                          because: r.fleet_code,
+                        });
+                      }}
+                      className="text-[10px] px-1.5 py-0.5 rounded border border-border
+                                 text-muted-foreground hover:text-foreground hover:bg-muted"
+                    >
+                      Defects
+                    </button>
                   </td>
                 </tr>
               ))}

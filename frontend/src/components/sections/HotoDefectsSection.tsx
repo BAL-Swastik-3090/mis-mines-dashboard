@@ -18,12 +18,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle, Check, ChevronLeft, Clock, Eye, Loader2, Lock, Wrench, X, Camera,
+  AlertTriangle, Check, ChevronLeft, Clock, Eye, Loader2, Filter, Lock, Wrench, X, Camera,
 } from "lucide-react";
 import api from "@/lib/api";
 import { HotoPhotos } from "@/components/hoto/HotoPhotos";
 import { useAuth } from "@/contexts/useAuth";
 import Explainer from "@/components/hoto/Explainer";
+import { useHotoFocus } from "@/contexts/useHotoFocus";
 
 type State = "RAISED" | "ACKNOWLEDGED" | "RECTIFIED" | "VERIFIED" | "CLOSED" | "CANCELLED";
 type Severity = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
@@ -182,6 +183,16 @@ export default function HotoDefectsSection() {
     }
   }, [load, detail, open]);
 
+  /* Arriving from the board or the register, narrowed to one machine. Taken
+     once: see useHotoFocus for why a linked filter must not persist. */
+  const goTo = useHotoFocus((st) => st.goTo);
+  const [machineFilter, setMachineFilter] = useState<string | null>(null);
+  useEffect(() => {
+    const f = useHotoFocus.getState().take();
+    if (f?.fleetCode) setMachineFilter(f.fleetCode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const held = useMemo(() => {
     const byMachine = new Map<string, number>();
     for (const r of rows) {
@@ -191,6 +202,10 @@ export default function HotoDefectsSection() {
     }
     return byMachine;
   }, [rows]);
+
+  const shown = machineFilter
+    ? rows.filter((r) => r.fleet_code === machineFilter)
+    : rows;
 
   if (detail) {
     return <DetailView d={detail} me={me} busy={busy} onBack={() => setDetail(null)}
@@ -255,7 +270,20 @@ export default function HotoDefectsSection() {
         </p>
       )}
 
-      {rows.length > 0 && (
+      {machineFilter && (
+        <div className="flex items-center gap-2 text-[11px] px-2.5 py-1.5 rounded
+                        border border-sky-200 bg-sky-50 text-sky-900
+                        dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-200">
+          <Filter size={12} className="shrink-0" />
+          <span>Only <strong>{machineFilter}</strong> — {shown.length} of {rows.length}.</span>
+          <button onClick={() => setMachineFilter(null)}
+                  className="ml-auto underline hover:no-underline">
+            Show every machine
+          </button>
+        </div>
+      )}
+
+      {shown.length > 0 && (
         <div className="overflow-x-auto rounded border border-border">
           <table className="w-full text-xs">
             <thead className="bg-muted/50 text-[10px] uppercase text-muted-foreground">
@@ -267,10 +295,11 @@ export default function HotoDefectsSection() {
                 <th className="text-right px-2 py-1.5 font-medium">Seen</th>
                 <th className="text-left px-2 py-1.5 font-medium">Severity</th>
                 <th className="text-left px-2 py-1.5 font-medium">Stage</th>
+                <th className="text-right px-2 py-1.5 font-medium">Go to</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {rows.map((r) => (
+              {shown.map((r) => (
                 <tr key={r.defect_id} onClick={() => void open(r)}
                     className="hover:bg-muted/40 cursor-pointer">
                   <td className="px-2 py-1.5 font-mono text-[10px] whitespace-nowrap">
@@ -309,6 +338,28 @@ export default function HotoDefectsSection() {
                     <span className={`text-[10px] px-1.5 py-0.5 rounded ${STATE_STYLE[r.state]}`}>
                       {r.state}
                     </span>
+                  </td>
+
+                  {/* BACK TO WHERE IT WAS FOUND. A defect is a claim; the
+                      handover that raised it is the evidence, with the
+                      photographs and the rest of that machine's walk-round.
+                      Reading one without the other is reading half. */}
+                  <td className="px-2 py-1.5 text-right whitespace-nowrap">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        goTo("hoto-register", {
+                          fleetCode: r.fleet_code,
+                          sessionId: r.raised_session_id ?? undefined,
+                          onDate: r.raised_at?.slice(0, 10),
+                          because: `${r.fleet_code} · ${r.defect_ref}`,
+                        });
+                      }}
+                      className="text-[10px] px-1.5 py-0.5 rounded border border-border
+                                 text-muted-foreground hover:text-foreground hover:bg-muted"
+                    >
+                      Handover
+                    </button>
                   </td>
                 </tr>
               ))}
