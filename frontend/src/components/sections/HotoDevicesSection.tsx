@@ -28,6 +28,7 @@ import {
   MapPin, Plug, RefreshCw, Smartphone, X,
 } from "lucide-react";
 import api from "@/lib/api";
+import Explainer from "@/components/hoto/Explainer";
 
 type Status = "PENDING" | "ACTIVE" | "SUSPENDED" | "REVOKED" | "REJECTED";
 
@@ -213,11 +214,15 @@ export default function HotoDevicesSection() {
     <div className="p-4 sm:p-6 space-y-6">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold">Devices</h1>
-          <p className="text-sm text-muted-foreground">
-            Phones and tablets allowed to capture handovers. A device registers
-            itself from the app; nobody types a token into it.
-          </p>
+          <h1 className="text-xl font-semibold flex items-center gap-1.5">
+            Devices
+            <Explainer>
+              Phones and tablets allowed to capture handovers. A device
+              registers itself from the app and waits here for approval;
+              nobody types a token into it, because a token typed by hand is a
+              token that gets shared, photographed and reused.
+            </Explainer>
+          </h1>
         </div>
         <button
           onClick={() => { setLoading(true); void load(); }}

@@ -20,6 +20,7 @@ import {
   Pencil, Plus, Send, Trash2, X,
 } from "lucide-react";
 import api from "@/lib/api";
+import Explainer from "@/components/hoto/Explainer";
 
 type Status = "DRAFT" | "ACTIVE" | "RETIRED";
 type ResponseType = "OK_CAUTION_NOTOK" | "NUMERIC" | "YES_NO" | "LEVEL";
@@ -188,12 +189,16 @@ export default function HotoChecklistsSection() {
     <div className="p-4 space-y-4">
       <header className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h2 className="text-lg font-semibold">HOTO checklists</h2>
-          <p className="text-xs text-muted-foreground mt-0.5 max-w-prose">
-            What an operator is asked at a handover, per machine type. Edited here,
-            not in a release — but a published version is never changed, because
-            handovers record the version they answered.
-          </p>
+          <h2 className="text-lg font-semibold flex items-center gap-1.5">
+            HOTO checklists
+            <Explainer>
+              What an operator is asked at a handover, per machine type. Edited
+              here, not in a release — but a published version is never changed,
+              because handovers record the version they answered. Changing a
+              published checklist would silently rewrite what every past
+              handover claims to have checked.
+            </Explainer>
+          </h2>
         </div>
         <label className="flex items-center gap-1.5 text-xs">
           <input type="checkbox" checked={showRetired}

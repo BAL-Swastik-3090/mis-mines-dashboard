@@ -31,6 +31,7 @@ const num = (v: unknown): number | null => {
   return Number.isFinite(n) ? n : null;
 };
 import { HotoPhotos } from "@/components/hoto/HotoPhotos";
+import Explainer from "@/components/hoto/Explainer";
 
 type Status = "DRAFT" | "SUBMITTED" | "BLOCKED" | "ACCEPTED" | "REJECTED" | "CANCELLED";
 type Severity = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
@@ -219,11 +220,15 @@ export default function HotoRegisterSection() {
     <div className="p-4 space-y-3">
       <header className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h2 className="text-lg font-semibold">HOTO register</h2>
-          <p className="text-xs text-muted-foreground mt-0.5 max-w-prose">
-            Every handover as it was recorded — who signed for the machine, what
-            they found, and what the checklist said at the time.
-          </p>
+          <h2 className="text-lg font-semibold flex items-center gap-1.5">
+            HOTO register
+            <Explainer>
+              Every handover as it was recorded — who signed for the machine,
+              what they found, and what the checklist said at the time. A row
+              is never rewritten when a checklist later changes: it keeps the
+              version that was actually answered.
+            </Explainer>
+          </h2>
         </div>
         {blocked > 0 && (
           <div className="flex items-center gap-1.5 text-[11px] px-2 py-1 rounded bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200">

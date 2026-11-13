@@ -23,6 +23,7 @@ import {
 import api from "@/lib/api";
 import { HotoPhotos } from "@/components/hoto/HotoPhotos";
 import { useAuth } from "@/contexts/useAuth";
+import Explainer from "@/components/hoto/Explainer";
 
 type State = "RAISED" | "ACKNOWLEDGED" | "RECTIFIED" | "VERIFIED" | "CLOSED" | "CANCELLED";
 type Severity = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
@@ -200,11 +201,16 @@ export default function HotoDefectsSection() {
     <div className="p-4 space-y-3">
       <header className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h2 className="text-lg font-semibold">Defects</h2>
-          <p className="text-xs text-muted-foreground mt-0.5 max-w-prose">
-            What a handover found, from raising to a verified repair. Machines
-            that cannot work are at the top.
-          </p>
+          <h2 className="text-lg font-semibold flex items-center gap-1.5">
+            Defects
+            <Explainer>
+              What a handover found, from raising to a verified repair.
+              Machines that cannot work are at the top. A machine is released
+              only when every blocking defect against it has been verified —
+              rectified is not the same as verified, which is the distinction
+              that keeps a machine off the pit until somebody has looked.
+            </Explainer>
+          </h2>
         </div>
         <label className="flex items-center gap-1.5 text-xs">
           <input type="checkbox" checked={!openOnly}

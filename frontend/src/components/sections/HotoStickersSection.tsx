@@ -31,6 +31,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2, Printer, QrCode, Search } from "lucide-react";
 import QRCode from "qrcode";
 import api from "@/lib/api";
+import Explainer from "@/components/hoto/Explainer";
 
 interface Asset {
   asset_id: number;
@@ -154,14 +155,14 @@ export default function HotoStickersSection() {
       <header className="no-print">
         <h1 className="text-xl font-semibold flex items-center gap-2">
           <QrCode className="h-5 w-5" /> Cab stickers
+          <Explainer>
+            The QR code an operator scans to pick his machine. Scanning is the
+            intended path — a fleet with MAN-50 through MAN-55 in it is one
+            where typing the number picks the wrong machine eventually, and a
+            handover filed against the wrong machine is worse than none: the
+            right machine looks checked.
+          </Explainer>
         </h1>
-        <p className="text-sm text-muted-foreground max-w-prose mt-0.5">
-          The QR code an operator scans to pick his machine. Scanning is the
-          intended path — a fleet with MAN-50 through MAN-55 in it is one where
-          typing the number picks the wrong machine eventually, and a handover
-          filed against the wrong machine is worse than none: the right machine
-          looks checked.
-        </p>
       </header>
 
       {error && (

@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
+import Explainer from "@/components/hoto/Explainer";
 
 type MachineState =
   | "AVAILABLE" | "RUNNING" | "CAUTION" | "RESTRICTED"
@@ -178,7 +179,12 @@ export default function HotoBoardSection() {
     <div className="p-4 space-y-3">
       <header className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h2 className="text-lg font-semibold">Shift Board</h2>
+          <h2 className="text-lg font-semibold flex items-center gap-1.5">
+            Shift Board
+            {board?.compliance_note && (
+              <Explainer>{board.compliance_note}</Explainer>
+            )}
+          </h2>
           {board && (
             <p className="text-xs text-muted-foreground mt-0.5">
               {board.shift.name} · production day {board.shift.production_day} ·{" "}
@@ -203,12 +209,6 @@ export default function HotoBoardSection() {
           <Tally label="Already off work" n={t.not_expected ?? 0} tone="muted" />
           <Tally label="No checklist published" n={t.no_checklist ?? 0} tone="warn" />
         </div>
-      )}
-
-      {board && (
-        <p className="text-[10px] text-muted-foreground leading-relaxed max-w-prose">
-          {board.compliance_note}
-        </p>
       )}
 
       {notice && (
