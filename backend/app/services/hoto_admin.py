@@ -142,6 +142,13 @@ def clone(db: Session, template_id: int, actor: str,
     """), {"new": new_id, "old": template_id})
 
     db.execute(text("""
+        -- THE TWO LISTS MUST STAY IN STEP, line for line. adverse_answer was
+        -- added to the column list in one position and to the SELECT in
+        -- another, which silently shifted three columns along: severity took
+        -- the adverse answer, display_order took the severity -- a varchar
+        -- into an integer column -- and the whole statement failed. Cloning
+        -- is how EVERY edit to a published checklist starts, so for as long
+        -- as that stood, no published checklist could be changed at all.
         INSERT INTO hoto_checklist_item
             (section_id, label, response_type, unit, min_value, max_value, category,
              is_critical, requires_photo_if_not_ok, default_severity, display_order,
@@ -149,8 +156,9 @@ def clone(db: Session, template_id: int, actor: str,
              status, created_by)
         SELECT ns.section_id, i.label, i.response_type, i.unit, i.min_value, i.max_value,
                i.category, i.is_critical, i.requires_photo_if_not_ok,
+               i.default_severity, i.display_order,
                i.adverse_answer,
-               i.default_severity, i.display_order, 'ACTIVE', :by
+               'ACTIVE', :by
           FROM hoto_checklist_item i
           JOIN hoto_checklist_section os ON os.section_id = i.section_id
           JOIN hoto_checklist_section ns ON ns.template_id = :new
