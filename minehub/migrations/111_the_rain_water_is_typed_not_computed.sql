@@ -34,7 +34,7 @@ SET LOCAL search_path = minehub, public;
 
 DO $$
 BEGIN
-    -- Guarded so a database built from 099 onward, or one where this has
+    -- Guarded so a database built from 100 onward, or one where this has
     -- already run, both arrive at the same shape.
     IF EXISTS (SELECT 1 FROM pg_attribute
                 WHERE attrelid = 'minehub.dewatering_daily_data'::regclass
