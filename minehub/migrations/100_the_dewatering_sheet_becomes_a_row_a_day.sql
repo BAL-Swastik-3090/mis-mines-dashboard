@@ -78,9 +78,12 @@ CREATE TABLE IF NOT EXISTS dewatering_daily_data (
     actual_pump_hr           numeric(8,2)  CHECK (actual_pump_hr >= 0),
 
     -- ── derived, AND THE DATABASE DOES THE ARITHMETIC ──────────────────
-    rain_water_m3            numeric(14,3)
-                             GENERATED ALWAYS AS
-                             (rainfall_mm * rain_factor_m3_per_mm) STORED,
+    -- TYPED, not generated. The mine's sheet carries "Add Day Rain Water"
+    -- as a literal on more than half its days, and computing it from
+    -- millimetres got 1-4 October 2025 wrong by 0.1 M3 each. The form fills
+    -- it from rainfall x factor; the figure may be typed over. Migration 108
+    -- made this change on a database already built from the old shape.
+    rain_water_m3            numeric(14,3) CHECK (rain_water_m3 >= 0),
 
     plan_disposal_m3         numeric(14,3)
                              GENERATED ALWAYS AS
@@ -99,7 +102,7 @@ CREATE TABLE IF NOT EXISTS dewatering_daily_data (
                              GENERATED ALWAYS AS
                              (opening_stock_m3
                               + seepage_m3
-                              + rainfall_mm * rain_factor_m3_per_mm
+                              + rain_water_m3
                               - actual_pump_hr * pump_capacity_m3_hr) STORED,
 
     -- NULLIF guards the division: a day planned at nought has no compliance

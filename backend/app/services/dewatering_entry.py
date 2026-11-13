@@ -69,7 +69,14 @@ FIELDS: list[tuple[str, str, str, str, str, str]] = [
     ("pump_capacity_m3_hr", "Adjusted Pump Capacity", "M3/Hr", "water", INPUT, NUMBER),
     ("opening_stock_m3", "Opening Stock as on Date", "M3", "water", INPUT, NUMBER),
     ("seepage_m3", "Add Day Water Seepage", "M3", "water", INPUT, NUMBER),
-    ("rain_water_m3", "Add Day Rain Water", "M3", "water", DERIVED, NUMBER),
+    # TYPED, NOT DERIVED, and the sheet is why. "Add Day Rain Water" is a
+    # literal on 209 of the mine's 407 days and a formula on 198: on more
+    # than half of them the water is the reading and the millimetres are
+    # the back-calculation. Generating it got 1-4 October 2025 wrong, where
+    # the mine typed 10/3 mm against a round 1,000 M3 -- see migration 108.
+    # save_day still fills it from rainfall x factor when the caller sends
+    # rainfall and no water, so the form behaves as it always has.
+    ("rain_water_m3", "Add Day Rain Water", "M3", "water", INPUT, NUMBER),
     ("plan_pump_hr", "PLAN Pump Running 450 kw & 425 hp pump", "Hr", "water", INPUT, NUMBER),
     ("plan_disposal_m3", "PLAN Disposal", "M3", "water", DERIVED, NUMBER),
     ("actual_pump_hr", "ACTUAL Pump Running 450 kw & 425 hp pump", "Hr", "water", INPUT, NUMBER),
@@ -116,6 +123,7 @@ RAIN_FACTOR = "rain_factor_m3_per_mm"
 #: Negative is meaningless for these; a level reading can be negative (the
 #: mine's own sheet has -3.5 Mrl) and so can a stock after an over-pump.
 NON_NEGATIVE = {"rainfall_mm", "pump_capacity_m3_hr", "seepage_m3",
+                "rain_water_m3",
                 "plan_pump_hr", "actual_pump_hr", "slurry_pump_east_1_hr",
                 "slurry_pump_west_1_hr", "eddy_a_shift_min",
                 "eddy_b_shift_min", "eddy_day_min", "eddy_discharge_m3",
@@ -398,6 +406,25 @@ def save_day(db: Session, d: date, values: dict[str, Any],
 
     before = read_day(db, d)
     revision = _next_revision(db, d)
+
+    # RAIN WATER FOLLOWS RAINFALL UNLESS IT IS STATED. It was a generated
+    # column until migration 108 and the screen still presents it that way:
+    # type the millimetres and the water appears. What changed is that the
+    # mine can now type the water itself -- which is what its own sheet does
+    # on more than half its days -- and an explicit figure is never
+    # overwritten by this. An explicit null is a deliberate clearing and is
+    # also left alone; only a caller that says nothing at all gets the fill.
+    if "rainfall_mm" in clean and "rain_water_m3" not in values:
+        mm = clean["rainfall_mm"]
+        if mm is None:
+            clean["rain_water_m3"] = None
+        else:
+            factor = clean.get(RAIN_FACTOR)
+            if factor is None and before is not None:
+                factor = before.get(RAIN_FACTOR)
+            if factor is None:
+                factor = Decimal("280")
+            clean["rain_water_m3"] = Decimal(str(mm)) * Decimal(str(factor))
 
     if before is None:
         # CHECKED BEFORE THE AUTO-FILL BELOW, not after. The fill supplies an
