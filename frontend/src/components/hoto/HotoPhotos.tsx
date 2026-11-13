@@ -239,7 +239,8 @@ export function HotoPhotos({ sessionId, itemId, compact }: {
           onClick={() => setBig(null)}
         >
           <div
-            className="max-w-4xl w-full max-h-full overflow-y-auto rounded-lg
+            className="w-fit max-w-full min-w-[min(22rem,100%)] max-h-full
+                       overflow-y-auto rounded-lg
                        bg-white text-black dark:bg-neutral-900 dark:text-neutral-100
                        shadow-2xl"
             onClick={(e) => e.stopPropagation()}
@@ -252,7 +253,8 @@ export function HotoPhotos({ sessionId, itemId, compact }: {
               <img
                 src={`/api/hoto/photos/${big.photo_id}`}
                 alt={big.item_label ?? "photograph"}
-                className="block max-w-full w-auto max-h-[65vh] object-contain"
+                className="block w-auto max-w-[min(56rem,90vw)] max-h-[65vh]
+                           object-contain"
               />
             </div>
 
@@ -261,10 +263,10 @@ export function HotoPhotos({ sessionId, itemId, compact }: {
                 image overflow a flex track and paint straight over these
                 facts, which is the same unreadable-overlay fault twice. */}
             <div className="relative z-10 bg-white dark:bg-neutral-900
-                            border-t border-black/10 dark:border-white/10 p-3
-                            flex items-start justify-between gap-4">
-              <div className="space-y-0.5 text-xs min-w-0">
-                <div className="font-semibold text-sm">
+                            border-t border-black/10 dark:border-white/10
+                            px-3 py-2 flex items-start justify-between gap-3">
+              <div className="space-y-0.5 text-[11px] leading-snug min-w-0">
+                <div className="font-semibold text-[13px]">
                   {big.item_label
                     ?? (big.kind === "OPERATOR" ? "The operator" : "The machine")}
                 </div>
@@ -299,8 +301,9 @@ export function HotoPhotos({ sessionId, itemId, compact }: {
                     reaching a screen. Kept as a labelled list rather than
                     another run-on line, because these are facts to be read
                     off one at a time, not prose. */}
-                <dl className="pt-2 mt-2 border-t border-black/10 dark:border-white/10
-                               grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                <dl className="pt-1.5 mt-1.5 border-t border-black/10 dark:border-white/10
+                               grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5
+                               text-[10px] leading-tight">
                   {big.operator_name && (
                     <>
                       <dt className="opacity-60">Operator</dt>
@@ -321,7 +324,7 @@ export function HotoPhotos({ sessionId, itemId, compact }: {
                           /* Worth saying out loud: a company tablet and
                              somebody's own phone are not equal evidence. */
                           <span className="ml-1 rounded bg-amber-100 dark:bg-amber-900/50
-                                           px-1 py-px text-[10px] align-middle">
+                                           px-1 py-px text-[9px] align-middle">
                             personal device
                           </span>
                         )}
@@ -346,7 +349,7 @@ export function HotoPhotos({ sessionId, itemId, compact }: {
               <button
                 onClick={() => setBig(null)}
                 className="shrink-0 rounded border border-black/20 dark:border-white/20
-                           px-3 py-1.5 text-xs hover:bg-black/5 dark:hover:bg-white/10"
+                           px-2.5 py-1 text-[11px] hover:bg-black/5 dark:hover:bg-white/10"
               >
                 Close
               </button>
