@@ -11,6 +11,13 @@ import { useDateFilter } from "@/contexts/useDateFilter";
 import { useAppPage } from "@/contexts/useAppPage";
 import { useEntryDialog } from "@/contexts/useEntryDialog";
 import { cn } from "@/lib/utils";
+import { type AppPage } from "@/contexts/useAppPage";
+
+/** Screens with no period of their own: what they show is "now" or "all". */
+const DATELESS_PAGES = new Set<AppPage>([
+  "hoto-board", "hoto-defects", "hoto-checklists", "hoto-devices",
+  "hoto-stickers",
+]);
 
 /** True when the selected end-date is today → sensor data is live. */
 function useIsLive(): boolean {
@@ -37,6 +44,8 @@ function useNow(): string {
 
 export default function Header() {
   const { periodLabel } = useDateFilter();
+  const page = useAppPage((s) => s.page);
+  const drivesDates = !DATELESS_PAGES.has(page);
   const isLive          = useIsLive();
   const qc              = useQueryClient();
   const now             = useNow();
@@ -108,8 +117,13 @@ export default function Header() {
             </div>
           )}
 
-          {/* Date Filter */}
-          <DateFilter />
+          {/* THE DATE CONTROL ONLY APPEARS WHERE IT DRIVES SOMETHING.
+              The shift board shows the shift running now, defects shows what
+              is open, and devices, checklists and stickers are registers with
+              no period at all. A range sitting over those screens is a control
+              that changes nothing -- which teaches people the filter is
+              unreliable everywhere else too. */}
+          {drivesDates && <DateFilter />}
 
           {/* Refresh — invalidates all TanStack Query cache */}
           <button

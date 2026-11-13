@@ -33,6 +33,7 @@ const num = (v: unknown): number | null => {
 import { HotoPhotos } from "@/components/hoto/HotoPhotos";
 import Explainer from "@/components/hoto/Explainer";
 import { useHotoFocus } from "@/contexts/useHotoFocus";
+import { useDateFilter } from "@/contexts/useDateFilter";
 
 type Status = "DRAFT" | "SUBMITTED" | "BLOCKED" | "ACCEPTED" | "REJECTED" | "CANCELLED";
 type Severity = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
@@ -159,10 +160,26 @@ export default function HotoRegisterSection() {
    * machine been handed over properly lately"), and it is wide enough that an
    * empty answer means something.
    */
-  const today = new Date().toISOString().slice(0, 10);
-  const weekAgo = new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10);
-  const [from, setFrom] = useState(weekAgo);
-  const [to, setTo] = useState(today);
+  /* THE RANGE COMES FROM THE HEADER, not from here.
+   *
+   * This screen used to keep its own From/To, so the header could say
+   * "1 Nov - 13 Nov" while the register said "06-11 - 13-11" directly beneath
+   * it. Two date controls on one screen, each claiming to be the filter, and
+   * no way for a reader to know which one the rows obeyed. Thirteen other
+   * sections already follow the header; this one now does too.
+   *
+   * The local inputs stay, because "this machine, last three days" is a real
+   * question and the header's period picker answers it badly. They are an
+   * OVERRIDE, and the screen says so -- an override nobody can see is how you
+   * get back to two filters disagreeing.
+   */
+  const { apiFrom, apiTo } = useDateFilter();
+  const [override, setOverride] = useState<{ from: string; to: string } | null>(null);
+  const from = override?.from ?? apiFrom;
+  const to   = override?.to   ?? apiTo;
+  const setFrom = (v: string) => setOverride({ from: v, to });
+  const setTo   = (v: string) => setOverride({ from, to: v });
+
   const [onlyAdverse, setOnlyAdverse] = useState(false);
   const [statusFilter, setStatusFilter] = useState("");
   const [q, setQ] = useState("");
@@ -331,6 +348,17 @@ export default function HotoRegisterSection() {
               <option key={s} value={s}>{s}</option>)}
           </select>
         </label>
+        {override && (
+          <button
+            onClick={() => setOverride(null)}
+            className="text-[10px] px-2 py-1 mb-px rounded border border-amber-300
+                       bg-amber-50 text-amber-900 hover:bg-amber-100
+                       dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+            title="The dates above no longer match the range in the header"
+          >
+            Custom range — follow the dashboard again
+          </button>
+        )}
         <label className="flex items-center gap-1.5 text-[11px] pb-1"
                title="A register of clean handovers is long and says nothing — this is usually what you want">
           <input type="checkbox" checked={onlyAdverse}
