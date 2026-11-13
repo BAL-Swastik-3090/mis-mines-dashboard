@@ -63,11 +63,24 @@ export interface Kpi {
  * table beneath it rather than the heading of the section. Same cards, less
  * weight, so the page still has one obvious top line.
  */
+/** The grid, per number of cards. Written out rather than built from a
+ *  template string because Tailwind reads the source for class names and
+ *  never sees one that is assembled at runtime -- `xl:grid-cols-${n}` is a
+ *  class that silently does not exist. The excavator strip carries seven
+ *  cards and the tipper strip six, and neither should leave a card stranded
+ *  alone on a row. */
+const GRID: Record<number, string> = {
+  5: "grid-cols-2 md:grid-cols-3 xl:grid-cols-5",
+  6: "grid-cols-2 md:grid-cols-3 xl:grid-cols-6",
+  7: "grid-cols-2 md:grid-cols-4 xl:grid-cols-7",
+};
+
 export function KpiStrip({ cards, loading, dense = false }: {
   cards: Kpi[]; loading: boolean; dense?: boolean;
 }) {
   return (
-    <div className={"grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 "
+    <div className={"grid "
+      + (GRID[cards.length] ?? "grid-cols-2 md:grid-cols-3 xl:grid-cols-6") + " "
       + (dense ? "gap-2 px-4 py-3 bg-bg-soft/60 border-b border-border-light"
                : "gap-3")}>
       {cards.map((c) => (
@@ -122,6 +135,27 @@ export function excavatorKpis(fleet: OEEFleet | undefined): Kpi[] {
       value: fleet?.availability ?? null,
       unit: "%",
       colorFn: (v) => pctColor(v, 85, 70),
+    },
+    {
+      // BESIDE AVAILABILITY, AND NOT AMONG THE THREE FACTORS. Availability,
+      // Performance and Quality multiply into OEE; Utilisation does not and
+      // never has. It sits here because it answers the question Availability
+      // raises -- the machine was free to work, did it? -- and it is the last
+      // column of every table on this page, which until now had no card.
+      //
+      // THE SAME THRESHOLDS THE COLUMN USES (70 / 50), deliberately. A card
+      // and the column it summarises calling the same figure different
+      // colours is worse than having no card.
+      label: "Utilisation",
+      // The server's weighted figure, never an average of the rows: a machine
+      // that ran two shifts must not count as much as one that ran the month.
+      sub: "Σ running ÷ Σ (god − breakdown)",
+      value: fleet?.utilisation ?? null,
+      unit: "%",
+      colorFn: (v) => pctColor(v, 70, 50),
+      // Null is a real answer here, not a nought. A fleet broken down for the
+      // whole window has no usable hours to have used.
+      blank: "—",
     },
     {
       label: "Performance",
