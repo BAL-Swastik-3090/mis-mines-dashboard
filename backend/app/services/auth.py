@@ -1048,6 +1048,23 @@ def _flush_on(db: Session | None, sids: list[str]) -> int:
             db.rollback()
             errno = _sqlstate(exc)
             if _is_retryable(exc) and attempt < FLUSH_ATTEMPTS:
+                # SAY SO. A retry that succeeds used to log nothing at all,
+                # so a deadlock here left no trace in this application's log
+                # -- the only evidence was pg_stat_database.deadlocks, which
+                # is a lifetime counter that is never reset and so cannot say
+                # WHEN, or the server's own log on a machine most people
+                # cannot read. One did happen, on 6 November 2026, between
+                # two workers flushing overlapping session ids; it was
+                # retried and nothing was lost, and it took reading the
+                # Postgres log to find that out.
+                #
+                # It stays a warning rather than an error because the retry
+                # IS the handling: this write is a heartbeat, losing one
+                # costs nothing, and a line per occurrence is what makes the
+                # next one attributable without leaving the application.
+                log.warning("activity flush hit %s on attempt %d of %d for "
+                            "%d sessions — retrying",
+                            _sqlstate(exc), attempt, FLUSH_ATTEMPTS, len(sids))
                 time.sleep(0.5 * attempt)
                 continue
             log.warning("activity flush failed for %d sessions "

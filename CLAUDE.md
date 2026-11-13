@@ -87,6 +87,49 @@ A reload line with no startup line after it means nothing was reloaded.
 proves the file is right, not that the process serving the page has it.
 Either restart first, or check the response the browser actually received.
 
+## A migration gets `SET lock_timeout` before it gets run
+
+`ALTER TABLE` takes an ACCESS EXCLUSIVE lock. It does not only wait — **a
+queued exclusive lock blocks every reader behind it**, so one migration that
+cannot get in takes the table down for everyone while it waits.
+
+This has now happened twice on this estate.
+
+On **31 October 2026** an `ALTER TABLE ... ADD COLUMN` on `action_item` ran
+against live traffic that was inserting, and held for **17 seconds**. Four of
+that day's five deadlocks were a single deployment.
+
+On **10 November 2026** three retries of migrations 105/106 stacked four
+queued `ALTER TABLE`s behind a `pg_dump` that had been running for 25 minutes
+— and `pg_dump` holds ACCESS SHARE on every table for its whole run, so there
+was no window at all. The retries, not the backup, were what held the OEE
+tables shut.
+
+So, every time:
+
+```sql
+SET lock_timeout = '5s';
+```
+
+Five seconds of waiting costs nothing and fails cleanly. Without it the
+statement waits on the server's default — 50 seconds here — with every reader
+queued behind it.
+
+**Check what is already holding locks before you start**, and retry on a
+timer rather than in a loop:
+
+```sql
+SELECT pid, application_name, client_addr, state,
+       now() - xact_start AS age, left(query, 60)
+  FROM pg_stat_activity
+ WHERE datname = current_database() AND xact_start IS NOT NULL
+ ORDER BY xact_start;
+```
+
+A long-running `pg_dump` means wait for it, not retry into it. And cancel
+only sessions you started: `pg_cancel_backend` on somebody else's backup is
+how a restore goes missing.
+
 ## Deploying: replace the tree, never extract over it
 
 `tar -xf` into the live directory adds and overwrites. It never DELETES, so a
