@@ -211,13 +211,28 @@ function buildNav(user: ReturnType<typeof useAuth.getState>["user"]): NavItem[] 
 
      canOpen draws the absent/empty distinction that this used to get wrong. */
   const items: NavItem[] = [
-    ...NAV_ITEMS.filter((i) =>
-      i.kind === "link"
-        // `i.kind === "link" ||` used to end the test here, which drew every
-        // external link for everybody regardless of what they held.
-        ? (!i.need || (user?.permissions ?? []).includes(i.need))
-        : canOpen(user, i.id as AppPage),
-    ),
+    ...NAV_ITEMS.flatMap<NavItem>((i) => {
+      // `i.kind === "link" ||` used to end the test here, which drew every
+      // external link for everybody regardless of what they held.
+      if (i.kind === "link") {
+        return (!i.need || (user?.permissions ?? []).includes(i.need)) ? [i] : [];
+      }
+
+      /* A HEADING HAS NO PERMISSION OF ITS OWN. It is not a page, so asking
+         canOpen about its id asks about a page that does not exist and the
+         answer is always no -- which silently removed the whole HOTO section
+         from every rail the moment it became a group.
+
+         Its access is its children's: show the heading if the user may open
+         at least one, and show only the ones they may. A heading that
+         survives with no children under it would be a dead end. */
+      if (i.kind === "group") {
+        const children = i.children.filter((c) => canOpen(user, c.id));
+        return children.length ? [{ ...i, children }] : [];
+      }
+
+      return canOpen(user, i.id) ? [i] : [];
+    }),
     // Permission, not role name — a role created in the UI reaches these entries
     // without any code change.
     //
