@@ -187,23 +187,29 @@ export function HotoPhotos({ sessionId, itemId, compact }: {
           onClick={() => setBig(null)}
         >
           <div
-            className="flex flex-col max-w-4xl w-full max-h-full rounded-lg overflow-hidden
+            className="max-w-4xl w-full max-h-full overflow-y-auto rounded-lg
                        bg-white text-black dark:bg-neutral-900 dark:text-neutral-100
                        shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             {/* The picture gets the room; the facts keep a fixed strip, so a
                 tall photograph can never push them off the screen. */}
-            <div className="flex-1 min-h-0 bg-black flex items-center justify-center">
+            <div className="bg-black flex items-center justify-center
+                            rounded-t-lg overflow-hidden">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={`/api/hoto/photos/${big.photo_id}`}
                 alt={big.item_label ?? "photograph"}
-                className="max-h-full max-w-full object-contain"
+                className="block max-w-full w-auto max-h-[65vh] object-contain"
               />
             </div>
 
-            <div className="shrink-0 border-t border-black/10 dark:border-white/10 p-3
+            {/* Its own opaque strip, below the picture in the flow and not
+                sharing a sizing track with it: the previous version let the
+                image overflow a flex track and paint straight over these
+                facts, which is the same unreadable-overlay fault twice. */}
+            <div className="relative z-10 bg-white dark:bg-neutral-900
+                            border-t border-black/10 dark:border-white/10 p-3
                             flex items-start justify-between gap-4">
               <div className="space-y-0.5 text-xs min-w-0">
                 <div className="font-semibold text-sm">
