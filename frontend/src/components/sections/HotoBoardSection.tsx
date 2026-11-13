@@ -25,6 +25,7 @@ import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
 import Explainer from "@/components/hoto/Explainer";
 import { useHotoFocus } from "@/contexts/useHotoFocus";
+import ShiftProgress from "@/components/hoto/ShiftProgress";
 
 type MachineState =
   | "AVAILABLE" | "RUNNING" | "CAUTION" | "RESTRICTED"
@@ -159,10 +160,68 @@ export default function HotoBoardSection() {
 
   useEffect(() => { void load(); }, [load]);
 
+  /* HOW FAR THROUGH THE SHIFT WE ARE.
+     A handover missing at 06:10 is normal; the same one missing at 13:50 is a
+     shift that was never signed for. The board read identically at both,
+     which is why "61 not filled in" could not be acted on -- the reader could
+     not tell urgency from earliness. Recomputed on a timer so a board left
+     open on a wall does not freeze at the moment it was loaded. */
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(t);
+  }, []);
+
+  const clock = useMemo(() => {
+    if (!board) return null;
+    const start = Date.parse(board.shift.starts_at);
+    const end = Date.parse(board.shift.ends_at);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+    const through = Math.min(1, Math.max(0, (now - start) / (end - start)));
+    const leftMs = end - now;
+    return {
+      through,
+      elapsed: Math.max(0, now - start),
+      // Negative when the shift has ended, which the caller words differently.
+      leftMs,
+      over: leftMs <= 0,
+    };
+  }, [board, now]);
+
+  /* THE TALLY NEEDS A HISTORY TO BE JUDGED BY. 61 not filled in is a bad
+     shift or a rollout that never happened, and those call for opposite
+     actions. Without the last week beside it nobody can tell which. */
+  const [trend, setTrend] = useState<{ day: string; filed: number; machines: number }[]>([]);
+  useEffect(() => {
+    api.get("/hoto/board/trend", { params: { days: 7 } })
+      .then((r) => setTrend(r.data.days ?? []))
+      .catch(() => { /* the board stands without it */ });
+  }, []);
+
   const rows = useMemo(() => {
     if (!board) return [];
     return attentionOnly ? board.machines.filter((m) => m.needs_attention) : board.machines;
   }, [board, attentionOnly]);
+
+  /* GROUPED BY MACHINE TYPE. Seventy-four flat rows hide the one pattern that
+     matters: "every drill is missing" is a different problem from "fourteen
+     scattered machines are missing", and as a flat list the two look the
+     same. Types with something wrong come first, then by size. */
+  const groups = useMemo(() => {
+    const by = new Map<string, Machine[]>();
+    for (const m of rows) {
+      const k = m.asset_type_name ?? "Other";
+      by.set(k, [...(by.get(k) ?? []), m]);
+    }
+    return [...by.entries()]
+      .map(([name, list]) => ({
+        name, list,
+        missing: list.filter((m) => m.handover === "not_captured").length,
+        attention: list.filter((m) => m.needs_attention).length,
+      }))
+      .sort((a, b) => b.attention - a.attention || b.list.length - a.list.length
+                      || a.name.localeCompare(b.name));
+  }, [rows]);
 
   if (picked) {
     return <Decide m={picked} canOverride={canOverride}
@@ -176,6 +235,8 @@ export default function HotoBoardSection() {
   }
 
   const t = board?.tally ?? {};
+
+
 
   return (
     <div className="p-4 space-y-3">
@@ -204,6 +265,15 @@ export default function HotoBoardSection() {
       </header>
 
       {/* The four cases, counted separately and never divided into each other. */}
+      {board && (
+        <ShiftProgress
+          clock={clock}
+          trend={trend}
+          startsAt={board.shift.starts_at}
+          endsAt={board.shift.ends_at}
+        />
+      )}
+
       {board && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
           <Tally label="Handed over" n={t.captured ?? 0} tone="good" />
@@ -258,7 +328,26 @@ export default function HotoBoardSection() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {rows.map((m) => (
+              {groups.map((g) => [
+                /* A heading per machine type, carrying the count that makes
+                   the group worth opening. Rendered as a row rather than a
+                   separate table so every column stays in one grid. */
+                <tr key={`h-${g.name}`} className="bg-muted/60">
+                  <td colSpan={7} className="px-2 py-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-wide">
+                      {g.name}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground ml-2">
+                      {g.list.length} machine{g.list.length === 1 ? "" : "s"}
+                      {g.missing > 0 && (
+                        <span className="text-red-700 dark:text-red-300 ml-1.5">
+                          · {g.missing} with nobody signed on
+                        </span>
+                      )}
+                    </span>
+                  </td>
+                </tr>,
+                ...g.list.map((m) => (
                 <tr key={m.asset_id} onClick={() => setPicked(m)}
                     className="hover:bg-muted/40 cursor-pointer">
                   <td className="px-2 py-1.5 whitespace-nowrap">
@@ -276,7 +365,20 @@ export default function HotoBoardSection() {
                           <span className="font-mono text-[10px] text-muted-foreground">
                             {m.session_ref}
                           </span></>
-                      : HANDOVER_LABEL[m.handover]}
+                      : <>
+                          {HANDOVER_LABEL[m.handover]}
+                          {/* HOW LATE, not just that it is missing. The same
+                              words ten minutes in and forty minutes from the
+                              end describe a normal shift and a shift that
+                              will end unsigned. */}
+                          {m.handover === "not_captured" && clock && (
+                            <span className="text-[10px] text-muted-foreground ml-1.5">
+                              {clock.over
+                                ? "· shift over"
+                                : `· ${Math.round(clock.through * 100)}% through`}
+                            </span>
+                          )}
+                        </>}
                   </td>
                   <td className="px-2 py-1.5 whitespace-nowrap">
                     {m.operator_name ?? (m.operator_emp_id ?? "—")}
@@ -351,7 +453,8 @@ export default function HotoBoardSection() {
                     </span>
                   </td>
                 </tr>
-              ))}
+                )),
+              ])}
             </tbody>
           </table>
         </div>

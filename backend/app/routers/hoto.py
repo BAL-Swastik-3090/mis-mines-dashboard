@@ -547,6 +547,19 @@ def board_shift(request: Request, db: Session = Depends(get_minehub_db)) -> dict
     return {"current": brd.current_shift(db), "shifts": svc.shifts(db)}
 
 
+@router.get("/board/trend")
+def board_trend(request: Request, days: int = 7, shift_code: str | None = None,
+                db: Session = Depends(get_minehub_db)) -> dict:
+    """Handovers filed on each of the last few production days.
+
+    So the board's tally can be judged. A count with no history behind it
+    cannot tell a bad shift from a rollout that never happened.
+    """
+    _guard(request, db)
+    days = max(2, min(days, 60))
+    return {"days": brd.recent_days(db, days=days, shift_code=shift_code)}
+
+
 @router.post("/board/{asset_id}/state")
 def board_decide(asset_id: int, request: Request, payload: dict,
                  db: Session = Depends(get_minehub_db)) -> dict:

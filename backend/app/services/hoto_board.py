@@ -313,6 +313,51 @@ def board(db: Session, *, plant_id: int | None = None,
     }
 
 
+def recent_days(db: Session, *, days: int = 7,
+                shift_code: str | None = None) -> list[dict[str, Any]]:
+    """How many handovers were filed on each of the last few production days.
+
+    ── WHY THE BOARD NEEDS THIS ─────────────────────────────────────────────
+    The board can say "61 machines, nobody filled it in" and a reader has no
+    way to judge it. Is that today's failure, or has it read 61 all week? The
+    two call for completely different actions -- one is a shift to chase, the
+    other is a rollout that never happened -- and the board gave no way to
+    tell them apart. The first instinct on seeing an unjudgeable number is to
+    disbelieve the screen.
+
+    Counted on the production day the handover recorded for itself, not on the
+    wall-clock date it arrived: a night shift crossing midnight belongs to the
+    day it was worked, and a tablet that synced the next morning must not move
+    it. Both have been stored since migration 113.
+    """
+    rows = db.execute(text("""
+        SELECT s.production_day::date AS day,
+               count(*) FILTER (WHERE s.status <> 'REJECTED') AS filed,
+               count(DISTINCT s.asset_id) FILTER (WHERE s.status <> 'REJECTED')
+                 AS machines,
+               count(*) FILTER (WHERE s.status = 'BLOCKED') AS blocked
+          FROM hoto_session s
+         WHERE s.production_day IS NOT NULL
+           AND s.production_day > (CURRENT_DATE - CAST(:d AS int))
+           AND (CAST(:sc AS text) IS NULL OR s.shift_code = CAST(:sc AS text))
+         GROUP BY 1 ORDER BY 1
+    """), {"d": days, "sc": shift_code}).mappings().all()
+
+    by_day = {r["day"].isoformat(): r for r in rows}
+    today = datetime.now().astimezone().date()
+    out = []
+    for i in range(days - 1, -1, -1):
+        d = (today - timedelta(days=i)).isoformat()
+        r = by_day.get(d)
+        # A day with no handovers is a zero, not a gap. Leaving it out would
+        # draw a flat line through the very days worth noticing.
+        out.append({"day": d,
+                    "filed": int(r["filed"]) if r else 0,
+                    "machines": int(r["machines"]) if r else 0,
+                    "blocked": int(r["blocked"]) if r else 0})
+    return out
+
+
 # ── changing a machine's state ───────────────────────────────────────────────
 
 def decide(db: Session, asset_id: int, state: str, actor: str, *,
