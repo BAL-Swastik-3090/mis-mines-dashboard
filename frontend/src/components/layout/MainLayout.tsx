@@ -2,6 +2,8 @@
 import AppSidebar              from "./AppSidebar";
 import CommandPalette          from "./CommandPalette";
 import SectionTabBar           from "./SectionTabBar";
+import HotoTabBar              from "./HotoTabBar";
+import { isHotoPage }          from "./hotoNav";
 import IntelligenceTabBar      from "./IntelligenceTabBar";
 import FuelManagementSection   from "@/components/sections/FuelManagementSection";
 import ElectricVehiclesSection from "@/components/sections/ElectricVehiclesSection";
@@ -51,6 +53,9 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
   // Intelligence carries its own section bar, so it needs the same
   // 115px offset the MIS page uses rather than the plain header height.
   const isIntel  = page === "intelligence" && mayOpen;
+  /* Every handover screen carries the same strip, so moving between them is
+     one click rather than a trip back out to the rail. */
+  const isHoto   = isHotoPage(page) && mayOpen;
 
   const sideW = collapsed ? "56px" : "200px";
 
@@ -73,6 +78,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
       <AppSidebar />
       {isMis && <SectionTabBar />}
       {isIntel && <IntelligenceTabBar />}
+      {isHoto && <HotoTabBar />}
 
       <main
         id="main" tabIndex={-1}
@@ -81,7 +87,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           min-h-screen pb-8
           px-4 sm:px-6 xl:px-8
           transition-[margin-left,padding-top] duration-300 ease-in-out
-          ${isMis || isIntel ? "pt-[115px]" : "pt-[76px]"}
+          ${isMis || isIntel || isHoto ? "pt-[115px]" : "pt-[76px]"}
         `}
       >
         <div className="max-w-[1920px] mx-auto">

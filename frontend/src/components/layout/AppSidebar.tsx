@@ -6,6 +6,7 @@ import { canOpen } from "@/contexts/pageAccess";
 import { useSidebar }               from "@/contexts/useSidebar";
 import { useAuth }                  from "@/contexts/useAuth";
 import { useDataHealth } from "@/hooks/useDataHealth";
+import { HOTO_TABS } from "./hotoNav";
 
 /** PR/PO Status is a separate application built by another IT team. It opens in
  *  its own tab rather than being embedded, so this dashboard stays alive behind
@@ -87,19 +88,7 @@ const NAV_ITEMS: NavItem[] = [
      UAT moves to the heading. The whole module is under acceptance, not six
      separate things, and six identical badges say less than one. */
   { kind: "group", id: "hoto", label: "HOTO", icon: DoorOpen, tag: "UAT",
-    children: [
-      // Daily, and the first thing opened in the morning.
-      { id: "hoto-board",      label: "Shift Board" },
-      { id: "hoto-register",   label: "Register" },
-      { id: "hoto-defects",    label: "Defects" },
-      // Changed when a check changes -- weeks apart, not days.
-      { id: "hoto-checklists", label: "Checklists" },
-      // Setup. A tablet is approved once, and a sticker printed once per
-      // machine, so these sit at the bottom where a rarely used thing
-      // belongs rather than in the path of daily work.
-      { id: "hoto-devices",    label: "Devices" },
-      { id: "hoto-stickers",   label: "Cab Stickers" },
-    ] },
+    children: HOTO_TABS.map(({ id, label }) => ({ id, label })) },
   { kind: "link", href: PRPO_URL,        label: "PR/PO Status",               icon: ClipboardList,
     need: "link.prpo.view" },
 ];
@@ -410,34 +399,58 @@ export default function AppSidebar() {
             const activeChild = item.children.find((c) => c.id === page);
             const isOpen = openGroups[item.id] ?? Boolean(activeChild);
             return (
-              <div key={item.id}>
+              <div key={item.id} className="relative">
                 <button
                   onClick={() => {
-                    /* COLLAPSED RAIL HAS NOWHERE TO PUT THE CHILDREN, so the
-                       heading navigates instead of expanding — to the child
-                       already open, or the first one. Toggling a list that
-                       cannot be drawn would make the click do nothing. */
-                    if (collapsed) {
-                      setPage(activeChild?.id ?? item.children[0].id);
-                      return;
-                    }
-                    setOpenGroups((g) => ({ ...g, [item.id]: !isOpen }));
+                    /* THE HEADING OPENS THE SECTION. Expanding alone made the
+                       first click do nothing useful: somebody who wants
+                       handovers wants the shift board, and asking them to
+                       click the heading and then its first child to get there
+                       is a toll on the commonest journey in the section.
+
+                       So it navigates — to the child already open, or the
+                       first one THIS USER may open, which is not always the
+                       first in the list. A heading that landed somebody on a
+                       screen they have no access to would be worse than one
+                       that only expanded.
+
+                       It expands as well, except on the collapsed rail, which
+                       has nowhere to draw the children. */
+                    const target = activeChild?.id ?? item.children[0]?.id;
+                    if (target) setPage(target);
+                    if (!collapsed) setOpenGroups((g) => ({ ...g, [item.id]: true }));
                   }}
                   title={collapsed ? label : undefined}
-                  aria-expanded={collapsed ? undefined : isOpen}
-                  className={`${ITEM_BASE} ${activeChild
+                  className={`${ITEM_BASE} ${collapsed ? "" : "!pr-7"} ${activeChild
                     ? "bg-white/10 text-white"
                     : "text-white/55 hover:text-white/90 hover:bg-white/5"}`}
                 >
                   {inner(Boolean(activeChild))}
-                  {!collapsed && (
+                </button>
+
+                {/* THE CHEVRON IS ITS OWN CONTROL, overlaid on the row's right
+                    edge rather than nested inside it — a button inside a
+                    button is not valid and the browser picks for you.
+
+                    It exists because the heading now navigates: without a
+                    separate handle there would be no way to fold a section
+                    away again, and a list that only ever grows is how a rail
+                    of twenty screens becomes unusable. */}
+                {!collapsed && (
+                  <button
+                    onClick={() => setOpenGroups((g) => ({ ...g, [item.id]: !isOpen }))}
+                    aria-expanded={isOpen}
+                    aria-label={`${isOpen ? "Collapse" : "Expand"} ${label}`}
+                    className="absolute right-1 inset-y-0 w-6 flex items-center
+                               justify-center text-white/45 hover:text-white/90
+                               hover:bg-white/10 rounded"
+                  >
                     <ChevronDown
                       size={13}
-                      className={`shrink-0 ml-auto opacity-45 transition-transform
-                                  ${isOpen ? "" : "-rotate-90"}`}
+                      className={`transition-transform ${isOpen ? "" : "-rotate-90"}`}
                     />
-                  )}
-                </button>
+                  </button>
+                )}
 
                 {!collapsed && isOpen && item.children.map((child) => {
                   const on = page === child.id;
