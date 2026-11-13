@@ -15,6 +15,21 @@ import {
   AlertTriangle, Camera, ChevronLeft, CloudOff, Loader2, MapPin, MapPinOff, Search, X,
 } from "lucide-react";
 import api from "@/lib/api";
+
+/**
+ * A number, whatever the API felt like sending.
+ *
+ * Postgres numeric reaches JSON as a string unless something converts it, and
+ * a screen that called .toFixed() on a latitude crashed the whole detail page
+ * on the first handover that had one. The server now converts them; this is
+ * here so that the next column nobody remembers to add to that list costs a
+ * missing line instead of a blank screen.
+ */
+const num = (v: unknown): number | null => {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
 import { HotoPhotos } from "@/components/hoto/HotoPhotos";
 
 type Status = "DRAFT" | "SUBMITTED" | "BLOCKED" | "ACCEPTED" | "REJECTED" | "CANCELLED";
@@ -443,8 +458,8 @@ function DetailView({ d, onBack }: { d: Detail; onBack: () => void }) {
             ? `${d.template_name} v${d.template_version}` : null} />
           {/* Where it was signed, not merely whether a fix was had. */}
           <Field label="Where" value={
-            d.captured_lat != null && d.captured_lon != null
-              ? `${d.captured_lat.toFixed(5)}, ${d.captured_lon.toFixed(5)}`
+            num(d.captured_lat) != null && num(d.captured_lon) != null
+              ? `${num(d.captured_lat)!.toFixed(5)}, ${num(d.captured_lon)!.toFixed(5)}`
               : (d.gps_status ?? null)} />
           {d.counterpart_ref && (
             <Field label="Paired with"
@@ -463,12 +478,12 @@ function DetailView({ d, onBack }: { d: Detail; onBack: () => void }) {
           </p>
         )}
 
-        {d.captured_lat != null && d.captured_lon != null && (
+        {num(d.captured_lat) != null && num(d.captured_lon) != null && (
           <a href={`https://www.google.com/maps?q=${d.captured_lat},${d.captured_lon}`}
              target="_blank" rel="noreferrer"
              className="inline-flex items-center gap-1 text-[11px] text-sky-700 hover:underline dark:text-sky-300">
             <MapPin size={11} /> Where this handover was signed
-            {d.gps_accuracy_m != null && ` (±${Math.round(d.gps_accuracy_m)} m)`}
+            {num(d.gps_accuracy_m) != null && ` (±${Math.round(num(d.gps_accuracy_m)!)} m)`}
           </a>
         )}
 

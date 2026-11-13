@@ -93,7 +93,17 @@ def search(db: Session, *,
 
 def _row(r) -> dict[str, Any]:
     d = dict(r)
-    for k in ("meter_reading", "fuel_level"):
+    # EVERY numeric, not a remembered subset.
+    #
+    # Postgres numeric arrives as a Decimal and serialises to a JSON STRING
+    # unless it is converted here. meter_reading and fuel_level were on this
+    # list and the coordinates were not, so a caller got 50.0 for one and
+    # "21.0346752" for the other -- and a screen that quite reasonably called
+    # .toFixed() on a latitude crashed on the first handover that had one.
+    # A list of names is exactly the kind of thing that goes stale when a
+    # column is added; this is the whole set.
+    for k in ("meter_reading", "fuel_level",
+              "captured_lat", "captured_lon", "gps_accuracy_m"):
         if d.get(k) is not None:
             d[k] = float(d[k])
     d["client_uuid"] = str(d["client_uuid"]) if d.get("client_uuid") else None

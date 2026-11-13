@@ -25,6 +25,21 @@ import { useEffect, useState } from "react";
 import { Loader2, MapPin } from "lucide-react";
 import api from "@/lib/api";
 
+/**
+ * A number, whatever the API felt like sending.
+ *
+ * Postgres numeric reaches JSON as a string unless something converts it, and
+ * a screen that called .toFixed() on a latitude crashed the whole detail page
+ * on the first handover that had one. The server now converts them; this is
+ * here so that the next column nobody remembers to add to that list costs a
+ * missing line instead of a blank screen.
+ */
+const num = (v: unknown): number | null => {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
 interface PhotoMeta {
   photo_id: number;
   item_id: number | null;
@@ -110,7 +125,7 @@ export function HotoPhotos({ sessionId, itemId, compact }: {
           {p.item_label ?? (p.kind === "OPERATOR" ? "The operator" : "The machine")}
         </div>
         <div className="text-[9px] text-muted-foreground flex items-center gap-1">
-          {p.captured_lat != null
+          {num(p.captured_lat) != null
             ? <><MapPin size={8} /> geotagged</>
             : <span className="opacity-60">no position</span>}
         </div>
@@ -161,13 +176,13 @@ export function HotoPhotos({ sessionId, itemId, compact }: {
                   day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false })}
                 {" · "}{Math.round(big.size_bytes / 1024)} kB
               </div>
-              {big.captured_lat != null ? (
+              {num(big.captured_lat) != null ? (
                 <a href={`https://www.google.com/maps?q=${big.captured_lat},${big.captured_lon}`}
                    target="_blank" rel="noreferrer"
                    className="inline-flex items-center gap-1 text-sky-700 hover:underline dark:text-sky-300">
                   <MapPin size={11} />
-                  {big.captured_lat.toFixed(6)}, {big.captured_lon?.toFixed(6)}
-                  {big.gps_accuracy_m != null && ` (±${Math.round(big.gps_accuracy_m)} m)`}
+                  {num(big.captured_lat)!.toFixed(6)}, {num(big.captured_lon)?.toFixed(6)}
+                  {num(big.gps_accuracy_m) != null && ` (±${Math.round(num(big.gps_accuracy_m)!)} m)`}
                 </a>
               ) : (
                 <div className="text-muted-foreground">
