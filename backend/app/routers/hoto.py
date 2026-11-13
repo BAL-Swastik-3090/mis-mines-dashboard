@@ -298,6 +298,20 @@ def admin_create_template(request: Request, payload: dict,
                   org_unit_id=payload.get("org_unit_id"))
 
 
+@router.get("/admin/templates/{template_id}/performance")
+def admin_item_performance(template_id: int, request: Request, days: int = 90,
+                           db: Session = Depends(get_minehub_db)) -> dict:
+    """How often each check on this template has actually found something.
+
+    A checklist is a cost paid by every operator at every handover, and until
+    now nothing said what any one question bought.
+    """
+    _admin_guard(request, db)
+    days = max(7, min(days, 365))
+    return {"template_id": template_id, "days": days,
+            "items": adm.item_performance(db, template_id, days=days)}
+
+
 @router.post("/admin/templates/{template_id}/clone", status_code=201)
 def admin_clone(template_id: int, request: Request, payload: dict | None = None,
                 db: Session = Depends(get_minehub_db)) -> dict:

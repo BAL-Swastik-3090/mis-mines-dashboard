@@ -15,7 +15,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
+import { BarChart3,
   AlertTriangle, Check, ChevronDown, ChevronRight, Copy, Loader2,
   Pencil, Plus, Send, Trash2, X,
 } from "lucide-react";
@@ -180,6 +180,23 @@ export default function HotoChecklistsSection() {
     }
     return [...by.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [rows]);
+
+  /* WHAT EACH QUESTION HAS ACTUALLY BOUGHT.
+     A checklist is a cost paid by every operator at every handover, and
+     nothing said what any single question earned. The system had been
+     recording the answers all along; this reads them back the other way
+     round, per question. Reading it is how the yes/no evaluation bug was
+     found -- "Abnormal sound" showed as firing on 17 of 17 handovers, which
+     is not a number a real check produces. */
+  const [perf, setPerf] = useState<ItemPerf[] | null>(null);
+  const [showPerf, setShowPerf] = useState(false);
+  useEffect(() => {
+    setPerf(null);
+    if (!detail) return;
+    api.get(`/hoto/admin/templates/${detail.template_id}/performance`)
+      .then((r) => setPerf(r.data.items ?? []))
+      .catch(() => { /* the checklist stands without it */ });
+  }, [detail]);
 
   const isDraft = detail?.status === "DRAFT";
   const uncovered = useMemo(
@@ -394,9 +411,20 @@ export default function HotoChecklistsSection() {
                       <Copy size={12} /> Clone to draft
                     </button>
                   )}
+                  {perf && perf.some((i) => i.answered > 0) && (
+                    <button
+                      onClick={() => setShowPerf((v) => !v)}
+                      className="flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-border hover:bg-muted"
+                    >
+                      <BarChart3 size={12} />
+                      {showPerf ? "Hide" : "What each check finds"}
+                    </button>
+                  )}
                   {isDraft && <PublishButton detail={detail} busy={busy} act={act} />}
                 </div>
               </div>
+
+              {showPerf && perf && <Performance items={perf} />}
 
               {detail.status === "ACTIVE" && (
                 <p className="px-4 py-2 text-[11px] text-muted-foreground border-b border-border">
@@ -802,6 +830,85 @@ function SectionTools({ section, busy, act }: {
       >
         <Trash2 size={10} /> Remove section
       </button>
+    </div>
+  );
+}
+
+
+/* ── what each check has found ───────────────────────────────────────────── */
+
+interface ItemPerf {
+  item_id: number;
+  label: string;
+  section_name: string;
+  response_type: string;
+  answered: number;
+  found: number;
+  found_rate: number | null;
+}
+
+/**
+ * Counts, deliberately without a verdict.
+ *
+ * Two kinds of question earn their place in opposite ways, and a single score
+ * would libel one of them:
+ *
+ *   A check that NEVER fires may be worthless — or it may be the one everybody
+ *   passes precisely because it is asked. Brakes are checked every shift and
+ *   are almost always fine; dropping that question because it rarely fires
+ *   would be the worst possible reading of this table.
+ *
+ *   A check that ALWAYS fires is usually worded so that the machine's normal
+ *   state counts as an exception, and it teaches operators to answer without
+ *   looking.
+ *
+ * So: no ranking, no traffic light, no recommendation. The judgement belongs
+ * to the people who know the machines.
+ */
+function Performance({ items }: { items: ItemPerf[] }) {
+  const answered = items.filter((i) => i.answered > 0);
+  const neverAsked = items.length - answered.length;
+
+  return (
+    <div className="px-4 py-3 border-b border-border bg-muted/30">
+      <p className="text-[11px] text-muted-foreground mb-2 max-w-prose">
+        How often each check has reported something, over the last 90 days.
+        A check that never fires may be worthless — or it may be the one
+        everybody passes <em>because</em> it is asked. The counts are here;
+        the judgement is yours.
+      </p>
+
+      <div className="space-y-0.5">
+        {answered.map((i) => {
+          const pct = Math.round((i.found_rate ?? 0) * 100);
+          return (
+            <div key={i.item_id} className="flex items-center gap-2 text-[11px]">
+              <span className="w-24 shrink-0 text-[10px] text-muted-foreground truncate">
+                {i.section_name}
+              </span>
+              <span className="flex-1 min-w-0 truncate">{i.label}</span>
+              <span className="w-28 shrink-0 h-1.5 rounded-full bg-muted overflow-hidden">
+                <span
+                  className={`block h-full rounded-full ${
+                    pct >= 90 ? "bg-amber-500" : pct > 0 ? "bg-sky-500" : "bg-transparent"}`}
+                  style={{ width: `${pct}%` }}
+                />
+              </span>
+              <span className="w-28 shrink-0 text-right tabular-nums text-muted-foreground">
+                {i.found} of {i.answered}
+                <span className="ml-1">({pct}%)</span>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      {neverAsked > 0 && (
+        <p className="text-[10px] text-muted-foreground mt-2">
+          {neverAsked} check{neverAsked === 1 ? " has" : "s have"} not been
+          answered yet — not the same as a check that never finds anything.
+        </p>
+      )}
     </div>
   );
 }
