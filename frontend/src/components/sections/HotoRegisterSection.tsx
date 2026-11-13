@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle, Camera, ChevronLeft, CloudOff, Loader2, MapPin, MapPinOff, Filter, Search, TrendingDown, X,
+  AlertTriangle, Camera, Check, Minus, ChevronLeft, CloudOff, Loader2, MapPin, MapPinOff, Filter, Search, TrendingDown, X,
 } from "lucide-react";
 import api from "@/lib/api";
 
@@ -653,10 +653,21 @@ function DetailView({ d, onBack }: { d: Detail; onBack: () => void }) {
         <HotoPhotos sessionId={d.session_id} />
       </section>
 
+      {/* The section somebody opened this page for. It used to be bordered
+          and headed exactly like the photographs and the full checklist
+          below it, so the one part that says a machine may be unsafe had no
+          more weight on the page than a list of file sizes. */}
       {d.adverse.length > 0 && (
-        <section className="rounded border border-border">
-          <h3 className="px-3 py-2 text-xs font-semibold border-b border-border">
-            What was found — {d.adverse.length} of {d.answer_count}
+        <section className="rounded border border-red-300 dark:border-red-900 overflow-hidden">
+          <h3 className="px-3 py-2 text-xs font-semibold border-b border-red-300
+                         dark:border-red-900 bg-red-50 dark:bg-red-950/40
+                         text-red-900 dark:text-red-200
+                         flex items-center gap-1.5">
+            <AlertTriangle size={13} className="shrink-0" />
+            What was found
+            <span className="font-normal opacity-80">
+              — {d.adverse.length} of {d.answer_count} checks
+            </span>
           </h3>
           <ul className="divide-y divide-border">
             {d.adverse.map((a) => <AnswerRow key={a.response_id} a={a} emphasise />)}
@@ -664,20 +675,57 @@ function DetailView({ d, onBack }: { d: Detail; onBack: () => void }) {
         </section>
       )}
 
-      <section className="rounded border border-border">
-        <h3 className="px-3 py-2 text-xs font-semibold border-b border-border">
-          The checklist as answered
+      {/* ── the walk-round, in the order it was walked ──────────────────────
+          Presentation matters here more than anywhere else in the module:
+          this is the page somebody reads when they are deciding whether a
+          machine is safe, and it used to render a pass and a fault in the
+          same grey four-letter word at the same place on the line. "ok",
+          "no" and "yes" all looked identical, so the reader had to know the
+          wording of every question to tell which answers were good news.
+
+          Now the state is carried by a mark at the START of the line, where
+          the eye already is, and the section headings say what their section
+          found instead of being a slightly greyer row. */}
+      <section className="rounded border border-border overflow-hidden">
+        <h3 className="px-3 py-2 text-xs font-semibold border-b border-border
+                       flex items-center justify-between gap-2">
+          <span>The checklist as answered</span>
+          <span className="font-normal text-[10px] text-muted-foreground">
+            {d.sections.reduce((n, s) => n + s.answers.length, 0)} checks
+          </span>
         </h3>
-        {d.sections.map((s) => (
-          <div key={s.name}>
-            <h4 className="px-3 py-1.5 text-[10px] uppercase tracking-wide text-muted-foreground bg-muted/40">
-              {s.name}
-            </h4>
-            <ul className="divide-y divide-border">
-              {s.answers.map((a) => <AnswerRow key={a.response_id} a={a} />)}
-            </ul>
-          </div>
-        ))}
+
+        {d.sections.map((s) => {
+          const found = s.answers.filter((a) => a.is_adverse).length;
+          return (
+            <div key={s.name}>
+              <h4 className="px-3 py-2 bg-muted/60 border-y border-border
+                             flex items-center gap-2 sticky top-0">
+                <span className="text-[11px] font-bold uppercase tracking-[.08em]">
+                  {s.name}
+                </span>
+                {found > 0 ? (
+                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded
+                                   bg-red-100 text-red-800
+                                   dark:bg-red-900/50 dark:text-red-200">
+                    {found} found
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700
+                                   dark:text-emerald-400">
+                    <Check size={10} /> all clear
+                  </span>
+                )}
+                <span className="ml-auto text-[10px] text-muted-foreground">
+                  {s.answers.length} check{s.answers.length === 1 ? "" : "s"}
+                </span>
+              </h4>
+              <ul className="divide-y divide-border">
+                {s.answers.map((a) => <AnswerRow key={a.response_id} a={a} />)}
+              </ul>
+            </div>
+          );
+        })}
       </section>
     </div>
   );
@@ -693,14 +741,49 @@ function Field({ label, value }: { label: string; value: string | null | undefin
 }
 
 function AnswerRow({ a, emphasise = false }: { a: Answer; emphasise?: boolean }) {
+  /* THE STATE GOES FIRST, AND IT IS A MARK, NOT A WORD.
+     "ok", "yes" and "no" were rendered identically at the right-hand end of
+     the line, so whether an answer was good news depended entirely on how
+     the question happened to be worded -- "Air leakage audible: no" is a
+     pass and "Receiver drained: no" is a fault, and the screen drew them the
+     same. The mark says which it is without the reader having to parse the
+     wording. */
+  const notAnswered = a.answer == null && a.numeric_value == null;
+
   return (
-    <li className={`px-3 py-1.5 flex items-start gap-2 ${emphasise ? "bg-red-50/40 dark:bg-red-950/10" : ""}`}>
+    <li className={`px-3 py-2 flex items-start gap-2.5 ${
+      a.is_adverse
+        ? "bg-red-50/60 dark:bg-red-950/20"
+        : emphasise ? "bg-red-50/40 dark:bg-red-950/10" : ""}`}>
+
+      <span className="mt-0.5 shrink-0">
+        {notAnswered ? (
+          <Minus size={13} className="text-muted-foreground/50" aria-label="not answered" />
+        ) : a.is_adverse ? (
+          <AlertTriangle size={13} className="text-red-600 dark:text-red-400"
+                         aria-label="reported a fault" />
+        ) : (
+          <Check size={13} className="text-emerald-600/70 dark:text-emerald-500/70"
+                 aria-label="clear" />
+        )}
+      </span>
+
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5 flex-wrap">
-          <span className="text-xs">{a.item_label}</span>
+          <span className={`text-xs ${a.is_adverse ? "font-medium" : ""}`}>
+            {a.item_label}
+          </span>
           {a.is_critical && (
-            <span className="text-[9px] px-1 py-0.5 rounded bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200">
+            <span
+              title="A fault here stops the machine going to work"
+              className="text-[9px] px-1 py-0.5 rounded bg-red-100 text-red-800
+                         dark:bg-red-900/40 dark:text-red-200">
               BLOCKS
+            </span>
+          )}
+          {a.photo_count > 0 && (
+            <span className="inline-flex items-center gap-0.5 text-[9px] text-muted-foreground">
+              <Camera size={9} />{a.photo_count}
             </span>
           )}
         </div>
@@ -709,9 +792,15 @@ function AnswerRow({ a, emphasise = false }: { a: Answer; emphasise?: boolean })
         )}
       </div>
 
+      {/* The answer itself, and for a reading the range it was judged
+          against -- a number with no limits beside it is not evidence of
+          anything. */}
       <div className="text-right shrink-0">
-        <div className={`text-xs tabular-nums ${a.is_adverse ? "text-red-700 dark:text-red-300 font-medium" : ""}`}>
-          {answerText(a)}
+        <div className={`text-xs tabular-nums ${
+          a.is_adverse
+            ? "text-red-700 dark:text-red-300 font-semibold"
+            : notAnswered ? "text-muted-foreground/60" : "text-muted-foreground"}`}>
+          {notAnswered ? "not answered" : answerText(a)}
         </div>
         {rangeText(a) && (
           <div className="text-[9px] text-muted-foreground">
@@ -721,13 +810,8 @@ function AnswerRow({ a, emphasise = false }: { a: Answer; emphasise?: boolean })
       </div>
 
       {a.severity && (
-        <span className={`text-[9px] px-1.5 py-0.5 rounded shrink-0 ${SEVERITY_STYLE[a.severity]}`}>
+        <span className={`mt-0.5 text-[9px] px-1.5 py-0.5 rounded shrink-0 ${SEVERITY_STYLE[a.severity]}`}>
           {a.severity}
-        </span>
-      )}
-      {a.photo_count > 0 && (
-        <span className="inline-flex items-center gap-0.5 text-[9px] text-muted-foreground shrink-0">
-          <Camera size={9} />{a.photo_count}
         </span>
       )}
     </li>
