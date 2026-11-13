@@ -74,3 +74,32 @@ test('a calendar with a gap says it does not know, rather than guessing', () => 
   const gapped: CachedShift[] = [CALENDAR[0]!];   // A shift only
   expect(resolveShift(gapped, at('2026-11-12T20:00:00'))).toBeNull();
 });
+
+/* ── the local day, not the UTC slice ─────────────────────────────────────── */
+
+import { localDay } from './shifts';
+
+describe('which day a capture belongs to', () => {
+  test('a night-shift capture belongs to the day it is worked', () => {
+    // 01:00 IST on 14 Nov is 19:30Z on 13 Nov. Slicing the ISO string gave
+    // the 13th — the previous day — for every capture before 05:30 local,
+    // which is the night shift, every night.
+    const oneAm = new Date('2026-11-14T01:00:00+05:30').toISOString();
+    expect(oneAm.slice(0, 10)).toBe('2026-11-13');   // the bug, stated
+    expect(localDay(oneAm)).toBe('2026-11-14');      // the fix
+  });
+
+  test('a day-shift capture is unaffected', () => {
+    const noon = new Date('2026-11-14T12:00:00+05:30').toISOString();
+    expect(localDay(noon)).toBe('2026-11-14');
+  });
+
+  test('the last minute before midnight stays on its own day', () => {
+    const late = new Date('2026-11-14T23:59:00+05:30').toISOString();
+    expect(localDay(late)).toBe('2026-11-14');
+  });
+
+  test('a value that is not a date is passed through rather than thrown on', () => {
+    expect(localDay('not-a-date')).toBe('not-a-date');
+  });
+});

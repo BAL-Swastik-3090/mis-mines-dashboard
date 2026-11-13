@@ -91,3 +91,18 @@ export async function cachedShifts(store: Store): Promise<CachedShift[]> {
 export async function shiftAt(store: Store, at: Date): Promise<ResolvedShift | null> {
   return resolveShift(await cachedShifts(store), at);
 }
+
+/**
+ * The calendar day an instant falls on **where the tablet is standing**.
+ *
+ * `new Date().toISOString().slice(0, 10)` is the UTC date, and the mine is at
+ * +05:30. Every capture before 05:30 local therefore reported the previous
+ * day — which is the night shift, every night. Written as its own function so
+ * the next person reaching for `.slice(0, 10)` finds this instead.
+ */
+export function localDay(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}

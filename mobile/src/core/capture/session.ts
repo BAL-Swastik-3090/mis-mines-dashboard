@@ -34,6 +34,7 @@ import {
   type ChecklistItem, type RawResponse, type SessionVerdict,
 } from '../evaluation';
 import { cacheAgeHours, resolveTemplate, type CachedAsset, type CachedOperator } from './masters';
+import { localDay } from './shifts';
 
 export interface SessionRow {
   client_uuid: string;
@@ -457,7 +458,14 @@ export async function payloadFor(store: Store, uuid: string): Promise<Record<str
     status: s.status,
     blocked_reason: s.blocked_reason,
     captured_at: s.captured_at,
-    production_day: s.captured_at.slice(0, 10),
+    // LOCAL DAY, NOT THE UTC SLICE. captured_at is written with
+    // toISOString(), so slicing the first ten characters gave the UTC date:
+    // in IST every capture between 00:00 and 05:29 local reported the
+    // PREVIOUS day -- precisely the night shift. The server recomputes the
+    // stored production day correctly, so only template resolution used
+    // this; but a checklist published overnight would have been resolved
+    // against the wrong day for the shift most likely to be working.
+    production_day: localDay(s.captured_at),
     captured_offline: s.captured_offline === 1,
     // So the office can tell a one-tap record from a walk-round.
     bulk_answered: (s as any).bulk_answered === 1,
