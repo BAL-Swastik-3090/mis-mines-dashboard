@@ -13,7 +13,9 @@ Status is **checked in the source today**, not carried over from the documents.
 
 ---
 
-## Part 1 · Architecture fix plan — one of four done
+## Part 1 · Architecture fix plan — three of four done
+
+**Updated 13 Nov, evening.** P3 and P4 are now fixed, and residual gap 1b with them. P2 is a decision for the mine, not code.
 
 I checked each one. **One is substantially done; three are untouched.**
 
@@ -66,7 +68,7 @@ restriction, and physical immobilisation. On a site with no signal those are
 three very different things, and the document promises the strongest reading
 of all three. No offline hold procedure is written down.
 
-### P3 · Device token reads every operator — ❌ NOT DONE
+### P3 · Device token reads every operator — ✅ FIXED
 
 The sharpest one, because the fix is nearly free and the exposure is real.
 
@@ -83,7 +85,7 @@ operator in the company, with names, employee references and competencies.
 So a stolen or cloned device token reads the entire operator register of every
 site — and Section 5 of the architecture document says it cannot.
 
-### P4 · Changed content under one UUID is accepted as a replay — ❌ NOT DONE
+### P4 · Changed content under one UUID accepted as a replay — ✅ FIXED
 
 ```python
 same = (prior["asset_id"] == payload.get("asset_id")
@@ -96,10 +98,19 @@ marks the handover as successfully synced. The server keeps the original; the
 tablet believes its version was filed. Nobody is told. There is no payload
 fingerprint anywhere in the service.
 
-**My reading of the priority:** P4 and P3 are the two that can be wrong
-*silently* in production. P4 loses a signed safety record while reporting
-success; P3 leaks the whole operator register to one stolen tablet. Both would
-be far harder to retrofit after go-live than now.
+**Both are now fixed.** P3 scopes the operator query to the device's site and
+declares the breadth when a device has none, with the site settable in the
+Devices table. P4 fingerprints the immutable payload on first acceptance
+(migration 114) and refuses a retry whose content differs, leaving the
+original untouched. 24 tests on the equivalence rules, and the whole rule
+driven end to end through the real service.
+
+Residual gap **1b** is fixed too: `production_day` was a UTC date slice, so in
+IST every capture before 05:30 local reported the previous day — the night
+shift, every night.
+
+**P2 remains**, and it is mostly a decision rather than code: what a block
+means on a site with no signal, and the mine's hold procedure.
 
 ---
 
