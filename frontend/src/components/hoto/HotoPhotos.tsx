@@ -51,6 +51,44 @@ interface PhotoMeta {
   captured_lat: number | null;
   captured_lon: number | null;
   gps_accuracy_m: number | null;
+  uploaded_by: string | null;
+  // Which tablet, and whose shift. Provenance is what evidence is worth.
+  device_code: string | null;
+  device_label: string | null;
+  device_profile: string | null;
+  device_manufacturer: string | null;
+  device_model: string | null;
+  device_platform: string | null;
+  device_os_version: string | null;
+  device_app_version: string | null;
+  operator_emp_id: string | null;
+  operator_name: string | null;
+}
+
+/**
+ * The tablet, named the way somebody checking a claim would want it named.
+ *
+ * The enrolment label is usually the make and model already ("LENOVO TB336ZU"),
+ * so repeating the model after it reads as a stutter. The device code is what
+ * identifies the tablet in the fleet and always leads.
+ */
+function describeDevice(p: PhotoMeta): { code: string; detail: string } | null {
+  if (!p.device_code) {
+    // A photo whose device row has gone, or one uploaded another way.
+    return p.uploaded_by ? { code: p.uploaded_by, detail: "" } : null;
+  }
+  const made = [p.device_manufacturer, p.device_model]
+    .filter(Boolean).join(" ");
+  const name = p.device_label && p.device_label.toUpperCase() !== made.toUpperCase()
+    ? p.device_label
+    : made;
+  const os = p.device_platform
+    ? `${p.device_platform === "android" ? "Android" : p.device_platform}`
+      + (p.device_os_version ? ` ${p.device_os_version}` : "")
+    : null;
+  const detail = [name || null, os, p.device_app_version ? `app ${p.device_app_version}` : null]
+    .filter(Boolean).join(" · ");
+  return { code: p.device_code, detail };
 }
 
 /**
@@ -109,6 +147,20 @@ export function HotoPhotos({ sessionId, itemId, compact }: {
       document.body.style.overflow = prev;
     };
   }, [big]);
+
+  // Derived for the open photograph. Declared here rather than inside the
+  // JSX so the markup stays markup.
+  const device = big ? describeDevice(big) : null;
+  const heldFor = (() => {
+    if (!big) return null;
+    const ms = Date.parse(big.received_at) - Date.parse(big.captured_at);
+    // Under a couple of minutes is just the sync running; not worth saying.
+    if (!Number.isFinite(ms) || ms < 120_000) return null;
+    const mins = Math.round(ms / 60_000);
+    if (mins < 90) return `${mins} min`;
+    const hrs = ms / 3_600_000;
+    return hrs < 48 ? `${hrs.toFixed(1)} h` : `${Math.round(hrs / 24)} days`;
+  })();
 
   if (error) return <p className="text-xs text-red-700">{error}</p>;
   if (!photos) return (
@@ -239,6 +291,57 @@ export function HotoPhotos({ sessionId, itemId, compact }: {
                     was available at the machine.
                   </div>
                 )}
+
+                {/* WHO AND WHAT. A photograph is worth what its provenance is
+                    worth: months later, somebody disputing a defect wants to
+                    know whose shift it was and which tablet took it, and all
+                    of this has been recorded since enrolment without ever
+                    reaching a screen. Kept as a labelled list rather than
+                    another run-on line, because these are facts to be read
+                    off one at a time, not prose. */}
+                <dl className="pt-2 mt-2 border-t border-black/10 dark:border-white/10
+                               grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                  {big.operator_name && (
+                    <>
+                      <dt className="opacity-60">Operator</dt>
+                      <dd className="min-w-0 truncate">
+                        {big.operator_name}
+                        {big.operator_emp_id && (
+                          <span className="opacity-60"> · {big.operator_emp_id}</span>
+                        )}
+                      </dd>
+                    </>
+                  )}
+                  {device && (
+                    <>
+                      <dt className="opacity-60">Tablet</dt>
+                      <dd className="min-w-0">
+                        <span className="font-medium">{device.code}</span>
+                        {big.device_profile === "PERSONAL" && (
+                          /* Worth saying out loud: a company tablet and
+                             somebody's own phone are not equal evidence. */
+                          <span className="ml-1 rounded bg-amber-100 dark:bg-amber-900/50
+                                           px-1 py-px text-[10px] align-middle">
+                            personal device
+                          </span>
+                        )}
+                        {device.detail && (
+                          <div className="opacity-60">{device.detail}</div>
+                        )}
+                      </dd>
+                    </>
+                  )}
+                  <dt className="opacity-60">Reached office</dt>
+                  <dd>
+                    {new Date(big.received_at).toLocaleString("en-IN", {
+                      day: "2-digit", month: "short", hour: "2-digit",
+                      minute: "2-digit", hour12: false })}
+                    {/* The gap between shutter and arrival is the offline
+                        story: a photo that took two hours to arrive was taken
+                        somewhere with no signal, which is most of this mine. */}
+                    {heldFor && <span className="opacity-60"> · held {heldFor}</span>}
+                  </dd>
+                </dl>
               </div>
               <button
                 onClick={() => setBig(null)}

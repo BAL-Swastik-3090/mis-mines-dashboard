@@ -182,17 +182,40 @@ def receive(db: Session, *, photo_uuid: str, client_uuid: str, content: bytes,
 def listing(db: Session, session_id: int) -> list[dict[str, Any]]:
     """What has arrived for this handover. Metadata only — never the bytes."""
     rows = db.execute(text("""
-        SELECT photo_id, photo_uuid, item_id, item_label, sha256, size_bytes,
-               content_type, captured_at, received_at, uploaded_by,
+        SELECT ph.photo_id, ph.photo_uuid, ph.item_id, ph.item_label,
+               ph.sha256, ph.size_bytes, ph.content_type,
+               ph.captured_at, ph.received_at, ph.uploaded_by,
                -- ITEM evidence or the OPERATOR's own photo: a screen has to
                -- tell them apart, and a defect's photo list must never show a
                -- photograph of a person as evidence of a fault.
-               kind,
+               ph.kind,
                -- Where it was taken. For a picture of a machine in a pit this
                -- is most of what makes it evidence.
-               captured_lat, captured_lon, gps_accuracy_m
-          FROM hoto_photo WHERE session_id = :s
-         ORDER BY captured_at, photo_id
+               ph.captured_lat, ph.captured_lon, ph.gps_accuracy_m,
+
+               -- WHICH TABLET TOOK IT. A photograph is evidence, and evidence
+               -- is worth what its provenance is worth: "a photo" and "a photo
+               -- from the tablet issued to the Kaliapani night shift, running
+               -- app 0.1.0" are different things to anybody checking a claim
+               -- months later. All of it is already recorded at enrolment;
+               -- until now none of it reached the screen.
+               d.device_code, d.label AS device_label, d.profile AS device_profile,
+               d.manufacturer AS device_manufacturer, d.model AS device_model,
+               d.platform AS device_platform, d.os_version AS device_os_version,
+               d.app_version AS device_app_version,
+
+               -- AND WHO WAS ON THE MACHINE. Carried on the handover rather
+               -- than on the photograph, which is the point: it says whose
+               -- shift this evidence belongs to.
+               s.operator_emp_id,
+               COALESCE(pa.display_name, pa.legal_name) AS operator_name
+          FROM hoto_photo ph
+          JOIN hoto_session s   ON s.session_id = ph.session_id
+          LEFT JOIN hoto_device d ON d.device_id = s.device_id
+          LEFT JOIN operator o    ON o.operator_id = s.operator_id
+          LEFT JOIN party pa      ON pa.party_id = o.party_id
+         WHERE ph.session_id = :s
+         ORDER BY ph.captured_at, ph.photo_id
     """), {"s": session_id}).mappings().all()
     out = []
     for r in rows:
