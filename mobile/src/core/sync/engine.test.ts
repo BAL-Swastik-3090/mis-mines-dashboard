@@ -69,6 +69,8 @@ async function queuedHandover(uuid = U1): Promise<void> {
                              clientUuid: uuid });
   const op = await masters.operatorByEmpId(store, '4101');
   await session.identify(store, uuid, op!, 'PIN', asset!);
+  // Every handover now says who was on the other side, or that nobody was.
+  await session.setCounterpart(store, uuid, null, true);
   await session.setReadings(store, uuid, { meterReading: 7700 });
   const list = await items();
   for (const i of list) {

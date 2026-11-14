@@ -100,6 +100,22 @@ interface Detail extends Row {
   counterpart_ref: string | null;
   counterpart_type: string | null;
   counterpart_status: string | null;
+  /* Migration 115: everyone in the handover. A null other side that is not
+     stated absent means NOT RECORDED -- every record filed before it -- and is
+     never shown as "nobody". */
+  operator_id: number | null;
+  counterpart_operator_id: number | null;
+  counterpart_emp_id: string | null;
+  counterpart_absent: boolean;
+  counterpart_name: string | null;
+  recorded_by_operator_id: number | null;
+  recorded_by_emp_id: string | null;
+  recorded_by_name: string | null;
+  counterpart_captured_at: string | null;
+  counterpart_session_operator_id: number | null;
+  counterpart_session_operator_name: string | null;
+  /** Who the OTHER half names as being on this side. */
+  counterpart_session_named_id: number | null;
   remarks: string | null;
   sections: { name: string; answers: Answer[] }[];
   adverse: Answer[];
@@ -577,8 +593,9 @@ function DetailView({ d, onBack }: { d: Detail; onBack: () => void }) {
           </div>
         )}
 
+        <People d={d} />
+
         <dl className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-1.5 text-[11px]">
-          <Field label="Operator" value={d.operator_name ?? d.operator_emp_id} />
           <Field label="Confirmed by" value={
             d.confirmed_by
               ? `${d.confirmed_by}${d.confirmed_at ? ` · ${fmt(d.confirmed_at)}` : ""}`
@@ -609,10 +626,6 @@ function DetailView({ d, onBack }: { d: Detail; onBack: () => void }) {
             num(d.captured_lat) != null && num(d.captured_lon) != null
               ? `${num(d.captured_lat)!.toFixed(5)}, ${num(d.captured_lon)!.toFixed(5)}`
               : (d.gps_status ?? null)} />
-          {d.counterpart_ref && (
-            <Field label="Paired with"
-                   value={`${d.counterpart_ref} (${TYPE_LABEL[d.counterpart_type ?? ""] ?? d.counterpart_type}, ${d.counterpart_status})`} />
-          )}
         </dl>
 
         {/* HOW IT WAS ANSWERED. A record filled with one tap is otherwise
@@ -727,6 +740,86 @@ function DetailView({ d, onBack }: { d: Detail; onBack: () => void }) {
           );
         })}
       </section>
+    </div>
+  );
+}
+
+/* ── who was in it ───────────────────────────────────────────────────────────
+   Three people, where the record used to have room for one: whose handover
+   it is, the other side of it, and who held the tablet. Then the other half
+   of the handover, if the server has paired one -- and a warning when the two
+   halves disagree about who was there, because one of them names the wrong
+   person and only somebody on site can say which. */
+
+function People({ d }: { d: Detail }) {
+  const own = TYPE_LABEL[d.session_type] ?? "Operator";
+  const otherRole = d.session_type === "START_HANDOVER" ? "Handed over by"
+    : d.session_type === "END_HANDOVER" ? "Handing over to" : null;
+
+  const other = d.counterpart_name ?? d.counterpart_emp_id
+    ?? (d.counterpart_absent ? "Nobody" : null);
+  const otherNote = d.counterpart_absent ? "the machine was parked"
+    : other == null ? "not recorded on this handover" : d.counterpart_emp_id;
+
+  const recorderIsOperator = d.recorded_by_operator_id != null
+    && d.recorded_by_operator_id === d.operator_id;
+  const recorder = d.recorded_by_operator_id == null ? null
+    : recorderIsOperator ? (d.operator_name ?? d.operator_emp_id)
+    : (d.recorded_by_name ?? d.recorded_by_emp_id);
+  const recorderNote = d.recorded_by_operator_id == null ? "not recorded on this handover"
+    : recorderIsOperator ? "the operator themself" : d.recorded_by_emp_id;
+
+  // The two halves disagree when either names somebody the other was not
+  // filed by -- the same rule the server raises an exception on.
+  const differs = (named: number | null, actual: number | null) =>
+    named != null && actual != null && named !== actual;
+  const disagree = d.counterpart_ref != null && (
+    differs(d.counterpart_operator_id, d.counterpart_session_operator_id)
+    || differs(d.counterpart_session_named_id, d.operator_id));
+
+  return (
+    <div className="space-y-2">
+      <div className={`grid grid-cols-1 gap-2 ${otherRole ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
+        <PersonCell role={own} name={d.operator_name ?? d.operator_emp_id}
+                    note={d.operator_name ? d.operator_emp_id : null} lead />
+        {otherRole && <PersonCell role={otherRole} name={other} note={otherNote} />}
+        <PersonCell role="Filled in by" name={recorder} note={recorderNote} />
+      </div>
+
+      {d.counterpart_ref && (
+        <div className={`flex flex-wrap items-center gap-x-2 gap-y-1 rounded border px-2.5 py-1.5 text-[11px] ${
+          disagree
+            ? "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30"
+            : "border-border bg-muted/30"}`}>
+          <span className="text-muted-foreground">Other half</span>
+          <span className="font-mono">{d.counterpart_ref}</span>
+          <span>
+            {TYPE_LABEL[d.counterpart_type ?? ""] ?? d.counterpart_type}
+            {d.counterpart_session_operator_name && <> by {d.counterpart_session_operator_name}</>}
+            {d.counterpart_captured_at && <span className="text-muted-foreground"> · {fmt(d.counterpart_captured_at)}</span>}
+          </span>
+          {disagree && (
+            <span className="basis-full text-amber-900 dark:text-amber-200">
+              <strong>The two halves disagree about who was there.</strong> One of
+              them names the wrong person, and only somebody on site can say which.
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PersonCell({ role, name, note, lead }: {
+  role: string; name: string | null | undefined; note?: string | null; lead?: boolean;
+}) {
+  return (
+    <div className={`rounded border px-2.5 py-2 ${lead ? "border-sky-200 bg-sky-50/60 dark:border-sky-900 dark:bg-sky-950/30" : "border-border"}`}>
+      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{role}</p>
+      <p className={`text-xs font-semibold ${name ? "" : "text-muted-foreground font-normal italic"}`}>
+        {name ?? "Not recorded"}
+      </p>
+      {note && <p className="text-[10px] text-muted-foreground">{note}</p>}
     </div>
   );
 }

@@ -23,7 +23,7 @@
  * unsynced handovers, and it lives in a cab.
  */
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 /** Run in order, inside one transaction, on first open and on upgrade. */
 export const MIGRATIONS: readonly string[][] = [
@@ -353,5 +353,22 @@ export const MIGRATIONS: readonly string[][] = [
   // tells him apart MAN-50 from MAN-51.
   [
     `ALTER TABLE cached_asset ADD COLUMN registration_no TEXT;`,
+  ],
+
+  // ── 8 · everyone in the handover ────────────────────────────────────────
+  // The form asked for one person and the record has three: whose handover
+  // it is (operator_id), the other side of it, and whoever held the tablet.
+  // One name stood for all of them, so a supervisor filling a record in for
+  // an operator who cannot read left no trace, and a takeover never said who
+  // it was taken from. See migration 115 on the server.
+  //
+  // counterpart_absent is separate from a NULL counterpart because "nobody
+  // handed it over -- it was parked" is an answer, and "not asked" is not.
+  [
+    `ALTER TABLE session ADD COLUMN counterpart_operator_id INTEGER;`,
+    `ALTER TABLE session ADD COLUMN counterpart_emp_id TEXT;`,
+    `ALTER TABLE session ADD COLUMN counterpart_absent INTEGER NOT NULL DEFAULT 0;`,
+    `ALTER TABLE session ADD COLUMN recorded_by_operator_id INTEGER;`,
+    `ALTER TABLE session ADD COLUMN recorded_by_emp_id TEXT;`,
   ],
 ];

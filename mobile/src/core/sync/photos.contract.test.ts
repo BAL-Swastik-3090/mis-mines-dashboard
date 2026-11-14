@@ -85,7 +85,11 @@ describeLive('a photo reaching the server', () => {
         return { item_id: i.item_id, numeric_value: (lo + hi) / 2 };
       }
       if (i.response_type === 'LEVEL') return { item_id: i.item_id, answer: 'NORMAL' };
-      if (i.response_type === 'YES_NO') return { item_id: i.item_id, answer: 'YES' };
+      // The answer that is NOT the finding for this item. 'YES' to "Abnormal
+      // sound" is a fault, and this fixture is meant to be a clean walk-round.
+      if (i.response_type === 'YES_NO') {
+        return { item_id: i.item_id, answer: (i.adverse_answer ?? 'YES') === 'YES' ? 'NO' : 'YES' };
+      }
       return { item_id: i.item_id, answer: 'OK' };
     });
 

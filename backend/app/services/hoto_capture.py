@@ -259,6 +259,19 @@ _IMMUTABLE = (
     "remarks", "bulk_answered", "status",
 )
 
+#: Added by migration 115: the other side of the handover, and who held the
+#: tablet. Hashed ONLY WHEN THEY CARRY SOMETHING, unlike the fields above.
+#:
+#: Every key in _IMMUTABLE is hashed whether present or not, so adding one
+#: there changes the fingerprint of every payload -- including the retry of a
+#: handover filed yesterday, which would then be refused as altered content
+#: and the tablet would never be able to clear it. A payload that does not
+#: carry these hashes exactly as it did before they existed.
+_IMMUTABLE_IF_PRESENT = (
+    "counterpart_operator_id", "counterpart_emp_id", "counterpart_absent",
+    "recorded_by_operator_id", "recorded_by_emp_id",
+)
+
 #: Likewise for one answer.
 _IMMUTABLE_RESPONSE = (
     "item_id", "answer", "numeric_value", "remark", "photo_count",
@@ -319,6 +332,12 @@ def fingerprint(payload: dict[str, Any]) -> str:
     handover it belongs to look altered.
     """
     body = {k: _norm(payload.get(k)) for k in _IMMUTABLE}
+    for k in _IMMUTABLE_IF_PRESENT:
+        v = _norm(payload.get(k))
+        # False is "nobody was stated absent", which is what a payload that
+        # never heard of the field also says.
+        if v is not None and v is not False:
+            body[k] = v
     body["responses"] = sorted(
         ({k: _norm(r.get(k)) for k in _IMMUTABLE_RESPONSE}
          for r in (payload.get("responses") or [])),
@@ -404,6 +423,17 @@ def submit(db: Session, payload: dict[str, Any], actor: str) -> dict[str, Any]:
         problems.append("session_type must be START_HANDOVER, MID_SHIFT or END_HANDOVER")
     if not payload.get("captured_at"):
         problems.append("captured_at is required — the device's own clock reading")
+
+    # ── the people in it (migration 115) ────────────────────────────────────
+    # Refused here in words rather than left to the CHECK constraints, which
+    # would surface as a database error on a tablet in a cab.
+    other = payload.get("counterpart_operator_id")
+    absent = bool(payload.get("counterpart_absent"))
+    if other is not None and absent:
+        problems.append("the other side of the handover is both named and stated "
+                        "absent — it can be one or the other")
+    if session_type == "MID_SHIFT" and (other is not None or absent):
+        problems.append("a mid-shift check has no other side; it names one operator")
     if problems:
         raise CaptureError(problems)
 
@@ -471,14 +501,24 @@ def submit(db: Session, payload: dict[str, Any], actor: str) -> dict[str, Any]:
              reject_reason, confirmed_by, confirmed_at, device_id, captured_at,
              captured_offline, captured_lat, captured_lon, gps_accuracy_m, gps_status,
              remarks, created_by, bulk_answered, shift_code, production_day,
-             payload_sha256)
+             payload_sha256,
+             counterpart_operator_id, counterpart_emp_id, counterpart_absent,
+             recorded_by_operator_id, recorded_by_emp_id)
         VALUES (CAST(:u AS uuid), :a, :si, :dep, :st, :seq, :op, :emp, :tpl, :ver,
                 :meter, :uom, :fuel, :loc, :status, :blocked, :reject, :by, :at,
                 :dev, CAST(:cap AS timestamptz), :off, :lat, :lon, :acc, :gps, :rem, :by,
-                :bulk, :shift_code, CAST(:prod_day AS date), :fp)
+                :bulk, :shift_code, CAST(:prod_day AS date), :fp,
+                :cp_op, :cp_emp, :cp_absent, :rec_op, :rec_emp)
         RETURNING session_id
     """), {
         "bulk": bool(payload.get("bulk_answered")),
+        # NOT DEFAULTED. A tablet on an older build sends none of these, and
+        # its record must say "not recorded" -- not "nobody", and not that the
+        # operator filled it in themself, neither of which anybody said.
+        "cp_op": other, "cp_emp": payload.get("counterpart_emp_id"),
+        "cp_absent": absent,
+        "rec_op": payload.get("recorded_by_operator_id"),
+        "rec_emp": payload.get("recorded_by_emp_id"),
         # Computed here, from what actually arrived, so a later retry is
         # compared against what was stored rather than against a hash the
         # device chose for itself.
@@ -551,6 +591,9 @@ def submit(db: Session, payload: dict[str, Any], actor: str) -> dict[str, Any]:
                "by": actor, "k": f"drift:{client_uuid}"})
         logger.warning("HOTO verdict drift on session %s: %s", session_id, detail)
 
+    # ── the other half of the handover ──────────────────────────────────────
+    paired = pair(db, session_id, actor)
+
     # ── what the findings mean ───────────────────────────────────────────────
     # The device decided whether each ANSWER was adverse -- it had to, to tell
     # the operator at the machine. Whether an adverse answer is a NEW defect or
@@ -578,4 +621,111 @@ def submit(db: Session, payload: dict[str, Any], actor: str) -> dict[str, Any]:
         "defects_raised": outcome["raised"],
         "defects_sighted": outcome["sighted"],
         "machine_state_change": outcome["state_change"],
+        "paired_with": paired["session_ref"] if paired else None,
+        "names_disagree": bool(paired and paired["names_disagree"]),
     }
+
+
+# ── pairing a takeover with the handover it follows ──────────────────────────
+
+#: How far apart a handover and its takeover may be and still be one event.
+#: The person going off normally fills theirs in minutes before the person
+#: coming on. Four hours covers a shift that ran over or a machine left at the
+#: bay over a meal break; longer than that, and it is not one handover but a
+#: machine that stood idle -- which pairing would misrepresent.
+PAIR_BEFORE = "4 hours"
+#: Two tablets' clocks disagree, and the incoming operator sometimes starts
+#: their walk-round before the outgoing one has pressed confirm.
+PAIR_AFTER = "30 minutes"
+
+
+def pair(db: Session, session_id: int, actor: str) -> dict[str, Any] | None:
+    """Point a takeover and the handover it follows at each other.
+
+    ── WHY THE SERVER DOES THIS, AND ON EVERY FILING ─────────────────────────
+    The two halves are filed by different people, often on different tablets,
+    and reach us in whichever order those tablets found a signal. Neither
+    device can know about the other. So whichever half arrives second finds
+    the first, whatever order they were captured in.
+
+    ── WHICH ONE ────────────────────────────────────────────────────────────
+    The unpaired session of the opposite type on the same machine, inside the
+    window. Where the record names the other person, a session BY that person
+    is preferred over a nearer one by somebody else -- the name is the better
+    evidence. Otherwise the nearest in time.
+
+    ── WHEN THE NAMES DISAGREE ──────────────────────────────────────────────
+    The takeover says it was handed over by A; the handover was filed by B.
+    Still paired -- they are still the two halves of what happened to this
+    machine -- and raised for a supervisor, because one of the two records
+    names the wrong person and only somebody on site can say which.
+    """
+    me = db.execute(text("""
+        SELECT session_id, session_ref, asset_id, session_type, captured_at,
+               operator_id, counterpart_operator_id, counterpart_session_id,
+               shift_instance_id
+          FROM hoto_session WHERE session_id = :s
+    """), {"s": session_id}).mappings().first()
+    if not me or me["counterpart_session_id"] is not None:
+        return None
+    if me["session_type"] == "START_HANDOVER":
+        want, lo, hi = "END_HANDOVER", f"- interval '{PAIR_BEFORE}'", f"+ interval '{PAIR_AFTER}'"
+    elif me["session_type"] == "END_HANDOVER":
+        want, lo, hi = "START_HANDOVER", f"- interval '{PAIR_AFTER}'", f"+ interval '{PAIR_BEFORE}'"
+    else:
+        return None     # a mid-shift check has no other half
+
+    # The intervals are module constants, not request data, so formatting them
+    # into the statement is safe; the values that come from a device are bound.
+    other = db.execute(text(f"""
+        SELECT session_id, session_ref, operator_id, counterpart_operator_id
+          FROM hoto_session
+         WHERE asset_id = :a AND session_type = :want
+           AND counterpart_session_id IS NULL
+           AND session_id <> :me
+           AND status <> 'CANCELLED'
+           AND captured_at BETWEEN CAST(:t AS timestamptz) {lo}
+                               AND CAST(:t AS timestamptz) {hi}
+         ORDER BY (operator_id IS NOT DISTINCT FROM CAST(:named AS bigint)
+                   AND CAST(:named AS bigint) IS NOT NULL) DESC,
+                  abs(extract(epoch FROM captured_at - CAST(:t AS timestamptz))),
+                  session_id
+         LIMIT 1
+         FOR UPDATE SKIP LOCKED
+    """), {"a": me["asset_id"], "want": want, "me": session_id,
+           "t": me["captured_at"], "named": me["counterpart_operator_id"]}).mappings().first()
+    if not other:
+        return None
+
+    db.execute(text("""
+        UPDATE hoto_session
+           SET counterpart_session_id = CASE session_id WHEN :a THEN :b ELSE :a END,
+               updated_by = :by, updated_at = now()
+         WHERE session_id IN (:a, :b)
+    """), {"a": session_id, "b": other["session_id"], "by": actor})
+
+    def disagree(named, actual) -> bool:
+        return named is not None and actual is not None and int(named) != int(actual)
+
+    names_disagree = (disagree(me["counterpart_operator_id"], other["operator_id"])
+                      or disagree(other["counterpart_operator_id"], me["operator_id"]))
+    if names_disagree:
+        lo_id, hi_id = sorted((session_id, other["session_id"]))
+        db.execute(text("""
+            INSERT INTO ops_exception
+                (kind, severity, shift_instance_id, asset_id, operator_id, detail,
+                 owner_role, status, raised_by, dedupe_key)
+            VALUES ('HOTO_COUNTERPART_MISMATCH', 'MEDIUM', :si, :a, :op, :d,
+                    'SUPERVISOR', 'OPEN', :by, :k)
+            ON CONFLICT DO NOTHING
+        """), {"si": me["shift_instance_id"], "a": me["asset_id"],
+               "op": me["operator_id"],
+               "d": (f"{me['session_ref'] or f'HOTO-{session_id:07d}'} and "
+                     f"{other['session_ref']} are the two halves of one handover, "
+                     f"but they do not agree on who was on the other side. "
+                     f"One of them names the wrong person."),
+               "by": actor, "k": f"pair:{lo_id}:{hi_id}"})
+        logger.warning("HOTO pair %s/%s names disagree", session_id, other["session_id"])
+
+    return {"session_id": other["session_id"], "session_ref": other["session_ref"],
+            "names_disagree": names_disagree}

@@ -11,6 +11,7 @@
 
 import { create } from 'zustand';
 import * as Location from 'expo-location';
+import * as FileSystem from 'expo-file-system';
 import { positionNow } from '../core/location/positionNow';
 import type { Store } from '@/core/capture/store';
 import type { CachedAsset, CachedOperator, ResolvedTemplate } from '@/core/capture/masters';
@@ -26,6 +27,12 @@ interface CaptureState {
   uuid: string | null;
   asset: CachedAsset | null;
   operator: CachedOperator | null;
+  /** The other side of the handover, when somebody was named. */
+  counterpart: CachedOperator | null;
+  /** The operator said nobody was on the other side. */
+  counterpartAbsent: boolean;
+  /** Somebody other than the operator holding the tablet; null when it is the operator. */
+  recorder: CachedOperator | null;
   template: ResolvedTemplate | null;
   row: SessionRow | null;
   answers: Map<number, RawResponse>;
@@ -40,6 +47,10 @@ interface CaptureState {
   begin: (asset: CachedAsset, type: SessionType, uuid: string) => Promise<boolean>;
   resume: (uuid: string) => Promise<boolean>;
   identify: (op: CachedOperator, how: IdentificationMethod) => Promise<void>;
+  /** `null, true` is "nobody"; `null, false` clears the answer so it is asked again. */
+  setCounterpart: (op: CachedOperator | null, absent?: boolean) => Promise<void>;
+  /** `null` means the operator is filling it in themself. */
+  setRecorder: (op: CachedOperator | null) => Promise<void>;
   setAnswer: (item: ChecklistItem, raw: RawResponse) => Promise<void>;
   /** Answer every routine check at once. Returns how many it filled. */
   answerRoutineChecks: () => Promise<number>;
@@ -49,6 +60,21 @@ interface CaptureState {
   discard: () => void;
 }
 
+/** The other side and the tablet-holder, read back from a stored draft. */
+async function peopleOf(store: Store, row: SessionRow): Promise<{
+  counterpart: CachedOperator | null; counterpartAbsent: boolean; recorder: CachedOperator | null;
+}> {
+  return {
+    counterpart: row.counterpart_operator_id
+      ? await masters.operator(store, row.counterpart_operator_id) : null,
+    counterpartAbsent: row.counterpart_absent === 1,
+    // Only somebody OTHER than the operator is a recorder worth showing. On a
+    // draft it is never the operator -- that is written at confirm.
+    recorder: row.recorded_by_operator_id && row.recorded_by_operator_id !== row.operator_id
+      ? await masters.operator(store, row.recorded_by_operator_id) : null,
+  };
+}
+
 const need = (s: Store | null): Store => {
   if (!s) throw new Error('the database has not been opened yet');
   return s;
@@ -56,6 +82,7 @@ const need = (s: Store | null): Store => {
 
 export const useCapture = create<CaptureState>()((set, get) => ({
   store: null, uuid: null, asset: null, operator: null, template: null,
+  counterpart: null, counterpartAbsent: false, recorder: null,
   row: null, answers: new Map(), advisories: [], verdict: null, blockers: [],
   bulkAnswered: false,
   busy: false,
@@ -81,6 +108,7 @@ export const useCapture = create<CaptureState>()((set, get) => ({
           remark: r.remark,
         }])),
         operator: row.operator_id ? await masters.operator(store, row.operator_id) : null,
+        ...(await peopleOf(store, row)),
         advisories: session.advisoriesFor(null, asset, new Date(), age),
         verdict: null, blockers: [],
       });
@@ -101,6 +129,7 @@ export const useCapture = create<CaptureState>()((set, get) => ({
     set({
       uuid, row, asset, template,
       operator: row.operator_id ? await masters.operator(store, row.operator_id) : null,
+      ...(await peopleOf(store, row)),
       answers: new Map(existing.map((r) => [r.item_id, {
         itemId: r.item_id, answer: r.answer, numericValue: r.numeric_value, remark: r.remark,
       }])),
@@ -112,13 +141,41 @@ export const useCapture = create<CaptureState>()((set, get) => ({
   identify: async (op, how) => {
     const { store, uuid, asset } = get();
     if (!uuid || !asset) return;
+    // A changed operator takes the previous one's photograph off the record
+    // (session.identify). The file goes too, so a picture of somebody who is
+    // no longer on this handover is not left lying in the tablet's storage.
+    const before = await need(store).getAllAsync<{ photo_uuid: string; local_path: string }>(
+      `SELECT photo_uuid, local_path FROM photo WHERE session_uuid = ? AND kind = 'OPERATOR'`,
+      [uuid]);
     const advisories = await session.identify(need(store), uuid, op, how, asset);
+    for (const p of before) {
+      const still = await need(store).getFirstAsync<{ n: number }>(
+        `SELECT count(*) AS n FROM photo WHERE photo_uuid = ?`, [p.photo_uuid]);
+      if (!still?.n) {
+        try { await FileSystem.deleteAsync(p.local_path, { idempotent: true }); } catch { /* best effort */ }
+      }
+    }
     const age = await masters.cacheAgeHours(need(store));
     set({
       operator: op,
       advisories: [...advisories, ...session.advisoriesFor(null, asset, new Date(), age)],
       row: await session.byUuid(need(store), uuid),
     });
+  },
+
+  setCounterpart: async (op, absent = false) => {
+    const { store, uuid } = get();
+    if (!uuid) return;
+    await session.setCounterpart(need(store), uuid, op, absent);
+    set({ counterpart: op, counterpartAbsent: absent,
+          row: await session.byUuid(need(store), uuid) });
+  },
+
+  setRecorder: async (op) => {
+    const { store, uuid } = get();
+    if (!uuid) return;
+    await session.setRecorder(need(store), uuid, op);
+    set({ recorder: op, row: await session.byUuid(need(store), uuid) });
   },
 
   /**
@@ -229,6 +286,7 @@ export const useCapture = create<CaptureState>()((set, get) => ({
   /** Leaves the draft in the database on purpose. Walking away is not discarding. */
   discard: () => set({
     uuid: null, asset: null, operator: null, template: null, row: null,
+    counterpart: null, counterpartAbsent: false, recorder: null,
     answers: new Map(), advisories: [], verdict: null, blockers: [],
     bulkAnswered: false,
   }),

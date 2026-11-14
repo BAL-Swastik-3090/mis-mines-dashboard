@@ -314,6 +314,8 @@ describe('confirming', () => {
     await session.startDraft({ store, asset: a, sessionType: 'START_HANDOVER', clientUuid: uuid });
     const op = await masters.operatorByEmpId(store, '4101');
     await session.identify(store, uuid, op!, 'PIN', a);
+    const handedBy = await masters.operatorByEmpId(store, '4102');
+    await session.setCounterpart(store, uuid, handedBy!);
     await session.setReadings(store, uuid, { meterReading: 7700 });
     return { asset: a, list: await items() };
   };
@@ -430,6 +432,114 @@ describe('confirming', () => {
   });
 });
 
+describe('everyone in the handover', () => {
+  // The form asked for one person and the record has three. These are the
+  // rules that keep them apart -- see migration 115 on the server.
+  const draft = async (key: string, type: 'START_HANDOVER' | 'END_HANDOVER' | 'MID_SHIFT') => {
+    const uuid = uu(key);
+    const a = await MAN11();
+    await session.startDraft({ store, asset: a, sessionType: type, clientUuid: uuid });
+    const ramesh = await masters.operatorByEmpId(store, '4101');
+    const sunil = await masters.operatorByEmpId(store, '4102');
+    await session.identify(store, uuid, ramesh!, 'PIN', a);
+    await session.setReadings(store, uuid, { meterReading: 7700 });
+    const list = await items();
+    await answerAllClean(key, list);
+    return { uuid, asset: a, list, ramesh: ramesh!, sunil: sunil! };
+  };
+
+  it('refuses a takeover that does not say who handed it over', async () => {
+    const { uuid, asset, list } = await draft('u1', 'START_HANDOVER');
+    const out = await session.confirm({ store, uuid, items: list, asset, confirmedBy: '4101' });
+    expect(out.queued).toBe(false);
+    expect(out.problems).toContain('Say who handed the machine over, or that nobody did');
+  });
+
+  it('asks a handover the other way round', async () => {
+    const { uuid, asset, list } = await draft('u1', 'END_HANDOVER');
+    const out = await session.confirm({ store, uuid, items: list, asset, confirmedBy: '4101' });
+    expect(out.problems).toContain('Say who is taking the machine over, or that nobody is');
+  });
+
+  it('accepts "nobody" as an answer, and keeps it distinct from not asked', async () => {
+    const { uuid, asset, list } = await draft('u1', 'START_HANDOVER');
+    await session.setCounterpart(store, uuid, null, true);
+    const out = await session.confirm({ store, uuid, items: list, asset, confirmedBy: '4101' });
+    expect(out.queued).toBe(true);
+    const p = await session.payloadFor(store, uuid);
+    expect(p).toMatchObject({ counterpart_operator_id: null, counterpart_absent: true });
+  });
+
+  it('will not record somebody as both named and absent', async () => {
+    const { uuid, sunil } = await draft('u1', 'START_HANDOVER');
+    await expect(session.setCounterpart(store, uuid, sunil, true)).rejects.toThrow();
+  });
+
+  it('does not ask a mid-shift check about another side, and never sends one', async () => {
+    const { uuid, asset, list, sunil } = await draft('u1', 'MID_SHIFT');
+    // Even if one somehow got stored, it must not reach the server, which
+    // refuses a mid-shift check that names a second party.
+    await session.setCounterpart(store, uuid, sunil);
+    const out = await session.confirm({ store, uuid, items: list, asset, confirmedBy: '4101' });
+    expect(out.queued).toBe(true);
+    const p = await session.payloadFor(store, uuid);
+    expect(p).toMatchObject({ counterpart_operator_id: null, counterpart_absent: false });
+  });
+
+  it('records the operator as having filled it in, when nobody else was named', async () => {
+    const { uuid, asset, list, sunil } = await draft('u1', 'START_HANDOVER');
+    await session.setCounterpart(store, uuid, sunil);
+    await session.confirm({ store, uuid, items: list, asset, confirmedBy: '4101' });
+    const p = await session.payloadFor(store, uuid);
+    expect(p).toMatchObject({
+      operator_id: 7, counterpart_operator_id: 8, counterpart_emp_id: '4102',
+      recorded_by_operator_id: 7, recorded_by_emp_id: '4101',
+    });
+  });
+
+  it('records somebody else who held the tablet', async () => {
+    const { uuid, asset, list, sunil } = await draft('u1', 'START_HANDOVER');
+    await session.setCounterpart(store, uuid, null, true);
+    await session.setRecorder(store, uuid, sunil);
+    await session.confirm({ store, uuid, items: list, asset, confirmedBy: '4101' });
+    const p = await session.payloadFor(store, uuid);
+    expect(p).toMatchObject({ operator_id: 7, recorded_by_operator_id: 8,
+                              recorded_by_emp_id: '4102' });
+  });
+
+  it('names whoever the operator finally is, not whoever was picked first', async () => {
+    const { uuid, asset, list, sunil } = await draft('u1', 'START_HANDOVER');
+    await session.setCounterpart(store, uuid, null, true);
+    await session.identify(store, uuid, sunil, 'PIN', asset);   // changed their mind
+    await session.confirm({ store, uuid, items: list, asset, confirmedBy: '4102' });
+    const p = await session.payloadFor(store, uuid);
+    expect(p).toMatchObject({ operator_id: 8, recorded_by_operator_id: 8 });
+  });
+
+  const operatorPhotos = async (uuid: string) =>
+    (await store.getFirstAsync<{ n: number }>(
+      `SELECT count(*) AS n FROM photo WHERE session_uuid = ? AND kind = 'OPERATOR'`,
+      [uuid]))?.n;
+  const photograph = (uuid: string) => store.runAsync(`INSERT INTO photo
+        (photo_uuid, session_uuid, item_id, local_path, bytes, sha256, captured_at, kind)
+       VALUES ('op1', ?, NULL, '/tmp/ramesh.jpg', 1, 'x', '2026-11-09T10:00:00Z', 'OPERATOR')`,
+    [uuid]);
+
+  it('removes the photograph of the previous operator when the operator is changed', async () => {
+    const { uuid, asset, sunil } = await draft('u1', 'START_HANDOVER');
+    await photograph(uuid);
+    await session.identify(store, uuid, sunil, 'PIN', asset);
+    expect(await operatorPhotos(uuid)).toBe(0);
+  });
+
+  it('keeps the photograph when the same operator is picked again', async () => {
+    const { uuid, asset, ramesh } = await draft('u1', 'START_HANDOVER');
+    await photograph(uuid);
+    await session.identify(store, uuid, ramesh, 'PIN', asset);
+    expect(await operatorPhotos(uuid)).toBe(1);
+  });
+});
+
 describe('what the tablet is holding', () => {
   it('offers to resume an unfinished walk-round', async () => {
     const a = await MAN11();
@@ -457,6 +567,7 @@ describe('the payload the server will receive', () => {
     await session.startDraft({ store, asset: a, sessionType: 'START_HANDOVER', clientUuid: uu('u1') });
     const op = await masters.operatorByEmpId(store, '4101');
     await session.identify(store, uu('u1'), op!, 'PIN', a);
+    await session.setCounterpart(store, uu('u1'), null, true);
     await session.setReadings(store, uu('u1'), { meterReading: 7700, fuelLevel: 60 });
     await session.setPosition(store, uu('u1'), { lat: 21.0, lon: 85.8, accuracyM: 8, status: 'OK' });
     const list = await items();

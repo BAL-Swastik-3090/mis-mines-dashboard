@@ -19,11 +19,15 @@ import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCapture } from '@/ui/useCapture';
 import { shiftAt, type ResolvedShift } from '@/core/capture/shifts';
+import { counterpartQuestion } from '@/core/capture/session';
 
 export default function Confirm() {
   const router = useRouter();
   const asset = useCapture((s) => s.asset);
   const operator = useCapture((s) => s.operator);
+  const counterpart = useCapture((s) => s.counterpart);
+  const counterpartAbsent = useCapture((s) => s.counterpartAbsent);
+  const recorder = useCapture((s) => s.recorder);
   const row = useCapture((s) => s.row);
   const verdict = useCapture((s) => s.verdict);
   const blockers = useCapture((s) => s.blockers);
@@ -70,7 +74,8 @@ export default function Confirm() {
             {held ? 'Recorded — the machine is held' : 'Recorded'}
           </Text>
           <Text style={styles.doneNote}>
-            {asset.fleet_code}, signed by {operator?.name ?? 'the operator'}.
+            {asset.fleet_code}, signed by {operator?.name ?? 'the operator'}
+            {recorder ? `, filled in by ${recorder.name}` : ''}.
           </Text>
 
           {/* THE HONEST SENTENCE, as a labelled fact rather than a paragraph.
@@ -118,10 +123,29 @@ export default function Confirm() {
           {shift ? `shift ${shift.code} · ${shift.productionDay}`
                  : 'shift not known on this device — the office will set it'}
         </Text>
-        <Text style={styles.meta}>
-          {operator ? `${operator.name} (${operator.emp_id ?? 'no number'})`
-                    : 'nobody identified'}
-        </Text>
+      </View>
+
+      {/* ── WHO IS ON THIS RECORD ──────────────────────────────────────────
+          Three people, not one. The person signing reads every name they are
+          putting on the record before they put their own to it -- this was a
+          single line that named the operator and implied the rest. */}
+      <View style={styles.people} testID="people">
+        <Person role={row.session_type === 'START_HANDOVER' ? 'Taking over'
+                      : row.session_type === 'END_HANDOVER' ? 'Handing over' : 'Operator'}
+                name={operator?.name} emp={operator?.emp_id} />
+        {counterpartQuestion(row.session_type) && (
+          <Person role={counterpartQuestion(row.session_type)!.label}
+                  name={counterpart?.name ?? (counterpartAbsent ? 'Nobody' : undefined)}
+                  emp={counterpart?.emp_id}
+                  note={counterpartAbsent
+                    ? (row.session_type === 'START_HANDOVER' ? 'the machine was parked'
+                                                             : 'the machine is being parked')
+                    : undefined} />
+        )}
+        <Person role="Filled in by"
+                name={recorder?.name ?? operator?.name}
+                emp={recorder?.emp_id ?? operator?.emp_id}
+                note={recorder ? undefined : 'the operator themself'} last />
       </View>
 
       {verdict?.isBlocked && (
@@ -194,7 +218,36 @@ export default function Confirm() {
   );
 }
 
+/** One labelled name. Missing is said, never left blank. */
+function Person({ role, name, emp, note, last }: {
+  role: string; name?: string | null; emp?: string | null; note?: string; last?: boolean;
+}) {
+  return (
+    <View style={[styles.person, !last && styles.personRule]}>
+      <Text style={styles.personRole}>{role}</Text>
+      <View style={styles.personWho}>
+        <Text style={[styles.personName, !name && styles.personMissing]}>
+          {name ?? 'Not answered'}
+        </Text>
+        {(emp || note) ? (
+          <Text style={styles.personEmp}>{[emp, note].filter(Boolean).join(' · ')}</Text>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
+  people: { backgroundColor: '#fff', borderRadius: 10, paddingHorizontal: 14,
+            borderWidth: 1, borderColor: '#d8dee6' },
+  person: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
+  personRule: { borderBottomWidth: 1, borderBottomColor: '#eef1f5' },
+  personRole: { width: 128, fontSize: 13, fontWeight: '700', color: '#5b6a7a',
+                textTransform: 'uppercase', letterSpacing: 0.4 },
+  personWho: { flex: 1, gap: 1 },
+  personName: { fontSize: 17, fontWeight: '700', color: '#16202b' },
+  personMissing: { color: '#a35f00' },
+  personEmp: { fontSize: 13, color: '#5b6a7a' },
   reg: { fontSize: 15, fontWeight: '700', color: '#16202b', textAlign: 'center',
          letterSpacing: 0.4 },
   /* ── READABLE ON A TABLET ─────────────────────────────────────────────

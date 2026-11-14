@@ -48,6 +48,13 @@ def search(db: Session, *,
                a.asset_id, a.fleet_code, at.name AS asset_type_name,
                o.operator_id, COALESCE(p.display_name, p.legal_name) AS operator_name,
                s.operator_emp_id,
+               -- Migration 115. NULL and not absent means NOT RECORDED, which
+               -- is every handover filed before it -- never shown as "nobody".
+               s.counterpart_operator_id, s.counterpart_emp_id, s.counterpart_absent,
+               COALESCE(cp.display_name, cp.legal_name) AS counterpart_name,
+               s.recorded_by_operator_id, s.recorded_by_emp_id,
+               COALESCE(rp.display_name, rp.legal_name) AS recorded_by_name,
+               s.counterpart_session_id,
                l.name AS location_name,
                d.device_code, d.profile AS device_profile,
                -- Resolved at capture and stored, so this is what the handover
@@ -71,6 +78,10 @@ def search(db: Session, *,
           JOIN asset_type at ON at.asset_type_id = a.asset_type_id
           LEFT JOIN operator o ON o.operator_id = s.operator_id
           LEFT JOIN party p    ON p.party_id = o.party_id
+          LEFT JOIN operator co ON co.operator_id = s.counterpart_operator_id
+          LEFT JOIN party cp    ON cp.party_id = co.party_id
+          LEFT JOIN operator ro ON ro.operator_id = s.recorded_by_operator_id
+          LEFT JOIN party rp    ON rp.party_id = ro.party_id
           LEFT JOIN location l ON l.location_id = s.location_id
           LEFT JOIN hoto_device d ON d.device_id = s.device_id
          WHERE (CAST(:frm AS date) IS NULL OR s.captured_at >= CAST(:frm AS date))
@@ -124,7 +135,12 @@ def detail(db: Session, session_id: int) -> dict[str, Any] | None:
                l.name AS location_name, d.device_code, d.profile AS device_profile,
                t.name AS template_name,
                cs.session_ref AS counterpart_ref, cs.session_type AS counterpart_type,
-               cs.status AS counterpart_status
+               cs.status AS counterpart_status, cs.captured_at AS counterpart_captured_at,
+               cs.operator_id AS counterpart_session_operator_id,
+               cs.counterpart_operator_id AS counterpart_session_named_id,
+               COALESCE(csp.display_name, csp.legal_name) AS counterpart_session_operator_name,
+               COALESCE(cp.display_name, cp.legal_name) AS counterpart_name,
+               COALESCE(rp.display_name, rp.legal_name) AS recorded_by_name
           FROM hoto_session s
           JOIN asset a       ON a.asset_id = s.asset_id
           JOIN asset_type at ON at.asset_type_id = a.asset_type_id
@@ -134,6 +150,12 @@ def detail(db: Session, session_id: int) -> dict[str, Any] | None:
           LEFT JOIN hoto_device d ON d.device_id = s.device_id
           LEFT JOIN hoto_checklist_template t ON t.template_id = s.template_id
           LEFT JOIN hoto_session cs ON cs.session_id = s.counterpart_session_id
+          LEFT JOIN operator cso ON cso.operator_id = cs.operator_id
+          LEFT JOIN party csp    ON csp.party_id = cso.party_id
+          LEFT JOIN operator co  ON co.operator_id = s.counterpart_operator_id
+          LEFT JOIN party cp     ON cp.party_id = co.party_id
+          LEFT JOIN operator ro  ON ro.operator_id = s.recorded_by_operator_id
+          LEFT JOIN party rp     ON rp.party_id = ro.party_id
          WHERE s.session_id = :s
     """), {"s": session_id}).mappings().first()
     if not head:

@@ -130,6 +130,8 @@ describeLive('the device against a live server', () => {
     const op = bundle.operators[0];
     const cached = await masters.operator(store, op!.operator_id);
     await session.identify(store, uuid, cached!, 'EMPNO', asset!);
+    // Every handover says who was on the other side, or that nobody was.
+    await session.setCounterpart(store, uuid, null, true);
 
     const template = await masters.resolveTemplate(store, asset!.asset_type_id);
     const items: ChecklistItem[] = template?.items ?? [];
@@ -143,7 +145,9 @@ describeLive('the device against a live server', () => {
       } else if (item.responseType === 'LEVEL') {
         await session.answer(store, uuid, item, { itemId: item.itemId, answer: 'NORMAL' });
       } else if (item.responseType === 'YES_NO') {
-        await session.answer(store, uuid, item, { itemId: item.itemId, answer: 'YES' });
+        // Whichever answer is NOT the finding: 'YES' to "Abnormal sound" is a fault.
+        await session.answer(store, uuid, item, { itemId: item.itemId,
+          answer: (item.adverseAnswer ?? 'YES') === 'YES' ? 'NO' : 'YES' });
       } else {
         await session.answer(store, uuid, item, { itemId: item.itemId, answer: 'OK' });
       }
@@ -208,6 +212,8 @@ describeLive('the device against a live server', () => {
       store, asset: asset!, sessionType: 'START_HANDOVER', clientUuid: uuid });
     const cached = await masters.operator(store, bundle.operators[0]!.operator_id);
     await session.identify(store, uuid, cached!, 'EMPNO', asset!);
+    // Every handover says who was on the other side, or that nobody was.
+    await session.setCounterpart(store, uuid, null, true);
 
     for (const item of items) {
       if (item.itemId === critical.itemId) continue;
@@ -217,7 +223,9 @@ describeLive('the device against a live server', () => {
       } else if (item.responseType === 'LEVEL') {
         await session.answer(store, uuid, item, { itemId: item.itemId, answer: 'NORMAL' });
       } else if (item.responseType === 'YES_NO') {
-        await session.answer(store, uuid, item, { itemId: item.itemId, answer: 'YES' });
+        // Whichever answer is NOT the finding: 'YES' to "Abnormal sound" is a fault.
+        await session.answer(store, uuid, item, { itemId: item.itemId,
+          answer: (item.adverseAnswer ?? 'YES') === 'YES' ? 'NO' : 'YES' });
       } else {
         await session.answer(store, uuid, item, { itemId: item.itemId, answer: 'OK' });
       }

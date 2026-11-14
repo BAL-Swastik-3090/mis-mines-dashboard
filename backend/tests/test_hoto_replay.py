@@ -132,6 +132,25 @@ added = copy.deepcopy(BASE)
 added["responses"].append({"item_id": 4, "answer": "OK"})
 check("an answer added", fingerprint(added) == A, False)
 
+print("\nthe people in it (migration 115)")
+# Pinned, not recomputed. This is the fingerprint BASE had before the fields
+# below existed. If it moves, every handover filed since migration 114 is
+# refused as altered on its next honest retry, and the tablet can never
+# clear it.
+check("a payload without them hashes exactly as it did before they existed",
+      A, "6d68e1a4a2de63bfcf6cd71ddf393c5b4843fbf80d6b0d688e13ac979ce1ee2d")
+check("stating nobody was absent is the same as not saying",
+      fingerprint(variant(counterpart_absent=False)) == A, True)
+check("the other side named", fingerprint(variant(counterpart_operator_id=12)) == A, False)
+check("the other side stated absent", fingerprint(variant(counterpart_absent=True)) == A, False)
+check("somebody else filled it in",
+      fingerprint(variant(recorded_by_operator_id=40)) == A, False)
+named = fingerprint(variant(counterpart_operator_id=12))
+check("a different person named on the other side",
+      fingerprint(variant(counterpart_operator_id=13)) == named, False)
+check("the same person named, as a string",
+      fingerprint(variant(counterpart_operator_id="12")) == named, True)
+
 print("\nthe hash is a hash")
 check("it is 64 hex characters", len(A) == 64 and all(c in "0123456789abcdef" for c in A), True)
 check("it is stable across runs",

@@ -65,6 +65,15 @@ export interface SessionRow {
   gps_status: GpsStatus | null;
   master_cache_age_hours: number | null;
   remarks: string | null;
+  // ── everyone in it (schema v8) ──
+  /** Who handed over (a takeover) or who took over (a handover). */
+  counterpart_operator_id: number | null;
+  counterpart_emp_id: string | null;
+  /** 1 when the operator said nobody was there -- first start, parked machine. */
+  counterpart_absent: number;
+  /** Who held the tablet. Set to the operator at confirm when nobody else was named. */
+  recorded_by_operator_id: number | null;
+  recorded_by_emp_id: string | null;
 }
 
 export interface ResponseRow {
@@ -186,12 +195,83 @@ export async function identify(
   store: Store, uuid: string, op: CachedOperator,
   method: IdentificationMethod, asset: CachedAsset, now = new Date(),
 ): Promise<Advisory[]> {
+  const before = await byUuid(store, uuid);
   await store.runAsync(
     `UPDATE session SET operator_id = ?, operator_emp_id = ?, identified_by = ?
       WHERE client_uuid = ?`,
     [op.operator_id, op.emp_id, method, uuid],
   );
+
+  // ── A PHOTOGRAPH OF SOMEBODY ELSE ─────────────────────────────────────────
+  // The operator photo is a record of WHO was standing at the machine. If the
+  // operator is changed after it was taken, it is a photograph of the wrong
+  // person attached to this one's name -- worse than no photo, because it
+  // looks like evidence. A draft's photos are held back from sync until the
+  // handover is confirmed (engine.ts), so this one has not left the tablet
+  // and removing it loses nothing that was ever filed.
+  if (before?.operator_id != null && before.operator_id !== op.operator_id) {
+    await store.runAsync(
+      `DELETE FROM photo WHERE session_uuid = ? AND kind = 'OPERATOR'
+         AND sync_state IN ('queued', 'rejected')`,
+      [uuid],
+    );
+  }
   return advisoriesFor(op, asset, now);
+}
+
+/**
+ * The other side of the handover: who handed it over, or who it is handed to.
+ *
+ * `op = null, absent = true` is an ANSWER -- "nobody; it was parked" -- and is
+ * recorded as one. `op = null, absent = false` clears the question so it is
+ * asked again. The two must never be confused: a register that showed an
+ * unasked question as "nobody was there" would be inventing a fact.
+ */
+export async function setCounterpart(
+  store: Store, uuid: string, op: CachedOperator | null, absent = false,
+): Promise<void> {
+  if (op && absent) throw new Error('the other side is either named or absent, not both');
+  await store.runAsync(
+    `UPDATE session SET counterpart_operator_id = ?, counterpart_emp_id = ?,
+                        counterpart_absent = ?
+      WHERE client_uuid = ?`,
+    [op?.operator_id ?? null, op?.emp_id ?? null, absent ? 1 : 0, uuid],
+  );
+}
+
+/**
+ * Who is holding the tablet, when it is not the operator.
+ *
+ * `null` means the operator is filling it in themself, which is resolved to
+ * their own name at confirm -- not stored now, because the operator may still
+ * be changed and the record must name whoever it ends up being.
+ */
+export async function setRecorder(
+  store: Store, uuid: string, op: CachedOperator | null,
+): Promise<void> {
+  await store.runAsync(
+    `UPDATE session SET recorded_by_operator_id = ?, recorded_by_emp_id = ?
+      WHERE client_uuid = ?`,
+    [op?.operator_id ?? null, op?.emp_id ?? null, uuid],
+  );
+}
+
+/** What the other-side question is called for this kind of session, or null. */
+export function counterpartQuestion(t: SessionType): {
+  label: string; nobody: string; missing: string;
+} | null {
+  switch (t) {
+    case 'START_HANDOVER':
+      return { label: 'Handed over by',
+               nobody: 'Nobody — the machine was parked',
+               missing: 'Say who handed the machine over, or that nobody did' };
+    case 'END_HANDOVER':
+      return { label: 'Handing over to',
+               nobody: 'Nobody — I am parking it',
+               missing: 'Say who is taking the machine over, or that nobody is' };
+    case 'MID_SHIFT':
+      return null;
+  }
 }
 
 /**
@@ -357,6 +437,10 @@ export async function review(
   // requires, not things the checklist does.
   const blockers: string[] = [];
   if (!session.operator_id) blockers.push('Nobody has been identified as the operator');
+  const q = counterpartQuestion(session.session_type);
+  if (q && session.counterpart_operator_id == null && !session.counterpart_absent) {
+    blockers.push(q.missing);
+  }
   if (!session.template_id) {
     blockers.push(`No checklist is published for ${asset.asset_type_name} on this tablet`);
   }
@@ -389,8 +473,16 @@ export async function confirm(args: {
 
   const status = verdict.isBlocked ? 'BLOCKED' : 'SUBMITTED';
   await store.runAsync(
+    // Nobody else named as holding the tablet means the operator did. Written
+    // now rather than when the operator was picked, so it is whoever the
+    // operator finally IS. SQLite evaluates every SET against the row as it
+    // stood, so the CASE sees the recorder before this statement.
     `UPDATE session SET status = ?, blocked_reason = ?, confirmed_by = ?,
-                        confirmed_at = ?, sync_state = 'queued'
+                        confirmed_at = ?, sync_state = 'queued',
+                        recorded_by_emp_id = CASE WHEN recorded_by_operator_id IS NULL
+                                                  THEN operator_emp_id
+                                                  ELSE recorded_by_emp_id END,
+                        recorded_by_operator_id = COALESCE(recorded_by_operator_id, operator_id)
       WHERE client_uuid = ? AND sync_state = 'draft'`,
     [status, verdict.blockedReason, confirmedBy, now.toISOString(), uuid],
   );
@@ -475,6 +567,13 @@ export async function payloadFor(store: Store, uuid: string): Promise<Record<str
     gps_status: s.gps_status,
     master_cache_age_hours: s.master_cache_age_hours,
     remarks: s.remarks,
+    // Everyone in it (migration 115). A mid-shift check has no other side,
+    // and the server refuses one that claims to.
+    counterpart_operator_id: s.session_type === 'MID_SHIFT' ? null : s.counterpart_operator_id,
+    counterpart_emp_id: s.session_type === 'MID_SHIFT' ? null : s.counterpart_emp_id,
+    counterpart_absent: s.session_type !== 'MID_SHIFT' && s.counterpart_absent === 1,
+    recorded_by_operator_id: s.recorded_by_operator_id,
+    recorded_by_emp_id: s.recorded_by_emp_id,
     responses: rows.map((r) => ({
       item_id: r.item_id,
       answer: r.answer,
