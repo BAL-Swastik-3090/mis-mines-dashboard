@@ -136,19 +136,34 @@ order and failed outright, so no published checklist could be edited at all.
 
 ---
 
-## Part 3 · Tablet app — 21 open items
+## Part 3 · Tablet app — 7 of 21 done
 
 Full detail in `docs/hoto-app-issues.md`. Summary:
 
 | Group | Count | Headline |
 |---|---|---|
-| **A · Who is who** | 4 | One name is written as the outgoing operator, the incoming operator *and* the confirmer. Needs a migration. |
+| **A · Who is who** | 4 | ✅ **Fixed 14 Nov** — three people on every handover, and the two halves paired (migration 115) |
 | **B · Mandatory fields** | 5 | Nothing is marked required; "All OK" fills everything at once instead of stepping through |
 | **C · Untrue messages** | 3 | "Everything has reached the office" shown in green above "6 photos waiting" |
 | **D · Hide before production** | 3 | Server address editable on screen; internal sync state shown |
 | **E · Not enterprise-grade** | 7 | No animation anywhere, no flow progress, Done button clips its own label |
 
 ---
+
+## Found on 14 November, while fixing A
+
+- **A test handover locked a real machine and the cleanup left it locked.**
+  The live contract test files a BLOCKED handover; that raises a critical
+  defect, which locks the machine and closes whatever window was open on it.
+  Removing the test handover did not undo the lock, so the drill
+  ATLAS-COPCO-DRILL-ICM-260-3 sat LOCKED over its genuine RESTRICTED window
+  from 12 Nov. Put back as it was, and the cleanup script now undoes machine
+  state too. Worth knowing for production: deleting a handover never releases
+  what it locked.
+- **The live contract fixtures answered every yes/no check YES** — since the
+  `adverse_answer` fix that is correctly a fault ("Abnormal sound"), so all
+  eight live tests had been failing. Fixed; 12 of 12 pass against the running
+  server.
 
 ## What I would do, in order
 
@@ -157,7 +172,7 @@ Full detail in `docs/hoto-app-issues.md`. Summary:
    and the tablet reports success.
 2. **P3** — scope the operator query. Nearly free; the scope is already in
    hand and simply not passed.
-3. **A1–A4** — the person model on the tablet. Needs a migration, so it gets
+3. ✅ **A1–A4** — done 14 Nov. Was: the person model on the tablet. Needs a migration, so it gets
    harder every day, and until it lands every handover records one name where
    there should be three.
 4. **P1** — store and evaluate the version actually answered.

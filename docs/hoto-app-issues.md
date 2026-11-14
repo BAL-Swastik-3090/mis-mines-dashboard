@@ -20,15 +20,24 @@ and the record has **three** people in it.
 | **A3** | **The two sides are never linked.** `counterpart_session_id` exists on the table and is never set, so nothing can ask "did the outgoing and incoming operator say the same thing about this machine?" — which is the point of a handover. | `hoto_session.counterpart_session_id` |
 | **A4** | **No record of who filled it in.** If a supervisor fills in a handover for an operator who cannot read, nothing says so. | — |
 
-**To decide before fixing:** three fields or two? My suggestion is *handing
-over*, *taking over*, and *filled in by* (defaulting to the signed-in device
-holder, so it costs nothing when they are the same person).
+**✅ A1–A4 FIXED, 14 Nov** (commit `e3e4f77`, migration 115). Three people:
+the operator; the other side — named, or "nobody, it was parked", kept
+distinct from *not recorded* on older handovers; and *filled in by*,
+defaulting to the operator. The server pairs a takeover with the handover it
+follows and raises an exception when the two halves name different people.
+The dashboard shows all three names and the other half. The identify screen's
+"Not him — change" link, which did nothing, now works, and changing the
+operator removes the previous operator's photo.
+
+Still open from this group: the dashboard does not yet compare the two
+halves' *answers* (did both say the brakes were fine?). That is D6, pairing,
+in the dashboard gap list.
 
 ## B · Mandatory fields and the "All OK" flow
 
 | # | Issue | Where |
 |---|---|---|
-| **B1** | **Nothing on the form is marked required.** Required-ness only appears at the very end, as a dim button. An operator cannot see what is compulsory while filling it in. | all capture screens |
+| **B1** | **Nothing on the form is marked required.** Required-ness only appears at the very end, as a dim button. An operator cannot see what is compulsory while filling it in. ◐ *The identify screen now marks each step Required until answered; readings and checklist still do not.* | all capture screens |
 | **B2** | **"N things left" does not say which, and does not take you there.** The confirm screen lists them in a box below the fold; the button itself just counts. | `confirm.tsx` → `stopping` |
 | **B3** | **"All OK" fills everything at once.** You asked for this to step through instead — ask, answer, next — so the operator passes each check deliberately rather than approving a screen they have not read. | `src/core/routine.ts` → `ROUTINE_PASS` |
 | **B4** | **Yes/no checks are left out of "All OK" and nobody is told why.** Correctly so — the pass answer depends on the wording — but the operator just finds them still unanswered with no explanation. | `routine.ts` (no `YES_NO` entry) |
