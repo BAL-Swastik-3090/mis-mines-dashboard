@@ -1,4 +1,4 @@
--- 109: what the mine has decided to DO about each loss head.
+-- 112: what the mine has decided to DO about each loss head.
 --
 -- The Major Controllable Loss Summary names the heads that cost the most and
 -- stops there. The mine's own review carries a second panel beside it -- the
@@ -20,7 +20,7 @@
 --
 -- ── THE TEXT BELOW IS A DRAFT, NOT A POLICY ───────────────────────────────
 -- These sentences were drafted for the mine to correct, exactly as the KAM
--- names in migration 101 were seeded for the mine to correct. They are dated
+-- names in migration 104 were seeded for the mine to correct. They are dated
 -- 2026-10-01 so that editing November does not rewrite October, and they are
 -- written onto every existing row rather than the earliest, because the four
 -- heads re-decided on 2026-11-01 would otherwise resolve to no action at all
