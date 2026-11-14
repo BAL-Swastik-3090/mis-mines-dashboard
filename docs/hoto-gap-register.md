@@ -136,7 +136,7 @@ order and failed outright, so no published checklist could be edited at all.
 
 ---
 
-## Part 3 · Tablet app — 14 of 21 done
+## Part 3 · Tablet app — 19 of 21 done
 
 Full detail in `docs/hoto-app-issues.md`. Summary:
 
@@ -146,7 +146,7 @@ Full detail in `docs/hoto-app-issues.md`. Summary:
 | **B · Mandatory fields** | 5 | ✅ **Fixed 14 Nov** — one check at a time, Required shown where asked, every thing left takes you to it |
 | **C · Untrue messages** | 3 | "Everything has reached the office" shown in green above "6 photos waiting" |
 | **D · Hide before production** | 3 | Server address editable on screen; internal sync state shown |
-| **E · Not enterprise-grade** | 7 | No animation anywhere, no flow progress, Done button clips its own label |
+| **E · Not enterprise-grade** | 7 | ✅ **Fixed 14 Nov** — motion, flow progress, urgent drafts first, grouped spacing, checklist hierarchy |
 
 ---
 
@@ -179,7 +179,7 @@ Full detail in `docs/hoto-app-issues.md`. Summary:
 5. ✅ **B1–B5** — done 14 Nov. Was: mandatory fields and sequential "All OK".
 6. **P2** — write down what a block means offline, and the mine's hold
    procedure. This is a decision to take with the mine, not code.
-7. **E1–E7** — the design pass, after the screens stop changing shape.
+7. ✅ **E1–E7** — done 14 Nov. Was: the design pass, after the screens stop changing shape.
 8. **D4, D6, C, D** — the remainder.
 
 **Awaiting your decision, blocking nothing:** whether to re-evaluate the 34

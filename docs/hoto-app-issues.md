@@ -1,7 +1,7 @@
 # HOTO tablet app — issue list
 
 **13 November 2026.** Open list, numbered so we can pick items off.
-**14 of 21 fixed** as of 14 Nov — marked ✅ (commits `4b79c71`, `e3e4f77`, `925aeae`). Each item says what is wrong and where, so we are not
+**19 of 21 fixed** as of 14 Nov — marked ✅ (commits `4b79c71`, `e3e4f77`, `925aeae`, `57b8186`). Left: **D1–D3**, hiding server details, agreed for when we go to production. Each item says what is wrong and where, so we are not
 working from screenshots when we come to fix it.
 
 Add to it freely — the numbering is stable, new items go on the end.
@@ -94,11 +94,29 @@ something, and change them when we go to production.
 |---|---|---|
 | **E1** ✅ | **The Done screen is mostly empty.** Content sits dead-centre in a full screen of white with nothing anchoring it. | `confirm.tsx` → `styles.centre` |
 | **E2** ✅ | **The Done button is tiny and its label is clipped.** `styles.primary` sets `minHeight: 72` but no width, and inside a centred container it shrinks to the text — so "Done" overflows its own button. A real bug, not just taste. | `confirm.tsx` → `styles.primary` + `styles.centre` |
-| **E3** | **No animation anywhere.** No press feedback, no screen transition, no progress on save, nothing on success. Every state change is instant and silent, which is what makes it feel unfinished. | whole app |
-| **E4** | **No progress through the capture flow.** Machine → operator → readings → checklist → confirm, with nothing saying where you are or how much is left. | `app/capture/*` |
-| **E5** | **The unfinished list is undifferentiated.** Six near-identical cards, most saying "nobody identified yet", in no order of urgency. | `app/index.tsx` |
-| **E6** | **Large empty gaps between elements** across the capture screens; spacing is uniform rather than grouped, so nothing reads as belonging together. | `app/capture/*` |
-| **E7** | **No visual hierarchy on the checklist itself** — the same fault just fixed on the dashboard: a pass and a fault look alike. | `app/capture/checklist.tsx` |
+| **E3** ✅ | **No animation anywhere.** No press feedback, no screen transition, no progress on save, nothing on success. Every state change is instant and silent, which is what makes it feel unfinished. | whole app |
+| **E4** ✅ | **No progress through the capture flow.** Machine → operator → readings → checklist → confirm, with nothing saying where you are or how much is left. | `app/capture/*` |
+| **E5** ✅ | **The unfinished list is undifferentiated.** Six near-identical cards, most saying "nobody identified yet", in no order of urgency. | `app/index.tsx` |
+| **E6** ✅ | **Large empty gaps between elements** across the capture screens; spacing is uniform rather than grouped, so nothing reads as belonging together. | `app/capture/*` |
+| **E7** ✅ | **No visual hierarchy on the checklist itself** — the same fault just fixed on the dashboard: a pass and a fault look alike. | `app/capture/checklist.tsx` |
+
+**✅ E3–E7 FIXED, 14 Nov** (commit `57b8186`).
+
+- **E3** — buttons give under the finger; screens slide forward and back; the
+  one-at-a-time walk-round slides between checks; checklist cards fold and
+  unfold; the home list arrives in order; the confirm button shows it is
+  saving; the saved mark lands. Built on React Native's own `Animated`, so
+  nothing new goes into the build, and all of it is off when the device asks
+  for reduced motion.
+- **E4** — a strip at the top of every capture screen: Machine · People ·
+  Checks · Readings · Confirm, with what is done, where you are, what is left.
+- **E5** — unfinished handovers ordered by urgency (held machine, then any
+  fault, then newest), each showing type, person, progress, faults and age.
+  One with nobody identified resumes on the people screen.
+- **E6** — the machine picker is two labelled groups; each reading is a card.
+- **E7** — a check answered OK folds to one line with its answer; faults and
+  unanswered checks keep the room; each section says how far it has got.
+  Readings never fold, so a card cannot vanish under the finger mid-typing.
 
 ---
 
