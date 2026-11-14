@@ -34,6 +34,7 @@ import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCapture } from '@/ui/useCapture';
 import { PersonPicker } from '@/ui/PersonPicker';
+import { FlowProgress } from '@/ui/FlowProgress';
 import { counterpartQuestion } from '@/core/capture/session';
 import type { SessionType } from '@/core/enums';
 
@@ -100,6 +101,8 @@ export default function Identify() {
     : null;
 
   return (
+    <View style={styles.scroll}>
+    <FlowProgress at="people" />
     <ScrollView style={styles.scroll} contentContainerStyle={styles.screen}
                 keyboardShouldPersistTaps="handled">
       <View style={styles.machine}>
@@ -272,6 +275,7 @@ export default function Identify() {
         <Text style={styles.primaryText}>{missing ?? 'Start the walk-round'}</Text>
       </Pressable>
     </ScrollView>
+    </View>
   );
 }
 

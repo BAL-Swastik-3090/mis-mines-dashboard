@@ -14,12 +14,16 @@
  */
 
 import { useMemo, useState } from 'react';
-import { View, Text, Pressable, SectionList, StyleSheet } from 'react-native';
+import {
+  View, Text, Pressable, SectionList, StyleSheet, LayoutAnimation,
+} from 'react-native';
 import { useRouter } from 'expo-router';
 import { useCapture } from '@/ui/useCapture';
-import { ItemControl } from '@/ui/ItemControl';
-import { evaluateSession } from '@/core/evaluation';
-import type { ChecklistItem } from '@/core/evaluation';
+import { ItemControl, ANSWER_LABEL } from '@/ui/ItemControl';
+import { useReducedMotion } from '@/ui/motion';
+import { FlowProgress } from '@/ui/FlowProgress';
+import { evaluateOne, evaluateSession } from '@/core/evaluation';
+import type { ChecklistItem, RawResponse } from '@/core/evaluation';
 import { leftToAsk } from '@/core/stepping';
 import { plural } from '@/core/words';
 
@@ -39,6 +43,13 @@ export default function Checklist() {
   }, [template, answers]);
 
   const [footerHeight, setFooterHeight] = useState(110);
+  // Answered-OK checks the operator has opened again to change.
+  const [opened, setOpened] = useState<Set<number>>(new Set());
+  const reduce = useReducedMotion();
+  /** Cards folding and unfolding ease rather than jump. */
+  const animate = () => {
+    if (!reduce) LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+  };
 
   const sections = useMemo(
     () => (template?.sections ?? []).map((s) => ({ title: s.name, data: s.items })),
@@ -63,6 +74,7 @@ export default function Checklist() {
 
   return (
     <View style={styles.screen}>
+      <FlowProgress at="checks" />
       <View style={styles.bar}>
         <Text style={styles.barCode}>{asset.fleet_code}</Text>
         <Text style={styles.barCount}>
@@ -132,20 +144,64 @@ export default function Checklist() {
         contentContainerStyle={{ padding: 16, paddingBottom: footerHeight + 24,
                                  width: '100%', maxWidth: 820, alignSelf: 'center' }}
         stickySectionHeadersEnabled={false}
-        renderSectionHeader={({ section }) => (
-          <Text style={styles.section}>{section.title}</Text>
-        )}
-        renderItem={({ item }) => (
-          <ItemControl
-            markUnanswered
-            item={item}
-            value={answers.get(item.itemId)}
-            photoCount={answers.get(item.itemId)?.photoCount ?? 0}
-            onChange={(raw) => void setAnswer(item, raw)}
-            onAddPhoto={() => router.push({ pathname: '/capture/photo',
-                                            params: { itemId: String(item.itemId) } })}
-          />
-        )}
+        // ── HIERARCHY (E7) ───────────────────────────────────────────────
+        // A pass and a fault were the same size card. Now a check answered
+        // cleanly folds to one line with its answer, and what is left -- the
+        // faults and the unanswered -- keeps the room. Each section says how
+        // far it has got, so the operator knows where the work is without
+        // reading every card.
+        renderSectionHeader={({ section }) => {
+          const n = section.data.length;
+          const got = section.data.filter((i) => answered(answers.get(i.itemId))).length;
+          const bad = section.data.filter((i) => isFault(i, answers.get(i.itemId))).length;
+          return (
+            <View style={styles.sectionHead}>
+              <Text style={styles.section}>{section.title}</Text>
+              <Text style={[styles.sectionCount, got === n && styles.sectionDone,
+                            bad > 0 && styles.sectionBad]}>
+                {got === n ? '✓ ' : ''}{got} of {n}{bad > 0 ? ` · ${plural(bad, 'fault')}` : ''}
+              </Text>
+            </View>
+          );
+        }}
+        renderItem={({ item }) => {
+          const raw = answers.get(item.itemId);
+          if (foldable(item, raw) && !opened.has(item.itemId)) {
+            return (
+              <Pressable testID={`passed-${item.itemId}`}
+                         style={({ pressed }) => [styles.passed, pressed && styles.passedPressed]}
+                         onPress={() => {
+                           animate();
+                           setOpened(new Set(opened).add(item.itemId));
+                         }}>
+                <Text style={styles.passedTick}>✓</Text>
+                <Text style={styles.passedLabel} numberOfLines={2}>{item.label}</Text>
+                <Text style={styles.passedAnswer}>{answerText(item, raw)}</Text>
+              </Pressable>
+            );
+          }
+          return (
+            <ItemControl
+              markUnanswered
+              item={item}
+              value={raw}
+              photoCount={raw?.photoCount ?? 0}
+              onChange={(next) => {
+                // A clean answer folds the card away; one reopened to change
+                // folds again once it has its new answer.
+                if (foldable(item, next)) {
+                  animate();
+                  if (opened.has(item.itemId)) {
+                    const o = new Set(opened); o.delete(item.itemId); setOpened(o);
+                  }
+                }
+                void setAnswer(item, next);
+              }}
+              onAddPhoto={() => router.push({ pathname: '/capture/photo',
+                                              params: { itemId: String(item.itemId) } })}
+            />
+          );
+        }}
       />
 
       <View style={styles.footer}
@@ -161,7 +217,48 @@ export default function Checklist() {
   );
 }
 
+const answered = (r: RawResponse | undefined): boolean =>
+  r != null && (r.answer != null || r.numericValue != null);
+
+/** Answered, not a fault, and owing nothing: the kind of check that can fold away. */
+function isClean(item: ChecklistItem, r: RawResponse | undefined): boolean {
+  if (!answered(r)) return false;
+  const ev = evaluateOne(item, { ...r!, photoCount: r!.photoCount ?? 0 });
+  return !ev.isAdverse && ev.problems.length === 0;
+}
+
+/**
+ * Whether a check folds to one line once answered. Never a reading: it is
+ * typed digit by digit, and "10" out of range then "100" in range would fold
+ * the card away under the operator's finger before they typed "100.5".
+ */
+function foldable(item: ChecklistItem, r: RawResponse | undefined): boolean {
+  return item.responseType !== 'NUMERIC' && isClean(item, r);
+}
+
+function isFault(item: ChecklistItem, r: RawResponse | undefined): boolean {
+  return answered(r) && evaluateOne(item, { ...r!, photoCount: r!.photoCount ?? 0 }).isAdverse;
+}
+
+function answerText(item: ChecklistItem, r: RawResponse | undefined): string {
+  if (r?.numericValue != null) return `${r.numericValue}${item.unit ? ` ${item.unit}` : ''}`;
+  return r?.answer ? ANSWER_LABEL[r.answer] : '';
+}
+
 const styles = StyleSheet.create({
+  sectionHead: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between',
+                 marginTop: 14, marginBottom: 8, gap: 8 },
+  sectionCount: { fontSize: 13, fontWeight: '700', color: '#5b6a7a',
+                  fontVariant: ['tabular-nums'] },
+  sectionDone: { color: '#1e8449' },
+  sectionBad: { color: '#c0392b' },
+  passed: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 52,
+            paddingHorizontal: 14, paddingVertical: 10, marginBottom: 8,
+            backgroundColor: '#f6fbf8', borderRadius: 10, borderWidth: 1, borderColor: '#cfe8d8' },
+  passedPressed: { backgroundColor: '#e8f5ed' },
+  passedTick: { fontSize: 16, fontWeight: '800', color: '#1e8449' },
+  passedLabel: { flex: 1, fontSize: 15, color: '#3c4a58' },
+  passedAnswer: { fontSize: 15, fontWeight: '800', color: '#1e8449' },
   // Width from the wrapper, margins from its padding: a width of 100% plus a
   // margin is wider than a phone.
   bulkWrap: { width: '100%', maxWidth: 820, alignSelf: 'center',
@@ -186,8 +283,8 @@ const styles = StyleSheet.create({
   blockedWhy: { color: '#fff', fontSize: 15 },
   blockedNote: { color: '#ffd9d4', fontSize: 13, marginTop: 4 },
 
-  section: { fontSize: 13, fontWeight: '800', color: '#5b6a7a', letterSpacing: 0.6,
-             marginTop: 10, marginBottom: 8 },
+  section: { flex: 1, fontSize: 13, fontWeight: '800', color: '#3c4a58', letterSpacing: 0.6,
+             textTransform: 'uppercase' },
 
   footer: { position: 'absolute', left: 0, right: 0, bottom: 0, padding: 16,
             alignItems: 'center',

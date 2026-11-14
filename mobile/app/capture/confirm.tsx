@@ -15,13 +15,15 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native';
+import { View, Text, Pressable, ScrollView, StyleSheet, ActivityIndicator } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCapture } from '@/ui/useCapture';
 import { shiftAt, type ResolvedShift } from '@/core/capture/shifts';
 import { counterpartQuestion } from '@/core/capture/session';
 import { whatIsLeft, type Fix } from '@/core/capture/todo';
 import { plural } from '@/core/words';
+import { FadeIn, PopIn } from '@/ui/motion';
+import { FlowProgress } from '@/ui/FlowProgress';
 
 export default function Confirm() {
   const router = useRouter();
@@ -67,10 +69,12 @@ export default function Confirm() {
          button sits under it at full width, and the screen has a top and a
          bottom instead of a centre. */
       <View style={[styles.screen, styles.doneScreen]}>
-        <View style={styles.doneCard}>
-          <View style={[styles.doneMark, held && styles.doneMarkHeld]}>
+        {/* It LANDS: the card rises in and the mark springs into place, so
+            the moment the record is saved is a moment, not a page swap. */}
+        <FadeIn style={styles.doneCard}>
+          <PopIn style={[styles.doneMark, held && styles.doneMarkHeld]} delay={140}>
             <Text style={styles.doneMarkText}>{held ? '!' : '✓'}</Text>
-          </View>
+          </PopIn>
 
           <Text style={styles.doneTitle}>
             {held ? 'Recorded — the machine is held' : 'Recorded'}
@@ -89,7 +93,7 @@ export default function Confirm() {
               It reaches the office at the next signal. Not filed yet.
             </Text>
           </View>
-        </View>
+        </FadeIn>
 
         <Pressable testID="done" style={styles.primary}
                    onPress={() => { discard(); router.replace('/'); }}>
@@ -132,6 +136,8 @@ export default function Confirm() {
   };
 
   return (
+    <View style={styles.screen}>
+    <FlowProgress at="confirm" />
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <View style={styles.summary}>
         <Text style={styles.code}>{asset.fleet_code}</Text>
@@ -241,7 +247,8 @@ export default function Confirm() {
         testID="attest"
         disabled={busy || verdict == null || (!ready && fixes[0]?.where === 'NOWHERE')}
         style={({ pressed }) => [styles.primary, !ready && styles.primaryTodo,
-                                 (busy || verdict == null) && styles.primaryOff,
+                                 // Saving keeps its colour: greyed out reads as refused.
+                                 !busy && verdict == null && styles.primaryOff,
                                  pressed && styles.pressed]}
         onPress={async () => {
           // Not ready: the button takes them to the first thing left, rather
@@ -252,11 +259,20 @@ export default function Confirm() {
           else setRefused(out.problems);
         }}
       >
+        {busy ? (
+          // Saving takes a moment -- the position fix alone can take seconds
+          // -- and a button that shows nothing invites a second press.
+          <View style={styles.saving}>
+            <ActivityIndicator color="#fff" />
+            <Text style={styles.primaryText}>Saving on this tablet…</Text>
+          </View>
+        ) : (
         <Text style={styles.primaryText}>
           {ready ? 'I confirm this is what I found'
             : fixes.length === 1 ? 'Fix the one thing left'
             : `Fix the first of ${fixes.length} things left`}
         </Text>
+        )}
       </Pressable>
 
       <Text style={styles.footnote}>
@@ -264,6 +280,7 @@ export default function Confirm() {
         signal.
       </Text>
     </ScrollView>
+    </View>
   );
 }
 
@@ -340,6 +357,7 @@ const styles = StyleSheet.create({
   fixText: { flex: 1, fontSize: 15, color: '#16202b' },
   fixGo: { fontSize: 26, color: '#8a5a00', fontWeight: '700', lineHeight: 28 },
   primaryTodo: { backgroundColor: '#1e5f8a' },
+  saving: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   pressed: { opacity: 0.88, transform: [{ scale: 0.99 }] },
   stoppingTitle: { fontSize: 15, fontWeight: '800', color: '#16202b', marginBottom: 4 },
   stoppingItem: { fontSize: 14, color: '#16202b' },

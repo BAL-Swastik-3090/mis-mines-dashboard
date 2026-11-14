@@ -16,6 +16,7 @@ import {
 import { useRouter } from 'expo-router';
 import { useCapture } from '@/ui/useCapture';
 import { fuelProblem } from '@/core/capture/session';
+import { FlowProgress } from '@/ui/FlowProgress';
 
 export default function Readings() {
   const router = useRouter();
@@ -57,7 +58,10 @@ export default function Readings() {
   };
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+    <View style={styles.screen}>
+    <FlowProgress at="readings" />
+    <ScrollView style={styles.screen} contentContainerStyle={styles.content}
+                keyboardShouldPersistTaps="handled">
       <View style={styles.field}>
         <FieldHead label="Hour meter / odometer" required done={valid} />
         {last != null && (
@@ -135,6 +139,7 @@ export default function Readings() {
         <Text style={styles.primaryText}>{missing ?? 'Review and confirm'}</Text>
       </Pressable>
     </ScrollView>
+    </View>
   );
 }
 
@@ -164,9 +169,12 @@ const styles = StyleSheet.create({
      same cap applied to a list. */
 
   screen: { flex: 1, backgroundColor: '#f3f6f9' },
-  content: { padding: 16, gap: 18, paddingBottom: 40,
+  content: { padding: 16, gap: 12, paddingBottom: 40,
              width: '100%', maxWidth: 820, alignSelf: 'center' },
-  field: { gap: 6 },
+  // Each reading is its own card (E6): label, hint, input and any warning
+  // read as one thing, instead of a column of evenly spaced loose parts.
+  field: { gap: 8, backgroundColor: '#fff', borderRadius: 12, padding: 14,
+           borderWidth: 1, borderColor: '#d8dee6' },
   label: { fontSize: 16, fontWeight: '700', color: '#16202b' },
   hint: { fontSize: 13, color: '#5b6a7a' },
   inputRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },

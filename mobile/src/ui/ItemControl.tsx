@@ -25,7 +25,7 @@ import { evaluateOne, rangeLabel } from '@/core/evaluation';
 import { answersFor, isAdverse, type Answer } from '@/core/enums';
 import { plural } from '@/core/words';
 
-const ANSWER_LABEL: Record<Answer, string> = {
+export const ANSWER_LABEL: Record<Answer, string> = {
   OK: 'OK', CAUTION: 'Caution', NOT_OK: 'Not OK', NA: 'N/A',
   YES: 'Yes', NO: 'No',
   LOW: 'Low', NORMAL: 'Normal', HIGH: 'High',
@@ -211,7 +211,9 @@ export function ItemControl({
                 testID={`answer-${item.itemId}-${a}`}
                 accessibilityRole="button"
                 accessibilityState={{ selected: picked }}
-                style={[styles.answer, large && styles.answerLarge, picked && styles.answerPicked,
+                style={({ pressed }) => [styles.answer, large && styles.answerLarge,
+                      // Gives under the glove, so a press is felt to land (E3).
+                      pressed && styles.answerPressed, picked && styles.answerPicked,
                         picked && a === 'NOT_OK' && styles.answerNotOk,
                         picked && a === 'CAUTION' && styles.answerCaution]}
                 onPress={() => choose(a)}
@@ -306,6 +308,7 @@ const styles = StyleSheet.create({
             borderWidth: 1.5, borderColor: '#aeb8c4', alignItems: 'center',
             justifyContent: 'center', backgroundColor: '#fff' },
   answerPicked: { backgroundColor: '#16202b', borderColor: '#16202b' },
+  answerPressed: { backgroundColor: '#e6eef5', borderColor: '#1e5f8a', transform: [{ scale: 0.97 }] },
   answerNotOk: { backgroundColor: '#c0392b', borderColor: '#c0392b' },
   answerCaution: { backgroundColor: '#d98300', borderColor: '#d98300' },
   answerText: { fontSize: 17, fontWeight: '600', color: '#16202b' },

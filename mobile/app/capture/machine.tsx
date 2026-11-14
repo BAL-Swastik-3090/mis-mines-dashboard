@@ -15,7 +15,7 @@
 
 import { useCallback, useState } from 'react';
 import {
-  View, Text, TextInput, Pressable, FlatList, StyleSheet, ActivityIndicator,
+  View, Text, TextInput, FlatList, StyleSheet, ActivityIndicator,
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as Crypto from 'expo-crypto';
@@ -23,6 +23,8 @@ import { useCapture } from '@/ui/useCapture';
 import * as masters from '@/core/capture/masters';
 import type { CachedAsset } from '@/core/capture/masters';
 import type { SessionType } from '@/core/enums';
+import { FlowProgress } from '@/ui/FlowProgress';
+import { FadeIn, PressableScale } from '@/ui/motion';
 
 const TYPES: { t: SessionType; label: string }[] = [
   { t: 'START_HANDOVER', label: 'Taking over' },
@@ -67,10 +69,17 @@ export default function PickMachine() {
   };
 
   return (
+    <View style={styles.outer}>
+    <FlowProgress at="machine" />
     <View style={styles.screen}>
+      {/* ── grouped, not spaced evenly (E6) ─────────────────────────────────
+          Two questions on this screen, each with its own label: what kind of
+          handover, then which machine. Uniform gaps made five controls read
+          as five unrelated things. */}
+      <Text style={styles.group}>What kind of handover</Text>
       <View style={styles.types}>
         {TYPES.map((o) => (
-          <Pressable
+          <PressableScale
             key={o.t}
             testID={`type-${o.t}`}
             accessibilityRole="button"
@@ -81,13 +90,14 @@ export default function PickMachine() {
             <Text style={[styles.typeText, type === o.t && styles.typeTextPicked]}>
               {o.label}
             </Text>
-          </Pressable>
+          </PressableScale>
         ))}
       </View>
 
-      <Pressable testID="scan" style={styles.scan} onPress={() => router.push('/capture/scan')}>
+      <Text style={[styles.group, styles.groupNext]}>Which machine</Text>
+      <PressableScale testID="scan" style={styles.scan} onPress={() => router.push('/capture/scan')}>
         <Text style={styles.scanText}>Scan the sticker on the cab</Text>
-      </Pressable>
+      </PressableScale>
 
       <TextInput
         testID="search"
@@ -125,10 +135,12 @@ export default function PickMachine() {
             </Text>
           )
         }
-        renderItem={({ item: a }) => (
-          <Pressable
+        renderItem={({ item: a, index }) => (
+          <FadeIn delay={Math.min(index, 8) * 30}>
+          <PressableScale
             testID={`asset-${a.asset_id}`}
             style={styles.row}
+            scaleTo={0.985}
             onPress={() => void choose(a)}
           >
             <View style={{ flex: 1 }}>
@@ -156,9 +168,11 @@ export default function PickMachine() {
                 </Text>
               )}
             </View>
-          </Pressable>
+          </PressableScale>
+          </FadeIn>
         )}
       />
+    </View>
     </View>
   );
 }
@@ -175,8 +189,12 @@ const styles = StyleSheet.create({
      screen is narrower than the cap. See app/capture/checklist.tsx for the
      same cap applied to a list. */
 
-  screen: { flex: 1, backgroundColor: '#f3f6f9', padding: 16, gap: 12,
+  outer: { flex: 1, backgroundColor: '#f3f6f9' },
+  screen: { flex: 1, padding: 16, gap: 10,
             width: '100%', maxWidth: 820, alignSelf: 'center' },
+  group: { fontSize: 12, fontWeight: '800', color: '#5b6a7a', letterSpacing: 0.8,
+           textTransform: 'uppercase' },
+  groupNext: { marginTop: 10 },
   types: { flexDirection: 'row', gap: 8 },
   type: { flex: 1, minHeight: 56, borderRadius: 8, borderWidth: 1.5, borderColor: '#aeb8c4',
           alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' },

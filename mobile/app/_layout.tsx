@@ -153,9 +153,16 @@ export default function RootLayout() {
 
   return (
     <SafeAreaProvider>
+      {/* Every screen arrives the same way (E3): forward slides in from the
+          right, back slides out, and a modal rises from below. Android's
+          default was a fade that made moving on and going back look the
+          same. The background is set here too, so nothing flashes white
+          between two grey screens mid-slide. */}
       <Stack screenOptions={{ headerStyle: { backgroundColor: '#16202b' },
                               headerTintColor: '#fff',
-                              headerTitleStyle: { fontSize: 18 } }}>
+                              headerTitleStyle: { fontSize: 18 },
+                              animation: 'slide_from_right',
+                              contentStyle: { backgroundColor: '#f3f6f9' } }}>
         <Stack.Screen name="index" options={{ title: 'Handover' }} />
         <Stack.Screen name="capture/machine" options={{ title: 'Which machine' }} />
         <Stack.Screen name="capture/operator" options={{ title: 'Who is in this handover' }} />
@@ -164,7 +171,9 @@ export default function RootLayout() {
         <Stack.Screen name="capture/readings" options={{ title: 'Readings' }} />
         <Stack.Screen name="capture/confirm" options={{ title: 'Confirm' }} />
         <Stack.Screen name="capture/scan" options={{ title: 'Scan the cab' }} />
-        <Stack.Screen name="capture/photo" options={{ title: 'Photo', presentation: 'modal' }} />
+        <Stack.Screen name="capture/photo"
+                      options={{ title: 'Photo', presentation: 'modal',
+                                 animation: 'slide_from_bottom' }} />
         <Stack.Screen name="sync" options={{ title: 'Still on this tablet' }} />
         <Stack.Screen name="enrol" options={{ title: 'Set up this device' }} />
       </Stack>

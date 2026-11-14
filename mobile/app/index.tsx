@@ -20,6 +20,14 @@ import {
 } from '@/core/location/tracker';
 import { trackingSettings } from '@/core/sync/enrolment';
 import { plural, verb } from '../src/core/words';
+import {
+  ago, byUrgency, draftSummaries, isStale, type DraftSummary,
+} from '@/core/capture/drafts';
+import { FadeIn, PressableScale } from '@/ui/motion';
+
+const TYPE_LABEL: Record<DraftSummary['session_type'], string> = {
+  START_HANDOVER: 'Taking over', END_HANDOVER: 'Handing over', MID_SHIFT: 'Mid-shift',
+};
 
 export default function Home() {
   const router = useRouter();
@@ -27,7 +35,7 @@ export default function Home() {
   const resume = useCapture((s) => s.resume);
   const discard = useCapture((s) => s.discard);
 
-  const [drafts, setDrafts] = useState<Awaited<ReturnType<typeof session.openDrafts>>>([]);
+  const [drafts, setDrafts] = useState<DraftSummary[]>([]);
   const [outbox, setOutbox] = useState<Awaited<ReturnType<typeof session.outboxDepth>> | null>(null);
   const [cacheAge, setCacheAge] = useState<number | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -41,7 +49,7 @@ export default function Home() {
 
   const load = useCallback(async () => {
     if (!store) return;
-    setDrafts(await session.openDrafts(store));
+    setDrafts(byUrgency(await draftSummaries(store)));
     setOutbox(await session.outboxDepth(store));
     setCacheAge(await masters.cacheAgeHours(store));
     const { track: wanted } = await trackingSettings();
@@ -185,38 +193,91 @@ export default function Home() {
         </View>
       )}
 
-      {/* ── resume ──────────────────────────────────────────────────────── */}
+      {/* ── resume ──────────────────────────────────────────────────────────
+          Ordered by what matters (E5): a machine that failed a check that
+          stops it comes first, then anything with a fault, then the rest,
+          newest first. Each card says what it is, who, how far it got and
+          how long ago -- these were six identical cards, most of them
+          "nobody identified yet". Logic and tests in core/capture/drafts.ts. */}
       {drafts.length > 0 && (
         <View style={styles.block}>
-          <Text style={styles.blockTitle}>Unfinished</Text>
-          {drafts.map((d) => (
-            <Pressable
-              key={d.client_uuid}
-              testID={`resume-${d.client_uuid}`}
-              style={styles.draft}
-              onPress={async () => {
-                if (await resume(d.client_uuid)) router.push('/capture/checklist');
-              }}
-            >
-              <Text style={styles.draftCode}>{d.fleet_code ?? `Machine ${d.asset_id}`}</Text>
-              <Text style={styles.draftWhen}>
-                started {new Date(d.captured_at).toLocaleString('en-IN', {
-                  day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
-                  hour12: false })}
-                {d.operator_emp_id ? ` · ${d.operator_emp_id}` : ' · nobody identified yet'}
-              </Text>
-            </Pressable>
-          ))}
+          <View style={styles.blockHead}>
+            <Text style={styles.blockTitle}>UNFINISHED</Text>
+            <Text style={styles.blockCount}>{drafts.length}</Text>
+          </View>
+          {drafts.map((d, i) => {
+            const stale = isStale(d.captured_at);
+            const level = d.blocking > 0 ? 'held' : d.findings > 0 ? 'found'
+              : stale ? 'stale' : 'open';
+            const pct = d.total > 0 ? Math.min(1, d.answered / d.total) : 0;
+            return (
+              <FadeIn key={d.client_uuid} delay={Math.min(i, 6) * 45}>
+                <PressableScale
+                  testID={`resume-${d.client_uuid}`}
+                  scaleTo={0.985}
+                  style={[styles.draft, LEVEL_EDGE[level]]}
+                  onPress={async () => {
+                    // Back to where it stopped: nobody identified means the
+                    // people screen, not a walk-round with no name on it.
+                    if (await resume(d.client_uuid)) {
+                      router.push(d.operator_id ? '/capture/checklist' : '/capture/operator');
+                    }
+                  }}
+                >
+                  <View style={styles.draftTop}>
+                    <View style={styles.draftId}>
+                      <Text style={styles.draftCode}>
+                        {d.fleet_code ?? `Machine ${d.asset_id}`}
+                        {d.registration_no ? <Text style={styles.draftReg}>  {d.registration_no}</Text> : null}
+                      </Text>
+                      <Text style={[styles.draftWho, !d.operator_name && styles.draftNobody]}>
+                        {d.operator_name ?? 'Nobody identified yet'}
+                      </Text>
+                    </View>
+                    <View style={styles.typeChip}>
+                      <Text style={styles.typeChipText}>{TYPE_LABEL[d.session_type]}</Text>
+                    </View>
+                  </View>
+
+                  {level === 'held' && (
+                    <Text style={styles.heldLine}>
+                      A check that stops this machine failed. Finish and confirm
+                      it, so the fault reaches the workshop.
+                    </Text>
+                  )}
+
+                  <View style={styles.progressRow}>
+                    <View style={styles.progressTrack}>
+                      <View style={[styles.progressFill, { width: `${pct * 100}%` },
+                                    level === 'held' && styles.progressHeld,
+                                    level === 'found' && styles.progressFound]} />
+                    </View>
+                    <Text style={styles.progressText}>
+                      {d.answered} of {d.total} checks
+                      {d.findings > 0 ? ` · ${plural(d.findings, 'fault')}` : ''}
+                    </Text>
+                  </View>
+
+                  <View style={styles.draftBottom}>
+                    <Text style={[styles.draftWhen, stale && styles.draftStale]}>
+                      Started {ago(d.captured_at)}{stale ? ' — still needed?' : ''}
+                    </Text>
+                    <Text style={styles.resumeText}>Resume ›</Text>
+                  </View>
+                </PressableScale>
+              </FadeIn>
+            );
+          })}
         </View>
       )}
 
-      <Pressable
+      <PressableScale
         testID="new-handover"
         style={styles.primary}
         onPress={() => { discard(); router.push('/capture/machine'); }}
       >
         <Text style={styles.primaryText}>Start a handover</Text>
-      </Pressable>
+      </PressableScale>
     </ScrollView>
   );
 }
@@ -251,14 +312,45 @@ const styles = StyleSheet.create({
   bannerNote: { fontSize: 14, color: '#5b6a7a' },
   bannerBad: { fontSize: 14, color: '#c0392b', fontWeight: '700' },
 
-  block: { gap: 8 },
-  blockTitle: { fontSize: 13, fontWeight: '800', color: '#5b6a7a', letterSpacing: 0.6 },
-  draft: { backgroundColor: '#fff', borderRadius: 10, padding: 14, minHeight: 64,
-           borderWidth: 1, borderColor: '#d8dee6', justifyContent: 'center' },
-  draftCode: { fontSize: 18, fontWeight: '700', color: '#16202b' },
-  draftWhen: { fontSize: 13, color: '#5b6a7a', marginTop: 2 },
+  block: { gap: 10 },
+  blockHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  blockTitle: { fontSize: 12, fontWeight: '800', color: '#5b6a7a', letterSpacing: 0.8 },
+  blockCount: { fontSize: 12, fontWeight: '800', color: '#fff', backgroundColor: '#5b6a7a',
+                borderRadius: 999, paddingHorizontal: 8, paddingVertical: 1, overflow: 'hidden' },
+  draft: { backgroundColor: '#fff', borderRadius: 12, padding: 14, gap: 10,
+           borderWidth: 1, borderColor: '#d8dee6', borderLeftWidth: 5 },
+  draftTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  draftId: { flex: 1, gap: 2 },
+  draftCode: { fontSize: 19, fontWeight: '800', color: '#16202b' },
+  draftReg: { fontSize: 14, fontWeight: '700', color: '#5b6a7a', letterSpacing: 0.4 },
+  draftWho: { fontSize: 15, fontWeight: '600', color: '#3c4a58' },
+  draftNobody: { fontWeight: '400', fontStyle: 'italic', color: '#8a97a5' },
+  typeChip: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4,
+              backgroundColor: '#eef3f8', borderWidth: 1, borderColor: '#d3dde8' },
+  typeChipText: { fontSize: 12, fontWeight: '800', color: '#3c4a58' },
+  heldLine: { fontSize: 14, fontWeight: '700', color: '#c0392b' },
+  progressRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  progressTrack: { flex: 1, height: 6, borderRadius: 3, backgroundColor: '#e8edf2',
+                   overflow: 'hidden' },
+  progressFill: { height: 6, backgroundColor: '#1e5f8a' },
+  progressHeld: { backgroundColor: '#c0392b' },
+  progressFound: { backgroundColor: '#d98300' },
+  progressText: { fontSize: 13, fontWeight: '600', color: '#3c4a58',
+                  fontVariant: ['tabular-nums'] },
+  draftBottom: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  draftWhen: { fontSize: 13, color: '#5b6a7a' },
+  draftStale: { color: '#8a5a00', fontWeight: '600' },
+  resumeText: { fontSize: 15, fontWeight: '800', color: '#1e5f8a' },
 
   primary: { minHeight: 68, borderRadius: 10, backgroundColor: '#16202b',
              alignItems: 'center', justifyContent: 'center', marginTop: 4 },
   primaryText: { color: '#fff', fontSize: 19, fontWeight: '700' },
+});
+
+/** The left edge says how urgent a card is before a word of it is read. */
+const LEVEL_EDGE = StyleSheet.create({
+  held: { borderLeftColor: '#c0392b', backgroundColor: '#fff8f7' },
+  found: { borderLeftColor: '#d98300' },
+  stale: { borderLeftColor: '#c4ccd6' },
+  open: { borderLeftColor: '#1e5f8a' },
 });
