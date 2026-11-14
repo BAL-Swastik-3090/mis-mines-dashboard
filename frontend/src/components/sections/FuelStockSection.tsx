@@ -1,9 +1,9 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, ArrowDownUp, CalendarDays, Database, Droplets,
-         Loader2, TrendingDown, Truck } from "lucide-react";
+import { ArrowDownUp, CalendarDays, Database, Droplets,
+         Loader2, TrendingDown } from "lucide-react";
 import api from "@/lib/api";
-import { Alert, Button, Card, CardHeader, Chip, SortTh, sortRows, Td, Th }
+import { Alert, Card, CardHeader, Chip, SortTh, sortRows, Td, Th }
   from "@/components/minehub/ui";
 import Dialog from "@/components/minehub/Dialog";
 import FuelStockTrend from "@/components/charts/FuelStockTrend";
@@ -119,10 +119,6 @@ export default function FuelStockSection() {
    * the comparison the four-row table above is already making. */
   const [plant, setPlant] = useState<string>("1200");
   const [mvSort, setMvSort] = useState<{ k: keyof Movement; d: Way } | null>(null);
-  const [poSort, setPoSort] = useState<{ k: keyof Inbound; d: Way } | null>(null);
-  /* Live first: an order 1,316 days late is not a delivery anybody is
-   * waiting for, and listing it among the three that are hides them. */
-  const [showStale, setShowStale] = useState(false);
   const [cal, setCal] = useState<{ today: string; burn_per_day_l: number;
                                    days: CalDay[] } | null>(null);
   const [arrival, setArrival] = useState<Arrival | null>(null);
@@ -211,10 +207,6 @@ export default function FuelStockSection() {
   const shownMoves = sortRows(
     plant ? moves.filter((m) => m.plant === plant) : moves,
     mvSort?.k ?? null, mvSort?.d ?? null);
-  const poRows = sortRows(
-    d.inbound.filter((i) => (!plant || i.plant === plant)
-                            && (showStale ? i.stale : !i.stale)),
-    poSort?.k ?? null, poSort?.d ?? null);
 
   return (
     <div className="space-y-4">
@@ -526,78 +518,6 @@ export default function FuelStockSection() {
           </Card>
         ))}
       </div>
-
-      {/* What is owed, oldest first — the overdue ones are the actionable rows. */}
-      <Card tone={overdue.length ? "rose" : undefined}>
-        <CardHeader
-          icon={overdue.length ? AlertTriangle : Truck}
-          tone={overdue.length ? "rose" : "slate"}
-          title={showStale
-            ? `${stale.length} orders past closing — ${L(staleL)} L`
-            : overdue.length
-              ? `${overdue.length} deliveries overdue — ${L(overdueL)} L`
-              : "Nothing overdue"}
-          subtitle={showStale
-            ? `More than ${d.stale_after_days} days past their date. These are not deliveries anybody is waiting for — they are lines somebody should close.`
-            : "Still to be delivered against an open purchase order. Oldest first."}
-          actions={
-            /* The two were in one list, so three live orders sat among sixty
-               dead ones and the heading counted them differently from the
-               rows beneath it. */
-            <Button size="sm" variant={showStale ? "secondary" : "ghost"}
-                    onClick={() => setShowStale((v) => !v)}>
-              {showStale ? "Show the live ones" : `Show ${stale.length} stale`}
-            </Button>
-          }
-        />
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[760px]">
-            <thead>
-              <tr>
-                <SortTh active={poSort?.k === "po"} dir={poSort?.d}
-                        onSort={(w) => setPoSort(w ? { k: "po", d: w } : null)}>Order</SortTh>
-                <SortTh active={poSort?.k === "plant"} dir={poSort?.d}
-                        onSort={(w) => setPoSort(w ? { k: "plant", d: w } : null)}>Plant</SortTh>
-                <SortTh active={poSort?.k === "vendor"} dir={poSort?.d}
-                        onSort={(w) => setPoSort(w ? { k: "vendor", d: w } : null)}>Supplier</SortTh>
-                <SortTh align="right" active={poSort?.k === "pending_l"} dir={poSort?.d}
-                        onSort={(w) => setPoSort(w ? { k: "pending_l", d: w } : null)}>Still due</SortTh>
-                <SortTh align="right" active={poSort?.k === "due_on"} dir={poSort?.d}
-                        onSort={(w) => setPoSort(w ? { k: "due_on", d: w } : null)}>Due on</SortTh>
-                <SortTh active={poSort?.k === "days_late"} dir={poSort?.d}
-                        onSort={(w) => setPoSort(w ? { k: "days_late", d: w } : null)}>State</SortTh>
-              </tr>
-            </thead>
-            <tbody>
-              {poRows.length === 0 && (
-                <tr><Td colSpan={6} className="text-center text-txt-muted py-8">
-                  Nothing {showStale ? "past closing" : "on order"} here.
-                </Td></tr>
-              )}
-              {poRows.map((i, n) => (
-                <tr key={`${i.po}-${n}`} className="border-t border-border-light">
-                  <Td className="font-mono text-[11.5px]">{i.po}</Td>
-                  <Td className="text-[11.5px] text-txt-muted">{i.plant}</Td>
-                  <Td className="text-[11.5px] text-txt truncate max-w-[200px]">
-                    {i.vendor ?? "—"}
-                  </Td>
-                  <Td className="text-right tabular-nums font-semibold">
-                    {L(i.pending_l)} <span className="text-[10px] font-normal text-txt-light">{i.unit}</span>
-                  </Td>
-                  <Td className="text-right text-[11.5px] tabular-nums">{day(i.due_on)}</Td>
-                  <Td>
-                    {i.stale
-                      ? <Chip tone="slate" dot={false}>{i.days_late} days — close it</Chip>
-                      : i.overdue
-                        ? <Chip tone="rose" dot={false}>{i.days_late} days late</Chip>
-                        : <Chip tone="slate" dot={false}>open</Chip>}
-                  </Td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
 
       {/* Where a delivery came from — as much as SAP will say. */}
       {arrival && (
