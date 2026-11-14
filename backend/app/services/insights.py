@@ -35,6 +35,7 @@ from openai import AsyncOpenAI
 from ..config import get_settings
 from ..schemas.insights import RealityCheckRow, RealityCheckResponse, InsightsResponse
 from app.services.despatch import MINES_HAULIER_PARAMS
+from app.services.sap_source import sap_one
 
 
 # ── Configurable constants ──────────────────────────────────────
@@ -221,17 +222,18 @@ def _despatch_mtd_actual(db: Session, from_date: date, to_date: date) -> float |
     transporter.
     """
     try:
-        row = db.execute(text("""
+        row = sap_one(db, text("""
             SELECT COALESCE(SUM(z.NETWEIGHT), 0) AS actual
             FROM (
-                SELECT DELIVERYNO, MAX(NETWEIGHT) AS NETWEIGHT
+                SELECT DELIVERYNO,
+                       MAX(CAST(NULLIF(TRIM(NETWEIGHT),'') AS DECIMAL(16,3))) AS NETWEIGHT
                 FROM   zsd_outbound_despatch
-                WHERE  DATE(GATEINDATE) BETWEEN :f AND :t
+                WHERE  GATEINDATE BETWEEN :f AND :t
                   AND  CUSTOMERNO IN ('BAL', 'JABAMOYEE')
                   AND  (COALESCE(WEIGHBRIDGE, '') = :wb OR COALESCE(TRANSPORTER, '') LIKE :hauler)
                 GROUP  BY DELIVERYNO
             ) z
-        """), {"f": from_date, "t": to_date, **MINES_HAULIER_PARAMS}).fetchone()
+        """), {"f": from_date, "t": to_date, **MINES_HAULIER_PARAMS})
         val = _f(row.actual) if row else None
         return val if val and val > 0 else None
     except Exception:
@@ -593,7 +595,7 @@ def _despatch_split_mtd(db: Session, from_date: date, to_date: date) -> dict:
     Despatch dashboard section's own numbers.
     """
     try:
-        row = db.execute(text("""
+        row = sap_one(db, text("""
             SELECT
                 COALESCE(SUM(CASE WHEN z.CUSTOMERNO = 'BAL'       THEN z.NETWEIGHT END), 0) AS bal,
                 COALESCE(SUM(CASE WHEN z.CUSTOMERNO = 'JABAMOYEE' THEN z.NETWEIGHT END), 0) AS suk,
@@ -601,14 +603,14 @@ def _despatch_split_mtd(db: Session, from_date: date, to_date: date) -> dict:
             FROM (
                 SELECT DELIVERYNO,
                        MAX(CUSTOMERNO) AS CUSTOMERNO,
-                       MAX(NETWEIGHT)  AS NETWEIGHT
+                       MAX(CAST(NULLIF(TRIM(NETWEIGHT),'') AS DECIMAL(16,3)))  AS NETWEIGHT
                 FROM zsd_outbound_despatch
-                WHERE DATE(GATEINDATE) BETWEEN :f AND :t
+                WHERE GATEINDATE BETWEEN :f AND :t
                   AND CUSTOMERNO IN ('BAL', 'JABAMOYEE')
                   AND (COALESCE(WEIGHBRIDGE, '') = :wb OR COALESCE(TRANSPORTER, '') LIKE :hauler)
                 GROUP BY DELIVERYNO
             ) z
-        """), {"f": from_date, "t": to_date, **MINES_HAULIER_PARAMS}).fetchone()
+        """), {"f": from_date, "t": to_date, **MINES_HAULIER_PARAMS})
         return {
             "bal":   round(float(row.bal   or 0), 1),
             "suk":   round(float(row.suk   or 0), 1),

@@ -56,7 +56,17 @@ AVAILABLE: frozenset[str] = frozenset({
     "pp_prod_order_confirmation",
     "zpm_iw29_notifications",
     "mm_plant_maint_calibration",
+    "zsd_outbound_despatch",
 })
+
+# THIS SET IS A NOTE, NOT A GATE. Nothing reads it -- sap_session routes to
+# the feed whenever the feed is up, for whatever table the query happens to
+# name. So a query is on Postgres because somebody wrapped it, and on MySQL
+# because somebody did not, and this list only records which tables that is
+# believed to be safe for. It drifted: zsd_outbound_despatch was absent from
+# it while four of its seven call sites had already been wrapped, so the
+# Despatch section read the feed and Reality Check read balcorpdb, from one
+# page, with no sign that the two came from different databases.
 
 # Whether the feed is usable, re-checked occasionally rather than per query: a
 # dashboard page fires a dozen SAP reads, and asking twelve times whether the
