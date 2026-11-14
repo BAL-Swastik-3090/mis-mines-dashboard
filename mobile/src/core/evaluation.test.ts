@@ -148,6 +148,28 @@ describe('a whole session', () => {
     expect(v.problems.join(' ')).toContain('Meter reads 12400 but was last 12480');
     expect(v.canSubmit).toBe(false);
   });
+
+  // The readings screen has always told the operator to explain a low reading
+  // in the remarks. Until 14 Nov doing so changed nothing, so a replaced meter
+  // could only be filed with a number that was not on it.
+  it('accepts a lower meter once somebody has said why', () => {
+    const v = evaluateSession({
+      items: [lights], sessionType: 'END_HANDOVER',
+      answers: new Map<number, RawResponse>([[4, ok(lights)]]),
+      meterReading: 120, lastMeterReading: 12480,
+      remarks: 'Hour meter replaced by the workshop on 13 Nov',
+    });
+    expect(v.canSubmit).toBe(true);
+  });
+
+  it('does not count blank remarks as an explanation', () => {
+    const v = evaluateSession({
+      items: [lights], sessionType: 'END_HANDOVER',
+      answers: new Map<number, RawResponse>([[4, ok(lights)]]),
+      meterReading: 120, lastMeterReading: 12480, remarks: '   ',
+    });
+    expect(v.canSubmit).toBe(false);
+  });
 });
 
 describe('range labels', () => {

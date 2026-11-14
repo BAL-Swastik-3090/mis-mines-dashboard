@@ -260,3 +260,54 @@ test('marking something NOT OK is never questioned', () => {
   expect(queryByTestId('confirm-clear-3')).toBeNull();
   expect(onChange).toHaveBeenCalledTimes(1);
 });
+
+describe('what a check demands, shown before it is answered (B5)', () => {
+  // "Photo required if not OK" was enforced and never shown until it blocked
+  // the operator -- after they had walked away from the thing to photograph.
+  it('says a photo will be needed, before any answer is given', () => {
+    setup(brakes);
+    expect(screen.getByText('Photo if Caution or Not OK')).toBeTruthy();
+  });
+
+  it('says nothing when the check demands nothing extra', () => {
+    setup(lights);
+    expect(screen.queryByTestId('rules-104')).toBeNull();
+  });
+
+  it('says which answer to a yes/no check is the fault', () => {
+    const sound: ChecklistItem = {
+      itemId: 201, label: 'Abnormal sound', responseType: 'YES_NO', adverseAnswer: 'YES',
+      isCritical: false, requiresPhotoIfNotOk: true, defaultSeverity: 'MEDIUM',
+    };
+    setup(sound);
+    expect(screen.getByText('Yes is a fault')).toBeTruthy();
+    expect(screen.getByText('Photo if Yes')).toBeTruthy();
+  });
+
+  it('does not promise a photo rule on a reading with no limit to break', () => {
+    setup({ ...boom, requiresPhotoIfNotOk: true });
+    expect(screen.queryByText(/Photo if/)).toBeNull();
+  });
+
+  it('asks for a photo on a reading only when it is out of range', () => {
+    setup(air);
+    expect(screen.getByText('Photo if out of range')).toBeTruthy();
+  });
+});
+
+describe('what is still unanswered stands out (B1)', () => {
+  it('marks a check with no answer, and stops marking it once answered', () => {
+    const onChange = jest.fn();
+    const { rerender } = render(
+      <ItemControl item={lights} value={undefined} photoCount={0} markUnanswered
+                   onChange={onChange} onAddPhoto={jest.fn()} />);
+    const open = screen.getByTestId('item-104').props.style;
+    expect(JSON.stringify(open)).toContain('"borderLeftWidth":5');
+
+    rerender(<ItemControl item={lights} value={{ itemId: 104, answer: 'OK' }} photoCount={0}
+                          markUnanswered onChange={onChange} onAddPhoto={jest.fn()} />);
+    expect(JSON.stringify(screen.getByTestId('item-104').props.style))
+      .not.toContain('"borderLeftWidth":5');
+    expect(screen.getByLabelText('answered')).toBeTruthy();
+  });
+});

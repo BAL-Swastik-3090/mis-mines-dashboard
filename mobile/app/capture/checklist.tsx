@@ -20,6 +20,8 @@ import { useCapture } from '@/ui/useCapture';
 import { ItemControl } from '@/ui/ItemControl';
 import { evaluateSession } from '@/core/evaluation';
 import type { ChecklistItem } from '@/core/evaluation';
+import { leftToAsk } from '@/core/stepping';
+import { plural } from '@/core/words';
 
 export default function Checklist() {
   const router = useRouter();
@@ -27,7 +29,6 @@ export default function Checklist() {
   const template = useCapture((s) => s.template);
   const answers = useCapture((s) => s.answers);
   const setAnswer = useCapture((s) => s.setAnswer);
-  const answerRoutineChecks = useCapture((s) => s.answerRoutineChecks);
   const bulkAnswered = useCapture((s) => s.bulkAnswered);
 
   const verdict = useMemo(() => {
@@ -37,7 +38,6 @@ export default function Checklist() {
     });
   }, [template, answers]);
 
-  const [bulkNote, setBulkNote] = useState<string | null>(null);
   const [footerHeight, setFooterHeight] = useState(110);
 
   const sections = useMemo(
@@ -55,12 +55,7 @@ export default function Checklist() {
     );
   }
 
-  const routineLeft = template.items.filter(
-    (i) => !i.isCritical && i.responseType !== 'NUMERIC'
-           && answers.get(i.itemId)?.answer == null).length;
-  const criticalLeft = template.items.filter(
-    (i) => i.isCritical && answers.get(i.itemId)?.answer == null
-           && answers.get(i.itemId)?.numericValue == null).length;
+  const left = leftToAsk(template.items, answers);
 
   const total = template.items.length;
   const done = verdict ? total - verdict.unanswered.length : 0;
@@ -76,44 +71,42 @@ export default function Checklist() {
         </Text>
       </View>
 
-      {/* ── one tap for the routine checks ──────────────────────────────
-          Offered only while there are routine checks left, and it never
-          touches the ones that stop a machine or the ones that take a
-          reading. Twenty taps on a shift where nothing is wrong is what
-          sends a section back to paper; a button that could pass a brake
-          test nobody made is what a checklist exists to prevent. Both are
-          true, so it does one and not the other. */}
-      {routineLeft > 0 && (
+      {/* ── ONE CHECK AT A TIME ───────────────────────────────────────────
+          This was "Mark the routine checks OK": one tap that filled twenty
+          answers nobody gave. Now it walks through what is left, each check
+          on its own screen -- a clean answer moves on by itself, so it costs
+          a tap per check, and every answer on the record is one somebody
+          gave to a question they were shown (issue B3). */}
+      {left > 0 && (
+        <View style={styles.bulkWrap}>
         <Pressable
-          testID="all-routine-ok"
-          style={styles.bulk}
-          onPress={async () => {
-            const n = await answerRoutineChecks();
-            setBulkNote(
-              `${n} routine check${n === 1 ? '' : 's'} marked OK.` +
-              (criticalLeft > 0
-                ? ` The ${criticalLeft} that can stop this machine still need answering, one at a time.`
-                : ''));
-          }}
+          testID="one-by-one"
+          style={({ pressed }) => [styles.bulk, pressed && styles.pressed]}
+          onPress={() => router.push('/capture/step')}
         >
           <Text style={styles.bulkText}>
-            Mark the {routineLeft} routine check{routineLeft === 1 ? '' : 's'} OK
+            {done === 0 ? `Start the checks — ${plural(total, 'check')}`
+                        : `Go on with the checks — ${left} left`}
           </Text>
           <Text style={styles.bulkNote}>
-            Does not touch the checks that stop the machine, or any reading.
+            One at a time. A clean answer moves straight to the next.
           </Text>
         </Pressable>
+        </View>
       )}
 
-      {bulkNote && (
-        <View style={styles.bulkDone}><Text style={styles.bulkDoneText}>{bulkNote}</Text></View>
-      )}
-
-      {bulkAnswered && routineLeft === 0 && (
+      {/* Records filled in one tap before this changed say so. */}
+      {bulkAnswered && (
         <Text style={styles.bulkFlag}>
-          The routine checks were marked OK together. The office sees this on the record.
+          The routine checks on this handover were marked OK together. The office sees this on the record.
         </Text>
       )}
+
+      {/* What every check demands, said once rather than on every card. */}
+      <Text style={styles.legend}>
+        Every check needs an answer. Any fault needs a note saying what is wrong;
+        the tags on a check say when it also needs a photo.
+      </Text>
 
       {verdict?.isBlocked && (
         <View style={styles.blocked} testID="blocked-banner">
@@ -144,6 +137,7 @@ export default function Checklist() {
         )}
         renderItem={({ item }) => (
           <ItemControl
+            markUnanswered
             item={item}
             value={answers.get(item.itemId)}
             photoCount={answers.get(item.itemId)?.photoCount ?? 0}
@@ -168,13 +162,20 @@ export default function Checklist() {
 }
 
 const styles = StyleSheet.create({
-  bulk: { backgroundColor: '#1e5f8a', borderRadius: 10, padding: 14, gap: 3 },
+  // Width from the wrapper, margins from its padding: a width of 100% plus a
+  // margin is wider than a phone.
+  bulkWrap: { width: '100%', maxWidth: 820, alignSelf: 'center',
+              paddingHorizontal: 16, paddingTop: 12 },
+  bulk: { backgroundColor: '#1e5f8a', borderRadius: 12, padding: 16, gap: 3 },
   bulkText: { color: '#fff', fontSize: 17, fontWeight: '700', textAlign: 'center' },
   bulkNote: { color: '#cfe0ec', fontSize: 12, textAlign: 'center' },
   bulkDone: { backgroundColor: '#eaf6ee', borderColor: '#1e8a4f', borderWidth: 1,
               borderRadius: 8, padding: 10 },
   bulkDoneText: { fontSize: 14, color: '#16202b' },
   bulkFlag: { fontSize: 12, color: '#8a97a5', textAlign: 'center' },
+  legend: { fontSize: 13, color: '#5b6a7a', paddingHorizontal: 16, paddingTop: 10,
+            width: '100%', maxWidth: 820, alignSelf: 'center' },
+  pressed: { opacity: 0.88, transform: [{ scale: 0.99 }] },
   screen: { flex: 1, backgroundColor: '#f3f6f9' },
   bar: { width: '100%', maxWidth: 820, alignSelf: 'center', backgroundColor: '#16202b', paddingHorizontal: 16, paddingVertical: 12 },
   barCode: { color: '#fff', fontSize: 18, fontWeight: '700' },

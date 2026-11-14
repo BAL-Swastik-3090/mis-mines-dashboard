@@ -165,8 +165,10 @@ export function evaluateSession(args: {
   sessionType: SessionType;
   meterReading?: number | null;
   lastMeterReading?: number | null;
+  /** The session's own remarks, which is where a lower meter is explained. */
+  remarks?: string | null;
 }): SessionVerdict {
-  const { items, answers, meterReading, lastMeterReading } = args;
+  const { items, answers, meterReading, lastMeterReading, remarks } = args;
 
   const responses: EvaluatedResponse[] = [];
   const unanswered: ChecklistItem[] = [];
@@ -198,9 +200,18 @@ export function evaluateSession(args: {
   // The meter is the only honest boundary between two operators' work, so a
   // reading that went backwards is queried at the machine rather than
   // reconciled by somebody in an office next week.
-  if (meterReading != null && lastMeterReading != null && meterReading < lastMeterReading) {
+  //
+  // QUERIED, NOT FORBIDDEN. This used to refuse the handover outright while
+  // the readings screen told the operator "if it is right, say why in the
+  // remarks" -- and saying why changed nothing. A meter that really was
+  // replaced or reset could only be filed by typing a number that was not on
+  // it, which is the one outcome worse than a low reading. Now the reading
+  // stands once somebody has written down why; the register still flags it.
+  if (meterReading != null && lastMeterReading != null && meterReading < lastMeterReading
+      && !(remarks ?? '').trim()) {
     problems.push(
-      `Meter reads ${num(meterReading)} but was last ${num(lastMeterReading)} — check the reading`,
+      `Meter reads ${num(meterReading)} but was last ${num(lastMeterReading)} — ` +
+      `check the reading, or say why in the remarks`,
     );
   }
 

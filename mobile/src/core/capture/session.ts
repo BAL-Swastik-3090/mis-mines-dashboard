@@ -256,6 +256,17 @@ export async function setRecorder(
   );
 }
 
+/**
+ * Fuel is a percentage. The office's database refuses anything outside 0-100,
+ * and a handover it refuses is retried for ever from a tablet that has no way
+ * to correct it -- so it is refused here, at the machine, instead.
+ */
+export function fuelProblem(v: number | null | undefined): string | null {
+  if (v == null) return null;
+  if (!Number.isFinite(v) || v < 0 || v > 100) return 'Fuel must be between 0 and 100 per cent';
+  return null;
+}
+
 /** What the other-side question is called for this kind of session, or null. */
 export function counterpartQuestion(t: SessionType): {
   label: string; nobody: string; missing: string;
@@ -431,6 +442,7 @@ export async function review(
     sessionType: session.session_type,
     meterReading: session.meter_reading,
     lastMeterReading: asset.last_meter_reading,
+    remarks: session.remarks,
   });
 
   // Separate from the verdict's own problems: these are things the FLOW
@@ -445,6 +457,8 @@ export async function review(
     blockers.push(`No checklist is published for ${asset.asset_type_name} on this tablet`);
   }
   if (session.meter_reading == null) blockers.push('The meter reading has not been entered');
+  const fuel = fuelProblem(session.fuel_level);
+  if (fuel) blockers.push(fuel);
 
   return { verdict, blockers };
 }

@@ -158,8 +158,9 @@ export default function RootLayout() {
                               headerTitleStyle: { fontSize: 18 } }}>
         <Stack.Screen name="index" options={{ title: 'Handover' }} />
         <Stack.Screen name="capture/machine" options={{ title: 'Which machine' }} />
-        <Stack.Screen name="capture/operator" options={{ title: 'Who is taking it' }} />
+        <Stack.Screen name="capture/operator" options={{ title: 'Who is in this handover' }} />
         <Stack.Screen name="capture/checklist" options={{ title: 'Walk-round' }} />
+        <Stack.Screen name="capture/step" options={{ title: 'One check at a time' }} />
         <Stack.Screen name="capture/readings" options={{ title: 'Readings' }} />
         <Stack.Screen name="capture/confirm" options={{ title: 'Confirm' }} />
         <Stack.Screen name="capture/scan" options={{ title: 'Scan the cab' }} />

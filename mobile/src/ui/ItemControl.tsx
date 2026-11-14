@@ -23,6 +23,7 @@ import { View, Text, Pressable, TextInput, StyleSheet } from 'react-native';
 import type { ChecklistItem, RawResponse } from '@/core/evaluation';
 import { evaluateOne, rangeLabel } from '@/core/evaluation';
 import { answersFor, isAdverse, type Answer } from '@/core/enums';
+import { plural } from '@/core/words';
 
 const ANSWER_LABEL: Record<Answer, string> = {
   OK: 'OK', CAUTION: 'Caution', NOT_OK: 'Not OK', NA: 'N/A',
@@ -36,9 +37,41 @@ export interface ItemControlProps {
   photoCount: number;
   onChange: (raw: RawResponse) => void;
   onAddPhoto: () => void;
+  /** Give an unanswered check an edge of its own, so what is left stands out (B1). */
+  markUnanswered?: boolean;
+  /** One check on its own screen: bigger type and buttons. */
+  large?: boolean;
 }
 
-export function ItemControl({ item, value, photoCount, onChange, onAddPhoto }: ItemControlProps) {
+/**
+ * What this check demands, said BEFORE it is answered (issue B5).
+ *
+ * "Photo required if not OK" was enforced and never shown until it blocked
+ * the operator -- after they had walked away from the thing to photograph.
+ * And a yes/no check says nothing on its face about which answer is the
+ * fault: "Abnormal sound -- Yes" is one, "Grease points done -- Yes" is not.
+ */
+export function itemRules(item: ChecklistItem): string[] {
+  const out: string[] = [];
+  let fault: string | null = null;
+  switch (item.responseType) {
+    case 'OK_CAUTION_NOTOK': fault = 'Caution or Not OK'; break;
+    case 'NUMERIC': fault = rangeLabel(item) ? 'out of range' : null; break;
+    case 'YES_NO':
+      if (item.adverseAnswer) {
+        fault = ANSWER_LABEL[item.adverseAnswer];
+        out.push(`${fault} is a fault`);
+      }
+      break;
+    case 'LEVEL': fault = null; break;
+  }
+  if (item.requiresPhotoIfNotOk && fault) out.push(`Photo if ${fault}`);
+  return out;
+}
+
+export function ItemControl({
+  item, value, photoCount, onChange, onAddPhoto, markUnanswered, large,
+}: ItemControlProps) {
   const [reading, setReading] = useState(
     value?.numericValue != null ? String(value.numericValue) : '',
   );
@@ -81,12 +114,13 @@ export function ItemControl({ item, value, photoCount, onChange, onAddPhoto }: I
   const photoButtonShown = adverse && item.requiresPhotoIfNotOk;
   const unsaid = ev.problems.filter(
     (p) => !(photoButtonShown && p === 'Add a photo'));
+  const rules = itemRules(item);
 
   const clearPrompt = confirmClear ? (
     <View style={styles.confirmBox} testID={`confirm-clear-${item.itemId}`}>
       <Text style={styles.confirmText}>
         This removes the finding{(current.remark ?? '').trim() ? ', what you wrote about it' : ''}
-        {(photoCount ?? 0) > 0 ? ` and ${photoCount} photo(s)` : ''}. The workshop
+        {(photoCount ?? 0) > 0 ? ` and ${plural(photoCount, 'photo')}` : ''}. The workshop
         will not be told about it.
       </Text>
       <View style={styles.confirmRow}>
@@ -115,13 +149,26 @@ export function ItemControl({ item, value, photoCount, onChange, onAddPhoto }: I
   ) : null;
 
   return (
-    <View style={[styles.card, adverse && styles.cardAdverse]} testID={`item-${item.itemId}`}>
+    <View style={[styles.card, large && styles.cardLarge,
+                  markUnanswered && !answered && styles.cardOpen,
+                  adverse && styles.cardAdverse]}
+          testID={`item-${item.itemId}`}>
       <View style={styles.header}>
-        <Text style={styles.label}>{item.label}</Text>
-        {item.isCritical && (
+        <Text style={[styles.label, large && styles.labelLarge]}>{item.label}</Text>
+        {item.isCritical ? (
           <Text style={styles.critical} accessibilityLabel="critical item">STOPS THE MACHINE</Text>
-        )}
+        ) : answered && !adverse && unsaid.length === 0 ? (
+          <Text style={styles.done} accessibilityLabel="answered">✓</Text>
+        ) : null}
       </View>
+
+      {rules.length > 0 && (
+        <View style={styles.rules} testID={`rules-${item.itemId}`}>
+          {rules.map((r) => (
+            <View key={r} style={styles.rule}><Text style={styles.ruleText}>{r}</Text></View>
+          ))}
+        </View>
+      )}
 
       {item.responseType === 'NUMERIC' ? (
         <View>
@@ -164,7 +211,7 @@ export function ItemControl({ item, value, photoCount, onChange, onAddPhoto }: I
                 testID={`answer-${item.itemId}-${a}`}
                 accessibilityRole="button"
                 accessibilityState={{ selected: picked }}
-                style={[styles.answer, picked && styles.answerPicked,
+                style={[styles.answer, large && styles.answerLarge, picked && styles.answerPicked,
                         picked && a === 'NOT_OK' && styles.answerNotOk,
                         picked && a === 'CAUTION' && styles.answerCaution]}
                 onPress={() => choose(a)}
@@ -237,6 +284,17 @@ const styles = StyleSheet.create({
   confirmBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
   card: { backgroundColor: '#fff', borderRadius: 10, padding: 14, marginBottom: 10,
           borderWidth: 1, borderColor: '#d8dee6' },
+  cardLarge: { padding: 20, borderRadius: 14, marginBottom: 0 },
+  // Not answered yet: an edge of its own, so the eye finds what is left
+  // rather than reading every card to see which has no selection.
+  cardOpen: { borderLeftWidth: 5, borderLeftColor: '#d9a441' },
+  labelLarge: { fontSize: 24, fontWeight: '700', lineHeight: 30 },
+  done: { fontSize: 18, fontWeight: '800', color: '#1e8449' },
+  rules: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: -2, marginBottom: 10 },
+  rule: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3,
+          backgroundColor: '#eef3f8', borderWidth: 1, borderColor: '#d3dde8' },
+  ruleText: { fontSize: 12, fontWeight: '700', color: '#3c4a58' },
+  answerLarge: { minHeight: 72, minWidth: 120, flexGrow: 1, borderRadius: 12 },
   cardAdverse: { borderColor: '#c0392b', borderWidth: 2, backgroundColor: '#fff6f5' },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start',
             marginBottom: 10, gap: 8 },

@@ -134,6 +134,10 @@ try:
          {"counterpart_operator_id": B}),
         ("a mid-shift check stating one absent", "MID_SHIFT",
          {"counterpart_absent": True}),
+        # Not a person, but the same failure: left to the CHECK constraint it
+        # was a 500, retried by the tablet on every sync for ever.
+        ("fuel above 100 per cent", "START_HANDOVER", {"fuel_level": 150}),
+        ("fuel that is not a number", "START_HANDOVER", {"fuel_level": "full"}),
     ]:
         try:
             file(kind, "2025-01-06T12:00:00+05:30", A, **extra)

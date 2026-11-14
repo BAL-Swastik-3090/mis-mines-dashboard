@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useCapture } from '@/ui/useCapture';
+import { fuelProblem } from '@/core/capture/session';
 
 export default function Readings() {
   const router = useRouter();
@@ -36,10 +37,20 @@ export default function Readings() {
   const last = asset.last_meter_reading;
   const wentBackwards = valid && last != null && n < last;
 
+  const fuelN = fuel.trim() === '' ? null : Number(fuel);
+  const fuelBad = fuel.trim() !== '' && (fuelN == null || fuelProblem(fuelN) != null);
+  const explained = remarks.trim() !== '';
+
+  // The button names the first thing still missing, top to bottom (B1).
+  const missing = !valid ? 'Enter the meter reading'
+    : fuelBad ? 'Fuel must be 0 to 100'
+    : wentBackwards && !explained ? 'Say why the meter is lower'
+    : null;
+
   const save = async () => {
     await setReadings({
       ...(valid ? { meterReading: n } : {}),
-      ...(fuel.trim() !== '' && Number.isFinite(Number(fuel)) ? { fuelLevel: Number(fuel) } : {}),
+      ...(fuelN != null && !fuelBad ? { fuelLevel: fuelN } : {}),
       ...(remarks.trim() !== '' ? { remarks: remarks.trim() } : {}),
     });
     router.push('/capture/confirm');
@@ -48,7 +59,7 @@ export default function Readings() {
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <View style={styles.field}>
-        <Text style={styles.label}>Hour meter / odometer</Text>
+        <FieldHead label="Hour meter / odometer" required done={valid} />
         {last != null && (
           <Text style={styles.hint}>
             Last recorded: {last} {asset.meter_uom ?? ''}
@@ -72,33 +83,41 @@ export default function Readings() {
         {wentBackwards && (
           <Text style={styles.bad} testID="meter-backwards">
             That is lower than the last recorded reading. Check it against the
-            meter before going on — if it is right, say why in the remarks.
+            meter. If it is right — the meter was replaced or reset — say so in
+            the remarks below and it will be accepted.
           </Text>
         )}
       </View>
 
       <View style={styles.field}>
-        <Text style={styles.label}>Fuel level (%)</Text>
+        <FieldHead label="Fuel level (%)" />
         <TextInput
           testID="fuel"
-          style={styles.input}
+          style={[styles.input, fuelBad && styles.inputBad]}
           value={fuel}
           onChangeText={setFuel}
           keyboardType="number-pad"
           placeholder="—"
           accessibilityLabel="fuel level"
         />
+        {fuelBad && (
+          <Text style={styles.bad} testID="fuel-bad">
+            A percentage, from 0 (empty) to 100 (full).
+          </Text>
+        )}
       </View>
 
       <View style={styles.field}>
-        <Text style={styles.label}>Anything else</Text>
+        {/* Optional, except when it is the explanation for a lower meter. */}
+        <FieldHead label="Anything else" required={wentBackwards} done={explained} />
         <Text style={styles.hint}>
-          Read by the supervisor and kept with the record. Not a defect — use
-          the checklist for those.
+          {wentBackwards
+            ? 'Say why the meter reads lower than last time.'
+            : 'Read by the supervisor and kept with the record. Not a defect — use the checklist for those.'}
         </Text>
         <TextInput
           testID="remarks"
-          style={[styles.input, styles.multiline]}
+          style={[styles.input, styles.multiline, wentBackwards && !explained && styles.inputOwed]}
           value={remarks}
           onChangeText={setRemarks}
           multiline
@@ -108,15 +127,27 @@ export default function Readings() {
 
       <Pressable
         testID="to-confirm"
-        disabled={!valid}
-        style={[styles.primary, !valid && styles.primaryOff]}
+        disabled={missing != null}
+        style={({ pressed }) => [styles.primary, missing != null && styles.primaryOff,
+                                 pressed && missing == null && styles.pressed]}
         onPress={() => void save()}
       >
-        <Text style={styles.primaryText}>
-          {valid ? 'Review and confirm' : 'Enter the meter reading'}
-        </Text>
+        <Text style={styles.primaryText}>{missing ?? 'Review and confirm'}</Text>
       </Pressable>
     </ScrollView>
+  );
+}
+
+/** A field's label, with whether it is compulsory said beside it (B1). */
+function FieldHead({ label, required, done }: { label: string; required?: boolean; done?: boolean }) {
+  return (
+    <View style={styles.head}>
+      <Text style={styles.label}>{label}</Text>
+      {required
+        ? (done ? <Text style={styles.tick}>✓</Text>
+                : <View style={styles.required}><Text style={styles.requiredText}>Required</Text></View>)
+        : <Text style={styles.optional}>Optional</Text>}
+    </View>
   );
 }
 
@@ -142,6 +173,14 @@ const styles = StyleSheet.create({
   input: { minHeight: 60, flex: 1, borderWidth: 1.5, borderColor: '#aeb8c4', borderRadius: 8,
            paddingHorizontal: 14, fontSize: 22, backgroundColor: '#fff', color: '#16202b' },
   inputBad: { borderColor: '#c0392b', borderWidth: 2 },
+  inputOwed: { borderColor: '#d9a441', borderWidth: 2 },
+  head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  required: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3,
+              backgroundColor: '#fff4dc', borderWidth: 1, borderColor: '#e0bf6a' },
+  requiredText: { fontSize: 12, fontWeight: '800', color: '#8a5a00', letterSpacing: 0.4 },
+  optional: { fontSize: 12, fontWeight: '700', color: '#8a97a5', letterSpacing: 0.4 },
+  tick: { fontSize: 18, fontWeight: '800', color: '#1e8449' },
+  pressed: { opacity: 0.85, transform: [{ scale: 0.99 }] },
   multiline: { minHeight: 90, fontSize: 16, paddingTop: 12, textAlignVertical: 'top' },
   unit: { fontSize: 17, color: '#5b6a7a', minWidth: 60 },
   bad: { fontSize: 14, color: '#c0392b', fontWeight: '600' },

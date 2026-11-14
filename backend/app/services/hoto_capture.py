@@ -424,6 +424,18 @@ def submit(db: Session, payload: dict[str, Any], actor: str) -> dict[str, Any]:
     if not payload.get("captured_at"):
         problems.append("captured_at is required — the device's own clock reading")
 
+    # Fuel is a percentage and the column CHECKs it. Left to the database, a
+    # tablet that let 150 through got a 500, retried it on every sync, and had
+    # no way to correct a handover already confirmed.
+    fuel = payload.get("fuel_level")
+    if fuel is not None:
+        try:
+            ok_fuel = 0 <= float(fuel) <= 100
+        except (TypeError, ValueError):
+            ok_fuel = False
+        if not ok_fuel:
+            problems.append(f"fuel_level must be a percentage between 0 and 100, got {fuel!r}")
+
     # ── the people in it (migration 115) ────────────────────────────────────
     # Refused here in words rather than left to the CHECK constraints, which
     # would surface as a database error on a tablet in a cab.

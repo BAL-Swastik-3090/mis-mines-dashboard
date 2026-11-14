@@ -20,7 +20,6 @@ import * as session from '@/core/capture/session';
 import type { Advisory, SessionRow } from '@/core/capture/session';
 import type { ChecklistItem, RawResponse, SessionVerdict } from '@/core/evaluation';
 import type { IdentificationMethod, SessionType } from '@/core/enums';
-import { planRoutineAnswers } from '@/core/routine';
 
 interface CaptureState {
   store: Store | null;
@@ -52,8 +51,6 @@ interface CaptureState {
   /** `null` means the operator is filling it in themself. */
   setRecorder: (op: CachedOperator | null) => Promise<void>;
   setAnswer: (item: ChecklistItem, raw: RawResponse) => Promise<void>;
-  /** Answer every routine check at once. Returns how many it filled. */
-  answerRoutineChecks: () => Promise<number>;
   setReadings: (r: { meterReading?: number; fuelLevel?: number; remarks?: string }) => Promise<void>;
   refreshVerdict: () => Promise<void>;
   confirm: (by: string) => Promise<{ queued: boolean; status: string; problems: string[] }>;
@@ -109,6 +106,8 @@ export const useCapture = create<CaptureState>()((set, get) => ({
         }])),
         operator: row.operator_id ? await masters.operator(store, row.operator_id) : null,
         ...(await peopleOf(store, row)),
+        // A draft filled in one tap before 14 Nov still says so.
+        bulkAnswered: (row as { bulk_answered?: number }).bulk_answered === 1,
         advisories: session.advisoriesFor(null, asset, new Date(), age),
         verdict: null, blockers: [],
       });
@@ -130,6 +129,8 @@ export const useCapture = create<CaptureState>()((set, get) => ({
       uuid, row, asset, template,
       operator: row.operator_id ? await masters.operator(store, row.operator_id) : null,
       ...(await peopleOf(store, row)),
+      // A draft filled in one tap before 14 Nov still says so.
+      bulkAnswered: (row as { bulk_answered?: number }).bulk_answered === 1,
       answers: new Map(existing.map((r) => [r.item_id, {
         itemId: r.item_id, answer: r.answer, numericValue: r.numeric_value, remark: r.remark,
       }])),
@@ -178,44 +179,11 @@ export const useCapture = create<CaptureState>()((set, get) => ({
     set({ recorder: op, row: await session.byUuid(need(store), uuid) });
   },
 
-  /**
-   * Mark the routine checks OK in one action.
-   *
-   * ── WHAT IT DELIBERATELY WILL NOT TOUCH ────────────────────────────────
-   * Anything critical -- the checks that stop a machine -- and anything that
-   * takes a reading. A button that could pass a brake test nobody made is not
-   * a convenience, it is the failure a checklist exists to prevent. Those are
-   * answered one at a time or not at all.
-   *
-   * The rest is drudgery: twenty-odd taps on a shift where nothing is wrong,
-   * which is most shifts. Friction there is what sends a section back to
-   * paper, and paper records nothing at all.
-   *
-   * The handover records that this was used (`bulk_answered`), so a record
-   * filled in one tap is not indistinguishable from a walk-round. See
-   * migration 111.
-   */
-  answerRoutineChecks: async () => {
-    const { template, answers, setAnswer } = get();
-    if (!template) return 0;
-    // The rule itself lives in core/routine.ts, with tests against it. This
-    // only carries out the plan.
-    const plan = planRoutineAnswers(template.items, answers);
-    for (const { item, answer } of plan.fill) {
-      const existing = answers.get(item.itemId) ?? { itemId: item.itemId };
-      await setAnswer(item, { ...existing, answer });
-    }
-    const filled = plan.fill.length;
-    if (filled > 0) {
-      const { store, uuid } = get();
-      if (store && uuid) {
-        await store.runAsync(
-          `UPDATE session SET bulk_answered = 1 WHERE client_uuid = ?`, [uuid]);
-      }
-      set({ bulkAnswered: true });
-    }
-    return filled;
-  },
+  // "Mark the routine checks OK" used to live here: one tap that answered
+  // every routine check. Withdrawn 14 Nov at the mine's request (issue B3) --
+  // the walk-round now asks each check in turn (app/capture/step.tsx). The
+  // rule for what may never be bulk-answered stays in core/routine.ts, tested,
+  // and records filed with it still carry bulk_answered.
 
   setAnswer: async (item, raw) => {
     const { store, uuid } = get();

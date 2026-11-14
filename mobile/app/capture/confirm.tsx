@@ -20,6 +20,8 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useCapture } from '@/ui/useCapture';
 import { shiftAt, type ResolvedShift } from '@/core/capture/shifts';
 import { counterpartQuestion } from '@/core/capture/session';
+import { whatIsLeft, type Fix } from '@/core/capture/todo';
+import { plural } from '@/core/words';
 
 export default function Confirm() {
   const router = useRouter();
@@ -30,7 +32,7 @@ export default function Confirm() {
   const recorder = useCapture((s) => s.recorder);
   const row = useCapture((s) => s.row);
   const verdict = useCapture((s) => s.verdict);
-  const blockers = useCapture((s) => s.blockers);
+  const template = useCapture((s) => s.template);
   const refreshVerdict = useCapture((s) => s.refreshVerdict);
   const confirm = useCapture((s) => s.confirm);
   const discard = useCapture((s) => s.discard);
@@ -97,9 +99,37 @@ export default function Confirm() {
     );
   }
 
-  const stopping = [...blockers, ...(verdict?.problems ?? []),
-                    ...(verdict?.unanswered ?? []).map((i) => `${i.label}: not answered`)];
-  const ready = stopping.length === 0;
+  // Each thing left knows where it is fixed, so the screen can take the
+  // operator there rather than leave them scrolling for it (issue B2). The
+  // same rules as session.confirm(), which still refuses on its own.
+  const fixes = whatIsLeft({
+    sessionType: row.session_type,
+    operatorId: row.operator_id,
+    counterpartOperatorId: row.counterpart_operator_id,
+    counterpartAbsent: row.counterpart_absent === 1,
+    hasTemplate: row.template_id != null && template != null,
+    assetTypeName: asset.asset_type_name,
+    meterReading: row.meter_reading,
+    lastMeterReading: asset.last_meter_reading,
+    fuelLevel: row.fuel_level,
+    remarks: row.remarks,
+    items: template?.items ?? [],
+    verdict,
+  });
+  const ready = verdict != null && fixes.length === 0;
+
+  const go = (f: Fix) => {
+    switch (f.where) {
+      // Back to the screen already in the stack, not a second copy of it.
+      case 'PEOPLE': router.dismissTo('/capture/operator'); break;
+      case 'READINGS': router.dismissTo('/capture/readings'); break;
+      case 'ITEM':
+        router.push({ pathname: '/capture/step',
+                      params: { item: String(f.itemId), from: 'confirm' } });
+        break;
+      case 'NOWHERE': break;
+    }
+  };
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
@@ -148,6 +178,27 @@ export default function Confirm() {
                 note={recorder ? undefined : 'the operator themself'} last />
       </View>
 
+      {/* ── WHAT IS LEFT, AND THE WAY TO EACH ───────────────────────────────
+          Was a box of text below the findings, under a button that said
+          "6 things left" and went nowhere. */}
+      {fixes.length > 0 && (
+        <View style={styles.stopping} testID="stopping">
+          <Text style={styles.stoppingTitle}>
+            {plural(fixes.length, 'thing')} left before you can confirm
+          </Text>
+          {fixes.map((f, i) => (
+            <Pressable key={`${f.where}-${i}`} testID={`fix-${i}`}
+                       disabled={f.where === 'NOWHERE'}
+                       style={({ pressed }) => [styles.fix, i > 0 && styles.fixRule,
+                                                pressed && styles.fixPressed]}
+                       onPress={() => go(f)}>
+              <Text style={styles.fixText}>{f.text}</Text>
+              {f.where !== 'NOWHERE' && <Text style={styles.fixGo}>›</Text>}
+            </Pressable>
+          ))}
+        </View>
+      )}
+
       {verdict?.isBlocked && (
         <View style={styles.blocked}>
           <Text style={styles.blockedTitle}>This machine does not change hands</Text>
@@ -180,13 +231,6 @@ export default function Confirm() {
         </View>
       )}
 
-      {!ready && (
-        <View style={styles.stopping} testID="stopping">
-          <Text style={styles.stoppingTitle}>Not finished</Text>
-          {stopping.map((p) => <Text key={p} style={styles.stoppingItem}>{p}</Text>)}
-        </View>
-      )}
-
       {refused.length > 0 && (
         <View style={styles.stopping}>
           {refused.map((p) => <Text key={p} style={styles.stoppingItem}>{p}</Text>)}
@@ -195,18 +239,23 @@ export default function Confirm() {
 
       <Pressable
         testID="attest"
-        disabled={!ready || busy}
-        style={[styles.primary, (!ready || busy) && styles.primaryOff]}
+        disabled={busy || verdict == null || (!ready && fixes[0]?.where === 'NOWHERE')}
+        style={({ pressed }) => [styles.primary, !ready && styles.primaryTodo,
+                                 (busy || verdict == null) && styles.primaryOff,
+                                 pressed && styles.pressed]}
         onPress={async () => {
+          // Not ready: the button takes them to the first thing left, rather
+          // than sitting there counting it.
+          if (!ready) { if (fixes[0]) go(fixes[0]); return; }
           const out = await confirm(operator?.emp_id ?? `operator:${operator?.operator_id}`);
           if (out.queued) setDone({ status: out.status });
           else setRefused(out.problems);
         }}
       >
         <Text style={styles.primaryText}>
-          {ready
-            ? 'I confirm this is what I found'
-            : `${stopping.length} thing${stopping.length === 1 ? '' : 's'} left`}
+          {ready ? 'I confirm this is what I found'
+            : fixes.length === 1 ? 'Fix the one thing left'
+            : `Fix the first of ${fixes.length} things left`}
         </Text>
       </Pressable>
 
@@ -283,8 +332,16 @@ const styles = StyleSheet.create({
   findingWhat: { fontSize: 14, color: '#5b6a7a' },
 
   stopping: { backgroundColor: '#fff8e6', borderColor: '#e0bf6a', borderWidth: 1,
-              borderRadius: 10, padding: 14, gap: 4 },
-  stoppingTitle: { fontSize: 15, fontWeight: '800', color: '#16202b' },
+              borderRadius: 10, paddingHorizontal: 14, paddingTop: 12, paddingBottom: 4 },
+  fix: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 52,
+         paddingVertical: 8 },
+  fixRule: { borderTopWidth: 1, borderTopColor: '#f0deb0' },
+  fixPressed: { backgroundColor: '#fdf0cf' },
+  fixText: { flex: 1, fontSize: 15, color: '#16202b' },
+  fixGo: { fontSize: 26, color: '#8a5a00', fontWeight: '700', lineHeight: 28 },
+  primaryTodo: { backgroundColor: '#1e5f8a' },
+  pressed: { opacity: 0.88, transform: [{ scale: 0.99 }] },
+  stoppingTitle: { fontSize: 15, fontWeight: '800', color: '#16202b', marginBottom: 4 },
   stoppingItem: { fontSize: 14, color: '#16202b' },
 
   /* WIDTH, not just height. `centre` sets alignItems: 'center', which makes
