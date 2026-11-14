@@ -1300,6 +1300,11 @@ export interface LCMEquipmentRow {
   loss_type:        "Controllable" | "Non Controllable" | "Unclassified";
   kam:              string;
   role:             string;
+  /** The mine's standing remedy for this head and who carries it out, from
+   *  the LCM KAM Selector. null is a real answer: a catch-all head such as
+   *  'other' is deliberately given none, and nothing invents one. */
+  action_text:      string | null;
+  owning_function:  string | null;
   /** The roll-up: every machine's cell for this head, added together. */
   ore_hours:        number;
   planned_ore_loss: number;
