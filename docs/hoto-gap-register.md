@@ -114,16 +114,16 @@ means on a site with no signal, and the mine's hold procedure.
 
 ---
 
-## Part 2 · Dashboard gaps — mostly closed
+## Part 2 · Dashboard gaps — all six closed
 
 | # | Gap | Status |
 |---|---|---|
 | D1 | No screen linked to any other | ✅ board → register/defects, register → defects, defect → handover |
 | D2 | Two date controls disagreeing | ✅ register follows the header; control hidden where it drives nothing |
 | D3 | Shift Board unjudgeable and unactionable | ✅ shift clock, 7-day trend, grouped by machine type |
-| D4 | Defects: no filters, flat ageing | ◐ filters + severity-weighted ageing done; **no assignee or target date** (needs a migration) |
+| D4 | Defects: no filters, flat ageing | ✅ filters, an owner and a target date (migration 116); overdue judged against the date, or the severity norm when none is set, and marked as such |
 | D5 | No check-failure statistics | ✅ per-question counts, deliberately unranked |
-| D6 | Register: shift hidden, no meter check | ◐ shift column + meter-backwards flag done; **pairing and export not done** |
+| D6 | Register: shift hidden, no meter check | ✅ shift (see below), meter-backwards flag, each handover paired with its takeover and compared check by check, CSV export |
 
 **Found while doing D5, now fixed:** `_items_for` never selected
 `adverse_answer`, so **no yes/no check could report a fault, ever** — 34
@@ -133,6 +133,27 @@ untouched and await your decision.**
 
 **Also found and fixed:** cloning a checklist inserted its columns in the wrong
 order and failed outright, so no published checklist could be edited at all.
+
+**Found on 14 Nov, both mine, both fixed:**
+
+- **The 13 Nov yes/no fix reached the verdict and nothing else.** Defect
+  raising, the register's fault count and its detail each kept their own copy
+  of the old rule, so a "ROPS damage: YES" handover was marked BLOCKED but
+  raised no defect, locked no machine and showed no fault. Its test had
+  asserted on the evaluator. A fault is now one rule everywhere -- an answer
+  with a severity -- and a new test files a real ROPS handover and checks the
+  defect, the lock, the list, the filter and the detail (commit `9a92979`).
+- **The register's Shift column showed a dash on every row.** It read fields
+  the list query never selected, though all 30 handovers have a shift stored.
+  I marked it done from the screen code without checking what the screen
+  received (commit `6b26a71`).
+
+**The stored yes/no faults awaiting your decision number 50, not 34.** All
+were filed 9-12 Nov, before the fix. The 34 quoted earlier was 17 "ROPS / FOPS
+visible damage" and 17 "Abnormal sound / vibration"; that count missed 16
+more from other checklists on 9 Nov -- tyre cuts / bulges (5), exhaust smoke
+(5), tread depth below limit (5), abnormal sound (1). Same question: whether
+to re-evaluate them and raise their defects.
 
 ---
 
