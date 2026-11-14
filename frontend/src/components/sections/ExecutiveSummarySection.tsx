@@ -35,7 +35,7 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ClipboardList, Package, Truck, Factory, Pickaxe, ShieldCheck, Send, Mountain,
-  Layers, Waves, Download, Check,
+  Layers, Waves, Download, Check, Gauge, Users, AlertTriangle, Award,
 } from "lucide-react";
 import api from "@/lib/api";
 import { downloadDashboard } from "@/utils/downloadDashboard";
@@ -43,6 +43,7 @@ import { withExportMode } from "@/contexts/useExportMode";
 import QualityTrendCharts from "@/components/charts/QualityTrendCharts";
 import PlantOutputTrendChart from "@/components/charts/PlantOutputTrendChart";
 import { useRainImpact } from "@/hooks/useRainImpact";
+import { useExecLossStructure, useExecLcmByEquipment } from "@/hooks/useExecLcm";
 import { formatIndian } from "@/lib/utils";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import type {
@@ -291,6 +292,929 @@ function StockBlock({ d }: { d: ExecutiveSummaryResponse }) {
 }
 
 /* ── Blocks 2-4 · a grade table, TD beside MTD ─────────────────────────── */
+/* == Main KPIs - plan against actual, on one line ==========================
+   THE MINE'S OWN MONTHLY REVIEW, as a block on the page it is cut from.
+   Everything here is already in the tables below; what the block adds is the
+   one reading those tables make somebody do by hand -- how far each stream
+   ran from its plan, and which one is carrying the month's shortfall.
+
+   MTD ONLY. A plan is a month's figure and an achievement against one day of
+   it is noise: the mine plans 43,000 MT for October, not 1,387 a day, and a
+   Sunday would read as a catastrophe. The tables below keep their TD column.
+
+   ACHIEVEMENT IS THE SERVER'S WHEREVER THE SERVER HAS ONE. ach_pct on the
+   production, COB and despatch totals is computed once in Python, on the
+   totals rather than averaged across grades, and recomputing it here would be
+   a second opinion nobody asked for. Overburden, de-silting and dewatering
+   are read straight off their own rows, which already carry a pct.
+
+   SO THE ACTUALS INHERIT THE EST-ACTUAL RULE FOR FREE. Production falls back
+   to the mine's own entry until SAP posts the day -- source "mixed",
+   manual_qty -- and because this block reads the same totals the table below
+   reads, it shows the same tonnage the table shows. */
+const KPI_GREEN = 95, KPI_AMBER = 80;
+
+function kpiTone(pct: number | null | undefined) {
+  if (pct == null) return { bar: "#b9c3d4", text: "text-txt-light" };
+  if (pct >= KPI_GREEN) return { bar: "#1e8a4c", text: "text-[#1e8a4c]" };
+  if (pct >= KPI_AMBER) return { bar: "#c8960c", text: "text-[#c8960c]" };
+  return { bar: "#c0392b", text: "text-[#c0392b]" };
+}
+
+interface KpiCard {
+  label: string;
+  pct: number | null;
+  /** The line under the figure: actual of plan, and whatever else the mine
+   *  reads beside it. Built by the caller, because each stream says something
+   *  different -- a grade here, a sump level there. */
+  detail: string;
+}
+
+function KpiTile({ c }: { c: KpiCard }) {
+  const t = kpiTone(c.pct);
+  return (
+    <div className="rounded-md border border-border-light bg-white px-3 py-2.5"
+         style={{ borderLeft: "4px solid " + t.bar }}>
+      <div className="text-[10px] font-condensed font-bold tracking-widest uppercase text-txt-muted">
+        {c.label}
+      </div>
+      <div className="mt-0.5 flex items-baseline gap-1">
+        <span className={"font-condensed font-extrabold text-[21px] leading-none " + t.text}>
+          {c.pct == null ? "\u2014" : c.pct.toFixed(1) + "%"}
+        </span>
+        {c.pct != null && <span className="text-[10px] font-semibold text-txt-muted">ach</span>}
+      </div>
+      <div className="mt-1 text-[10px] text-txt-light tabular-nums">{c.detail}</div>
+      {/* Clamped at 100 so a stream that beat its plan does not draw a bar
+          past the end of its own box. The figure above still reads over. */}
+      <div className="mt-1.5 h-[5px] rounded-sm bg-bg-section overflow-hidden">
+        <div className="h-full rounded-sm"
+             style={{ width: Math.max(0, Math.min(100, c.pct ?? 0)) + "%",
+                      background: t.bar }} />
+      </div>
+    </div>
+  );
+}
+
+function MainKpiBlock({ d, mtdLabel }: {
+  d: ExecutiveSummaryResponse; mtdLabel: string;
+}) {
+  const m = d.mtd;
+  const n0 = (v: number | null | undefined) =>
+    v == null ? "\u2014" : formatIndian(Math.round(v), 0);
+  const gap = (plan: number | null | undefined, act: number | null | undefined) =>
+    plan != null && act != null && plan > act
+      ? " \u00b7 Gap " + n0(plan - act) : "";
+
+  const at = (k: string) => m.excavation.find((r) => r.key === k);
+  const grade = (k: string) => m.production.find((r) => r.grade === k);
+  const ob = at("ob"), desilt = at("desilt");
+  const desp = mergeDespatch(m.despatch).total;
+  const dwRow = (k: string) => (d.dewatering?.mtd?.rows ?? []).find((r) => r.key === k);
+  const disposal = dwRow("disposal"), sump = dwRow("stock");
+  const prod = m.production_total, cob = m.cob_total;
+  const mg = grade("MG"), lg = grade("LG");
+
+  const cards: KpiCard[] = [
+    { label: "Ore Production", pct: prod?.ach_pct ?? null,
+      detail: n0(prod?.qty) + " / " + n0(prod?.plan) + " MT" + gap(prod?.plan, prod?.qty) },
+    { label: "MG Ore", pct: mg?.ach_pct ?? null,
+      detail: n0(mg?.qty) + " / " + n0(mg?.plan) + " MT"
+        + (mg?.cr2o3 != null ? " \u00b7 Cr\u2082O\u2083 " + mg.cr2o3.toFixed(2) + "%" : "") },
+    { label: "LG Ore", pct: lg?.ach_pct ?? null,
+      detail: n0(lg?.qty) + " / " + n0(lg?.plan) + " MT" + gap(lg?.plan, lg?.qty) },
+    { label: "Overburden", pct: ob?.pct ?? null,
+      detail: n0(ob?.actual) + " / " + n0(ob?.plan) + " CuM" },
+    { label: "COB Concentrate", pct: cob?.ach_pct ?? null,
+      detail: n0(cob?.qty) + " / " + n0(cob?.plan) + " MT"
+        + (cob?.cr2o3 != null ? " \u00b7 Cr\u2082O\u2083 " + cob.cr2o3.toFixed(1) + "%" : "") },
+    { label: "Total Despatch", pct: desp?.ach_pct ?? null,
+      detail: n0(desp?.qty) + " / " + n0(desp?.plan) + " MT"
+        + (desp?.cr2o3 != null ? " \u00b7 Cr\u2082O\u2083 " + desp.cr2o3.toFixed(2) + "%" : "") },
+    { label: "Dewatering", pct: disposal?.pct ?? null,
+      detail: n0(disposal?.actual) + " / " + n0(disposal?.plan) + " m\u00b3"
+        + (sump?.actual != null ? " \u00b7 Sump " + n0(sump.actual) + " m\u00b3" : "") },
+    { label: "De-Silting", pct: desilt?.pct ?? null,
+      detail: n0(desilt?.actual) + " / " + n0(desilt?.plan) + " CuM" },
+  ];
+
+  /* == the read-out ========================================================
+     COMPUTED, NOT WRITTEN. Every clause is a figure off the cards above with
+     a threshold on it; nothing is asserted that the data does not say. Which
+     grade carries the shortfall changes month to month -- it was LG in
+     October -- so naming one in markup would be a sentence that goes stale
+     without anybody noticing. */
+  const oreGap = prod?.plan != null && prod?.qty != null && prod.plan > prod.qty
+    ? prod.plan - prod.qty : null;
+  const worst = [mg, lg]
+    .filter((g): g is ExecGradeRow =>
+      !!g && g.plan != null && g.qty != null && g.plan > g.qty)
+    .sort((a, b) => ((b.plan as number) - (b.qty as number))
+                  - ((a.plan as number) - (a.qty as number)))[0];
+  const shortfalls = [mg, lg]
+    .map((g) => g && g.plan != null && g.qty != null && g.plan > g.qty
+      ? g.plan - g.qty : 0)
+    .reduce((a, b) => a + b, 0);
+  const worstShort = worst ? (worst.plan as number) - (worst.qty as number) : null;
+  // Only worth saying when more than one grade is short -- "LG accounts for
+  // 100% of the shortfall" is a sentence that says nothing.
+  const worstShare = worstShort != null && shortfalls > 0 && shortfalls > worstShort
+    ? Math.round(worstShort / shortfalls * 100) : null;
+  const onPlan = cards.filter((c) => c.pct != null && c.pct >= KPI_GREEN)
+    .map((c) => c.label);
+
+  return (
+    <Card icon={<Gauge size={14} />} title="Main KPIs &mdash; Plan vs Actual"
+          sub={<span>{mtdLabel}&nbsp;&nbsp;&middot;&nbsp;&nbsp;Green &ge; {KPI_GREEN}% &middot; Amber {KPI_AMBER}&ndash;{KPI_GREEN}% &middot; Red &lt; {KPI_AMBER}%</span>}>
+      <div className="p-3 grid gap-2.5 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
+        {cards.map((c) => <KpiTile key={c.label} c={c} />)}
+      </div>
+      <p className="px-4 py-2.5 border-t border-border-light bg-bg-soft/60
+                    text-[10px] leading-relaxed text-txt-secondary">
+        <span className="font-bold text-navy">Read-out:</span>{" "}
+        {onPlan.length > 0 && (
+          <>{onPlan.join(", ")} {onPlan.length === 1 ? "is" : "are"} on plan. </>
+        )}
+        {worst && worstShort != null && (
+          <>The month&rsquo;s shortfall is driven by{" "}
+            <span className="font-bold">
+              {worst.label} ({worst.ach_pct?.toFixed(1)}%)
+            </span>, {n0(worstShort)} MT short
+            {worstShare != null && <> &mdash; {worstShare}% of the {n0(shortfalls)} MT
+              shortfall across grades</>}.{" "}
+            {oreGap != null && shortfalls > oreGap && (
+              <>The net ore gap is {n0(oreGap)} MT, the rest having been made up
+                elsewhere in the mix.{" "}</>
+            )}
+          </>
+        )}
+        {ob?.pct != null && cob?.ach_pct != null && (
+          <>Overburden is at {ob.pct.toFixed(1)}% and COB concentrate at {cob.ach_pct.toFixed(1)}%.{" "}</>
+        )}
+        <span className="text-txt-light">
+          Achievement is measured month to date; a plan is a month&rsquo;s figure
+          and a single day against it is noise.
+        </span>
+      </p>
+    </Card>
+  );
+}
+
+/* == The loss blocks - what the month's shortfall cost, and who owns it ====
+   BOTH READ THE LCM, and the Equipment Wise matrix specifically, which is the
+   one the LCM screen shows. Its rain row reads 1,291.9 MT where the overall
+   matrix reads 1,181.8, and a summary quoting one while the detail shows the
+   other is a reconciliation nobody can win.
+
+   LAKHS, NOT RUPEES, because that is the unit the mine's own review is
+   written in. The LCM page reports the same figures in rupees; these are the
+   same numbers divided by a hundred thousand, never re-derived.
+
+   THE PERIOD IS THE SUMMARY'S OWN WINDOW, not the dashboard filter -- see
+   useExecLossStructure. A loss has to cover the days the production it
+   explains covers, or the two blocks on this page describe different months.
+
+   KAM RATINGS FOLLOW, in KamRatingBlock. Its banding is the mine's own and
+   is reproduced, not invented -- see RATING below. */
+const CTRL_COLOUR = "#c0392b", NCTRL_COLOUR = "#8a98ad";
+
+/** Rupees to lakhs. The services return rupees on the matrix rows and lakhs
+ *  on the structure nodes, so only one of the two needs converting -- which
+ *  is exactly the kind of thing that goes wrong silently. */
+const toLakh = (rs: number | null | undefined) =>
+  rs == null ? null : rs / 100000;
+
+function SplitBar({ ctrl, nctrl }: { ctrl: number | null; nctrl: number | null }) {
+  const c = ctrl ?? 0, n = nctrl ?? 0, t = c + n;
+  if (t <= 0) return <div className="h-[10px] rounded-sm bg-bg-section min-w-[90px]" />;
+  return (
+    <div className="flex h-[10px] rounded-sm overflow-hidden min-w-[90px] bg-bg-section">
+      <div style={{ width: (c / t * 100) + "%", background: CTRL_COLOUR }} />
+      <div style={{ width: (n / t * 100) + "%", background: NCTRL_COLOUR }} />
+    </div>
+  );
+}
+
+function L({ v, strong }: { v: number | null | undefined; strong?: boolean }) {
+  if (v == null) return <span className="text-txt-light">&mdash;</span>;
+  return (
+    <span className={strong ? "font-bold text-navy" : "text-txt-secondary"}>
+      {formatIndian(Math.round(v * 100) / 100, 2)}
+    </span>
+  );
+}
+
+function KamLossBlock({ from, to, mtdLabel }: {
+  from?: string | null; to?: string | null; mtdLabel: string;
+}) {
+  const q = useExecLossStructure(from, to);
+  const d = q.data;
+
+  /* THE COB NODE IS SEPARATED FROM THE MINES ROLL-UP, as the mine's own
+     review separates it: a concentrate shortfall at the plant is not a mines
+     KAM's loss, and adding it into the mines total would make six people
+     answerable for a seventh's plant. */
+  const nodes = (d?.nodes ?? []).filter((n) => n.role_code !== "COB");
+  const cobNode = (d?.nodes ?? []).find((n) => n.role_code === "COB");
+  const mines = nodes.reduce((a, n) => ({
+    ctrl:  a.ctrl  + (n.controllable.value_lacs ?? 0),
+    nctrl: a.nctrl + (n.non_controllable.value_lacs ?? 0),
+    total: a.total + (n.total.value_lacs ?? 0),
+  }), { ctrl: 0, nctrl: 0, total: 0 });
+
+  /* COB CARRIES NO CONTROLLABILITY AXIS. The plant matrix has no such split
+     -- its causes are feed volume and recovery, neither of which the mine
+     classifies -- so the review treats the whole of it as controllable and
+     says so. Reproduced here, footnote and all, rather than quietly dropping
+     it out of the grand total. */
+  const cob = cobNode?.total.value_lacs ?? d?.root.cob.value_lacs ?? null;
+  const grand = {
+    ctrl:  mines.ctrl + (cob ?? 0),
+    nctrl: mines.nctrl,
+    total: mines.total + (cob ?? 0),
+  };
+
+  const ordered = [...nodes].sort((a, b) =>
+    (b.total.value_lacs ?? 0) - (a.total.value_lacs ?? 0));
+  const vacant = ordered.filter((n) => !n.owner).length;
+
+  return (
+    <Card icon={<Users size={14} />}
+          title="KAM-wise Controllable &amp; Non-Controllable Loss"
+          sub={<span>{mtdLabel}&nbsp;&nbsp;&middot;&nbsp;&nbsp;&#8377; Lakh</span>}>
+      <div className="px-4 pt-2.5 flex gap-4 text-[10px] text-txt-muted">
+        <span><i className="inline-block w-2.5 h-2.5 rounded-sm align-[-1px] mr-1"
+                 style={{ background: CTRL_COLOUR }} />Controllable</span>
+        <span><i className="inline-block w-2.5 h-2.5 rounded-sm align-[-1px] mr-1"
+                 style={{ background: NCTRL_COLOUR }} />Non-controllable</span>
+      </div>
+
+      <table className="w-full text-[12px] tabular-nums border-collapse mt-1.5">
+        <thead>
+          <tr className={THEAD}>
+            <th className={TH + " text-left min-w-[180px]"}>KAM</th>
+            <th className={TH + " text-right"}>Ctrl</th>
+            <th className={TH + " text-right"}>Non-Ctrl</th>
+            <th className={TH + " text-right"}>Total</th>
+            <th className={TH + " text-left w-[120px]"}>Split</th>
+          </tr>
+        </thead>
+        <tbody>
+          {q.isLoading && (
+            <tr><td className={TD + " text-txt-light"} colSpan={5}>
+              Reading the loss matrix&hellip;
+            </td></tr>
+          )}
+          {!q.isLoading && ordered.map((n) => (
+            <tr key={n.role_code} className="hover:bg-bg-light">
+              <td className={TD}>
+                {/* A VACANT POST IS NAMED AS ONE. The owner is derived from
+                    the loss heads under the node or set on the KAM Selector;
+                    a node nobody has been given reads as the role itself
+                    rather than as a blank somebody mistakes for an error. */}
+                <span className={n.owner ? "font-semibold text-navy" : "text-txt-light italic"}>
+                  {n.owner ?? "Not assigned"}
+                </span>
+                <span className="ml-1.5 text-[10px] text-txt-light">({n.title})</span>
+              </td>
+              <td className={TD + " text-right"}><L v={n.controllable.value_lacs} /></td>
+              <td className={TD + " text-right"}><L v={n.non_controllable.value_lacs} /></td>
+              <td className={TD + " text-right"}><L v={n.total.value_lacs} strong /></td>
+              <td className={TD}>
+                <SplitBar ctrl={n.controllable.value_lacs}
+                          nctrl={n.non_controllable.value_lacs} />
+              </td>
+            </tr>
+          ))}
+          {!q.isLoading && d && (
+            <>
+              <tr className="bg-bg-section border-t border-border">
+                <td className={TD + " font-condensed font-bold tracking-wider uppercase text-[11px] text-navy"}>
+                  Mines total
+                </td>
+                <td className={TD + " text-right"}><L v={mines.ctrl} strong /></td>
+                <td className={TD + " text-right"}><L v={mines.nctrl} strong /></td>
+                <td className={TD + " text-right"}><L v={mines.total} strong /></td>
+                <td className={TD}><SplitBar ctrl={mines.ctrl} nctrl={mines.nctrl} /></td>
+              </tr>
+              <tr className="hover:bg-bg-light">
+                <td className={TD}>
+                  <span className="font-semibold text-navy">
+                    {cobNode?.owner ?? "Not assigned"}
+                  </span>
+                  <span className="ml-1.5 text-[10px] text-txt-light">(COB*)</span>
+                </td>
+                <td className={TD + " text-right"}><L v={cob} /></td>
+                <td className={TD + " text-right"}><L v={0} /></td>
+                <td className={TD + " text-right"}><L v={cob} strong /></td>
+                <td className={TD}><SplitBar ctrl={cob} nctrl={0} /></td>
+              </tr>
+              <tr className="bg-bg-section border-t-2 border-border">
+                <td className={TD + " font-condensed font-extrabold tracking-widest uppercase text-[11px] text-navy"}>
+                  Grand total (Mines + COB)
+                </td>
+                <td className={TD + " text-right"}><L v={grand.ctrl} strong /></td>
+                <td className={TD + " text-right"}><L v={grand.nctrl} strong /></td>
+                <td className={TD + " text-right"}><L v={grand.total} strong /></td>
+                <td className={TD}><SplitBar ctrl={grand.ctrl} nctrl={grand.nctrl} /></td>
+              </tr>
+            </>
+          )}
+        </tbody>
+      </table>
+
+      <div className="px-4 py-2.5 border-t border-border-light bg-bg-soft/60
+                      text-[10px] leading-relaxed text-txt-secondary space-y-1">
+        <p>
+          <span className="font-bold">*COB</span> is a concentrate shortfall at the
+          plant. The plant matrix carries no controllability axis &mdash; its causes
+          are feed volume and recovery, neither of which the mine classifies &mdash;
+          so the whole of it is counted as controllable, as the mine&rsquo;s own review
+          does.
+        </p>
+        {d?.costing?.weighted_rate != null && (
+          <p>
+            Valuation: lost ore &times; IBM weighted rate{" "}
+            <span className="font-semibold">
+              &#8377;{formatIndian(Math.round(d.costing.weighted_rate), 0)}/MT
+            </span>.
+          </p>
+        )}
+        {vacant > 0 && (
+          <p className="text-amber-700">
+            {vacant} {vacant === 1 ? "head reads" : "heads read"} nil because no loss
+            head rolls up to {vacant === 1 ? "it" : "them"} yet. Assign them under
+            &ldquo;Rolls up to&rdquo; on the LCM KAM Selector and the figures move here
+            with the matrix.
+          </p>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+/* -- KAM RATINGS ---------------------------------------------------------
+   Scores each KAM out of ten on the mine's own rule. Every figure it needs
+   is already on the loss structure the table above fetched, so the two
+   cannot disagree: the Ctrl Loss column here IS that table's Ctrl column,
+   read from one response, not a second computation of the same thing.
+
+   THE SCALE IS ABSOLUTE RUPEES AND THE WINDOW IS THE GLOBAL DATE FILTER.
+   A fortnight accumulates less loss than a month, so a part-month view
+   scores better than the same rate of working over a full one -- across
+   1-13 Nov COB's Rs 81 L reads 80%, where that same daily rate over thirty
+   days is Rs 188 L and reads 60%. That follows from the mine's rule rather
+   than from anything done here, but it is printed on the face of the card
+   so a mid-month score is not read as a month's verdict. */
+
+/** POLICY, NOT DATA. The mine's rating rule in one place, so a change of
+ *  policy is one edit here and nothing else moves. Slabs are keyed on the
+ *  LOWER edge, inclusive: exactly Rs 200 L is the 80% band for a mines KAM
+ *  and the 50% band for COB.
+ *
+ *  THE MINES SLAB IS THE WORKBOOK'S "Inputs" SHEET -- what its live cells
+ *  compute, and therefore what produced the ratings the mine has already
+ *  seen. Its own "Formula Logic" tab and the JS snippet beside it carry a
+ *  DIFFERENT table (under 500 -> 90%, 500-800 -> 80% ...) that the workbook
+ *  never uses; on Rana's Rs 257 L the two differ by a whole band. If the
+ *  mine means that one, replace minesSlab and nothing else changes.
+ *
+ *  COB IS GRADED ON ITS OWN, TIGHTER SLAB, as the mine instructed: its top
+ *  band is under Rs 50 L where a mines KAM's is under Rs 200 L. */
+const RATING = {
+  weightPerformance: 0.5,
+  weightLoss:        0.5,
+  /** Performance cannot score below this, however far plan is missed. */
+  performanceFloor:  0.5,
+  minesSlab: [[0, 0.9], [200, 0.8], [500, 0.7], [800, 0.6],
+              [1000, 0.5], [1500, 0.4]],
+  cobSlab:   [[0, 0.9], [50, 0.8], [100, 0.7], [150, 0.6], [200, 0.5]],
+  /** Final score -> rating out of ten. Read top down, first match wins. */
+  bands:     [[1, 10, "Excellent"], [0.9, 9, "Very Good"], [0.8, 8, "Good"],
+              [0.7, 7, "Average"], [0.6, 6, "Below Average"], [0, 5, "Poor"]],
+} as const;
+
+type Slab = readonly (readonly [number, number])[];
+
+function slabRating(lakh: number, slab: Slab): number {
+  let out = slab[0][1];
+  for (const [edge, v] of slab) if (lakh >= edge) out = v;
+  return out;
+}
+
+function ratingBand(score: number): { rating: number; grade: string } {
+  for (const [cut, rating, grade] of RATING.bands)
+    if (score >= cut) return { rating, grade };
+  return { rating: 5, grade: "Poor" };
+}
+
+const RATING_COLOUR: Record<number, string> = {
+  10: "#1e7d4f", 9: "#2f9e63", 8: "#6a9c3a",
+  7:  "#c8960c", 6: "#d4762a", 5: "#c0392b",
+};
+
+function ScoreBar({ score }: { score: number }) {
+  const { rating } = ratingBand(score);
+  return (
+    <div className="flex h-[10px] rounded-sm overflow-hidden min-w-[90px] bg-bg-section">
+      <div style={{ width: Math.min(100, Math.max(0, score * 100)) + "%",
+                    background: RATING_COLOUR[rating] }} />
+    </div>
+  );
+}
+
+const asPct = (v: number | null | undefined) =>
+  v == null ? "\u2014" : (v * 100).toFixed(0) + "%";
+
+function KamRatingBlock({ from, to, mtdLabel }: {
+  from?: string | null; to?: string | null; mtdLabel: string;
+}) {
+  const q = useExecLossStructure(from, to);
+  const d = q.data;
+
+  /* THE PERFORMANCE HALF IS MINE-WIDE AND IDENTICAL FOR EVERY KAM. The rule
+     multiplies ore achievement by OB achievement, and neither is attributed
+     per person anywhere in the data -- so what separates two rows here is
+     their own controllable loss, and nothing else. */
+  const ore = d?.summary.ore, ob = d?.summary.ob;
+  const oreAch = ore && ore.plan ? ore.actual / ore.plan : null;
+  const obAch  = ob  && ob.plan  ? ob.actual  / ob.plan  : null;
+  const raw  = oreAch != null && obAch != null ? oreAch * obAch : null;
+  const perf = raw == null ? null : Math.max(RATING.performanceFloor, raw);
+  const floored = raw != null && raw < RATING.performanceFloor;
+
+  const cobNode = (d?.nodes ?? []).find((n) => n.role_code === "COB");
+  /* Unmapped is a bucket, not a person, and is not scored. It stays visible
+     in the loss table above, which is where it belongs. */
+  const mineNodes = (d?.nodes ?? []).filter(
+    (n) => n.role_code !== "COB" && n.role_code !== "UNMAPPED");
+  const minesCtrl = mineNodes.reduce(
+    (a, n) => a + (n.controllable.value_lacs ?? 0), 0);
+  const cobLoss = cobNode?.total.value_lacs ?? d?.root.cob.value_lacs ?? null;
+
+  type Row = {
+    key: string; name: string; title: string;
+    loss: number | null; slab: Slab; rateable: boolean;
+  };
+  const rows: Row[] = [
+    ...mineNodes.map((n) => ({
+      key: n.role_code,
+      name: n.owner ?? "Not assigned",
+      title: n.title,
+      loss: n.controllable.value_lacs,
+      slab: RATING.minesSlab as Slab,
+      /* NIL IS NOT THE SAME AS NOTHING TO ANSWER FOR. A node reads 0.00
+         either because its heads cost nothing this window or because no head
+         rolls up to it at all -- and the second would earn the top loss band
+         and hand a rating to somebody with nothing assigned. Only a post
+         that is filled AND carries heads is scored. In Nov 2026 that is the
+         difference between rating K L Das, Praspero Sahoo and Maheswar
+         Mohanty "7 - Average" on an empty node and showing a dash. */
+      rateable: Boolean(n.owner) && n.head_count > 0,
+    })),
+    ...(cobNode ? [{
+      key: "COB",
+      name: cobNode.owner ?? "Not assigned",
+      title: cobNode.title,
+      loss: cobLoss,
+      slab: RATING.cobSlab as Slab,
+      /* COB'S head_count IS ALWAYS ZERO and must not be read as "nothing
+         assigned": no mines loss head reports to the plant, and its causes
+         are attached from the COB matrix afterwards. Its own loss figure is
+         the test. */
+      rateable: Boolean(cobNode.owner) && cobLoss != null,
+    }] : []),
+  ];
+
+  const scoreOf = (r: Row) =>
+    perf == null || r.loss == null || !r.rateable ? null
+      : RATING.weightPerformance * perf
+        + RATING.weightLoss * slabRating(r.loss, r.slab);
+
+  const scored = rows
+    .map((r) => ({ ...r, score: scoreOf(r) }))
+    .sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
+
+  /* THE CHIEF IS SCORED ON THE WHOLE MINE, COB INCLUDED -- the same figure
+     the table above prints as "Grand total (Mines + COB)", so the two tie by
+     construction rather than by coincidence. He is graded on the mines slab:
+     his total is a mines-scale number. */
+  const chiefLoss = minesCtrl + (cobLoss ?? 0);
+  const chiefScore = perf == null || !d ? null
+    : RATING.weightPerformance * perf
+      + RATING.weightLoss * slabRating(chiefLoss, RATING.minesSlab as Slab);
+
+  function RatingCells({ s }: { s: number | null }) {
+    if (s == null) return (
+      <>
+        <td className={TD + " text-right text-txt-light"}>&mdash;</td>
+        <td className={TD + " text-center text-txt-light"}>&mdash;</td>
+        <td className={TD + " text-txt-light"}>&mdash;</td>
+        <td className={TD}><ScoreBar score={0} /></td>
+      </>
+    );
+    const { rating, grade } = ratingBand(s);
+    return (
+      <>
+        <td className={TD + " text-right font-bold text-navy"}>{asPct(s)}</td>
+        <td className={TD + " text-center"}>
+          <span className="inline-block min-w-[22px] px-1.5 py-0.5 rounded text-[11px] font-bold text-white"
+                style={{ background: RATING_COLOUR[rating] }}>{rating}</span>
+        </td>
+        <td className={TD + " text-[11px] font-semibold"}
+            style={{ color: RATING_COLOUR[rating] }}>{grade}</td>
+        <td className={TD}><ScoreBar score={s} /></td>
+      </>
+    );
+  }
+
+  return (
+    <Card icon={<Award size={14} />}
+          title="KAM Ratings (out of 10)"
+          sub={<span>{mtdLabel}&nbsp;&nbsp;&middot;&nbsp;&nbsp;50% performance + 50% controllable loss</span>}>
+
+      {d && perf != null && (
+        <div className="px-4 pt-2.5 flex flex-wrap gap-x-5 gap-y-1 text-[10px] text-txt-muted">
+          <span>Ore achv <span className="font-bold text-navy">{asPct(oreAch)}</span></span>
+          <span>OB achv <span className="font-bold text-navy">{asPct(obAch)}</span></span>
+          <span>Performance rating{" "}
+            <span className="font-bold text-navy">{asPct(perf)}</span>
+            {floored && (
+              <span className="text-amber-700">
+                {" "}(floored from {asPct(raw)})
+              </span>
+            )}
+          </span>
+        </div>
+      )}
+
+      <table className="w-full text-[12px] tabular-nums border-collapse mt-1.5">
+        <thead>
+          <tr className={THEAD}>
+            <th className={TH + " text-left min-w-[180px]"}>KAM</th>
+            <th className={TH + " text-right"}>Ctrl Loss</th>
+            <th className={TH + " text-right"}>Loss Rtg</th>
+            <th className={TH + " text-right"}>Score</th>
+            <th className={TH + " text-center"}>Rating</th>
+            <th className={TH + " text-left"}>Grade</th>
+            <th className={TH + " text-left w-[110px]"}>&nbsp;</th>
+          </tr>
+        </thead>
+        <tbody>
+          {q.isLoading && (
+            <tr><td className={TD + " text-txt-light"} colSpan={7}>
+              Scoring against the loss matrix&hellip;
+            </td></tr>
+          )}
+          {!q.isLoading && scored.map((r) => (
+            <tr key={r.key} className="hover:bg-bg-light">
+              <td className={TD}>
+                <span className={r.rateable
+                  ? "font-semibold text-navy" : "text-txt-light italic"}>
+                  {r.name}
+                </span>
+                <span className="ml-1.5 text-[10px] text-txt-light">
+                  ({r.title}{r.key === "COB" ? "*" : ""})
+                </span>
+              </td>
+              <td className={TD + " text-right"}><L v={r.loss} /></td>
+              <td className={TD + " text-right text-txt-secondary"}>
+                {r.loss == null ? <span className="text-txt-light">&mdash;</span>
+                                : asPct(slabRating(r.loss, r.slab))}
+              </td>
+              <RatingCells s={r.score} />
+            </tr>
+          ))}
+          {!q.isLoading && d && (
+            <tr className="bg-bg-section border-t-2 border-border">
+              <td className={TD + " font-condensed font-extrabold tracking-widest uppercase text-[11px] text-navy"}>
+                {d.root.owner ?? d.root.title}
+                <span className="ml-1.5 text-[10px] font-normal normal-case tracking-normal text-txt-light">
+                  ({d.root.title})
+                </span>
+              </td>
+              <td className={TD + " text-right"}><L v={chiefLoss} strong /></td>
+              <td className={TD + " text-right text-txt-secondary"}>
+                {asPct(slabRating(chiefLoss, RATING.minesSlab as Slab))}
+              </td>
+              <RatingCells s={chiefScore} />
+            </tr>
+          )}
+        </tbody>
+      </table>
+
+      {/* THE SCALE IS DRAWN FROM RATING.bands, not typed again. A band edge
+          changed in the policy block moves the table and this legend
+          together, which is the whole point of having one. */}
+      <div className="px-4 py-2.5 border-t border-border-light
+                      flex flex-wrap items-center gap-x-3.5 gap-y-2">
+        <span className="text-[10px] font-condensed font-bold tracking-widest
+                         uppercase text-txt-muted">
+          Rating scale
+        </span>
+        {RATING.bands.map(([cut, rating, grade], i) => {
+          const upper = i === 0 ? null : RATING.bands[i - 1][0];
+          const range = upper == null
+            ? "\u2265" + (cut * 100).toFixed(0) + "%"
+            : cut === 0
+              ? "<" + (upper * 100).toFixed(0) + "%"
+              : (cut * 100).toFixed(0) + "\u2013" + (upper * 100).toFixed(0) + "%";
+          return (
+            <span key={rating} className="inline-flex items-center gap-1.5">
+              <span className="inline-block min-w-[18px] text-center px-1 py-0.5
+                               rounded text-[10px] font-bold text-white"
+                    style={{ background: RATING_COLOUR[rating] }}>{rating}</span>
+              <span className="text-[10px] font-semibold text-txt-secondary">{grade}</span>
+              <span className="text-[10px] text-txt-light tabular-nums">{range}</span>
+            </span>
+          );
+        })}
+      </div>
+
+      <div className="px-4 py-2.5 border-t border-border-light bg-bg-soft/60
+                      text-[10px] leading-relaxed text-txt-secondary space-y-1">
+        <p>
+          Score ={" "}{asPct(RATING.weightPerformance)}{" "}performance (ore achv &times;
+          OB achv, floored at {asPct(RATING.performanceFloor)}) +{" "}
+          {asPct(RATING.weightLoss)}{" "}loss rating. Performance is mine-wide and the
+          same for every KAM, so what separates two rows is their own controllable
+          loss.
+        </p>
+        <p>
+          <span className="font-bold">Loss slabs (&#8377; Lakh).</span>{" "}
+          Mines &mdash; &lt;200 : 90% &middot; 200&ndash;500 : 80% &middot;
+          500&ndash;800 : 70% &middot; 800&ndash;1,000 : 60% &middot;
+          1,000&ndash;1,500 : 50% &middot; &ge;1,500 : 40%.{" "}
+          <span className="font-bold">*COB</span> &mdash; &lt;50 : 90% &middot;
+          50&ndash;100 : 80% &middot; 100&ndash;150 : 70% &middot;
+          150&ndash;200 : 60% &middot; &ge;200 : 50%, applied to its whole plant
+          loss, which carries no controllability split.
+        </p>
+        <p>
+          The {d?.root.title ?? "Chief of Mines"}{" "}is scored on the whole mine
+          &mdash; every KAM&rsquo;s controllable loss plus COB &mdash; which is the
+          grand total printed in the table above.
+        </p>
+        <p>
+          A KAM with no loss head rolling up to them is shown as{" "}
+          <span className="font-bold">&mdash;</span>, not scored: nil loss there
+          means nothing has been assigned, not that nothing went wrong. Assign
+          heads under &ldquo;Rolls up to&rdquo; on the LCM KAM Selector and they
+          join the table.
+        </p>
+        <p className="text-amber-700">
+          The slabs are absolute rupees, so a part-month window carries less loss
+          and scores higher than the same rate of working over a full month.
+          Compare whole months, or read this with the window in mind.
+        </p>
+      </div>
+    </Card>
+  );
+}
+
+/** The idle family, for the read-out beneath the loss table. Keyed on the
+ *  matrix COLUMN, never the label: the labels live in LABEL_OVERRIDES in
+ *  lcm.py and renaming one must not silently empty this group. */
+const IDLE_COLUMNS = ["idle_safety", "job_allocation", "idle_requ_basic", "idle"];
+
+/** How many heads the table names before the rest are gathered into one row.
+ *  The mine's own review prints seven and a remainder. */
+const CTRL_HEADS_SHOWN = 7;
+
+/* == WHICH ACTIONS APPEAR ==================================================
+   The sentences are the mine's, held against each loss head in the LCM KAM
+   Selector and dated there, so re-opening September shows September's
+   policy. Nothing is written here and nothing is generated: this decides
+   only WHICH of them is worth printing this month, which is arithmetic on
+   the table beside it.
+
+   A HEAD HANDLED IN ANOTHER SECTION IS LEFT TO IT. The mine's own review
+   skips Breakdown in this panel at 23% of controllable loss and writes "see
+   Section 5" instead, because equipment is answered by the equipment matrix.
+   Repeating it here would crowd out the operations actions this panel is
+   for. */
+const ACTIONS_SHOWN = 4;
+const ACTION_MIN_SHARE_PCT = 5;
+const ACTION_HANDLED_ELSEWHERE: Record<string, string> = {
+  breakdown: "the Equipment Excavation Plan",
+};
+
+function ControllableLossBlock({ from, to, mtdLabel }: {
+  from?: string | null; to?: string | null; mtdLabel: string;
+}) {
+  const q = useExecLcmByEquipment(from, to);
+  const rows = (q.data?.rows ?? []).filter((r) => r.loss_type === "Controllable");
+  const total = rows.reduce((a, r) => a + (r.loss_amount ?? 0), 0);
+  const oreHrs = rows.reduce((a, r) => a + (r.ore_hours ?? 0), 0);
+  // OB HOURS, NOT THE CuM BEHIND THEM. The mine's review reads hours on
+  // the OB side and tonnes on the ore side, because an overburden head is
+  // judged on the machine time it swallowed; planned_ob_loss is the cubic
+  // metres those hours would have moved and is a different question.
+  const obHrs  = rows.reduce((a, r) => a + (r.ob_hours ?? 0), 0);
+  const oreMt  = rows.reduce((a, r) => a + (r.planned_ore_loss ?? 0), 0);
+
+  const ranked = [...rows].sort((a, b) => (b.loss_amount ?? 0) - (a.loss_amount ?? 0));
+  const shown = ranked.slice(0, CTRL_HEADS_SHOWN);
+  const rest  = ranked.slice(CTRL_HEADS_SHOWN);
+  const restAgg = rest.reduce((a, r) => ({
+    ore_hours: a.ore_hours + (r.ore_hours ?? 0),
+    ore_mt:    a.ore_mt    + (r.planned_ore_loss ?? 0),
+    ob_hrs:    a.ob_hrs    + (r.ob_hours ?? 0),
+    rs:        a.rs        + (r.loss_amount ?? 0),
+  }), { ore_hours: 0, ore_mt: 0, ob_hrs: 0, rs: 0 });
+
+  const share = (rs: number) => total > 0 ? rs / total * 100 : 0;
+  const n1 = (v: number) => formatIndian(Math.round(v * 10) / 10, 1);
+  const n0 = (v: number) => formatIndian(Math.round(v), 0);
+
+  /* == the observations ====================================================
+     EVERY LINE IS ARITHMETIC ON THE TABLE BESIDE IT. The mine's review also
+     carries a list of recommended actions; those are somebody's judgement
+     about named machines and named people, and are not generated here. */
+  const top3 = ranked.slice(0, 3).reduce((a, r) => a + (r.loss_amount ?? 0), 0);
+  const idle = rows.filter((r) => IDLE_COLUMNS.includes(r.column));
+  const idleRs = idle.reduce((a, r) => a + (r.loss_amount ?? 0), 0);
+  const biggest = ranked[0];
+
+  /* == the actions =========================================================
+     The heads that cost enough to be worth acting on, that carry a remedy,
+     and that are not answered by another section. A head with no action_text
+     is skipped silently rather than given a placeholder -- 'other' is a
+     catch-all and has deliberately been left without one. */
+  const actions = ranked.filter((r) =>
+    r.action_text
+    && share(r.loss_amount ?? 0) >= ACTION_MIN_SHARE_PCT
+    && !ACTION_HANDLED_ELSEWHERE[r.column]).slice(0, ACTIONS_SHOWN);
+  const deferred = ranked.filter((r) =>
+    ACTION_HANDLED_ELSEWHERE[r.column]
+    && share(r.loss_amount ?? 0) >= ACTION_MIN_SHARE_PCT);
+
+  return (
+    <Card icon={<AlertTriangle size={14} />}
+          title="Major Controllable Loss Summary &mdash; Operations"
+          sub={<span>{mtdLabel}&nbsp;&nbsp;&middot;&nbsp;&nbsp;
+            &#8377;{formatIndian(Math.round(toLakh(total) ?? 0), 0)} L &middot;{" "}
+            {n1(oreHrs)} ore-hrs &middot; {n1(obHrs)} OB-hrs</span>}>
+      <div className="grid gap-0 lg:grid-cols-[1.6fr_1fr]">
+        <div className="overflow-x-auto">
+          <table className="w-full text-[12px] tabular-nums border-collapse">
+            <thead>
+              <tr className={THEAD}>
+                <th className={TH + " text-left min-w-[150px]"}>Loss head</th>
+                <th className={TH + " text-left min-w-[130px]"}>KAM</th>
+                <th className={TH + " text-right"}>Ore hrs</th>
+                <th className={TH + " text-right"}>Ore loss MT</th>
+                <th className={TH + " text-right"}>OB hrs</th>
+                <th className={TH + " text-right"}>&#8377; L</th>
+                <th className={TH + " text-left w-[110px]"}>% of ctrl loss</th>
+              </tr>
+            </thead>
+            <tbody>
+              {q.isLoading && (
+                <tr><td className={TD + " text-txt-light"} colSpan={7}>
+                  Reading the loss matrix&hellip;
+                </td></tr>
+              )}
+              {!q.isLoading && shown.map((r) => {
+                const pc = share(r.loss_amount ?? 0);
+                return (
+                  <tr key={r.column} className="hover:bg-bg-light">
+                    <td className={TD + " font-semibold text-navy"}>{r.loss_description}</td>
+                    <td className={TD + " text-txt-secondary"}>{r.kam}</td>
+                    <td className={TD + " text-right"}>{n1(r.ore_hours ?? 0)}</td>
+                    <td className={TD + " text-right"}>{n0(r.planned_ore_loss ?? 0)}</td>
+                    <td className={TD + " text-right"}>{n1(r.ob_hours ?? 0)}</td>
+                    <td className={TD + " text-right"}><L v={toLakh(r.loss_amount)} strong /></td>
+                    <td className={TD}>
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 h-[8px] rounded-sm bg-bg-section overflow-hidden min-w-[40px]">
+                          <div className="h-full rounded-sm"
+                               style={{ width: Math.min(100, pc) + "%",
+                                        background: pc >= 20 ? CTRL_COLOUR : "#c8960c" }} />
+                        </div>
+                        <span className="text-[11px] text-txt-secondary">{pc.toFixed(1)}%</span>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+              {!q.isLoading && rest.length > 0 && (
+                <tr className="hover:bg-bg-light">
+                  <td className={TD + " text-txt-secondary"}>
+                    Others ({rest.length} heads)
+                  </td>
+                  <td className={TD + " text-txt-light"}>Various</td>
+                  <td className={TD + " text-right"}>{n1(restAgg.ore_hours)}</td>
+                  <td className={TD + " text-right"}>{n0(restAgg.ore_mt)}</td>
+                  <td className={TD + " text-right"}>{n1(restAgg.ob_hrs)}</td>
+                  <td className={TD + " text-right"}><L v={toLakh(restAgg.rs)} /></td>
+                  <td className={TD + " text-[11px] text-txt-secondary"}>
+                    {share(restAgg.rs).toFixed(1)}%
+                  </td>
+                </tr>
+              )}
+              {!q.isLoading && rows.length > 0 && (
+                <tr className="bg-bg-section border-t-2 border-border">
+                  <td className={TD + " font-condensed font-extrabold tracking-widest uppercase text-[11px] text-navy"}
+                      colSpan={2}>
+                    Total controllable
+                  </td>
+                  <td className={TD + " text-right font-bold text-navy"}>{n1(oreHrs)}</td>
+                  <td className={TD + " text-right font-bold text-navy"}>{n0(oreMt)}</td>
+                  <td className={TD + " text-right font-bold text-navy"}>{n1(obHrs)}</td>
+                  <td className={TD + " text-right"}><L v={toLakh(total)} strong /></td>
+                  <td className={TD + " text-[11px] font-bold text-navy"}>100%</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="p-3 border-l border-border-light">
+          <div className="rounded-md bg-[#fbe9e7] px-3 py-2.5">
+            <h4 className="font-condensed font-bold text-[12px] text-navy tracking-wide mb-1.5">
+              Key observations
+            </h4>
+            {q.isLoading || rows.length === 0 ? (
+              <p className="text-[10px] text-txt-light">Waiting for the loss matrix&hellip;</p>
+            ) : (
+              <ul className="list-disc pl-4 text-[10.5px] leading-relaxed text-txt-secondary space-y-1">
+                <li>
+                  <span className="font-bold">Top 3 heads = {share(top3).toFixed(1)}%</span>
+                  {" "}of controllable loss (&#8377;{n0(toLakh(top3) ?? 0)} L).
+                </li>
+                {idle.length > 0 && (
+                  <li>
+                    <span className="font-bold">Idle time</span> ({idle.map((r) => r.loss_description).join(", ")}){" "}
+                    = <span className="font-bold">&#8377;{n0(toLakh(idleRs) ?? 0)} L,
+                    {" "}{share(idleRs).toFixed(0)}%</span> &mdash; a planning and
+                    face-readiness question, not an equipment one.
+                  </li>
+                )}
+                {biggest && (
+                  <li>
+                    <span className="font-bold">{biggest.loss_description}</span> alone cost{" "}
+                    {n0(biggest.planned_ore_loss ?? 0)} MT of ore, against{" "}
+                    {n1(biggest.ore_hours ?? 0)} ore-hours.
+                  </li>
+                )}
+                <li>
+                  Controllable loss is {n0(oreMt)} MT of ore and {n1(obHrs)} hours
+                  of overburden time, worth &#8377;{n0(toLakh(total) ?? 0)} L in all.
+                </li>
+              </ul>
+            )}
+            <p className="mt-2 text-[9.5px] text-txt-light leading-relaxed">
+              Every line above is arithmetic on the table beside it.
+            </p>
+          </div>
+
+          {!q.isLoading && (actions.length > 0 || deferred.length > 0) && (
+            <div className="rounded-md bg-[#e8f3ea] px-3 py-2.5 mt-3">
+              <h4 className="font-condensed font-bold text-[12px] text-navy tracking-wide mb-1.5">
+                Actions recommended
+              </h4>
+              <ul className="list-disc pl-4 text-[10.5px] leading-relaxed
+                             text-txt-secondary space-y-1.5">
+                {actions.map((r) => (
+                  <li key={r.column}>
+                    {r.action_text}
+                    <span className="block text-[9.5px] text-txt-light mt-0.5">
+                      {r.loss_description} &middot;{" "}
+                      &#8377;{n0(toLakh(r.loss_amount) ?? 0)} L &middot;{" "}
+                      {share(r.loss_amount ?? 0).toFixed(1)}% of ctrl loss
+                      {r.owning_function && (
+                        <> &middot; <span className="font-semibold text-txt-secondary">
+                          {r.owning_function}
+                        </span></>
+                      )}
+                    </span>
+                  </li>
+                ))}
+                {deferred.map((r) => (
+                  <li key={r.column} className="text-txt-light">
+                    <span className="font-semibold">{r.loss_description}</span>{" "}
+                    is {share(r.loss_amount ?? 0).toFixed(1)}% of controllable loss
+                    and is answered in {ACTION_HANDLED_ELSEWHERE[r.column]}.
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-[9.5px] text-txt-light leading-relaxed">
+                The wording is the mine&rsquo;s own standing remedy for each loss
+                head, held in the LCM KAM Selector and dated there &mdash; not
+                generated, so this month reads the same way whenever it is
+                re-opened. Which of them appears is decided by the table beside
+                it: heads above {ACTION_MIN_SHARE_PCT}% of controllable loss,
+                largest first.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 function GradeTable({ icon, title, sub, qtyLabel, tdLabel, mtdLabel,
                      td, mtd, tdTotal, mtdTotal, showPlan = false,
                      qtyDp = 2, rainImpactMt }: {
@@ -1365,6 +2289,13 @@ export default function ExecutiveSummarySection() {
 
           <StockBlock d={d} />
 
+          {/* ABOVE MINES PRODUCTION, where the mine asked for it: the one-line
+              verdict on the month comes before the grade detail that explains
+              it. Given the whole payload rather than a dozen props -- it reads
+              seven different blocks of it, and threading those through the
+              signature would be a parameter list nobody could keep straight. */}
+          <MainKpiBlock d={d} mtdLabel={mtdLabel} />
+
           {/* MINES PRODUCTION ALONE CARRIES THE RAIN ROWS. The deduction is
               ore at the face; against COB concentrate or a despatch it would
               be a figure borrowed from another question. */}
@@ -1434,6 +2365,16 @@ export default function ExecutiveSummarySection() {
               dashboard filter, so the lines cover exactly the days the tables
               above them cover. */}
           <QualityTrendCharts from={d.mtd_from} to={d.report_day} />
+
+          {/* DIRECTLY BELOW THE DESPATCH QUALITY TREND, where the mine asked
+              for them: what the month cost and who owns it, after the
+              production and quality detail that explains how it arose.
+              Both take the report's OWN window rather than the dashboard
+              filter, so the loss covers exactly the days the tables above
+              cover -- see useExecLcm. */}
+          <KamLossBlock from={d.mtd_from} to={d.report_day} mtdLabel={mtdLabel} />
+          <KamRatingBlock from={d.mtd_from} to={d.report_day} mtdLabel={mtdLabel} />
+          <ControllableLossBlock from={d.mtd_from} to={d.report_day} mtdLabel={mtdLabel} />
 
           {/* And then what the ore became. Production and assay on one pair of
               axes, because a quality dip on a full day and the same dip on a
