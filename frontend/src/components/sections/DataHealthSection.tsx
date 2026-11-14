@@ -58,6 +58,20 @@ const TONE: Record<DataHealthStatus, {
 };
 
 /** Sidebar labels, so this page names a section the way the menu does. */
+/** Where a feed was actually read from.
+ *
+ * THREE VALUES, NOT TWO. The five SAP tables live in both databases and the
+ * server picks per request -- the OData feed when it is up, balcorpdb when it
+ * is not -- so this is the source that ANSWERED, not a fixed property of the
+ * feed. Rendering an unknown value as "MineHub", which a two-way test did,
+ * would have labelled SAP's own data as the platform's.
+ */
+const SOURCE_LABEL: Record<string, string> = {
+  mysql: "IMOS/SAP",
+  sapfeed: "SAP feed",
+  minehub: "MineHub",
+};
+
 const SECTION_LABEL: Record<string, string> = {
   "executive-summary": "Executive Summary",
   "mis": "MIS Dashboard",
@@ -305,7 +319,7 @@ export default function DataHealthSection() {
                     <td className={`${TD} text-[11px] text-txt-light`}>
                       <span className="uppercase tracking-wide text-[9px]
                                        text-steel mr-1.5">
-                        {f.source === "mysql" ? "IMOS/SAP" : "MineHub"}
+                        {SOURCE_LABEL[f.source] ?? f.source}
                       </span>
                       {f.table}
                     </td>

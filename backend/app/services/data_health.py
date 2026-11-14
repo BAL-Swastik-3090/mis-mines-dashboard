@@ -53,6 +53,18 @@ logger = logging.getLogger(__name__)
 
 MYSQL = "mysql"
 MINEHUB = "minehub"
+# The SAP OData feed, in Postgres under sap_odata_api.
+#
+# IT IS A SOURCE OF ITS OWN BECAUSE THE APPLICATION TREATS IT AS ONE. These
+# five tables exist in BOTH databases, and sap_source decides per request
+# which one a read lands on: the feed when it is up, balcorpdb when it is
+# not. Probing balcorpdb while the screens read the feed is the dewatering
+# failure described below, waiting to happen -- the report would stay green
+# off a copy nobody is reading while every figure on the page went stale.
+#
+# So this probe asks sap_source the SAME question the readers ask, and
+# reports whichever side actually answered.
+SAPFEED = "sapfeed"
 
 DAILY = "daily"
 PLAN = "plan"
@@ -139,26 +151,26 @@ FEEDS: tuple[Feed, ...] = (
     # -- SAP, interfaced -----------------------------------------------------
     Feed("sap_production", "SAP production postings",
          ("executive-summary", "mis", "amira", "oee", "lcm", "intelligence"),
-         MYSQL, "pp_production", "POSTING_DATE", SAP,
+         SAPFEED, "pp_production", "POSTING_DATE", SAP,
          "Goods receipts for ore, OB and concentrate. Every production tonnage "
          "on the dashboard is this table, netted of its reversals."),
     Feed("sap_quality", "SAP quality inspection (assays)",
          ("executive-summary", "mis", "amira", "lcm", "intelligence"),
-         MYSQL, "pp_quality_inspection", "QLT_START_DATE", SAP,
+         SAPFEED, "pp_quality_inspection", "QLT_START_DATE", SAP,
          "Cr2O3, Cr/Fe, FeO and moisture, one row per characteristic. The lab "
          "files after the material moves, so a tonnage can be present a day or "
          "two before its grade is."),
     Feed("sap_despatch", "Despatch gate records",
          ("executive-summary", "mis", "amira", "intelligence"),
-         MYSQL, "zsd_outbound_despatch", "GATEINDATE", SAP,
+         SAPFEED, "zsd_outbound_despatch", "GATEINDATE", SAP,
          "Outbound trips to Balasore and Jabamoyee, one row per truck."),
     Feed("sap_plant_output", "Ferrochrome plant output",
          ("executive-summary", "mis"),
-         MYSQL, "pp_prod_order_confirmation", "POSTING_DATE", SAP,
+         SAPFEED, "pp_prod_order_confirmation", "POSTING_DATE", SAP,
          "Furnace order confirmations at Balasore and Jabamoyee."),
     Feed("sap_maintenance", "Maintenance and breakdown orders",
          ("oee", "lcm"),
-         MYSQL, "mm_plant_maint_calibration", "BASIC_START_DATE", SAP,
+         SAPFEED, "mm_plant_maint_calibration", "BASIC_START_DATE", SAP,
          "Breakdown hours for the five owned excavators. The hired machines are "
          "not in SAP -- their downtime comes from the tipper log."),
 
@@ -269,7 +281,18 @@ UNMONITORED: dict[str, str] = {
 
 
 def _quote(source: str, ident: str) -> str:
-    return f"`{ident}`" if source == MYSQL else f'"{ident}"'
+    # THE FEED LOWER-CASES EVERYTHING. The registry carries SAP's own spelling
+    # -- GATEINDATE, POSTING_DATE -- because that is what balcorpdb uses and
+    # what every query in this codebase is written in. Postgres folded them on
+    # the way in, so "GATEINDATE" quoted as declared finds no column and the
+    # probe returns unknown for all five SAP feeds at once. Quoted lower, it
+    # matches; and it must stay quoted, because an unquoted identifier would
+    # break the minehub feeds if one were ever mixed-case.
+    if source == MYSQL:
+        return f"`{ident}`"
+    if source == SAPFEED:
+        return f'"{ident.lower()}"'
+    return f'"{ident}"'
 
 
 def _probe(db: Session, source: str, feeds: list[Feed]) -> dict[str, date | None]:
@@ -426,12 +449,43 @@ def get_data_health(mysql: Session, minehub: Session | None,
         by_source.setdefault(f.source, []).append(f)
 
     latest: dict[str, date | None] = {}
+    #: Where each feed was ACTUALLY read, which for the SAP five is decided
+    #: per request and so cannot be taken from the registry.
+    read_from: dict[str, str] = {}
     for source, feeds in by_source.items():
-        db = mysql if source == MYSQL else minehub
+        if source == SAPFEED:
+            # Ask sap_source the same question its readers ask, so the report
+            # describes the copy the screens are using rather than the copy
+            # this file happens to name.
+            from app.services.sap_source import _ready
+            use_feed = minehub is not None
+            if use_feed:
+                try:
+                    use_feed = _ready(minehub)
+                except Exception:               # noqa: BLE001
+                    use_feed = False
+            if use_feed:
+                db, probe_as = minehub, SAPFEED
+                try:
+                    minehub.execute(text(
+                        "SET LOCAL search_path TO sap_odata_api, minehub, public"))
+                except Exception:               # noqa: BLE001
+                    logger.warning("could not set the feed search path; "
+                                   "probing balcorpdb instead")
+                    db, probe_as = mysql, MYSQL
+            else:
+                # The readers will fall back to balcorpdb, so the freshness
+                # that matters is balcorpdb's.
+                db, probe_as = mysql, MYSQL
+        else:
+            db = mysql if source == MYSQL else minehub
+            probe_as = source
         if db is None:
             continue
         try:
-            latest.update(_probe(db, source, feeds))
+            latest.update(_probe(db, probe_as, feeds))
+            for f in feeds:
+                read_from[f.key] = probe_as
         except Exception:
             logger.warning("freshness probe unavailable for %s", source,
                            exc_info=True)
@@ -441,7 +495,12 @@ def get_data_health(mysql: Session, minehub: Session | None,
         last = _as_date(latest.get(f"{f.table}.{f.date_col}"))
         rows.append({
             "key": f.key, "label": f.label, "sections": list(f.sections),
-            "source": f.source, "table": f.table, "kind": f.kind,
+            # The source actually probed. For the SAP five that is the feed
+            # when it is up and balcorpdb when it is not -- the same choice
+            # the readers made -- so the report never claims a freshness it
+            # read somewhere else.
+            "source": read_from.get(f.key, f.source),
+            "table": f.table, "kind": f.kind,
             "note": f.note,
             # Who to chase, and what date this feed is held to. Both are
             # carried rather than inferred on the client: the rule lives here,
