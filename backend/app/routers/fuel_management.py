@@ -106,3 +106,19 @@ def stock_calendar(plant: str, request: Request,
     """Every day as a square: stock, what arrived, what was posted out."""
     from app.services import fuel_stock as svc
     return svc.fuel_calendar(pg, plant, back, forward)
+
+
+@router.get("/stock/{plant}/calculator")
+def stock_calculator(plant: str, request: Request,
+                     days: int = Query(14, ge=3, le=45),
+                     pg: Session = Depends(get_minehub_db),
+                     db: Session = Depends(get_db)) -> dict:
+    """The diesel calculator's starting figures, every one of them measured.
+
+    Opening stock, dead stock, the supply rhythm, the production plan, the
+    litres a cubic metre actually takes -- what the mine's own workbook types
+    in by hand, read from SAP and the excavation log instead. The screen works
+    the days out and lets the planner change any of it.
+    """
+    from app.services import fuel_stock as svc
+    return svc.fuel_calculator(pg, db, plant, days)

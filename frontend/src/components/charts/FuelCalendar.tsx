@@ -24,6 +24,9 @@ import { Chip } from "@/components/minehub/ui";
 interface Day {
   day: string; actual: boolean;
   closing_l: number; issued_l: number | null; received_l: number;
+  /** Sent to another plant. Not burn -- shown apart so a transfer out of
+   *  Sukinda no longer reads as Sukinda using eighteen thousand litres. */
+  transferred_out_l?: number | null;
   days_cover: number | null; dry?: boolean;
 }
 
@@ -88,7 +91,8 @@ export default function FuelCalendar({ days, today, burnPerDay }: {
                     <div key={d.day}
                       title={d.actual
                         ? `${short(d.day)} — ${L(d.closing_l)} L in tank`
-                          + `, ${L(d.issued_l ?? 0)} L posted out`
+                          + `, ${L(d.issued_l ?? 0)} L consumed`
+                          + ((d.transferred_out_l ?? 0) > 0 ? `, ${L(d.transferred_out_l ?? 0)} L sent to another plant` : "")
                           + `, ${L(d.received_l)} L arrived`
                           + (d.days_cover !== null ? ` · ${d.days_cover} days of cover` : "")
                         : `${short(d.day)} — projected ${L(d.closing_l)} L. `
@@ -114,9 +118,10 @@ export default function FuelCalendar({ days, today, burnPerDay }: {
                           ? <>
                               {d.received_l > 0 && <span className="font-semibold">+{L(d.received_l)} </span>}
                               {(d.issued_l ?? 0) > 0 ? `−${L(d.issued_l ?? 0)}` : null}
-                              {(d.issued_l ?? 0) === 0 && d.received_l === 0 ? "nothing posted" : null}
+                              {(d.transferred_out_l ?? 0) > 0 && <span className="block opacity-90">→ {L(d.transferred_out_l ?? 0)} sent</span>}
+                              {(d.issued_l ?? 0) === 0 && d.received_l === 0 && !(d.transferred_out_l ?? 0) ? "nothing posted" : null}
                             </>
-                          : d.dry ? "dry" : "projected"}
+                          : d.dry ? "below dead stock" : d.received_l > 0 ? `+${L(d.received_l)} due` : "projected"}
                       </span>
                     </div>
                   );
