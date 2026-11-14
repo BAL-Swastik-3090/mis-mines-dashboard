@@ -767,8 +767,17 @@ def _summary(pg: Session, frm: date, to: date, rd: date) -> dict[str, Any]:
             "plan_dry_from": (chain["dry_from"].isoformat()
                               if chain["dry_from"] else None),
             "plan_dry_days": chain["dry_days"],
+            # BOTH ENDS, NOT JUST THE OPENING. The guard tested `opening`
+            # alone, so a window whose LAST entered day has no closing stock
+            # -- 13 November 2026, filed with the pump hours but not yet the
+            # rainfall -- reached a None minus a float and raised. The caller
+            # catches that and returns the whole dewatering block as None, so
+            # one missing figure on one day blanked the sump, the disposal,
+            # the pump hours and the Executive Summary's dewatering KPI
+            # together. `drawdown` above already guards both ends; this is
+            # the same test.
             "stock_change_pct": (round((closing - opening) / opening * 100, 1)
-                                 if opening else None),
+                                 if (opening and closing is not None) else None),
             "net_drawdown": drawdown,
             "days_to_clear": days_to_clear,
             "completeness_pct": completeness,
