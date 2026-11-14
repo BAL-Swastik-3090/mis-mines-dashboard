@@ -18,6 +18,16 @@
 -- can change without a developer.
 
 
+-- WITHOUT THIS LINE THIS FILE CANNOT BE REPLAYED. Every name below is
+-- unqualified, so the schema they land in is whatever the applier's
+-- search_path happens to say. On corpappdb that was minehub and this is a
+-- no-op; from a clean database applied as postgres it would create
+-- fuel_movement_class and fuel_plant_setting in PUBLIC, and the ALTER on
+-- fuel_material would fail outright -- taking the rest of the set with it.
+-- Ten of the other migrations in this range already carry the line.
+SET LOCAL search_path = minehub, public;
+
+
 -- ---------------------------------------------------------------------------
 -- 1. What an SAP movement MEANS for fuel
 -- ---------------------------------------------------------------------------
