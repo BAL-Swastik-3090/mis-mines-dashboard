@@ -36,7 +36,8 @@ logger = logging.getLogger(__name__)
 _RESOLVE_HEADS = """
     SELECT DISTINCT ON (column_name)
            column_name, label, loss_type, kam_name, role_code,
-           sl_order, is_active, effective_from, revision
+           sl_order, is_active, action_text, owning_function,
+           effective_from, revision
     FROM   minehub.lcm_loss_head_setting
     ORDER  BY column_name,
               (effective_from <= :on_date) DESC,
@@ -56,6 +57,10 @@ def resolve(db: Session, on_date: date) -> dict[str, dict[str, Any]]:
         "role_code":      r.role_code,
         "sl_order":       r.sl_order,
         "is_active":      r.is_active,
+        # The mine's standing remedy for this head, and who carries it out.
+        # NULL is a real answer -- 'other' is a catch-all and is given none.
+        "action_text":     r.action_text,
+        "owning_function": r.owning_function,
         "effective_from": r.effective_from,
         "revision":       r.revision,
     } for r in db.execute(text(_RESOLVE_HEADS), {"on_date": on_date})}

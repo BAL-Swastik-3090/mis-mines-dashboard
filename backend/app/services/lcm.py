@@ -380,6 +380,14 @@ def discover_loss_heads(db: Session,
         "role":      pick(col, "role_code",
                           ROLE_BY_COLUMN.get(col, ROLE_UNMAPPED)),
         "is_active": pick(col, "is_active", True),
+        # THE STANDING REMEDY, AND NO FALLBACK. Where the owner and the type
+        # fall back to the maps compiled into this file when minehub is
+        # unreachable, an action has nowhere to fall back TO -- it exists only
+        # because somebody at the mine wrote it. A blank panel is the honest
+        # answer; an invented instruction addressed to a named department is
+        # not.
+        "action_text":     pick(col, "action_text", None),
+        "owning_function": pick(col, "owning_function", None),
     } for col in cols]
     heads.sort(key=lambda h: h["sl_no"])
     return heads
@@ -1274,6 +1282,8 @@ def get_lcm_by_equipment(db: Session, from_date: date, to_date: date) -> dict:
             "loss_type": h["loss_type"],
             "kam": h["kam"],
             "role": h["role"],
+            "action_text":     h["action_text"],
+            "owning_function": h["owning_function"],
             # The equipment-wise roll-up: every machine's cell added together.
             "ore_hours": round(sum(ore_per[n].get(src, 0.0) for n in ore_per), 2),
             "planned_ore_loss": ore_tot,
