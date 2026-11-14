@@ -61,7 +61,11 @@ def search(db: Session, *,
                -- actually said, not what today's limits would make of it.
                (SELECT count(*) FROM hoto_response r
                  WHERE r.session_id = s.session_id
-                   AND (r.answer IN ('NOT_OK','CAUTION') OR r.in_range = false)) AS adverse_count,
+                   -- An answer with a severity is a fault: set at capture, on a
+                   -- fault only. The answer-text test alone never counted a
+                   -- yes/no fault. See hoto_defects.raise_from_session.
+                   AND (r.severity IS NOT NULL
+                        OR r.answer IN ('NOT_OK','CAUTION') OR r.in_range = false)) AS adverse_count,
                -- NOT max(r.severity): severity is text, so max() sorts it
                -- alphabetically and MEDIUM comes out above CRITICAL. This
                -- column read wrong from the day it was written.
@@ -93,7 +97,8 @@ def search(db: Session, *,
            AND (NOT :adverse OR EXISTS (
                  SELECT 1 FROM hoto_response r
                   WHERE r.session_id = s.session_id
-                    AND (r.answer IN ('NOT_OK','CAUTION') OR r.in_range = false)))
+                    AND (r.severity IS NOT NULL
+                         OR r.answer IN ('NOT_OK','CAUTION') OR r.in_range = false)))
          ORDER BY s.captured_at DESC, s.session_id DESC
          LIMIT :lim
     """), {"frm": from_date, "to": to_date, "asset": asset_id, "op": operator_id,
@@ -187,7 +192,9 @@ def detail(db: Session, session_id: int) -> dict[str, Any] | None:
         for k in ("numeric_value", "min_value", "max_value"):
             if row.get(k) is not None:
                 row[k] = float(row[k])
-        row["is_adverse"] = (row["answer"] in ("NOT_OK", "CAUTION")
+        # Same rule as the list and as defect raising: a severity is a fault.
+        row["is_adverse"] = (row["severity"] is not None
+                             or row["answer"] in ("NOT_OK", "CAUTION")
                              or row["in_range"] is False)
         sections[-1]["answers"].append(row)
 

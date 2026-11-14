@@ -77,7 +77,14 @@ def raise_from_session(db: Session, session_id: int, actor: str) -> dict[str, An
           FROM hoto_response r
           LEFT JOIN hoto_checklist_item i ON i.item_id = r.item_id
          WHERE r.session_id = :s
-           AND (r.answer IN ('NOT_OK', 'CAUTION') OR r.in_range = false)
+           -- A FAULT IS AN ANSWER WITH A SEVERITY. The evaluator sets one on
+           -- a fault and only on a fault, at capture, by the rules in force
+           -- then. The answer-text test alone missed every yes/no fault: after
+           -- the 13 Nov fix a "ROPS damage: YES" handover was marked BLOCKED,
+           -- raised no defect and locked nothing. The old test stays alongside
+           -- for rows filed before severity was stored.
+           AND (r.severity IS NOT NULL
+                OR r.answer IN ('NOT_OK', 'CAUTION') OR r.in_range = false)
     """), {"s": session_id}).mappings().all()
 
     raised, sighted = [], []
