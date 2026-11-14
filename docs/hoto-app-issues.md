@@ -1,7 +1,7 @@
 # HOTO tablet app — issue list
 
 **13 November 2026.** Open list, numbered so we can pick items off.
-**9 of 21 fixed** as of 14 Nov — marked ✅ (commits `4b79c71`, `e3e4f77`). Each item says what is wrong and where, so we are not
+**14 of 21 fixed** as of 14 Nov — marked ✅ (commits `4b79c71`, `e3e4f77`, `925aeae`). Each item says what is wrong and where, so we are not
 working from screenshots when we come to fix it.
 
 Add to it freely — the numbering is stable, new items go on the end.
@@ -37,11 +37,37 @@ in the dashboard gap list.
 
 | # | Issue | Where |
 |---|---|---|
-| **B1** | **Nothing on the form is marked required.** Required-ness only appears at the very end, as a dim button. An operator cannot see what is compulsory while filling it in. ◐ *The identify screen now marks each step Required until answered; readings and checklist still do not.* | all capture screens |
-| **B2** | **"N things left" does not say which, and does not take you there.** The confirm screen lists them in a box below the fold; the button itself just counts. | `confirm.tsx` → `stopping` |
-| **B3** | **"All OK" fills everything at once.** You asked for this to step through instead — ask, answer, next — so the operator passes each check deliberately rather than approving a screen they have not read. | `src/core/routine.ts` → `ROUTINE_PASS` |
-| **B4** | **Yes/no checks are left out of "All OK" and nobody is told why.** Correctly so — the pass answer depends on the wording — but the operator just finds them still unanswered with no explanation. | `routine.ts` (no `YES_NO` entry) |
-| **B5** | **Required-if rules are invisible.** "Photo required if not OK" is enforced but never shown until it blocks you. | `evaluation.ts` |
+| **B1** ✅ | **Nothing on the form is marked required.** Required-ness only appears at the very end, as a dim button. An operator cannot see what is compulsory while filling it in. | all capture screens |
+| **B2** ✅ | **"N things left" does not say which, and does not take you there.** The confirm screen lists them in a box below the fold; the button itself just counts. | `confirm.tsx` → `stopping` |
+| **B3** ✅ | **"All OK" fills everything at once.** You asked for this to step through instead — ask, answer, next — so the operator passes each check deliberately rather than approving a screen they have not read. | `src/core/routine.ts` → `ROUTINE_PASS` |
+| **B4** ✅ | **Yes/no checks are left out of "All OK" and nobody is told why.** Correctly so — the pass answer depends on the wording — but the operator just finds them still unanswered with no explanation. | `routine.ts` (no `YES_NO` entry) |
+| **B5** ✅ | **Required-if rules are invisible.** "Photo required if not OK" is enforced but never shown until it blocks you. | `evaluation.ts` |
+
+**✅ B1–B5 FIXED, 14 Nov** (commit `925aeae`).
+
+- **B3** — "All OK" now walks through what is left, one check per screen. A
+  clean answer moves on by itself; a fault waits for its note and photo; a
+  reading waits for Next. The one-tap fill is gone.
+- **B4** — dissolved with B3: every check is asked, so none is skipped silently.
+  (It had also moved on since this list was written: yes/no checks the mine
+  has classified *were* being filled; only unclassified ones were skipped.)
+- **B1** — unanswered checks carry an amber edge; the identify and readings
+  screens mark each field Required or Optional; every button names the first
+  thing still missing.
+- **B2** — each thing left on the confirm screen takes you to it, and the
+  button goes to the first one.
+- **B5** — each check shows its rules before it is answered: "Photo if Caution
+  or Not OK", "Yes is a fault", "Stops the machine".
+
+Two bugs found while doing it, both fixed:
+
+- **A lower meter could never be confirmed.** The readings screen said "if it
+  is right, say why in the remarks", but doing so changed nothing — a replaced
+  meter could only be filed with a made-up number. An explanation now lets it
+  stand; the register still flags it.
+- **Fuel above 100 % was accepted on the tablet and refused by the database**,
+  so that handover failed on every sync, for ever, with no way to correct it.
+  Refused at the machine now, and in words by the server for older builds.
 
 ## C · Messages that are not quite true
 

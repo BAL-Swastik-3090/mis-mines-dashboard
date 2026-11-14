@@ -136,14 +136,14 @@ order and failed outright, so no published checklist could be edited at all.
 
 ---
 
-## Part 3 · Tablet app — 9 of 21 done
+## Part 3 · Tablet app — 14 of 21 done
 
 Full detail in `docs/hoto-app-issues.md`. Summary:
 
 | Group | Count | Headline |
 |---|---|---|
 | **A · Who is who** | 4 | ✅ **Fixed 14 Nov** — three people on every handover, and the two halves paired (migration 115) |
-| **B · Mandatory fields** | 5 | Nothing is marked required; "All OK" fills everything at once instead of stepping through |
+| **B · Mandatory fields** | 5 | ✅ **Fixed 14 Nov** — one check at a time, Required shown where asked, every thing left takes you to it |
 | **C · Untrue messages** | 3 | "Everything has reached the office" shown in green above "6 photos waiting" |
 | **D · Hide before production** | 3 | Server address editable on screen; internal sync state shown |
 | **E · Not enterprise-grade** | 7 | No animation anywhere, no flow progress, Done button clips its own label |
@@ -176,7 +176,7 @@ Full detail in `docs/hoto-app-issues.md`. Summary:
    harder every day, and until it lands every handover records one name where
    there should be three.
 4. **P1** — store and evaluate the version actually answered.
-5. **B1–B3** — mandatory fields and sequential "All OK".
+5. ✅ **B1–B5** — done 14 Nov. Was: mandatory fields and sequential "All OK".
 6. **P2** — write down what a block means offline, and the mine's hold
    procedure. This is a decision to take with the mine, not code.
 7. **E1–E7** — the design pass, after the screens stop changing shape.
