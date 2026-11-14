@@ -420,6 +420,80 @@ def register(request: Request,
     return {"count": len(rows), "sessions": rows}
 
 
+@router.get("/register/export.csv")
+def register_export(request: Request,
+                    from_date: date | None = Query(default=None),
+                    to_date: date | None = Query(default=None),
+                    asset_id: int | None = Query(default=None),
+                    status: str | None = Query(default=None),
+                    session_type: str | None = Query(default=None),
+                    only_adverse: bool = Query(default=False),
+                    db: Session = Depends(get_minehub_db)):
+    """The register, as a file.
+
+    A register whose job is evidence has to leave the screen: for an audit,
+    an inquiry, a monthly report. Same filters as the list, so what is
+    exported is what was on screen. Declared before /register/{session_id},
+    which would otherwise try to read "export.csv" as a handover number.
+    """
+    import csv
+    import io
+    from fastapi.responses import Response
+
+    _guard(request, db)
+    rows = reg.search(db, from_date=from_date, to_date=to_date, asset_id=asset_id,
+                      status=status, session_type=session_type,
+                      only_adverse=only_adverse, limit=1000)
+    kind = {"START_HANDOVER": "Taking over", "END_HANDOVER": "Handing over",
+            "MID_SHIFT": "Mid-shift check"}
+
+    def other_side(r):
+        if r.get("counterpart_name") or r.get("counterpart_emp_id"):
+            return r.get("counterpart_name") or r.get("counterpart_emp_id")
+        return "Nobody (parked)" if r.get("counterpart_absent") else ""
+
+    def filled_by(r):
+        if r.get("recorded_by_operator_id") is None:
+            return ""
+        if r["recorded_by_operator_id"] == r.get("operator_id"):
+            return "The operator"
+        return r.get("recorded_by_name") or r.get("recorded_by_emp_id") or ""
+
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["Reference", "Captured", "Production day", "Shift", "Machine",
+                "Machine type", "Kind", "Operator", "Operator number",
+                "Other side", "Filled in by", "Status", "Blocked because",
+                "Faults", "Checks answered", "Worst severity", "Photos",
+                "Meter", "Meter unit", "Fuel %", "Position", "Other half",
+                "Halves disagree on", "Device", "Reached the office",
+                "Delay (min)", "Remarks"])
+    for r in rows:
+        w.writerow([
+            r["session_ref"], r["captured_at"].isoformat() if r.get("captured_at") else "",
+            r.get("production_day") or "", r.get("shift_code") or "",
+            r["fleet_code"], r["asset_type_name"], kind.get(r["session_type"], r["session_type"]),
+            r.get("operator_name") or "", r.get("operator_emp_id") or "",
+            other_side(r), filled_by(r), r["status"], r.get("blocked_reason") or "",
+            r["adverse_count"], r["answer_count"], r.get("worst_severity") or "",
+            r["photo_count"], r.get("meter_reading") if r.get("meter_reading") is not None else "",
+            r.get("meter_uom") or "", r.get("fuel_level") if r.get("fuel_level") is not None else "",
+            (f"{r['captured_lat']},{r['captured_lon']}"
+             if r.get("captured_lat") is not None else (r.get("gps_status") or "")),
+            r.get("counterpart_ref") or "",
+            r.get("pair_differs") if r.get("counterpart_ref") else "",
+            r.get("device_code") or "",
+            r["received_at"].isoformat() if r.get("received_at") else "",
+            r.get("sync_delay_minutes") if r.get("sync_delay_minutes") is not None else "",
+            r.get("remarks") or "",
+        ])
+    name = f"hoto-register-{from_date or 'all'}-to-{to_date or 'now'}.csv"
+    # The BOM is for Excel, which otherwise reads names in Odia or with an
+    # accent as mojibake.
+    return Response(content="﻿" + buf.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
 @router.get("/register/{session_id}")
 def register_detail(session_id: int, request: Request,
                     db: Session = Depends(get_minehub_db)) -> dict:

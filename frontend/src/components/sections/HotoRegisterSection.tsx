@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle, Camera, Check, Minus, ChevronLeft, CloudOff, Loader2, MapPin, MapPinOff, Filter, Search, TrendingDown, X,
+  AlertTriangle, ArrowLeftRight, Camera, Check, Minus, ChevronLeft, CloudOff, Download, Loader2, MapPin, MapPinOff, Filter, Search, TrendingDown, X,
 } from "lucide-react";
 import api from "@/lib/api";
 
@@ -77,6 +77,30 @@ interface Row {
   answer_count: number;
   photo_count: number;
   template_version: number | null;
+  /* The other half of the handover, paired by the server (migration 115),
+     and on how many checks the two halves disagree about a fault. */
+  counterpart_session_id?: number | null;
+  counterpart_ref?: string | null;
+  counterpart_type?: string | null;
+  pair_differs?: number | null;
+}
+
+interface Difference {
+  item_label: string;
+  this: string;
+  other: string;
+  this_found: boolean;
+  other_found: boolean;
+  severity: Severity | null;
+}
+
+interface Comparison {
+  compared: number;
+  agree: number;
+  differ: Difference[];
+  both_found: { item_label: string; this: string; other: string }[];
+  only_this_asked: number;
+  only_other_asked: number;
 }
 
 interface Answer {
@@ -116,6 +140,7 @@ interface Detail extends Row {
   counterpart_session_operator_name: string | null;
   /** Who the OTHER half names as being on this side. */
   counterpart_session_named_id: number | null;
+  comparison: Comparison | null;
   remarks: string | null;
   sections: { name: string; answers: Answer[] }[];
   adverse: Answer[];
@@ -321,12 +346,32 @@ export default function HotoRegisterSection() {
             </Explainer>
           </h2>
         </div>
-        {blocked > 0 && (
-          <div className="flex items-center gap-1.5 text-[11px] px-2 py-1 rounded bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200">
-            <AlertTriangle size={12} />
-            {blocked} machine{blocked === 1 ? "" : "s"} blocked in this period
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          {blocked > 0 && (
+            <div className="flex items-center gap-1.5 text-[11px] px-2 py-1 rounded bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200">
+              <AlertTriangle size={12} />
+              {blocked} machine{blocked === 1 ? "" : "s"} blocked in this period
+            </div>
+          )}
+          {/* A register whose job is evidence has to leave the screen. Same
+              filters as the list, so the file is what was on screen. The
+              search box narrows in the browser only, so it is not applied --
+              said in the title rather than silently ignored. */}
+          <a
+            href={`/api/hoto/register/export.csv?${new URLSearchParams({
+              from_date: from, to_date: to,
+              ...(onlyAdverse ? { only_adverse: "true" } : {}),
+              ...(statusFilter ? { status: statusFilter } : {}),
+            }).toString()}`}
+            className="flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-border
+                       hover:bg-muted text-foreground"
+            title={q.trim()
+              ? "Exports the dates and status chosen. The search box is not applied to the file."
+              : "Exports every handover in the dates and status chosen"}
+          >
+            <Download size={12} /> Export CSV
+          </a>
+        </div>
       </header>
 
       {arrivedFor && (
@@ -448,6 +493,23 @@ export default function HotoRegisterSection() {
                   </td>
                   <td className="px-2 py-1.5 whitespace-nowrap">
                     {TYPE_LABEL[r.session_type] ?? r.session_type}
+                    {/* Its other half, and a mark when the two disagree about a
+                        fault -- the question a handover exists to answer. */}
+                    {r.counterpart_ref && (
+                      <span
+                        className={`ml-1.5 inline-flex items-center gap-0.5 text-[9px] font-mono ${
+                          (r.pair_differs ?? 0) > 0
+                            ? "text-amber-700 dark:text-amber-300 font-semibold"
+                            : "text-muted-foreground"}`}
+                        title={(r.pair_differs ?? 0) > 0
+                          ? `Paired with ${r.counterpart_ref}. The two halves disagree on ${r.pair_differs} check${r.pair_differs === 1 ? "" : "s"}.`
+                          : `Paired with ${r.counterpart_ref}. The two halves agree.`}
+                      >
+                        <ArrowLeftRight size={9} />
+                        {r.counterpart_ref.replace(/^HOTO-0*/, "")}
+                        {(r.pair_differs ?? 0) > 0 && <AlertTriangle size={9} />}
+                      </span>
+                    )}
                   </td>
                   <td className="px-2 py-1.5 whitespace-nowrap">
                     {r.shift_code
@@ -594,6 +656,7 @@ function DetailView({ d, onBack }: { d: Detail; onBack: () => void }) {
         )}
 
         <People d={d} />
+        {d.comparison && <Compared d={d} c={d.comparison} />}
 
         <dl className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-1.5 text-[11px]">
           <Field label="Confirmed by" value={
@@ -804,6 +867,87 @@ function People({ d }: { d: Detail }) {
               them names the wrong person, and only somebody on site can say which.
             </span>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── the two halves, check by check ──────────────────────────────────────────
+   The question a handover exists to answer, which nothing could ask until the
+   server paired them: did the person going off and the person coming on say
+   the same thing about this machine? A fault found on taking over and not
+   reported on handing over is either something that happened in the gap, or
+   something one of them did not look at -- the most useful line in the
+   register either way. Worst first. */
+
+function Compared({ d, c }: { d: Detail; c: Comparison }) {
+  const thisSide = TYPE_LABEL[d.session_type] ?? "This half";
+  const otherSide = TYPE_LABEL[d.counterpart_type ?? ""] ?? "The other half";
+  const thisWho = d.operator_name ?? d.operator_emp_id;
+  const otherWho = d.counterpart_session_operator_name;
+  return (
+    <div className="rounded border border-border">
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 px-2.5 py-1.5 border-b border-border bg-muted/30">
+        <span className="text-[11px] font-semibold">Compared with the other half</span>
+        <span className={`text-[11px] ${c.differ.length > 0
+          ? "text-amber-800 dark:text-amber-200 font-medium" : "text-emerald-700 dark:text-emerald-300"}`}>
+          {c.differ.length === 0
+            ? `Both halves agree on all ${c.compared} checks`
+            : `They disagree on ${c.differ.length} of ${c.compared} checks`}
+        </span>
+        {(c.only_this_asked > 0 || c.only_other_asked > 0) && (
+          <span className="text-[10px] text-muted-foreground">
+            · {c.only_this_asked + c.only_other_asked} asked of one half only (a different checklist version), not compared
+          </span>
+        )}
+      </div>
+
+      {(c.differ.length > 0 || c.both_found.length > 0) && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-[11px]">
+            <thead className="text-[10px] uppercase text-muted-foreground">
+              <tr>
+                <th className="text-left px-2.5 py-1 font-medium">Check</th>
+                <th className="text-left px-2.5 py-1 font-medium">
+                  {thisSide}{thisWho ? ` · ${thisWho}` : ""}
+                </th>
+                <th className="text-left px-2.5 py-1 font-medium">
+                  {otherSide}{otherWho ? ` · ${otherWho}` : ""}
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {c.differ.map((x) => (
+                <tr key={x.item_label} className="bg-amber-50/60 dark:bg-amber-950/20">
+                  <td className="px-2.5 py-1.5 font-medium">
+                    {x.item_label}
+                    {x.severity && (
+                      <span className={`ml-1.5 text-[9px] px-1 py-0.5 rounded ${SEVERITY_STYLE[x.severity]}`}>
+                        {x.severity}
+                      </span>
+                    )}
+                  </td>
+                  <td className={`px-2.5 py-1.5 ${x.this_found ? "text-red-700 dark:text-red-300 font-semibold" : ""}`}>
+                    {x.this}
+                  </td>
+                  <td className={`px-2.5 py-1.5 ${x.other_found ? "text-red-700 dark:text-red-300 font-semibold" : ""}`}>
+                    {x.other}
+                  </td>
+                </tr>
+              ))}
+              {c.both_found.map((x) => (
+                <tr key={`both-${x.item_label}`}>
+                  <td className="px-2.5 py-1.5">
+                    {x.item_label}
+                    <span className="ml-1.5 text-[9px] text-muted-foreground">both reported</span>
+                  </td>
+                  <td className="px-2.5 py-1.5 text-red-700 dark:text-red-300">{x.this}</td>
+                  <td className="px-2.5 py-1.5 text-red-700 dark:text-red-300">{x.other}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </div>
