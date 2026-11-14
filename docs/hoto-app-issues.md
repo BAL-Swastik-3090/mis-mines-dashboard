@@ -1,7 +1,7 @@
 # HOTO tablet app — issue list
 
-**13 November 2026.** Open list, numbered so we can pick items off. Nothing
-here is fixed yet. Each item says what is wrong and where, so we are not
+**13 November 2026.** Open list, numbered so we can pick items off.
+**9 of 21 fixed** as of 14 Nov — marked ✅ (commits `4b79c71`, `e3e4f77`). Each item says what is wrong and where, so we are not
 working from screenshots when we come to fix it.
 
 Add to it freely — the numbering is stable, new items go on the end.
@@ -47,9 +47,9 @@ in the dashboard gap list.
 
 | # | Issue | Where |
 |---|---|---|
-| **C1** | **"Everything on this tablet has reached the office" shows green while "6 photo(s) waiting to upload" sits directly under it.** The banner's test counts handovers only and ignores photos. | `app/index.tsx:68` — `waiting === 0` |
-| **C2** | **Bracket plurals everywhere** — "photo(s)", "handover(s)". Reads as unfinished software. | `index.tsx`, `sync.tsx` |
-| **C3** | **The Done screen's amber paragraph is a wall of text** for what is one fact: it is saved here, not filed yet. | `confirm.tsx` → `doneWaiting` |
+| **C1** ✅ | **"Everything on this tablet has reached the office" shows green while "6 photo(s) waiting to upload" sits directly under it.** The banner's test counts handovers only and ignores photos. | `app/index.tsx:68` — `waiting === 0` |
+| **C2** ✅ | **Bracket plurals everywhere** — "photo(s)", "handover(s)". Reads as unfinished software. | `index.tsx`, `sync.tsx` |
+| **C3** ✅ | **The Done screen's amber paragraph is a wall of text** for what is one fact: it is saved here, not filed yet. | `confirm.tsx` → `doneWaiting` |
 
 ## D · Things to hide before production
 
@@ -66,8 +66,8 @@ something, and change them when we go to production.
 
 | # | Issue | Where |
 |---|---|---|
-| **E1** | **The Done screen is mostly empty.** Content sits dead-centre in a full screen of white with nothing anchoring it. | `confirm.tsx` → `styles.centre` |
-| **E2** | **The Done button is tiny and its label is clipped.** `styles.primary` sets `minHeight: 72` but no width, and inside a centred container it shrinks to the text — so "Done" overflows its own button. A real bug, not just taste. | `confirm.tsx` → `styles.primary` + `styles.centre` |
+| **E1** ✅ | **The Done screen is mostly empty.** Content sits dead-centre in a full screen of white with nothing anchoring it. | `confirm.tsx` → `styles.centre` |
+| **E2** ✅ | **The Done button is tiny and its label is clipped.** `styles.primary` sets `minHeight: 72` but no width, and inside a centred container it shrinks to the text — so "Done" overflows its own button. A real bug, not just taste. | `confirm.tsx` → `styles.primary` + `styles.centre` |
 | **E3** | **No animation anywhere.** No press feedback, no screen transition, no progress on save, nothing on success. Every state change is instant and silent, which is what makes it feel unfinished. | whole app |
 | **E4** | **No progress through the capture flow.** Machine → operator → readings → checklist → confirm, with nothing saying where you are or how much is left. | `app/capture/*` |
 | **E5** | **The unfinished list is undifferentiated.** Six near-identical cards, most saying "nobody identified yet", in no order of urgency. | `app/index.tsx` |

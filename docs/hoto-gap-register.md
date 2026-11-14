@@ -136,7 +136,7 @@ order and failed outright, so no published checklist could be edited at all.
 
 ---
 
-## Part 3 · Tablet app — 7 of 21 done
+## Part 3 · Tablet app — 9 of 21 done
 
 Full detail in `docs/hoto-app-issues.md`. Summary:
 
