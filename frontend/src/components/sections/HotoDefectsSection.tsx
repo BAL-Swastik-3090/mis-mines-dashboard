@@ -18,7 +18,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle, Check, ChevronLeft, Clock, Eye, Loader2, Filter, Lock, Search, Wrench, X, Camera,
+  AlertTriangle, Check, ChevronLeft, Clock, Eye, Loader2, Filter, Lock, Search, UserCheck, Wrench, X, Camera,
 } from "lucide-react";
 import api from "@/lib/api";
 import { HotoPhotos } from "@/components/hoto/HotoPhotos";
@@ -57,6 +57,14 @@ interface Defect {
   sightings: number;
   last_seen_at: string | null;
   machine_state: string | null;
+  /* Migration 116: who is fixing it, and by when. due_date is the target a
+     person set, or -- when nobody has -- the severity norm, and due_is_set
+     says which, so the screen never passes a norm off as a promise. */
+  assigned_to: string | null;
+  target_date: string | null;
+  due_date: string;
+  due_is_set: boolean;
+  overdue_days: number;
 }
 
 interface Sighting {
@@ -74,8 +82,20 @@ interface Event {
   actor: string;
   at: string;
   note: string | null;
+  kind?: "STATE" | "ASSIGNED" | "TARGET";
 }
-interface Detail extends Defect { sightings_list?: Sighting[]; events?: Event[] }
+interface Detail extends Defect {
+  sightings_list?: Sighting[];
+  events?: Event[];
+  target_norm_days?: number;
+}
+
+/** Where a repair is still owed: the stages a defect can be planned in. */
+const OWED: State[] = ["RAISED", "ACKNOWLEDGED", "RECTIFIED"];
+
+const day = (iso: string) =>
+  new Date(`${iso.slice(0, 10)}T00:00:00`).toLocaleDateString("en-IN", {
+    day: "2-digit", month: "short" });
 
 const SEVERITY_STYLE: Record<Severity, string> = {
   LOW: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
@@ -183,6 +203,23 @@ export default function HotoDefectsSection() {
     }
   }, [load, detail, open]);
 
+  const plan = useCallback(async (id: number, body: { assigned_to?: string; target_date?: string }) => {
+    setBusy(true); setError(null);
+    try {
+      await api.post(`/hoto/defects/${id}/plan`, body);
+      const fresh = await load();
+      const row = fresh.find((x) => x.defect_id === id);
+      if (detail) await open(row ?? detail);
+      return true;
+    } catch (e: any) {
+      const d = e?.response?.data?.detail;
+      setError(Array.isArray(d?.problems) ? d.problems : [d?.message ?? d ?? "Refused."]);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }, [load, detail, open]);
+
   /* Arriving from the board or the register, narrowed to one machine. Taken
      once: see useHotoFocus for why a linked filter must not persist. */
   const goTo = useHotoFocus((st) => st.goTo);
@@ -206,19 +243,15 @@ export default function HotoDefectsSection() {
     return byMachine;
   }, [rows]);
 
-  /* OVERDUE, BY WHAT THE DEFECT IS.
-     A raw age in days put a critical brake fault and a horn on the same
-     footing at three days old. These are the intervals the mine would use if
-     anybody asked it: a critical fault is overdue the day after it is
-     raised, a horn can wait a fortnight. Shown as a flag, not as a column of
-     dates nobody set -- the system has no target date to promise, so it must
-     not pretend to one. */
-  const OVERDUE_AFTER_DAYS: Record<string, number> = {
-    CRITICAL: 1, HIGH: 3, MEDIUM: 7, LOW: 14,
-  };
-  const isOverdue = (r: Defect) =>
-    r.state !== "VERIFIED" && r.state !== "CLOSED"
-    && r.age_days > (OVERDUE_AFTER_DAYS[r.severity] ?? 7);
+  /* OVERDUE AGAINST A DATE. The severity intervals this screen used to apply
+     itself (critical 1 day, high 3, medium 7, low 14) now live on the server,
+     which uses them only when nobody has set a target -- so the date the
+     screen suggests and the date it judges by are one rule, and a target a
+     person set wins over both. */
+  const isOverdue = (r: Defect) => (r.overdue_days ?? 0) > 0;
+  const owners = useMemo(() =>
+    [...new Set(rows.map((r) => r.assigned_to).filter((x): x is string => !!x))].sort(),
+  [rows]);
 
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -234,7 +267,8 @@ export default function HotoDefectsSection() {
 
   if (detail) {
     return <DetailView d={detail} me={me} busy={busy} onBack={() => setDetail(null)}
-                       onMove={move} error={error} clearError={() => setError(null)} />;
+                       onMove={move} onPlan={plan} owners={owners}
+                       error={error} clearError={() => setError(null)} />;
   }
 
   return (
@@ -281,7 +315,7 @@ export default function HotoDefectsSection() {
         {overdueCount > 0 && (
           <span className="text-[11px] px-2 py-1 mb-px rounded
                            bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200">
-            {overdueCount} past the interval for its severity
+            {overdueCount} past due
           </span>
         )}
         <div className="relative ml-auto">
@@ -349,7 +383,8 @@ export default function HotoDefectsSection() {
                 <th className="text-left px-2 py-1.5 font-medium">Reference</th>
                 <th className="text-left px-2 py-1.5 font-medium">Machine</th>
                 <th className="text-left px-2 py-1.5 font-medium">What is wrong</th>
-                <th className="text-right px-2 py-1.5 font-medium">Open</th>
+                <th className="text-left px-2 py-1.5 font-medium">Who is fixing it</th>
+                <th className="text-right px-2 py-1.5 font-medium">Due</th>
                 <th className="text-right px-2 py-1.5 font-medium">Seen</th>
                 <th className="text-left px-2 py-1.5 font-medium">Severity</th>
                 <th className="text-left px-2 py-1.5 font-medium">Stage</th>
@@ -378,19 +413,30 @@ export default function HotoDefectsSection() {
                       <span className="text-[10px] text-muted-foreground italic"> — {r.description}</span>
                     )}
                   </td>
-                  {/* The number the morning meeting asks for, read against
-                      what the defect is: seven days was the threshold for
-                      everything, which let a critical brake fault look as
-                      calm as a horn. */}
-                  <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">
-                    <span
-                      title={isOverdue(r)
-                        ? `Past the ${OVERDUE_AFTER_DAYS[r.severity] ?? 7}-day interval for a ${r.severity} defect`
-                        : undefined}
-                      className={isOverdue(r) ? "text-red-700 dark:text-red-300 font-medium" : ""}
-                    >
-                      {r.age_days}d
-                    </span>
+                  {/* Nobody named is said, in the queue, where it is seen. */}
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    {r.assigned_to
+                      ? r.assigned_to
+                      : OWED.includes(r.state)
+                        ? <span className="text-amber-700 dark:text-amber-300 italic">nobody yet</span>
+                        : <span className="text-muted-foreground">—</span>}
+                  </td>
+                  {/* The date it should be fixed by, and how late it is. A date
+                      nobody set is shown as the severity norm and marked so --
+                      the screen must not pass a norm off as a promise. */}
+                  <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap"
+                      title={`Open ${r.age_days} day${r.age_days === 1 ? "" : "s"}. ${r.due_is_set
+                        ? "Target set by a person."
+                        : "No target set: due by the norm for a " + r.severity + " defect."}`}>
+                    {isOverdue(r) ? (
+                      <span className="text-red-700 dark:text-red-300 font-semibold">
+                        {r.overdue_days}d late
+                      </span>
+                    ) : OWED.includes(r.state) ? (
+                      <span className={r.due_is_set ? "" : "text-muted-foreground"}>
+                        {day(r.due_date)}{r.due_is_set ? "" : " *"}
+                      </span>
+                    ) : <span className="text-muted-foreground">—</span>}
                   </td>
                   <td className="px-2 py-1.5 text-right tabular-nums" title="How many handovers have reported it">
                     {r.sightings}×
@@ -439,10 +485,12 @@ export default function HotoDefectsSection() {
 
 /* ── one defect ────────────────────────────────────────────────────────────── */
 
-function DetailView({ d, me, busy, onBack, onMove, error, clearError }: {
+function DetailView({ d, me, busy, onBack, onMove, onPlan, owners, error, clearError }: {
   d: Detail; me: string | null; busy: boolean;
   onBack: () => void;
   onMove: (id: number, to: State, note?: string) => Promise<void>;
+  onPlan: (id: number, body: { assigned_to?: string; target_date?: string }) => Promise<boolean>;
+  owners: string[];
   error: string[] | null; clearError: () => void;
 }) {
   const [pending, setPending] = useState<{ to: State; prompt: string } | null>(null);
@@ -494,6 +542,11 @@ function DetailView({ d, me, busy, onBack, onMove, error, clearError }: {
         <dl className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-1.5 text-[11px] border-t border-border pt-2">
           <F label="Raised by" value={`${d.raised_by} · ${fmt(d.raised_at)}`} />
           <F label="Open for" value={`${d.age_days} days`} />
+          <F label="Who is fixing it" value={d.assigned_to ?? (OWED.includes(d.state) ? "Nobody yet" : null)} />
+          <F label="Due" value={OWED.includes(d.state)
+            ? `${day(d.due_date)}${d.due_is_set ? "" : " (norm, not set)"}${
+                d.overdue_days > 0 ? ` — ${d.overdue_days} day${d.overdue_days === 1 ? "" : "s"} late` : ""}`
+            : null} />
           <F label="Reported" value={`${d.sightings} time${d.sightings === 1 ? "" : "s"}`} />
           <F label="Machine state" value={d.machine_state} />
           <F label="Accepted" value={d.acknowledged_at ? fmt(d.acknowledged_at) : null} />
@@ -501,7 +554,7 @@ function DetailView({ d, me, busy, onBack, onMove, error, clearError }: {
             ? `${d.rectified_by} · ${d.rectified_at ? fmt(d.rectified_at) : ""}` : null} />
           <F label="Verified by" value={d.verified_by
             ? `${d.verified_by} · ${d.verified_at ? fmt(d.verified_at) : ""}` : null} />
-          <F label="Owner" value={d.owner_role} />
+          <F label="Department" value={d.owner_role} />
         </dl>
 
         {d.rectification_note && (
@@ -517,6 +570,13 @@ function DetailView({ d, me, busy, onBack, onMove, error, clearError }: {
           <div className="text-[11px] space-y-0.5">{error.map((p, i) => <p key={i}>{p}</p>)}</div>
           <button onClick={clearError} className="ml-auto"><X size={13} /></button>
         </div>
+      )}
+
+      {/* ── who, and by when ───────────────────────────────────────────────
+          Gap D4: ten open defects and nobody named against any of them. */}
+      {OWED.includes(d.state) && (
+        // Keyed to the defect: its fields start from THIS defect, not the last one opened.
+        <PlanForm key={d.defect_id} d={d} busy={busy} owners={owners} onPlan={onPlan} />
       )}
 
       {/* ── what can be done next ─────────────────────────────────────────── */}
@@ -628,17 +688,82 @@ function DetailView({ d, me, busy, onBack, onMove, error, clearError }: {
             {d.events.map((e, i) => (
               <li key={i} className="px-3 py-1.5 text-[11px] flex items-start gap-2">
                 <span className="text-muted-foreground shrink-0 w-28">{fmt(e.at)}</span>
-                <span className="shrink-0">
-                  {e.from_state ? `${e.from_state} → ` : ""}<strong>{e.to_state}</strong>
-                </span>
+                {e.kind === "ASSIGNED" || e.kind === "TARGET" ? (
+                  /* Not a stage change: who or when changed, said as such. */
+                  <span className="shrink-0"><strong>{e.note}</strong></span>
+                ) : (
+                  <span className="shrink-0">
+                    {e.from_state ? `${e.from_state} → ` : ""}<strong>{e.to_state}</strong>
+                  </span>
+                )}
                 <span className="text-muted-foreground">by {e.actor}</span>
-                {e.note && <span className="italic text-muted-foreground">— {e.note}</span>}
+                {e.note && e.kind !== "ASSIGNED" && e.kind !== "TARGET" && (
+                  <span className="italic text-muted-foreground">— {e.note}</span>
+                )}
               </li>
             ))}
           </ul>
         </section>
       )}
     </div>
+  );
+}
+
+/* Who is fixing it, and by when. The date starts at the one the defect is
+   judged by today -- a target someone set, or the severity norm -- so saving
+   without touching it makes the norm a real target, and changing it is one
+   field. Every save is in the history with what it replaced. */
+function PlanForm({ d, busy, owners, onPlan }: {
+  d: Detail; busy: boolean; owners: string[];
+  onPlan: (id: number, body: { assigned_to?: string; target_date?: string }) => Promise<boolean>;
+}) {
+  const [who, setWho] = useState(d.assigned_to ?? "");
+  const [when, setWhen] = useState(d.due_date.slice(0, 10));
+  const changedWho = who.trim() !== (d.assigned_to ?? "") && who.trim().length >= 2;
+  const changedWhen = !d.due_is_set || when !== (d.target_date ?? "").slice(0, 10);
+  const minDate = d.raised_at.slice(0, 10);
+
+  return (
+    <section className="rounded border border-border p-3 space-y-2">
+      <h3 className="text-xs font-semibold flex items-center gap-1.5">
+        <UserCheck size={13} /> Who is fixing it, and by when
+      </h3>
+      {!d.due_is_set && (
+        <p className="text-[11px] text-muted-foreground">
+          No target has been set. The date below is the norm for a {d.severity.toLowerCase()}{" "}
+          defect ({d.target_norm_days ?? "?"} day{d.target_norm_days === 1 ? "" : "s"} from raising) —
+          change it or save it as the target.
+        </p>
+      )}
+      <div className="flex items-end gap-2 flex-wrap">
+        <label className="text-[11px] flex-1 min-w-[12rem]">
+          <span className="block text-muted-foreground mb-0.5">Person, team or contractor</span>
+          <input value={who} onChange={(e) => setWho(e.target.value)} list="defect-owners"
+                 placeholder="e.g. R. Naik (fitter), Hydraulics team"
+                 maxLength={120}
+                 className="w-full px-2 py-1 rounded border border-border bg-background" />
+          <datalist id="defect-owners">
+            {owners.map((o) => <option key={o} value={o} />)}
+          </datalist>
+        </label>
+        <label className="text-[11px]">
+          <span className="block text-muted-foreground mb-0.5">Fix by</span>
+          <input type="date" value={when} min={minDate} onChange={(e) => setWhen(e.target.value)}
+                 className="px-1.5 py-1 rounded border border-border bg-background" />
+        </label>
+        <button
+          disabled={busy || (!changedWho && !changedWhen) || (!d.assigned_to && who.trim().length < 2)}
+          onClick={() => void onPlan(d.defect_id, {
+            ...(changedWho ? { assigned_to: who.trim() } : {}),
+            ...(changedWhen ? { target_date: when } : {}),
+          })}
+          className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded bg-foreground text-background disabled:opacity-40"
+          title={!d.assigned_to && who.trim().length < 2 ? "Say who is fixing it first" : undefined}
+        >
+          <Check size={12} /> Save
+        </button>
+      </div>
+    </section>
   );
 }
 

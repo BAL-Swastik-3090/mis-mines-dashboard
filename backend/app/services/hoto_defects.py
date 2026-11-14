@@ -25,6 +25,7 @@ device reports findings and the server decides what they mean.
 from __future__ import annotations
 
 import logging
+from datetime import date, timedelta
 from typing import Any
 
 from sqlalchemy import text
@@ -225,6 +226,97 @@ def _recompute_state(db: Session, asset_id: int, actor: str,
     return set_state(db, asset_id, want, reason=reason, actor=actor)
 
 
+# ── who is fixing it, and by when (migration 116) ────────────────────────────
+
+#: When nobody has set a target, a defect is judged by these. They are the
+#: intervals the defect screen already used to call a defect overdue --
+#: moved here so the date it suggests and the date it judges by are one rule.
+#: The mine's norms to set; these are a starting point, and the screen says so.
+TARGET_DAYS = {"CRITICAL": 1, "HIGH": 3, "MEDIUM": 7, "LOW": 14}
+
+_UNSET = object()
+
+#: Where a repair is still owed. VERIFIED is open in the queue's sense --
+#: awaiting closure -- but the work is done and checked, so it is neither
+#: planned nor late.
+_OWED = ("RAISED", "ACKNOWLEDGED", "RECTIFIED")
+
+
+def plan(db: Session, defect_id: int, actor: str, *,
+         assigned_to: Any = _UNSET, target_date: Any = _UNSET) -> dict[str, Any]:
+    """Say who is fixing a defect, and by when. Either, or both.
+
+    Every change goes in the defect's history with what it was before, so a
+    target that is quietly moved every time it is missed leaves a trail of
+    exactly that.
+    """
+    d = db.execute(text("""
+        SELECT defect_id, state, raised_at, assigned_to, target_date
+          FROM hoto_defect WHERE defect_id = :d
+    """), {"d": defect_id}).mappings().first()
+    if not d:
+        raise DefectError([f"no such defect: {defect_id}"], status=404)
+    if d["state"] not in _OWED:
+        raise DefectError([f"a {d['state']} defect has been repaired; there is nothing left to plan"],
+                          status=409)
+
+    problems: list[str] = []
+    who = None
+    if assigned_to is not _UNSET:
+        who = (assigned_to or "").strip()
+        if len(who) < 2:
+            problems.append("say who is fixing it -- a name, a team or a contractor")
+        elif len(who) > 120:
+            problems.append("keep who is fixing it under 120 characters")
+    when = None
+    if target_date is not _UNSET:
+        try:
+            when = target_date if isinstance(target_date, date) else date.fromisoformat(str(target_date))
+        except ValueError:
+            problems.append("the target date is not a date")
+        else:
+            if when < d["raised_at"].date():
+                problems.append("the target cannot be before the defect was raised")
+    if assigned_to is _UNSET and target_date is _UNSET:
+        problems.append("nothing to change: give who is fixing it, a target date, or both")
+    if problems:
+        raise DefectError(problems)
+
+    if who is not None and who != d["assigned_to"]:
+        db.execute(text("""UPDATE hoto_defect SET assigned_to = :w, assigned_by = :by,
+                                              assigned_at = now(), updated_at = now()
+                             WHERE defect_id = :d"""), {"w": who, "by": actor, "d": defect_id})
+        db.execute(text("""
+            INSERT INTO hoto_defect_event (defect_id, from_state, to_state, actor, note, kind)
+            VALUES (:d, :st, :st, :by, :n, 'ASSIGNED')
+        """), {"d": defect_id, "st": d["state"], "by": actor,
+               "n": (f"Assigned to {who}" if not d["assigned_to"]
+                     else f"Reassigned from {d['assigned_to']} to {who}")})
+    if when is not None and when != d["target_date"]:
+        db.execute(text("""UPDATE hoto_defect SET target_date = :t, target_set_by = :by,
+                                              target_set_at = now(), updated_at = now()
+                             WHERE defect_id = :d"""), {"t": when, "by": actor, "d": defect_id})
+        db.execute(text("""
+            INSERT INTO hoto_defect_event (defect_id, from_state, to_state, actor, note, kind)
+            VALUES (:d, :st, :st, :by, :n, 'TARGET')
+        """), {"d": defect_id, "st": d["state"], "by": actor,
+               "n": (f"Target set for {when:%d %b %Y}" if not d["target_date"]
+                     else f"Target moved from {d['target_date']:%d %b %Y} to {when:%d %b %Y}")})
+    db.commit()
+    return {"defect_id": defect_id, "assigned_to": who if who is not None else d["assigned_to"],
+            "target_date": (when or d["target_date"])}
+
+
+def _due(row: dict[str, Any], today: date | None = None) -> dict[str, Any]:
+    """When a defect is due, whether a person set that, and how late it is."""
+    today = today or date.today()
+    set_ = row.get("target_date") is not None
+    due = row["target_date"] if set_ else (
+        row["raised_at"].date() + timedelta(days=TARGET_DAYS.get(row["severity"], 7)))
+    late = (today - due).days if row["state"] in _OWED else 0
+    return {"due_date": due, "due_is_set": set_, "overdue_days": max(0, late)}
+
+
 # ── the workshop's queue ─────────────────────────────────────────────────────
 
 def queue(db: Session, *, asset_id: int | None = None, state: str | None = None,
@@ -236,6 +328,7 @@ def queue(db: Session, *, asset_id: int | None = None, state: str | None = None,
                d.raised_by, d.raised_at, d.acknowledged_at,
                d.rectified_by, d.rectified_at, d.rectification_note,
                d.verified_by, d.verified_at, d.closed_at, d.cancel_reason,
+               d.assigned_to, d.assigned_at, d.target_date,
                a.asset_id, a.fleet_code, at.name AS asset_type_name,
                -- How long it has been open. The number the morning meeting
                -- asks for, and the reason repeat reports are sightings rather
@@ -261,7 +354,7 @@ def queue(db: Session, *, asset_id: int | None = None, state: str | None = None,
          LIMIT :lim
     """), {"open_only": open_only, "open": list(OPEN_STATES), "asset": asset_id,
            "state": state, "sev": severity, "lim": min(limit, 1000)}).mappings().all()
-    return [dict(r) for r in rows]
+    return [{**dict(r), **_due(dict(r))} for r in rows]
 
 
 def detail(db: Session, defect_id: int) -> dict[str, Any] | None:
@@ -275,6 +368,8 @@ def detail(db: Session, defect_id: int) -> dict[str, Any] | None:
     if not head:
         return None
     out = dict(head)
+    out.update(_due(out))
+    out["target_norm_days"] = TARGET_DAYS.get(out["severity"], 7)
     out["sightings"] = [dict(r) for r in db.execute(text("""
         SELECT s.sighting_id, s.observed_by, s.observed_at, s.answer,
                s.numeric_value, s.remark, hs.session_ref
@@ -283,7 +378,7 @@ def detail(db: Session, defect_id: int) -> dict[str, Any] | None:
          WHERE s.defect_id = :d ORDER BY s.observed_at
     """), {"d": defect_id}).mappings().all()]
     out["events"] = [dict(r) for r in db.execute(text("""
-        SELECT from_state, to_state, actor, at, note FROM hoto_defect_event
+        SELECT from_state, to_state, actor, at, note, kind FROM hoto_defect_event
          WHERE defect_id = :d ORDER BY at
     """), {"d": defect_id}).mappings().all()]
     return out

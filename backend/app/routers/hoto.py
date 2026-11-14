@@ -585,6 +585,19 @@ def defect_transition(defect_id: int, request: Request, payload: dict,
                     note=payload.get("note"))
 
 
+@router.post("/defects/{defect_id}/plan")
+def defect_plan(defect_id: int, request: Request, payload: dict,
+                db: Session = Depends(get_minehub_db)) -> dict:
+    """Say who is fixing a defect, and by when.
+
+    Either or both. Each change goes in the defect's history with what it was
+    before, so a target moved every time it is missed leaves that trail.
+    """
+    actor = _capture_guard(request, db)
+    kw = {k: payload[k] for k in ("assigned_to", "target_date") if k in payload}
+    return _defects(dfx.plan, db, defect_id, actor, **kw)
+
+
 @router.get("/assets/{asset_id}/state")
 def asset_state(asset_id: int, request: Request,
                 db: Session = Depends(get_minehub_db)) -> dict:
