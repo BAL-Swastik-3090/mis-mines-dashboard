@@ -798,13 +798,20 @@ def _summary(pg: Session, frm: date, to: date, rd: date) -> dict[str, Any]:
             "plan_dry_from": (chain["dry_from"].isoformat()
                               if chain["dry_from"] else None),
             "plan_dry_days": chain["dry_days"],
-            # closing is NULL whenever a day is short of a figure the balance
-            # needs -- rainfall left blank makes rain_water_m3 NULL, and the
-            # generated closing stock with it. drawdown and days_to_clear
-            # above already allow for that; this did not, and the TypeError
-            # it raised was caught by the caller, which dropped the WHOLE
-            # dewatering block off the Executive Summary. One blank cell
-            # should cost one figure, not a section.
+            # BOTH ENDS, NOT JUST THE OPENING. closing is NULL whenever a
+            # day is short of a figure the balance needs -- rainfall left
+            # blank makes rain_water_m3 NULL, and the generated closing stock
+            # with it. Guarded on `opening` alone this reached a None minus a
+            # float and raised; the caller catches that and returns the whole
+            # dewatering block as None, so one blank cell on one day blanked
+            # the sump, the disposal, the pump hours and the Executive
+            # Summary's dewatering KPI together. drawdown and days_to_clear
+            # above already test both ends; this is the same test.
+            #
+            # FOUND TWICE, INDEPENDENTLY -- here on 6 November and again on
+            # the 13th, when a day filed with pump hours but no rainfall hit
+            # it. The second finding came off a branch forked before the
+            # first fix, which is what a long-lived fork from 398c54a costs.
             "stock_change_pct": (round((closing - opening) / opening * 100, 1)
                                  if opening and closing is not None else None),
             "net_drawdown": drawdown,
