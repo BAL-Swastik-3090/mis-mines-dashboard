@@ -1,7 +1,7 @@
 # HOTO tablet app — issue list
 
 **13 November 2026.** Open list, numbered so we can pick items off.
-**19 of 21 fixed** as of 14 Nov — marked ✅ (commits `4b79c71`, `e3e4f77`, `925aeae`, `57b8186`). Left: **D1–D3**, hiding server details, agreed for when we go to production. Each item says what is wrong and where, so we are not
+**19 of 22 fixed** as of 14 Nov — marked ✅ (commits `4b79c71`, `e3e4f77`, `925aeae`, `57b8186`). Left: **D1–D3**, hiding server details, agreed for when we go to production. Each item says what is wrong and where, so we are not
 working from screenshots when we come to fix it.
 
 Add to it freely — the numbering is stable, new items go on the end.
