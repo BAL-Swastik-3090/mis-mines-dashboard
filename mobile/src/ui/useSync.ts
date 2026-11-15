@@ -25,6 +25,7 @@ import { create } from 'zustand';
 import type { Store } from '@/core/capture/store';
 import type { Transport, SyncReport } from '@/core/sync/engine';
 import { status as readStatus, syncNow } from '@/core/sync/engine';
+import { tryLock, unlock } from '@/core/sync/lock';
 
 export type SyncStatus = Awaited<ReturnType<typeof readStatus>>;
 
@@ -56,8 +57,10 @@ export const useSync = create<SyncState>()((set, get) => ({
   run: async (opts) => {
     const { store, transport, running } = get();
     if (!store || !transport) return null;
-    // See the header: a second concurrent pass spends the signal twice.
-    if (running) return null;
+    // See the header: a second concurrent pass spends the signal twice. The
+    // lock is shared with the background sender (core/sync/background.ts),
+    // which may be mid-send when somebody presses the button.
+    if (running || !tryLock()) return null;
 
     set({ running: true, lastError: null });
     try {
@@ -74,6 +77,7 @@ export const useSync = create<SyncState>()((set, get) => ({
       set({ lastError: e instanceof Error ? e.message : String(e) });
       return null;
     } finally {
+      unlock();
       set({ running: false });
     }
   },

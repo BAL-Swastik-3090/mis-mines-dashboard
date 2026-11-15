@@ -8,7 +8,10 @@
  * most misleading thing this screen could do.
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import * as Network from 'expo-network';
+import { lastAttempt } from '@/core/sync/engine';
+import { doneOnTablet, summary as doneSummary } from '@/core/capture/history';
 import { View, Text, Pressable, ScrollView, StyleSheet, RefreshControl } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCapture } from '@/ui/useCapture';
@@ -24,6 +27,15 @@ import {
   ago, byUrgency, draftSummaries, isStale, type DraftSummary,
 } from '@/core/capture/drafts';
 import { FadeIn, PressableScale } from '@/ui/motion';
+
+/** "just now", "3 min ago", "2 h ago" -- for the last time the office was tried. */
+function agoShort(iso: string): string {
+  const m = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000));
+  if (!Number.isFinite(m)) return 'recently';
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m} min ago`;
+  return `${Math.round(m / 60)} h ago`;
+}
 
 const TYPE_LABEL: Record<DraftSummary['session_type'], string> = {
   START_HANDOVER: 'Taking over', END_HANDOVER: 'Handing over', MID_SHIFT: 'Mid-shift',
@@ -41,6 +53,9 @@ export default function Home() {
   const [refreshing, setRefreshing] = useState(false);
   const [track, setTrack] = useState<{ wanted: boolean; running: boolean; queued: number } | null>(null);
   const [trackProblem, setTrackProblem] = useState<string | null>(null);
+  const [online, setOnline] = useState<boolean | null>(null);
+  const [tried, setTried] = useState<Awaited<ReturnType<typeof lastAttempt>>>(null);
+  const [today, setToday] = useState<ReturnType<typeof doneSummary> | null>(null);
 
   const runSync = useSync((s) => s.run);
   const syncing = useSync((s) => s.running);
@@ -54,9 +69,23 @@ export default function Home() {
     setCacheAge(await masters.cacheAgeHours(store));
     const { track: wanted } = await trackingSettings();
     setTrack({ wanted, running: await isTracking(), queued: await queuedCount(store) });
+    const net = await Network.getNetworkStateAsync().catch(() => null);
+    setOnline(net ? Boolean(net.isConnected) : null);
+    setTried(await lastAttempt(store).catch(() => null));
+    setToday(doneSummary(await doneOnTablet(store, 'today')));
   }, [store]);
 
   useFocusEffect(useCallback(() => { void load(); }, [load]));
+
+  // The banner follows the sends that happen by themselves, rather than
+  // saying "1 handover waiting" until somebody leaves the screen and comes
+  // back. Re-read after every send, and every half minute for the "tried
+  // 3 min ago" line.
+  useEffect(() => { void load(); }, [lastReport, syncing, load]);
+  useEffect(() => {
+    const t = setInterval(() => { void load(); }, 30_000);
+    return () => clearInterval(t);
+  }, [load]);
 
   const stale = cacheAge != null && cacheAge >= masters.STALE_AFTER_HOURS;
   const waiting = (outbox?.queued ?? 0) + (outbox?.sending ?? 0);
@@ -89,17 +118,25 @@ export default function Home() {
               ? `${plural(waiting, 'handover')} still on this tablet`
               : `${plural(photosWaiting, 'photograph')} still on this tablet`}
         </Text>
-        {waiting > 0 && (
-          <Text style={styles.bannerNote}>
-            {photosWaiting > 0
-              ? `With ${plural(photosWaiting, 'photograph')}. They are safe here but not filed — bring the tablet within signal.`
-              : 'They are safe here but not filed. Bring the tablet within signal to send them.'}
+        {/* WHAT IS ACTUALLY HAPPENING, not "bring the tablet within signal".
+            That sentence sat on a tablet with working wifi for thirty-five
+            hours while the server it wanted was simply elsewhere. No network,
+            a server that is not answering, and a send in progress are three
+            different things, and only the first is about signal. */}
+        {!allClear && (
+          <Text style={styles.bannerNote} testID="send-state">
+            {waiting > 0 && photosWaiting > 0 ? `With ${plural(photosWaiting, 'photograph')}. ` : ''}
+            {syncing ? 'Sending now…'
+              : online === false ? 'No network. It sends by itself as soon as there is one.'
+              : tried && !tried.ok
+                ? `The office did not answer ${agoShort(tried.at)}. It keeps trying by itself every few minutes.`
+                : 'Safe on this tablet. It sends by itself in a moment.'}
           </Text>
         )}
         {waiting === 0 && photosWaiting > 0 && (
           <Text style={styles.bannerNote}>
-            The handovers have been filed. Their photographs have not, so the
-            evidence behind any fault is still on this tablet.
+            The handovers have been filed. Their photographs are still on this
+            tablet, so the evidence behind any fault has not reached the office yet.
           </Text>
         )}
         {(outbox?.rejected ?? 0) > 0 && (
@@ -278,6 +315,25 @@ export default function Home() {
       >
         <Text style={styles.primaryText}>Start a handover</Text>
       </PressableScale>
+
+      {/* ── what has been done ─────────────────────────────────────────────
+          Which machines were handed over on this tablet, by whom, and whether
+          each has reached the office. Asked for by supervisors who could not
+          see which vehicles they had already done. */}
+      <PressableScale testID="open-history" style={styles.doneCard} scaleTo={0.985}
+                      onPress={() => router.push('/history')}>
+        <View style={styles.doneText}>
+          <Text style={styles.doneTitle}>Done on this tablet today</Text>
+          <Text style={styles.doneNote}>
+            {!today || today.handovers === 0
+              ? 'Nothing confirmed yet today. Earlier days are inside.'
+              : `${plural(today.handovers, 'handover')} on ${plural(today.machines, 'machine')}`
+                + ` · ${today.atOffice} at the office`
+                + (today.waiting > 0 ? ` · ${today.waiting} waiting` : '')}
+          </Text>
+        </View>
+        <Text style={styles.doneGo}>See who did which ›</Text>
+      </PressableScale>
     </ScrollView>
   );
 }
@@ -342,6 +398,12 @@ const styles = StyleSheet.create({
   draftStale: { color: '#8a5a00', fontWeight: '600' },
   resumeText: { fontSize: 15, fontWeight: '800', color: '#1e5f8a' },
 
+  doneCard: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#fff',
+              borderRadius: 12, padding: 16, borderWidth: 1, borderColor: '#d8dee6' },
+  doneText: { flex: 1, gap: 2 },
+  doneTitle: { fontSize: 17, fontWeight: '800', color: '#16202b' },
+  doneNote: { fontSize: 14, color: '#5b6a7a' },
+  doneGo: { fontSize: 15, fontWeight: '800', color: '#1e5f8a' },
   primary: { minHeight: 68, borderRadius: 10, backgroundColor: '#16202b',
              alignItems: 'center', justifyContent: 'center', marginTop: 4 },
   primaryText: { color: '#fff', fontSize: 19, fontWeight: '700' },

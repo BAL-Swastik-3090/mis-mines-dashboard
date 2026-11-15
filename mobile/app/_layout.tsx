@@ -19,6 +19,7 @@ import { useCapture } from '@/ui/useCapture';
 import { useSync } from '@/ui/useSync';
 import Enrol from './enrol';
 import { BACKGROUND_TASK, registerBackgroundSync, useSyncTriggers } from '@/ui/syncTriggers';
+import { sendFromBackground } from '@/core/sync/background';
 import { httpTransport } from '@/core/sync/transport';
 import { setRehash, syncNow } from '@/core/sync/engine';
 import { hashPhotoFile } from '@/core/capture/photoHash';
@@ -39,19 +40,12 @@ import { applyTrackingSettings } from '@/core/location/tracker';
  */
 try {
 TaskManager.defineTask(BACKGROUND_TASK, async () => {
-  try {
-    const base = await storedBaseUrl();
-    if (!base) return BackgroundTask.BackgroundTaskResult.Success;   // nothing to do
-    const db = await openDb();
-    await syncNow({
-      store: adapt(db),
-      transport: httpTransport({ baseUrl: storedBaseUrl, deviceToken: storedToken }),
-      force: true,
-    });
-    return BackgroundTask.BackgroundTaskResult.Success;
-  } catch {
-    return BackgroundTask.BackgroundTaskResult.Failed;
-  }
+  // Through the same lock as the screens and the position tracker, so a run
+  // the OS grants while either is mid-send does not post everything twice.
+  // Success even when nothing went: a failed send stays queued and the
+  // tracker or the screens try again, so there is nothing for the OS to retry.
+  await sendFromBackground({ force: true });
+  return BackgroundTask.BackgroundTaskResult.Success;
 });
 } catch {
   console.warn('[hoto] background sync is not available in this runtime ' +
@@ -175,6 +169,7 @@ export default function RootLayout() {
                       options={{ title: 'Photo', presentation: 'modal',
                                  animation: 'slide_from_bottom' }} />
         <Stack.Screen name="sync" options={{ title: 'Still on this tablet' }} />
+        <Stack.Screen name="history" options={{ title: 'Done on this tablet' }} />
         <Stack.Screen name="enrol" options={{ title: 'Set up this device' }} />
       </Stack>
     </SafeAreaProvider>

@@ -29,6 +29,7 @@ import * as Crypto from 'expo-crypto';
 import { adapt, openDb } from '../db/open';
 import type { Store } from '../capture/store';
 import { trackingSettings } from '../sync/enrolment';
+import { sendFromBackground } from '../sync/background';
 
 export const LOCATION_TASK = 'hoto-location';
 
@@ -95,6 +96,11 @@ try {
       for (const l of data.locations as Location.LocationObject[]) {
         await queueFix(store, l, 'BACKGROUND');
       }
+      // ...and send what is waiting while it is awake. This foreground
+      // service is the one piece of the app Android keeps running, so it
+      // carries the handovers too -- see core/sync/background.ts. Throttled
+      // to once a minute there; never awaited past this task's own work.
+      await sendFromBackground();
     } catch {
       // Nothing useful to do from a background task with no UI. The next fix
       // tries again; a device that cannot write its own database has a much

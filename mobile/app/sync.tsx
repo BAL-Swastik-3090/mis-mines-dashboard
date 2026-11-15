@@ -199,8 +199,9 @@ export default function Sync() {
       )}
 
       <Text style={styles.footnote}>
-        Closing the app does not send anything. Bring the tablet within signal
-        and leave it open, or press Sync now.
+        It sends by itself: every few minutes while the app is open, and in the
+        background while this device is reporting its position. Sync now sends
+        straight away.
       </Text>
 
       {/* ── which server, and how to change it ──────────────────────────────

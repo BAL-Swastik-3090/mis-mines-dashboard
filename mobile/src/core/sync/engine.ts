@@ -558,3 +558,51 @@ export async function status(store: Store): Promise<{
     lastSyncAt: last?.value ?? null,
   };
 }
+
+/**
+ * What is waiting on the NETWORK, as opposed to waiting on a person.
+ *
+ * A photo attached to an unfinished draft is held back until the handover is
+ * confirmed, so it is not counted: the triggers would otherwise keep trying to
+ * send something that is not allowed to go, and the screen would blame the
+ * signal for a handover nobody has finished. Positions are counted, because
+ * the office is waiting on those too.
+ */
+export async function waiting(store: Store): Promise<{
+  sessions: number; photos: number; positions: number; total: number;
+}> {
+  const s = await store.getFirstAsync<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM session WHERE sync_state IN ('queued','sending')`);
+  const p = await store.getFirstAsync<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM photo ph
+       JOIN session s ON s.client_uuid = ph.session_uuid
+      WHERE ph.sync_state IN ('queued','sending') AND s.sync_state <> 'draft'`);
+  let positions = 0;
+  try {
+    const l = await store.getFirstAsync<{ n: number }>(`SELECT COUNT(*) AS n FROM location_queue`);
+    positions = l?.n ?? 0;
+  } catch { /* a device on a schema before v2 has no queue */ }
+  const sessions = s?.n ?? 0;
+  const photos = p?.n ?? 0;
+  return { sessions, photos, positions, total: sessions + photos + positions };
+}
+
+/**
+ * The most recent attempt to reach the office, and how it went.
+ *
+ * So the screen can say "the office did not answer 2 minutes ago" rather than
+ * "bring the tablet within signal" -- which is what it said to a tablet sitting
+ * on working wifi for thirty-five hours while the server it was looking for
+ * was simply somewhere else.
+ */
+export async function lastAttempt(store: Store): Promise<{
+  at: string; ok: boolean; status: number | null; detail: string | null; kind: string;
+} | null> {
+  const r = await store.getFirstAsync<{
+    at: string; ok: number; http_status: number | null; detail: string | null; kind: string;
+  }>(
+    `SELECT at, ok, http_status, detail, kind FROM sync_log
+      WHERE kind IN ('SESSION','PHOTO','LOCATIONS','MASTERS')
+      ORDER BY local_id DESC LIMIT 1`);
+  return r ? { at: r.at, ok: r.ok === 1, status: r.http_status, detail: r.detail, kind: r.kind } : null;
+}
