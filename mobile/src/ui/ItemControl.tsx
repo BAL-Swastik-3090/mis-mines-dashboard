@@ -24,6 +24,7 @@ import type { ChecklistItem, RawResponse } from '@/core/evaluation';
 import { evaluateOne, rangeLabel } from '@/core/evaluation';
 import { answersFor, isAdverse, type Answer } from '@/core/enums';
 import { plural } from '@/core/words';
+import { useT } from '@/i18n';
 
 export const ANSWER_LABEL: Record<Answer, string> = {
   OK: 'OK', CAUTION: 'Caution', NOT_OK: 'Not OK', NA: 'N/A',
@@ -129,13 +130,20 @@ export function ItemControl({
   const unsaid = ev.problems.filter(
     (p) => !(photoButtonShown && p === 'Add a photo'));
   const rules = itemRules(item);
+  const { t, tn } = useT();
 
   const clearPrompt = confirmClear ? (
     <View style={styles.confirmBox} testID={`confirm-clear-${item.itemId}`}>
       <Text style={styles.confirmText}>
-        This removes the finding{(current.remark ?? '').trim() ? ', what you wrote about it' : ''}
-        {(photoCount ?? 0) > 0 ? ` and ${plural(photoCount, 'photo')}` : ''}. The workshop
-        will not be told about it.
+        {(current.remark ?? '').trim() && (photoCount ?? 0) > 0
+          ? tn(photoCount, 'This removes the finding, what you wrote about it and {n} photo. The workshop will not be told about it.',
+                           'This removes the finding, what you wrote about it and {n} photos. The workshop will not be told about it.')
+          : (current.remark ?? '').trim()
+            ? t('This removes the finding and what you wrote about it. The workshop will not be told about it.')
+            : (photoCount ?? 0) > 0
+              ? tn(photoCount, 'This removes the finding and {n} photo. The workshop will not be told about it.',
+                               'This removes the finding and {n} photos. The workshop will not be told about it.')
+              : t('This removes the finding. The workshop will not be told about it.')}
       </Text>
       <View style={styles.confirmRow}>
         <Pressable
@@ -149,14 +157,14 @@ export function ItemControl({
             setConfirmClear(null);
           }}
         >
-          <Text style={styles.confirmBtnText}>Yes, remove it</Text>
+          <Text style={styles.confirmBtnText}>{t('Yes, remove it')}</Text>
         </Pressable>
         <Pressable
           testID={`confirm-clear-no-${item.itemId}`}
           style={[styles.confirmBtn, styles.confirmBtnKeep]}
           onPress={() => setConfirmClear(null)}
         >
-          <Text style={styles.confirmBtnText}>Keep the finding</Text>
+          <Text style={styles.confirmBtnText}>{t('Keep the finding')}</Text>
         </Pressable>
       </View>
     </View>
@@ -170,7 +178,7 @@ export function ItemControl({
       <View style={styles.header}>
         <Text style={[styles.label, large && styles.labelLarge]}>{item.label}</Text>
         {item.isCritical ? (
-          <Text style={styles.critical} accessibilityLabel="critical item">STOPS THE MACHINE</Text>
+          <Text style={styles.critical} accessibilityLabel="critical item">{t('STOPS THE MACHINE')}</Text>
         ) : answered && !adverse && unsaid.length === 0 ? (
           <Text style={styles.done} accessibilityLabel="answered">✓</Text>
         ) : null}
@@ -179,7 +187,7 @@ export function ItemControl({
       {rules.length > 0 && (
         <View style={styles.rules} testID={`rules-${item.itemId}`}>
           {rules.map((r) => (
-            <View key={r} style={styles.rule}><Text style={styles.ruleText}>{r}</Text></View>
+            <View key={r} style={styles.rule}><Text style={styles.ruleText}>{t(r)}</Text></View>
           ))}
         </View>
       )}
@@ -204,12 +212,12 @@ export function ItemControl({
           </View>
           {rangeLabel(item) ? (
             <Text style={[styles.range, ev.inRange === false && styles.rangeBad]}>
-              {ev.inRange === false ? 'Outside ' : 'Should be '}{rangeLabel(item)}
+              {t(ev.inRange === false ? 'Outside {range}' : 'Should be {range}', { range: rangeLabel(item) })}
             </Text>
           ) : (
             // Said out loud: an unbounded gauge is recorded, not judged, and an
             // operator should not be left wondering whether his reading passed.
-            <Text style={styles.range}>Recorded, no limit set</Text>
+            <Text style={styles.range}>{t('Recorded, no limit set')}</Text>
           )}
         </View>
       ) : (
@@ -233,7 +241,7 @@ export function ItemControl({
                 onPress={() => choose(a)}
               >
                 <Text style={[styles.answerText, picked && styles.answerTextPicked]}>
-                  {ANSWER_LABEL[a]}
+                  {t(ANSWER_LABEL[a])}
                 </Text>
               </Pressable>
             );
@@ -255,7 +263,7 @@ export function ItemControl({
             style={styles.remark}
             value={current.remark ?? ''}
             onChangeText={(t) => put({ remark: t })}
-            placeholder="What is wrong? The workshop reads this."
+            placeholder={t('What is wrong? The workshop reads this.')}
             multiline
             accessibilityLabel={`${item.label} — what is wrong`}
           />
@@ -267,7 +275,7 @@ export function ItemControl({
               onPress={onAddPhoto}
             >
               <Text style={styles.photoText}>
-                {photoCount > 0 ? `${photoCount} photo${photoCount === 1 ? '' : 's'}` : 'Add a photo'}
+                {photoCount > 0 ? tn(photoCount, '{n} photo', '{n} photos') : t('Add a photo')}
               </Text>
             </Pressable>
           )}
@@ -280,7 +288,7 @@ export function ItemControl({
       {answered && unsaid.length > 0 && (
         <View testID={`problems-${item.itemId}`}>
           {unsaid.map((p) => (
-            <Text key={p} style={styles.problem}>{p}</Text>
+            <Text key={p} style={styles.problem}>{t(p)}</Text>
           ))}
         </View>
       )}

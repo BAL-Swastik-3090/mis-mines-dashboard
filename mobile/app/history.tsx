@@ -17,7 +17,7 @@ import { useSync } from '@/ui/useSync';
 import {
   doneOnTablet, filledInBy, people, summary, whereItIs, type DoneRow, type Period,
 } from '@/core/capture/history';
-import { plural } from '@/core/words';
+import { useT } from '@/i18n';
 import { FadeIn } from '@/ui/motion';
 
 const PERIODS: { key: Period; label: string }[] = [
@@ -36,6 +36,7 @@ const when = (iso: string, withDay: boolean) => new Date(iso).toLocaleString('en
 });
 
 export default function History() {
+  const { t, tn } = useT();
   const store = useCapture((s) => s.store);
   const lastReport = useSync((s) => s.lastReport);
   const [period, setPeriod] = useState<Period>('today');
@@ -63,7 +64,7 @@ export default function History() {
           <Pressable key={p.key} testID={`period-${p.key}`}
                      style={[styles.seg, period === p.key && styles.segOn]}
                      onPress={() => { setPeriod(p.key); setWho(null); }}>
-            <Text style={[styles.segText, period === p.key && styles.segTextOn]}>{p.label}</Text>
+            <Text style={[styles.segText, period === p.key && styles.segTextOn]}>{t(p.label)}</Text>
           </Pressable>
         ))}
       </View>
@@ -73,14 +74,14 @@ export default function History() {
           to see exactly which vehicles they did. */}
       {everyone.length > 0 && (
         <View style={styles.block}>
-          <Text style={styles.label}>FILLED IN BY</Text>
+          <Text style={styles.label}>{t('Filled in by').toUpperCase()}</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}
                       contentContainerStyle={styles.chips}>
             <Pressable testID="who-everyone"
                        style={[styles.chip, who === null && styles.chipOn]}
                        onPress={() => setWho(null)}>
               <Text style={[styles.chipText, who === null && styles.chipTextOn]}>
-                Everyone · {rows.length}
+                {t('Everyone')} · {rows.length}
               </Text>
             </Pressable>
             {everyone.map((p) => (
@@ -99,12 +100,12 @@ export default function History() {
       {/* ── the totals ─────────────────────────────────────────────────────── */}
       {shown.length > 0 && (
         <View style={styles.totals} testID="history-summary">
-          <Total n={s.machines} label={s.machines === 1 ? 'machine' : 'machines'} />
-          <Total n={s.handovers} label={s.handovers === 1 ? 'handover' : 'handovers'} />
-          <Total n={s.atOffice} label="at the office" tone="good" />
-          {s.waiting > 0 && <Total n={s.waiting} label="waiting to send" tone="warn" />}
-          {s.refused > 0 && <Total n={s.refused} label="refused" tone="bad" />}
-          {s.held > 0 && <Total n={s.held} label={s.held === 1 ? 'machine held' : 'machines held'} tone="bad" />}
+          <Total n={s.machines} label={t(s.machines === 1 ? 'machine' : 'machines')} />
+          <Total n={s.handovers} label={t(s.handovers === 1 ? 'handover' : 'handovers')} />
+          <Total n={s.atOffice} label={t('at the office')} tone="good" />
+          {s.waiting > 0 && <Total n={s.waiting} label={t('waiting to send')} tone="warn" />}
+          {s.refused > 0 && <Total n={s.refused} label={t('refused')} tone="bad" />}
+          {s.held > 0 && <Total n={s.held} label={t(s.held === 1 ? 'machine held' : 'machines held')} tone="bad" />}
         </View>
       )}
 
@@ -112,12 +113,12 @@ export default function History() {
       {shown.length === 0 ? (
         <View style={styles.empty}>
           <Text style={styles.emptyTitle}>
-            {period === 'today' ? 'Nothing confirmed on this tablet today'
+            {t(period === 'today' ? 'Nothing confirmed on this tablet today'
               : period === 'yesterday' ? 'Nothing confirmed on this tablet yesterday'
-              : 'Nothing confirmed on this tablet in the last 7 days'}
+              : 'Nothing confirmed on this tablet in the last 7 days')}
           </Text>
           <Text style={styles.emptyNote}>
-            Handovers done on other tablets are on the office dashboard.
+            {t('Handovers done on other tablets are on the office dashboard.')}
           </Text>
         </View>
       ) : shown.map((r, i) => {
@@ -129,37 +130,39 @@ export default function History() {
               <View style={styles.top}>
                 <View style={styles.machine}>
                   <Text style={styles.code}>
-                    {r.fleet_code ?? `Machine ${r.asset_id}`}
+                    {r.fleet_code ?? t('Machine {id}', { id: r.asset_id })}
                     {r.registration_no ? <Text style={styles.reg}>  {r.registration_no}</Text> : null}
                   </Text>
                   <Text style={styles.time}>{when(r.captured_at, period !== 'today')}</Text>
                 </View>
-                <View style={styles.type}><Text style={styles.typeText}>{TYPE_LABEL[r.session_type]}</Text></View>
+                <View style={styles.type}><Text style={styles.typeText}>{t(TYPE_LABEL[r.session_type])}</Text></View>
               </View>
 
               <View style={styles.rows}>
-                <Line label="Operator" value={r.operator_name ?? 'Not identified'} />
+                <Line label={t('Operator')} value={r.operator_name ?? t('Not identified')} />
                 {r.session_type !== 'MID_SHIFT' && (
-                  <Line label={r.session_type === 'START_HANDOVER' ? 'Handed over by' : 'Handed to'}
-                        value={r.counterpart_name ?? (r.counterpart_absent ? 'Nobody — parked' : 'Not recorded')} />
+                  <Line label={t(r.session_type === 'START_HANDOVER' ? 'Handed over by' : 'Handed to')}
+                        value={r.counterpart_name ?? t(r.counterpart_absent ? 'Nobody — parked' : 'Not recorded')} />
                 )}
-                <Line label="Filled in by" value={filledInBy(r)} />
+                <Line label={t('Filled in by')} value={filledInBy(r)} />
               </View>
 
               {r.status === 'BLOCKED' && (
-                <Text style={styles.held}>Machine held — {r.blocked_reason ?? 'a check that stops it failed'}</Text>
+                <Text style={styles.held}>
+                  {t('Machine held')} — {r.blocked_reason ?? t('a check that stops it failed')}
+                </Text>
               )}
 
               <View style={styles.bottom}>
                 <Text style={[styles.where, where === 'office' ? styles.whereOk
                               : where === 'refused' ? styles.whereBad : styles.whereWait]}>
-                  {where === 'office' ? `✓ At the office${r.server_session_ref ? ` · ${r.server_session_ref}` : ''}`
-                    : where === 'refused' ? '✕ Refused by the office — show a supervisor'
-                    : r.sync_state === 'synced' ? `⏳ Photographs still sending (${r.photos_waiting})`
-                    : '⏳ Waiting to send'}
+                  {where === 'office' ? `✓ ${t('At the office')}${r.server_session_ref ? ` · ${r.server_session_ref}` : ''}`
+                    : where === 'refused' ? `✕ ${t('Refused by the office — show a supervisor')}`
+                    : r.sync_state === 'synced' ? `⏳ ${t('Photographs still sending ({n})', { n: r.photos_waiting })}`
+                    : `⏳ ${t('Waiting to send')}`}
                 </Text>
                 <Text style={[styles.found, r.findings > 0 && styles.foundSome]}>
-                  {r.findings > 0 ? plural(r.findings, 'fault') : 'Nothing found'}
+                  {r.findings > 0 ? tn(r.findings, '{n} fault', '{n} faults') : t('Nothing found')}
                 </Text>
               </View>
             </View>

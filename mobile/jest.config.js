@@ -15,7 +15,8 @@ module.exports = {
       displayName: 'core',
       preset: 'ts-jest',
       testEnvironment: 'node',
-      testMatch: ['<rootDir>/src/core/**/*.test.ts'],
+      // The translations are plain data and plain functions: node is enough.
+      testMatch: ['<rootDir>/src/core/**/*.test.ts', '<rootDir>/src/i18n/**/*.test.ts'],
       moduleNameMapper: { '^@/(.*)$': '<rootDir>/src/$1' },
       transform: {
         '^.+\\.tsx?$': ['ts-jest', {

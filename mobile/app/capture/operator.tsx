@@ -36,6 +36,7 @@ import { useCapture } from '@/ui/useCapture';
 import { PersonPicker } from '@/ui/PersonPicker';
 import { FlowProgress } from '@/ui/FlowProgress';
 import { counterpartQuestion } from '@/core/capture/session';
+import { useT } from '@/i18n';
 import type { SessionType } from '@/core/enums';
 
 /** What the operator IS in this kind of session. */
@@ -51,6 +52,8 @@ const firstName = (n: string) => n.trim().split(/\s+/)[0] ?? n;
 
 export default function Identify() {
   const router = useRouter();
+  const { t, tm } = useT();
+  const recorderRemembered = useCapture((s) => s.recorderRemembered);
   const store = useCapture((s) => s.store);
   const uuid = useCapture((s) => s.uuid);
   const asset = useCapture((s) => s.asset);
@@ -82,7 +85,7 @@ export default function Identify() {
   if (!asset || !row) {
     return (
       <View style={styles.screen}>
-        <Text style={styles.empty}>No machine has been picked. Go back and pick one.</Text>
+        <Text style={styles.empty}>{t('No machine has been picked. Go back and pick one.')}</Text>
       </View>
     );
   }
@@ -94,10 +97,10 @@ export default function Identify() {
   const otherDone = !other || counterpart != null || counterpartAbsent;
 
   // The button names the first thing still missing, in the order asked.
-  const missing = !operatorDone ? 'Identify the operator first'
-    : !photoDone ? `Photograph ${firstName(chosen.name)} first`
-    : !otherDone ? (type === 'START_HANDOVER' ? 'Say who handed it over first'
-                                              : 'Say who is taking it over first')
+  const missing = !operatorDone ? t('Identify the operator first')
+    : !photoDone ? t('Photograph {name} first', { name: firstName(chosen.name) })
+    : !otherDone ? (type === 'START_HANDOVER' ? t('Say who handed it over first')
+                                              : t('Say who is taking it over first'))
     : null;
 
   return (
@@ -113,15 +116,15 @@ export default function Identify() {
           <Text style={styles.machineReg}>{asset.registration_no}</Text>
         ) : null}
         <Text style={styles.machineType}>
-          {asset.asset_type_name} · {operatorRole(type).toLowerCase()}
+          {asset.asset_type_name} · {t(operatorRole(type))}
         </Text>
       </View>
 
       {/* ── 1 · the operator ─────────────────────────────────────────────── */}
-      <Step n={1} title={operatorRole(type)} done={operatorDone && photoDone}
-            hint={type === 'MID_SHIFT' ? 'Who is operating the machine'
+      <Step n={1} title={t(operatorRole(type))} done={operatorDone && photoDone}
+            hint={t(type === 'MID_SHIFT' ? 'Who is operating the machine'
                   : type === 'START_HANDOVER' ? 'Who is taking the machine on'
-                  : 'Who is handing the machine off'}>
+                  : 'Who is handing the machine off')}>
         <PersonPicker
           testID="operator"
           chosen={chosen}
@@ -144,7 +147,7 @@ export default function Identify() {
                     style={[styles.advisory,
                             (a.kind === 'MACHINE_HELD' || a.kind === 'COMPETENCY')
                               && styles.advisorySerious]}>
-                <Text style={styles.advisoryText}>{a.message}</Text>
+                <Text style={styles.advisoryText}>{tm(a.message)}</Text>
               </View>
             ))}
           </View>
@@ -158,29 +161,29 @@ export default function Identify() {
         {chosen && (
           <View style={styles.photoBox}>
             {hasPhoto ? (
-              <Text style={styles.photoDone}>✓ {firstName(chosen.name)} photographed</Text>
+              <Text style={styles.photoDone}>✓ {t('{name} photographed', { name: firstName(chosen.name) })}</Text>
             ) : (
               <>
                 <View style={styles.photoHead}>
                   <Text style={styles.photoAsk}>
-                    Photograph {firstName(chosen.name)} at the machine
+                    {t('Photograph {name} at the machine', { name: firstName(chosen.name) })}
                   </Text>
                   <Required done={photoSkipped} />
                 </View>
                 <Pressable testID="operator-photo"
                            style={({ pressed }) => [styles.photoBtn, pressed && styles.pressed]}
                            onPress={() => router.push('/capture/photo?kind=operator')}>
-                  <Text style={styles.photoBtnText}>Take the photo</Text>
+                  <Text style={styles.photoBtnText}>{t('Take the photo')}</Text>
                 </Pressable>
                 {/* A broken camera must not stop a shift. Recorded, not
                     hidden: the handover goes without a photo and says so. */}
                 {!photoSkipped ? (
                   <Pressable testID="skip-photo" hitSlop={8} onPress={() => setPhotoSkipped(true)}>
-                    <Text style={styles.photoSkip}>The camera is not working</Text>
+                    <Text style={styles.photoSkip}>{t('The camera is not working')}</Text>
                   </Pressable>
                 ) : (
                   <Text style={styles.photoSkipped}>
-                    Going on without a photo. The office will see that none was taken.
+                    {t('Going on without a photo. The office will see that none was taken.')}
                   </Text>
                 )}
               </>
@@ -191,17 +194,17 @@ export default function Identify() {
 
       {/* ── 2 · the other side ───────────────────────────────────────────── */}
       {other && (
-        <Step n={2} title={other.label} done={otherDone}
-              hint={type === 'START_HANDOVER'
+        <Step n={2} title={t(other.label)} done={otherDone}
+              hint={t(type === 'START_HANDOVER'
                 ? 'The operator going off shift, who handed you the machine'
-                : 'The operator coming on shift, who takes the machine from you'}>
+                : 'The operator coming on shift, who takes the machine from you')}>
           {counterpartAbsent ? (
             <View style={styles.nobody} testID="counterpart-nobody">
-              <Text style={styles.nobodyText}>{other.nobody}</Text>
+              <Text style={styles.nobodyText}>{t(other.nobody)}</Text>
               <Pressable testID="counterpart-nobody-change" hitSlop={12}
                          style={styles.changeBtn}
                          onPress={() => void setCounterpart(null, false)}>
-                <Text style={styles.change}>Change</Text>
+                <Text style={styles.change}>{t('Change')}</Text>
               </Pressable>
             </View>
           ) : (
@@ -217,7 +220,7 @@ export default function Identify() {
                 <Pressable testID="counterpart-none"
                            style={({ pressed }) => [styles.secondary, pressed && styles.pressed]}
                            onPress={() => void setCounterpart(null, true)}>
-                  <Text style={styles.secondaryText}>{other.nobody}</Text>
+                  <Text style={styles.secondaryText}>{t(other.nobody)}</Text>
                 </Pressable>
               )}
             </>
@@ -226,18 +229,27 @@ export default function Identify() {
       )}
 
       {/* ── 3 · who is holding the tablet ────────────────────────────────── */}
-      <Step n={other ? 3 : 2} title="Filled in by" optional
-            hint="Whoever is holding the tablet, if it is not the operator">
+      <Step n={other ? 3 : 2} title={t('Filled in by')} optional
+            hint={t('Whoever is holding the tablet, if it is not the operator')}>
         {recorder ? (
           <>
             <PersonPicker testID="recorder" chosen={recorder}
                           exclude={chosen?.operator_id}
                           onPick={(op) => setRecorder(op)} />
-            <Pressable testID="recorder-is-operator" hitSlop={8}
+            {/* THE SUPERVISOR, REMEMBERED (gap G4). Said plainly, so a name
+                the tablet chose is never mistaken for one somebody picked --
+                and the way out is a button, not a small link. */}
+            {recorderRemembered && (
+              <Text style={styles.remembered} testID="recorder-remembered">
+                {t('Same as the last handover on this tablet.')}
+              </Text>
+            )}
+            <Pressable testID="recorder-is-operator"
+                       style={({ pressed }) => [styles.secondary, pressed && styles.pressed]}
                        onPress={() => { void setRecorder(null); setSomeoneElse(false); }}>
-              <Text style={styles.link}>
-                {chosen ? `${firstName(chosen.name)} is filling it in after all`
-                        : 'The operator is filling it in after all'}
+              <Text style={styles.secondaryText}>
+                {chosen ? t('{name} is filling it in themself', { name: firstName(chosen.name) })
+                        : t('The operator is filling it in')}
               </Text>
             </Pressable>
           </>
@@ -246,20 +258,21 @@ export default function Identify() {
             <PersonPicker testID="recorder" chosen={null}
                           exclude={chosen?.operator_id}
                           excludedBecause="is the operator, which is already the default."
-                          placeholder="Your employee number or name"
+                          placeholder={t('Your employee number or name')}
                           onPick={(op) => setRecorder(op)} />
             <Pressable testID="recorder-cancel" hitSlop={8} onPress={() => setSomeoneElse(false)}>
-              <Text style={styles.link}>Cancel — the operator is filling it in</Text>
+              <Text style={styles.link}>{t('Cancel — the operator is filling it in')}</Text>
             </Pressable>
           </>
         ) : (
           <View style={styles.selfRow}>
             <Text style={styles.selfText}>
-              {chosen ? `${firstName(chosen.name)} is filling this in` : 'The operator is filling this in'}
+              {chosen ? t('{name} is filling this in', { name: firstName(chosen.name) })
+                      : t('The operator is filling this in')}
             </Text>
             <Pressable testID="recorder-someone-else" hitSlop={8}
                        style={styles.changeBtn} onPress={() => setSomeoneElse(true)}>
-              <Text style={styles.change}>Someone else</Text>
+              <Text style={styles.change}>{t('Someone else')}</Text>
             </Pressable>
           </View>
         )}
@@ -272,7 +285,7 @@ export default function Identify() {
                                  pressed && missing == null && styles.pressed]}
         onPress={() => router.push('/capture/checklist')}
       >
-        <Text style={styles.primaryText}>{missing ?? 'Start the walk-round'}</Text>
+        <Text style={styles.primaryText}>{missing ?? t('Start the walk-round')}</Text>
       </Pressable>
     </ScrollView>
     </View>
@@ -284,6 +297,7 @@ function Step({ n, title, hint, done, optional, children }: {
   n: number; title: string; hint: string; done?: boolean; optional?: boolean;
   children: ReactNode;
 }) {
+  const { t } = useT();
   return (
     <View style={[styles.step, !optional && !done && styles.stepOpen]} testID={`step-${n}`}>
       <View style={styles.stepHead}>
@@ -296,7 +310,7 @@ function Step({ n, title, hint, done, optional, children }: {
           <Text style={styles.stepTitle}>{title}</Text>
           <Text style={styles.stepHint}>{hint}</Text>
         </View>
-        {optional ? <Text style={styles.optional}>Optional</Text> : <Required done={done} />}
+        {optional ? <Text style={styles.optional}>{t('Optional')}</Text> : <Required done={done} />}
       </View>
       {children}
     </View>
@@ -309,10 +323,11 @@ function Step({ n, title, hint, done, optional, children }: {
  * the last screen (issue B1).
  */
 function Required({ done }: { done?: boolean }) {
+  const { t } = useT();
   if (done) return null;
   return (
     <View style={styles.required}>
-      <Text style={styles.requiredText}>Required</Text>
+      <Text style={styles.requiredText}>{t('Required')}</Text>
     </View>
   );
 }
@@ -383,6 +398,7 @@ const styles = StyleSheet.create({
                borderWidth: 1, borderColor: '#c4d3e0', backgroundColor: '#fff' },
   change: { fontSize: 15, color: '#1e5f8a', fontWeight: '700' },
   link: { fontSize: 15, color: '#1e5f8a', fontWeight: '600', paddingVertical: 4 },
+  remembered: { fontSize: 14, color: '#1e5f8a', fontWeight: '600' },
 
   primary: { minHeight: 68, borderRadius: 12, backgroundColor: '#16202b',
              alignItems: 'center', justifyContent: 'center', paddingHorizontal: 20,

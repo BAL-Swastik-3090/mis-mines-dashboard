@@ -20,6 +20,8 @@ import { useSync } from '@/ui/useSync';
 import Enrol from './enrol';
 import { BACKGROUND_TASK, registerBackgroundSync, useSyncTriggers } from '@/ui/syncTriggers';
 import { sendFromBackground } from '@/core/sync/background';
+import { useLang, useT } from '@/i18n';
+import { HeaderActions } from '@/ui/Guide';
 import { requeueDeviceRefusals } from '@/core/sync/engine';
 import { removeEmptyDraftsWithoutChecklist } from '@/core/capture/session';
 import { httpTransport } from '@/core/sync/transport';
@@ -63,6 +65,10 @@ export default function RootLayout() {
   const attach = useCapture((s) => s.attach);
   const attachSync = useSync((s) => s.attach);
   const [state, setState] = useState<'opening' | 'ready' | 'failed' | 'unenrolled'>('opening');
+  const { t } = useT();
+  const loadLang = useLang((s) => s.load);
+  // The tablet's language, before the first screen is drawn.
+  useEffect(() => { void loadLang(); }, [loadLang]);
   const [why, setWhy] = useState<string>('');
 
   /**
@@ -162,22 +168,24 @@ export default function RootLayout() {
       <Stack screenOptions={{ headerStyle: { backgroundColor: '#16202b' },
                               headerTintColor: '#fff',
                               headerTitleStyle: { fontSize: 18 },
+                              // Language and the guide, on every screen (gaps G11, G12).
+                              headerRight: () => <HeaderActions />,
                               animation: 'slide_from_right',
                               contentStyle: { backgroundColor: '#f3f6f9' } }}>
-        <Stack.Screen name="index" options={{ title: 'Handover' }} />
-        <Stack.Screen name="capture/machine" options={{ title: 'Which machine' }} />
-        <Stack.Screen name="capture/operator" options={{ title: 'Who is in this handover' }} />
-        <Stack.Screen name="capture/checklist" options={{ title: 'Walk-round' }} />
-        <Stack.Screen name="capture/step" options={{ title: 'One check at a time' }} />
-        <Stack.Screen name="capture/readings" options={{ title: 'Readings' }} />
-        <Stack.Screen name="capture/confirm" options={{ title: 'Confirm' }} />
-        <Stack.Screen name="capture/scan" options={{ title: 'Scan the cab' }} />
+        <Stack.Screen name="index" options={{ title: t('Handover') }} />
+        <Stack.Screen name="capture/machine" options={{ title: t('Which machine') }} />
+        <Stack.Screen name="capture/operator" options={{ title: t('Who is in this handover') }} />
+        <Stack.Screen name="capture/checklist" options={{ title: t('Walk-round') }} />
+        <Stack.Screen name="capture/step" options={{ title: t('One check at a time') }} />
+        <Stack.Screen name="capture/readings" options={{ title: t('Readings') }} />
+        <Stack.Screen name="capture/confirm" options={{ title: t('Confirm') }} />
+        <Stack.Screen name="capture/scan" options={{ title: t('Scan the cab') }} />
         <Stack.Screen name="capture/photo"
-                      options={{ title: 'Photo', presentation: 'modal',
+                      options={{ title: t('Photo'), presentation: 'modal',
                                  animation: 'slide_from_bottom' }} />
-        <Stack.Screen name="sync" options={{ title: 'Still on this tablet' }} />
-        <Stack.Screen name="history" options={{ title: 'Done on this tablet' }} />
-        <Stack.Screen name="enrol" options={{ title: 'Set up this device' }} />
+        <Stack.Screen name="sync" options={{ title: t('Still on this tablet') }} />
+        <Stack.Screen name="history" options={{ title: t('Done on this tablet') }} />
+        <Stack.Screen name="enrol" options={{ title: t('Set up this device') }} />
       </Stack>
     </SafeAreaProvider>
   );

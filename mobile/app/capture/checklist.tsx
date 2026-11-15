@@ -25,10 +25,11 @@ import { FlowProgress } from '@/ui/FlowProgress';
 import { evaluateOne, evaluateSession } from '@/core/evaluation';
 import type { ChecklistItem, RawResponse } from '@/core/evaluation';
 import { leftToAsk } from '@/core/stepping';
-import { plural } from '@/core/words';
+import { useT } from '@/i18n';
 
 export default function Checklist() {
   const router = useRouter();
+  const { t, tn } = useT();
   const asset = useCapture((s) => s.asset);
   const template = useCapture((s) => s.template);
   const answers = useCapture((s) => s.answers);
@@ -60,7 +61,7 @@ export default function Checklist() {
     return (
       <View style={styles.screen}>
         <Text style={styles.empty}>
-          No walk-round is in progress. Go back and start one.
+          {t('No walk-round is in progress. Go back and start one.')}
         </Text>
       </View>
     );
@@ -78,8 +79,8 @@ export default function Checklist() {
       <View style={styles.bar}>
         <Text style={styles.barCode}>{asset.fleet_code}</Text>
         <Text style={styles.barCount}>
-          {done} of {total} answered
-          {findings > 0 ? ` · ${findings} finding${findings === 1 ? '' : 's'}` : ''}
+          {t('{n} of {total} answered', { n: done, total })}
+          {findings > 0 ? ` · ${tn(findings, '{n} finding', '{n} findings')}` : ''}
         </Text>
       </View>
 
@@ -97,11 +98,11 @@ export default function Checklist() {
           onPress={() => router.push('/capture/step')}
         >
           <Text style={styles.bulkText}>
-            {done === 0 ? `Start the checks — ${plural(total, 'check')}`
-                        : `Go on with the checks — ${left} left`}
+            {done === 0 ? tn(total, 'Start the checks — {n} check', 'Start the checks — {n} checks')
+                        : t('Go on with the checks — {n} left', { n: left })}
           </Text>
           <Text style={styles.bulkNote}>
-            One at a time. A clean answer moves straight to the next.
+            {t('One at a time. A clean answer moves straight to the next.')}
           </Text>
         </Pressable>
         </View>
@@ -110,23 +111,21 @@ export default function Checklist() {
       {/* Records filled in one tap before this changed say so. */}
       {bulkAnswered && (
         <Text style={styles.bulkFlag}>
-          The routine checks on this handover were marked OK together. The office sees this on the record.
+          {t('The routine checks on this handover were marked OK together. The office sees this on the record.')}
         </Text>
       )}
 
       {/* What every check demands, said once rather than on every card. */}
       <Text style={styles.legend}>
-        Every check needs an answer. Any fault needs a note saying what is wrong;
-        the tags on a check say when it also needs a photo.
+        {t('Every check needs an answer. Any fault needs a note saying what is wrong; the tags on a check say when it also needs a photo.')}
       </Text>
 
       {verdict?.isBlocked && (
         <View style={styles.blocked} testID="blocked-banner">
-          <Text style={styles.blockedTitle}>This machine does not change hands</Text>
+          <Text style={styles.blockedTitle}>{t('This machine does not change hands')}</Text>
           <Text style={styles.blockedWhy}>{verdict.blockedReason}</Text>
           <Text style={styles.blockedNote}>
-            Finish the walk-round and confirm anyway — the record of what was
-            found is what gets it repaired. Tell your supervisor now.
+            {t('Finish the walk-round and confirm anyway — the record of what was found is what gets it repaired. Tell your supervisor now.')}
           </Text>
         </View>
       )}
@@ -159,7 +158,8 @@ export default function Checklist() {
               <Text style={styles.section}>{section.title}</Text>
               <Text style={[styles.sectionCount, got === n && styles.sectionDone,
                             bad > 0 && styles.sectionBad]}>
-                {got === n ? '✓ ' : ''}{got} of {n}{bad > 0 ? ` · ${plural(bad, 'fault')}` : ''}
+                {got === n ? '✓ ' : ''}{t('{n} of {total}', { n: got, total: n })}
+                {bad > 0 ? ` · ${tn(bad, '{n} fault', '{n} faults')}` : ''}
               </Text>
             </View>
           );
@@ -176,7 +176,7 @@ export default function Checklist() {
                          }}>
                 <Text style={styles.passedTick}>✓</Text>
                 <Text style={styles.passedLabel} numberOfLines={2}>{item.label}</Text>
-                <Text style={styles.passedAnswer}>{answerText(item, raw)}</Text>
+                <Text style={styles.passedAnswer}>{t(answerText(item, raw))}</Text>
               </Pressable>
             );
           }
@@ -209,7 +209,7 @@ export default function Checklist() {
         <Pressable testID="to-readings" style={styles.primary}
                    onPress={() => router.push('/capture/readings')}>
           <Text style={styles.primaryText}>
-            {done < total ? `Readings (${total - done} unanswered)` : 'Readings'}
+            {done < total ? t('Readings ({n} unanswered)', { n: total - done }) : t('Readings')}
           </Text>
         </Pressable>
       </View>

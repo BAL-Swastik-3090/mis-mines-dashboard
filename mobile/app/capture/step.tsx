@@ -25,13 +25,14 @@ import { useCapture } from '@/ui/useCapture';
 import { ItemControl } from '@/ui/ItemControl';
 import { evaluateSession, type RawResponse } from '@/core/evaluation';
 import { isSettled, leftToAsk, movesOnByItself, nextToAsk, startAt } from '@/core/stepping';
-import { plural } from '@/core/words';
+import { useT } from '@/i18n';
 
 /** Long enough to see the answer land, short enough not to wait for it. */
 const MOVE_ON_MS = 320;
 
 export default function Step() {
   const router = useRouter();
+  const { t, tn } = useT();
   const params = useLocalSearchParams<{ item?: string; from?: string }>();
   const fromConfirm = params.from === 'confirm';
 
@@ -80,7 +81,7 @@ export default function Step() {
   if (!asset || !template || items.length === 0) {
     return (
       <View style={styles.screen}>
-        <Text style={styles.empty}>No walk-round is in progress. Go back and start one.</Text>
+        <Text style={styles.empty}>{t('No walk-round is in progress. Go back and start one.')}</Text>
       </View>
     );
   }
@@ -102,20 +103,21 @@ export default function Step() {
               <Text style={styles.doneMarkText}>{verdict?.isBlocked ? '!' : '✓'}</Text>
             </View>
             <Text style={styles.doneTitle}>
-              {owed.length > 0 ? 'Every check is answered' : `All ${items.length} checks done`}
+              {owed.length > 0 ? t('Every check is answered') : t('All {n} checks done', { n: items.length })}
             </Text>
             <Text style={styles.doneNote}>
-              {findings === 0 ? 'Nothing found.' : `${plural(findings, 'finding')} recorded.`}
+              {findings === 0 ? t('Nothing found.')
+                : tn(findings, '{n} finding recorded.', '{n} findings recorded.')}
             </Text>
             {verdict?.isBlocked && (
               <Text style={styles.doneHeld}>
-                This machine does not change hands: {verdict.blockedReason}
+                {t('This machine does not change hands')}: {verdict.blockedReason}
               </Text>
             )}
             {owed.length > 0 && (
               <Text style={styles.doneOwed}>
-                {plural(owed.length, 'check')} still {owed.length === 1 ? 'needs' : 'need'} a
-                note or a photo — go back to {owed.length === 1 ? 'it' : 'them'}.
+                {tn(owed.length, '{n} check still needs a note or a photo — go back to it.',
+                    '{n} checks still need a note or a photo — go back to them.')}
               </Text>
             )}
           </View>
@@ -127,7 +129,7 @@ export default function Step() {
                        else router.replace('/capture/readings');
                      }}>
             <Text style={styles.primaryText}>
-              {fromConfirm ? 'Back to confirm' : 'Go to the readings'}
+              {fromConfirm ? t('Back to confirm') : t('Go to the readings')}
             </Text>
           </Pressable>
           {owed.length > 0 && (
@@ -136,7 +138,7 @@ export default function Step() {
                          setFinished(false);
                          setIndex(items.findIndex((i) => i.itemId === owed[0]!.item.itemId));
                        }}>
-              <Text style={styles.secondaryText}>Go to {owed[0]!.item.label}</Text>
+              <Text style={styles.secondaryText}>{t('Go to {label}', { label: owed[0]!.item.label })}</Text>
             </Pressable>
           )}
         </Animated.View>
@@ -160,21 +162,21 @@ export default function Step() {
         <View style={styles.barRow}>
           <Text style={styles.barCode}>{asset.fleet_code}</Text>
           <Text style={styles.barCount} testID="step-position">
-            Check {index + 1} of {items.length}
+            {t('Check {n} of {total}', { n: index + 1, total: items.length })}
           </Text>
         </View>
         <View style={styles.track}>
           <View style={[styles.fill, { width: `${((items.length - left) / items.length) * 100}%` }]} />
         </View>
         <Text style={styles.barLeft}>
-          {left === 0 ? 'Every check has an answer' : `${left} still to answer`}
+          {left === 0 ? t('Every check has an answer') : t('{n} still to answer', { n: left })}
           {sectionOf.get(item.itemId) ? ` · ${sectionOf.get(item.itemId)}` : ''}
         </Text>
       </View>
 
       {verdict?.isBlocked && (
         <View style={styles.blocked} testID="blocked-banner">
-          <Text style={styles.blockedTitle}>This machine does not change hands</Text>
+          <Text style={styles.blockedTitle}>{t('This machine does not change hands')}</Text>
           <Text style={styles.blockedWhy}>{verdict.blockedReason}</Text>
         </View>
       )}
@@ -208,21 +210,21 @@ export default function Step() {
         <Pressable testID="step-back" disabled={index === 0}
                    style={[styles.small, index === 0 && styles.smallOff]}
                    onPress={() => { cancelMove(); setIndex(index - 1); }}>
-          <Text style={styles.smallText}>Back</Text>
+          <Text style={styles.smallText}>{t('Back')}</Text>
         </Pressable>
         <Pressable testID="step-skip" disabled={!canSkip || settled}
                    style={[styles.small, (!canSkip || settled) && styles.smallOff]}
                    onPress={() => { cancelMove(); goOn(index, answers); }}>
-          <Text style={styles.smallText}>Skip for now</Text>
+          <Text style={styles.smallText}>{t('Skip for now')}</Text>
         </Pressable>
         <Pressable testID="step-next" disabled={!settled}
                    style={({ pressed }) => [styles.next, !settled && styles.nextOff,
                                             pressed && settled && styles.pressed]}
                    onPress={() => { cancelMove(); goOn(index, answers); }}>
           <Text style={styles.nextText}>
-            {!raw || (raw.answer == null && raw.numericValue == null) ? 'Answer to go on'
+            {t(!raw || (raw.answer == null && raw.numericValue == null) ? 'Answer to go on'
               : settled ? (left === 0 ? 'Finish' : 'Next')
-              : 'Finish this check first'}
+              : 'Finish this check first')}
           </Text>
         </Pressable>
       </View>

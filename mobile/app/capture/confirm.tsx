@@ -21,12 +21,26 @@ import { useCapture } from '@/ui/useCapture';
 import { shiftAt, type ResolvedShift } from '@/core/capture/shifts';
 import { counterpartQuestion } from '@/core/capture/session';
 import { whatIsLeft, type Fix } from '@/core/capture/todo';
-import { plural } from '@/core/words';
 import { FadeIn, PopIn } from '@/ui/motion';
 import { FlowProgress } from '@/ui/FlowProgress';
+import { ANSWER_LABEL } from '@/ui/ItemControl';
+import { DiscardSheet } from '@/ui/DiscardSheet';
+import { useT } from '@/i18n';
+import type { Severity } from '@/core/enums';
+
+const SEVERITY_LABEL: Record<Severity, string> = {
+  LOW: 'low', MEDIUM: 'medium', HIGH: 'high', CRITICAL: 'critical',
+};
+const TYPE_LABEL = {
+  START_HANDOVER: 'Taking over', END_HANDOVER: 'Handing over', MID_SHIFT: 'Mid-shift check',
+} as const;
 
 export default function Confirm() {
   const router = useRouter();
+  const { t, tn, tm } = useT();
+  const discardDraft = useCapture((s) => s.discardDraft);
+  const answers = useCapture((s) => s.answers);
+  const [discarding, setDiscarding] = useState(false);
   const asset = useCapture((s) => s.asset);
   const operator = useCapture((s) => s.operator);
   const counterpart = useCapture((s) => s.counterpart);
@@ -58,7 +72,7 @@ export default function Confirm() {
   useFocusEffect(useCallback(() => { void refreshVerdict(); }, [refreshVerdict]));
 
   if (!asset || !row) {
-    return <View style={styles.screen}><Text style={styles.empty}>Nothing to confirm.</Text></View>;
+    return <View style={styles.screen}><Text style={styles.empty}>{t('Nothing to confirm.')}</Text></View>;
   }
 
   if (done) {
@@ -77,20 +91,24 @@ export default function Confirm() {
           </PopIn>
 
           <Text style={styles.doneTitle}>
-            {held ? 'Recorded — the machine is held' : 'Recorded'}
+            {held ? t('Recorded — the machine is held') : t('Recorded')}
           </Text>
           <Text style={styles.doneNote}>
-            {asset.fleet_code}, signed by {operator?.name ?? 'the operator'}
-            {recorder ? `, filled in by ${recorder.name}` : ''}.
+            {recorder
+              ? t('{fleet}, signed by {name}, filled in by {recorder}.',
+                  { fleet: asset.fleet_code, name: operator?.name ?? t('the operator'),
+                    recorder: recorder.name })
+              : t('{fleet}, signed by {name}.',
+                  { fleet: asset.fleet_code, name: operator?.name ?? t('the operator') })}
           </Text>
 
           {/* THE HONEST SENTENCE, as a labelled fact rather than a paragraph.
               It was three lines of amber prose saying one thing, which is
               how a warning stops being read. */}
           <View style={styles.doneState}>
-            <Text style={styles.doneStateTitle}>Saved on this tablet</Text>
+            <Text style={styles.doneStateTitle}>{t('Saved on this tablet')}</Text>
             <Text style={styles.doneStateNote}>
-              It reaches the office at the next signal. Not filed yet.
+              {t('It reaches the office by itself when there is signal. Not filed yet.')}
             </Text>
           </View>
         </FadeIn>
@@ -105,7 +123,7 @@ export default function Confirm() {
                      if (router.canDismiss()) router.dismissAll();
                      else router.replace('/');
                    }}>
-          <Text style={styles.primaryText}>Done</Text>
+          <Text style={styles.primaryText}>{t('Done')}</Text>
         </Pressable>
       </View>
     );
@@ -155,7 +173,7 @@ export default function Confirm() {
         ) : null}
         <Text style={styles.meta}>{asset.asset_type_name}</Text>
         <Text style={styles.meta}>
-          {row.session_type === 'START_HANDOVER' ? 'Taking over' : row.session_type === 'END_HANDOVER' ? 'Handing over' : 'Mid-shift check'} · meter {row.meter_reading ?? '—'}{' '}
+          {t(TYPE_LABEL[row.session_type])} · {t('meter')} {row.meter_reading ?? '—'}{' '}
           {row.meter_uom ?? ''}
         </Text>
         {/* WHICH SHIFT. The office resolves this from the time of capture and
@@ -164,8 +182,8 @@ export default function Confirm() {
             boundary it is the difference between their shift and the next
             one, and they are the only person who can say it is wrong. */}
         <Text style={styles.meta}>
-          {shift ? `shift ${shift.code} · ${shift.productionDay}`
-                 : 'shift not known on this device — the office will set it'}
+          {shift ? `${t('shift')} ${shift.code} · ${shift.productionDay}`
+                 : t('shift not known on this device — the office will set it')}
         </Text>
       </View>
 
@@ -174,22 +192,22 @@ export default function Confirm() {
           putting on the record before they put their own to it -- this was a
           single line that named the operator and implied the rest. */}
       <View style={styles.people} testID="people">
-        <Person role={row.session_type === 'START_HANDOVER' ? 'Taking over'
-                      : row.session_type === 'END_HANDOVER' ? 'Handing over' : 'Operator'}
+        <Person role={t(row.session_type === 'START_HANDOVER' ? 'Taking over'
+                      : row.session_type === 'END_HANDOVER' ? 'Handing over' : 'Operator')}
                 name={operator?.name} emp={operator?.emp_id} />
         {counterpartQuestion(row.session_type) && (
-          <Person role={counterpartQuestion(row.session_type)!.label}
-                  name={counterpart?.name ?? (counterpartAbsent ? 'Nobody' : undefined)}
+          <Person role={t(counterpartQuestion(row.session_type)!.label)}
+                  name={counterpart?.name ?? (counterpartAbsent ? t('Nobody') : undefined)}
                   emp={counterpart?.emp_id}
                   note={counterpartAbsent
-                    ? (row.session_type === 'START_HANDOVER' ? 'the machine was parked'
-                                                             : 'the machine is being parked')
+                    ? t(row.session_type === 'START_HANDOVER' ? 'the machine was parked'
+                                                               : 'the machine is being parked')
                     : undefined} />
         )}
-        <Person role="Filled in by"
+        <Person role={t('Filled in by')}
                 name={recorder?.name ?? operator?.name}
                 emp={recorder?.emp_id ?? operator?.emp_id}
-                note={recorder ? undefined : 'the operator themself'} last />
+                note={recorder ? undefined : t('the operator themself')} last />
       </View>
 
       {/* ── WHAT IS LEFT, AND THE WAY TO EACH ───────────────────────────────
@@ -198,7 +216,8 @@ export default function Confirm() {
       {fixes.length > 0 && (
         <View style={styles.stopping} testID="stopping">
           <Text style={styles.stoppingTitle}>
-            {plural(fixes.length, 'thing')} left before you can confirm
+            {tn(fixes.length, '{n} thing left before you can confirm',
+                '{n} things left before you can confirm')}
           </Text>
           {fixes.map((f, i) => (
             <Pressable key={`${f.where}-${i}`} testID={`fix-${i}`}
@@ -206,7 +225,7 @@ export default function Confirm() {
                        style={({ pressed }) => [styles.fix, i > 0 && styles.fixRule,
                                                 pressed && styles.fixPressed]}
                        onPress={() => go(f)}>
-              <Text style={styles.fixText}>{f.text}</Text>
+              <Text style={styles.fixText}>{tm(f.text)}</Text>
               {f.where !== 'NOWHERE' && <Text style={styles.fixGo}>›</Text>}
             </Pressable>
           ))}
@@ -215,11 +234,10 @@ export default function Confirm() {
 
       {verdict?.isBlocked && (
         <View style={styles.blocked}>
-          <Text style={styles.blockedTitle}>This machine does not change hands</Text>
+          <Text style={styles.blockedTitle}>{t('This machine does not change hands')}</Text>
           <Text style={styles.blockedWhy}>{verdict.blockedReason}</Text>
           <Text style={styles.blockedNote}>
-            Confirm it anyway. The record of what you found is what gets it
-            repaired, and a handover nobody filed leaves the fault invisible.
+            {t('Confirm it anyway. The record of what you found is what gets it repaired, and a handover nobody filed leaves the fault invisible.')}
           </Text>
         </View>
       )}
@@ -227,17 +245,17 @@ export default function Confirm() {
       {(verdict?.adverseCount ?? 0) > 0 && (
         <View style={styles.findings}>
           <Text style={styles.findingsTitle}>
-            {verdict?.adverseCount} finding{verdict?.adverseCount === 1 ? '' : 's'}
+            {tn(verdict?.adverseCount ?? 0, '{n} finding', '{n} findings')}
           </Text>
           {verdict?.responses.filter((r) => r.isAdverse).map((r) => (
             <View key={r.item.itemId} style={styles.finding}>
               <Text style={styles.findingLabel}>
                 {r.item.label}
-                {r.severity ? ` · ${r.severity.toLowerCase()}` : ''}
+                {r.severity ? ` · ${t(SEVERITY_LABEL[r.severity])}` : ''}
               </Text>
               <Text style={styles.findingWhat}>
                 {r.raw.numericValue != null ? `${r.raw.numericValue} ${r.item.unit ?? ''}`
-                                            : String(r.raw.answer).replace(/_/g, ' ').toLowerCase()}
+                  : r.raw.answer ? t(ANSWER_LABEL[r.raw.answer]) : ''}
                 {r.raw.remark ? ` — ${r.raw.remark}` : ''}
               </Text>
             </View>
@@ -247,7 +265,7 @@ export default function Confirm() {
 
       {refused.length > 0 && (
         <View style={styles.stopping}>
-          {refused.map((p) => <Text key={p} style={styles.stoppingItem}>{p}</Text>)}
+          {refused.map((p) => <Text key={p} style={styles.stoppingItem}>{tm(p)}</Text>)}
         </View>
       )}
 
@@ -272,22 +290,41 @@ export default function Confirm() {
           // -- and a button that shows nothing invites a second press.
           <View style={styles.saving}>
             <ActivityIndicator color="#fff" />
-            <Text style={styles.primaryText}>Saving on this tablet…</Text>
+            <Text style={styles.primaryText}>{t('Saving on this tablet…')}</Text>
           </View>
         ) : (
         <Text style={styles.primaryText}>
-          {ready ? 'I confirm this is what I found'
-            : fixes.length === 1 ? 'Fix the one thing left'
-            : `Fix the first of ${fixes.length} things left`}
+          {ready ? t('I confirm this is what I found')
+            : fixes.length === 1 ? t('Fix the one thing left')
+            : t('Fix the first of {n} things left', { n: fixes.length })}
         </Text>
         )}
       </Pressable>
 
       <Text style={styles.footnote}>
-        Confirming saves it on this tablet. It reaches the office when there is
-        signal.
+        {t('Confirming saves it on this tablet. It reaches the office by itself when there is signal.')}
       </Text>
+
+      {/* ── THROWING IT AWAY (gap G1) ─────────────────────────────────────
+          Last on the screen and plain, so it is found when wanted and not
+          pressed by a thumb heading for Confirm. The sheet asks why. */}
+      <Pressable testID="discard-this" hitSlop={8} style={styles.discard}
+                 onPress={() => setDiscarding(true)}>
+        <Text style={styles.discardText}>{t('Discard this handover')}</Text>
+      </Pressable>
     </ScrollView>
+    <DiscardSheet
+      visible={discarding}
+      what={`${asset.fleet_code} · ${t(TYPE_LABEL[row.session_type])}`}
+      answered={[...answers.values()].filter((a) => a.answer != null || a.numericValue != null).length}
+      onCancel={() => setDiscarding(false)}
+      onDiscard={async (reason) => {
+        await discardDraft(row.client_uuid, reason);
+        setDiscarding(false);
+        if (router.canDismiss()) router.dismissAll();
+        else router.replace('/');
+      }}
+    />
     </View>
   );
 }
@@ -296,12 +333,13 @@ export default function Confirm() {
 function Person({ role, name, emp, note, last }: {
   role: string; name?: string | null; emp?: string | null; note?: string; last?: boolean;
 }) {
+  const { t } = useT();
   return (
     <View style={[styles.person, !last && styles.personRule]}>
       <Text style={styles.personRole}>{role}</Text>
       <View style={styles.personWho}>
         <Text style={[styles.personName, !name && styles.personMissing]}>
-          {name ?? 'Not answered'}
+          {name ?? t('Not answered')}
         </Text>
         {(emp || note) ? (
           <Text style={styles.personEmp}>{[emp, note].filter(Boolean).join(' · ')}</Text>
@@ -384,6 +422,9 @@ const styles = StyleSheet.create({
   primaryOff: { backgroundColor: '#aeb8c4' },
   primaryText: { color: '#fff', fontSize: 18, fontWeight: '700', textAlign: 'center' },
   footnote: { fontSize: 13, color: '#5b6a7a', textAlign: 'center' },
+  discard: { alignSelf: 'center', paddingHorizontal: 18, paddingVertical: 12, marginTop: 18,
+             borderRadius: 10, borderWidth: 1, borderColor: '#e3b5ae' },
+  discardText: { fontSize: 15, fontWeight: '700', color: '#a33a2a' },
 
   doneScreen: { padding: 16, gap: 16, justifyContent: 'center',
                 width: '100%', maxWidth: 820, alignSelf: 'center' },

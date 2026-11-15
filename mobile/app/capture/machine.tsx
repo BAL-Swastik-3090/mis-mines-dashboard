@@ -25,6 +25,7 @@ import type { CachedAsset } from '@/core/capture/masters';
 import type { SessionType } from '@/core/enums';
 import { FlowProgress } from '@/ui/FlowProgress';
 import { FadeIn, PressableScale } from '@/ui/motion';
+import { useT } from '@/i18n';
 
 const TYPES: { t: SessionType; label: string }[] = [
   { t: 'START_HANDOVER', label: 'Taking over' },
@@ -34,6 +35,7 @@ const TYPES: { t: SessionType; label: string }[] = [
 
 export default function PickMachine() {
   const router = useRouter();
+  const { t } = useT();
   const store = useCapture((s) => s.store);
   const begin = useCapture((s) => s.begin);
   const busy = useCapture((s) => s.busy);
@@ -60,8 +62,8 @@ export default function PickMachine() {
     if (!ok) {
       // Stopped here rather than three screens later with an empty checklist.
       setNoChecklist(
-        `This tablet holds no checklist for a ${a.asset_type_name}. ` +
-        `Sync it within signal, or record this handover on paper.`,
+        t('This tablet holds no checklist for a {type}. Sync it within signal, or record this handover on paper.',
+          { type: a.asset_type_name }),
       );
       return;
     }
@@ -76,7 +78,7 @@ export default function PickMachine() {
           Two questions on this screen, each with its own label: what kind of
           handover, then which machine. Uniform gaps made five controls read
           as five unrelated things. */}
-      <Text style={styles.group}>What kind of handover</Text>
+      <Text style={styles.group}>{t('What kind of handover')}</Text>
       <View style={styles.types}>
         {TYPES.map((o) => (
           <PressableScale
@@ -88,15 +90,15 @@ export default function PickMachine() {
             onPress={() => setType(o.t)}
           >
             <Text style={[styles.typeText, type === o.t && styles.typeTextPicked]}>
-              {o.label}
+              {t(o.label)}
             </Text>
           </PressableScale>
         ))}
       </View>
 
-      <Text style={[styles.group, styles.groupNext]}>Which machine</Text>
+      <Text style={[styles.group, styles.groupNext]}>{t('Which machine')}</Text>
       <PressableScale testID="scan" style={styles.scan} onPress={() => router.push('/capture/scan')}>
-        <Text style={styles.scanText}>Scan the sticker on the cab</Text>
+        <Text style={styles.scanText}>{t('Scan the sticker on the cab')}</Text>
       </PressableScale>
 
       <TextInput
@@ -104,7 +106,7 @@ export default function PickMachine() {
         style={styles.search}
         value={search}
         onChangeText={(t) => { setSearch(t); void load(t); }}
-        placeholder="…or find it by number or registration"
+        placeholder={t('…or find it by number or registration')}
         autoCapitalize="characters"
         autoCorrect={false}
       />
@@ -123,15 +125,14 @@ export default function PickMachine() {
           held === 0 ? (
             <View style={styles.warn}>
               <Text style={styles.warnText}>
-                This tablet holds no machines yet. Bring it within signal and
-                press Sync now on the home screen.
+                {t('This tablet holds no machines yet. Bring it within signal and press Sync now on the home screen.')}
               </Text>
             </View>
           ) : (
             <Text style={styles.empty}>
               {search
-                ? `None of the ${held} machines on this tablet match “${search}”.`
-                : `${held} machines on this tablet.`}
+                ? t('None of the {n} machines on this tablet match “{q}”.', { n: held, q: search })
+                : t('{n} machines on this tablet.', { n: held })}
             </Text>
           )
         }
@@ -155,11 +156,11 @@ export default function PickMachine() {
             </View>
             <View style={styles.flags}>
               {a.has_critical_defect === 1 && (
-                <Text style={styles.held}>HELD</Text>
+                <Text style={styles.held}>{t('HELD')}</Text>
               )}
               {a.open_defect_count > 0 && (
                 <Text style={styles.defects}>
-                  {a.open_defect_count} open
+                  {t('{n} open', { n: a.open_defect_count })}
                 </Text>
               )}
               {a.last_meter_reading != null && (

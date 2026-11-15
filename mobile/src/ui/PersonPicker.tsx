@@ -29,6 +29,7 @@ import { useCapture } from './useCapture';
 import * as masters from '@/core/capture/masters';
 import type { CachedOperator } from '@/core/capture/masters';
 import type { IdentificationMethod } from '@/core/enums';
+import { useT } from '@/i18n';
 
 const SHOWN = 8;
 
@@ -46,6 +47,7 @@ interface Props {
 export function PersonPicker({
   testID, chosen, onPick, exclude, excludedBecause, placeholder,
 }: Props) {
+  const { t } = useT();
   const store = useCapture((s) => s.store);
   const [search, setSearch] = useState('');
   const [found, setFound] = useState<CachedOperator[]>([]);
@@ -90,12 +92,12 @@ export function PersonPicker({
         <View style={styles.chosenText}>
           <Text style={styles.chosenName}>{chosen.name}</Text>
           <Text style={styles.chosenEmp}>
-            {chosen.emp_id ?? 'no employee number on record'}
+            {chosen.emp_id ?? t('no employee number on record')}
           </Text>
         </View>
         <Pressable testID={`${testID}-change`} hitSlop={12}
                    onPress={() => setEditing(true)} style={styles.changeBtn}>
-          <Text style={styles.change}>Change</Text>
+          <Text style={styles.change}>{t('Change')}</Text>
         </Pressable>
       </View>
     );
@@ -109,7 +111,7 @@ export function PersonPicker({
         style={styles.search}
         value={search}
         onChangeText={(t) => { setSearch(t); void look(t); }}
-        placeholder={placeholder ?? 'Employee number or name'}
+        placeholder={placeholder ?? t('Employee number or name')}
         placeholderTextColor="#8a97a5"
         autoCorrect={false}
         autoFocus={editing}
@@ -118,8 +120,8 @@ export function PersonPicker({
       {clashes.length > 0 && (
         <View style={styles.clash} testID={`${testID}-clash`}>
           <Text style={styles.clashText}>
-            {clashes.length} people here are called {clashes[0]!.name}.
-            Check the employee number before you pick one.
+            {t('{n} people here are called {name}. Check the employee number before you pick one.',
+               { n: clashes.length, name: clashes[0]!.name })}
           </Text>
         </View>
       )}
@@ -131,27 +133,27 @@ export function PersonPicker({
           <Text style={styles.name}>{o.name}</Text>
           <Text style={[styles.emp,
                         sameName.has(o.name.trim().toUpperCase()) && styles.empLoud]}>
-            {o.emp_id ?? 'no employee number'}
+            {o.emp_id ?? t('no employee number')}
           </Text>
         </Pressable>
       ))}
 
       {found.length > SHOWN && (
         <Text style={styles.more}>
-          {found.length - SHOWN} more — type more of the name or the employee number.
+          {t('{n} more — type more of the name or the employee number.', { n: found.length - SHOWN })}
         </Text>
       )}
       {short && found.length === 0 && !hidden && (
-        <Text style={styles.none}>Nobody on this tablet matches.</Text>
+        <Text style={styles.none}>{t('Nobody on this tablet matches.')}</Text>
       )}
       {hidden && excludedBecause && (
-        <Text style={styles.none}>{hidden.name}: {excludedBecause}</Text>
+        <Text style={styles.none}>{hidden.name}: {t(excludedBecause)}</Text>
       )}
 
       {editing && chosen && (
         <Pressable testID={`${testID}-keep`} hitSlop={12}
                    onPress={() => { setEditing(false); setSearch(''); setFound([]); }}>
-          <Text style={styles.keep}>Keep {chosen.name}</Text>
+          <Text style={styles.keep}>{t('Keep {name}', { name: chosen.name })}</Text>
         </Pressable>
       )}
     </View>

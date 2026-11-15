@@ -17,9 +17,11 @@ import { useRouter } from 'expo-router';
 import { useCapture } from '@/ui/useCapture';
 import { fuelProblem } from '@/core/capture/session';
 import { FlowProgress } from '@/ui/FlowProgress';
+import { useT } from '@/i18n';
 
 export default function Readings() {
   const router = useRouter();
+  const { t } = useT();
   const asset = useCapture((s) => s.asset);
   const row = useCapture((s) => s.row);
   const setReadings = useCapture((s) => s.setReadings);
@@ -30,7 +32,7 @@ export default function Readings() {
   const [remarks, setRemarks] = useState(row?.remarks ?? '');
 
   if (!asset) {
-    return <View style={styles.screen}><Text style={styles.empty}>No machine picked.</Text></View>;
+    return <View style={styles.screen}><Text style={styles.empty}>{t('No machine picked.')}</Text></View>;
   }
 
   const n = meter.trim() === '' ? null : Number(meter);
@@ -43,9 +45,9 @@ export default function Readings() {
   const explained = remarks.trim() !== '';
 
   // The button names the first thing still missing, top to bottom (B1).
-  const missing = !valid ? 'Enter the meter reading'
-    : fuelBad ? 'Fuel must be 0 to 100'
-    : wentBackwards && !explained ? 'Say why the meter is lower'
+  const missing = !valid ? t('Enter the meter reading')
+    : fuelBad ? t('Fuel must be 0 to 100')
+    : wentBackwards && !explained ? t('Say why the meter is lower')
     : null;
 
   const save = async () => {
@@ -63,13 +65,14 @@ export default function Readings() {
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}
                 keyboardShouldPersistTaps="handled">
       <View style={styles.field}>
-        <FieldHead label="Hour meter / odometer" required done={valid} />
+        <FieldHead label={t('Hour meter / odometer')} required done={valid} />
         {last != null && (
           <Text style={styles.hint}>
-            Last recorded: {last} {asset.meter_uom ?? ''}
             {asset.last_meter_at
-              ? ` on ${new Date(asset.last_meter_at).toLocaleDateString('en-IN')}`
-              : ''}
+              ? t('Last recorded: {value} on {date}', {
+                  value: `${last} ${asset.meter_uom ?? ''}`.trim(),
+                  date: new Date(asset.last_meter_at).toLocaleDateString('en-IN') })
+              : t('Last recorded: {value}', { value: `${last} ${asset.meter_uom ?? ''}`.trim() })}
           </Text>
         )}
         <View style={styles.inputRow}>
@@ -86,15 +89,13 @@ export default function Readings() {
         </View>
         {wentBackwards && (
           <Text style={styles.bad} testID="meter-backwards">
-            That is lower than the last recorded reading. Check it against the
-            meter. If it is right — the meter was replaced or reset — say so in
-            the remarks below and it will be accepted.
+            {t('That is lower than the last recorded reading. Check it against the meter. If it is right — the meter was replaced or reset — say so in the remarks below and it will be accepted.')}
           </Text>
         )}
       </View>
 
       <View style={styles.field}>
-        <FieldHead label="Fuel level (%)" />
+        <FieldHead label={t('Fuel level (%)')} />
         <TextInput
           testID="fuel"
           style={[styles.input, fuelBad && styles.inputBad]}
@@ -106,18 +107,18 @@ export default function Readings() {
         />
         {fuelBad && (
           <Text style={styles.bad} testID="fuel-bad">
-            A percentage, from 0 (empty) to 100 (full).
+            {t('A percentage, from 0 (empty) to 100 (full).')}
           </Text>
         )}
       </View>
 
       <View style={styles.field}>
         {/* Optional, except when it is the explanation for a lower meter. */}
-        <FieldHead label="Anything else" required={wentBackwards} done={explained} />
+        <FieldHead label={t('Anything else')} required={wentBackwards} done={explained} />
         <Text style={styles.hint}>
-          {wentBackwards
+          {t(wentBackwards
             ? 'Say why the meter reads lower than last time.'
-            : 'Read by the supervisor and kept with the record. Not a defect — use the checklist for those.'}
+            : 'Read by the supervisor and kept with the record. Not a defect — use the checklist for those.')}
         </Text>
         <TextInput
           testID="remarks"
@@ -136,7 +137,7 @@ export default function Readings() {
                                  pressed && missing == null && styles.pressed]}
         onPress={() => void save()}
       >
-        <Text style={styles.primaryText}>{missing ?? 'Review and confirm'}</Text>
+        <Text style={styles.primaryText}>{missing ?? t('Review and confirm')}</Text>
       </Pressable>
     </ScrollView>
     </View>
@@ -145,13 +146,14 @@ export default function Readings() {
 
 /** A field's label, with whether it is compulsory said beside it (B1). */
 function FieldHead({ label, required, done }: { label: string; required?: boolean; done?: boolean }) {
+  const { t } = useT();
   return (
     <View style={styles.head}>
       <Text style={styles.label}>{label}</Text>
       {required
         ? (done ? <Text style={styles.tick}>✓</Text>
-                : <View style={styles.required}><Text style={styles.requiredText}>Required</Text></View>)
-        : <Text style={styles.optional}>Optional</Text>}
+                : <View style={styles.required}><Text style={styles.requiredText}>{t('Required')}</Text></View>)
+        : <Text style={styles.optional}>{t('Optional')}</Text>}
     </View>
   );
 }

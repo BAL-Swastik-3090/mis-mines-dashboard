@@ -14,6 +14,7 @@
 import { useEffect, useRef } from 'react';
 import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
 import { useReducedMotion } from './motion';
+import { useT } from '@/i18n';
 
 export const STAGES = [
   { key: 'machine', label: 'Machine' },
@@ -25,6 +26,7 @@ export const STAGES = [
 export type Stage = (typeof STAGES)[number]['key'];
 
 export function FlowProgress({ at }: { at: Stage }) {
+  const { t } = useT();
   const here = STAGES.findIndex((s) => s.key === at);
   const reduce = useReducedMotion();
   const fill = useRef(new Animated.Value(Math.max(0, here - 1) / (STAGES.length - 1))).current;
@@ -37,7 +39,7 @@ export function FlowProgress({ at }: { at: Stage }) {
 
   return (
     <View style={styles.bar} accessibilityRole="progressbar"
-          accessibilityLabel={`Step ${here + 1} of ${STAGES.length}: ${STAGES[here]?.label}`}>
+          accessibilityLabel={t('Step {n} of {total}: {stage}', { n: here + 1, total: STAGES.length, stage: t(STAGES[here]?.label ?? '') })}>
       <View style={styles.row}>
         {/* Behind the dots, from the centre of the first to the centre of the
             last: each column is 1/N wide, so its centre is 1/2N in. */}
@@ -58,7 +60,7 @@ export function FlowProgress({ at }: { at: Stage }) {
               </View>
               <Text numberOfLines={1}
                     style={[styles.label, now && styles.labelNow, done && styles.labelDone]}>
-                {s.label}
+                {t(s.label)}
               </Text>
             </View>
           );

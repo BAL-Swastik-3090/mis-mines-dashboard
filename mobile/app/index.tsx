@@ -27,14 +27,22 @@ import {
   ago, byUrgency, draftSummaries, isStale, type DraftSummary,
 } from '@/core/capture/drafts';
 import { FadeIn, PressableScale } from '@/ui/motion';
+import { useT } from '@/i18n';
+import { DiscardSheet } from '@/ui/DiscardSheet';
 
-/** "just now", "3 min ago", "2 h ago" -- for the last time the office was tried. */
-function agoShort(iso: string): string {
-  const m = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000));
-  if (!Number.isFinite(m)) return 'recently';
-  if (m < 1) return 'just now';
-  if (m < 60) return `${m} min ago`;
-  return `${Math.round(m / 60)} h ago`;
+/** "just now", "3 min ago", "2 h ago", "yesterday", "4 days ago", in the tablet's language. */
+function useAgo() {
+  const { t } = useT();
+  return (iso: string): string => {
+    const m = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000));
+    if (!Number.isFinite(m)) return t('recently');
+    if (m < 2) return t('just now');
+    if (m < 60) return t('{n} min ago', { n: m });
+    const h = Math.round(m / 60);
+    if (h < 24) return t('{n} h ago', { n: h });
+    const d = Math.round(h / 24);
+    return d === 1 ? t('yesterday') : t('{n} days ago', { n: d });
+  };
 }
 
 const TYPE_LABEL: Record<DraftSummary['session_type'], string> = {
@@ -43,9 +51,13 @@ const TYPE_LABEL: Record<DraftSummary['session_type'], string> = {
 
 export default function Home() {
   const router = useRouter();
+  const { t, tn, tm } = useT();
+  const agoT = useAgo();
   const store = useCapture((s) => s.store);
   const resume = useCapture((s) => s.resume);
   const discard = useCapture((s) => s.discard);
+  const discardDraft = useCapture((s) => s.discardDraft);
+  const [toDiscard, setToDiscard] = useState<DraftSummary | null>(null);
 
   const [drafts, setDrafts] = useState<DraftSummary[]>([]);
   const [outbox, setOutbox] = useState<Awaited<ReturnType<typeof session.outboxDepth>> | null>(null);
@@ -120,12 +132,12 @@ export default function Home() {
                  style={[styles.banner, allClear ? styles.bannerClear : styles.bannerWaiting]}>
         <Text style={styles.bannerTitle}>
           {allClear
-            ? 'Everything on this tablet has reached the office'
+            ? t('Everything on this tablet has reached the office')
             : waiting > 0
-              ? `${plural(waiting, 'handover')} still on this tablet`
+              ? tn(waiting, '{n} handover still on this tablet', '{n} handovers still on this tablet')
               : photosWaiting > 0
-                ? `${plural(photosWaiting, 'photograph')} still on this tablet`
-                : `${plural(refused, 'handover')} refused by the office`}
+                ? tn(photosWaiting, '{n} photograph still on this tablet', '{n} photographs still on this tablet')
+                : tn(refused, '{n} handover refused by the office', '{n} handovers refused by the office')}
         </Text>
         {/* WHAT IS ACTUALLY HAPPENING, not "bring the tablet within signal".
             That sentence sat on a tablet with working wifi for thirty-five
@@ -134,30 +146,30 @@ export default function Home() {
             different things, and only the first is about signal. */}
         {!allClear && (waiting > 0 || photosWaiting > 0) && (
           <Text style={styles.bannerNote} testID="send-state">
-            {waiting > 0 && photosWaiting > 0 ? `With ${plural(photosWaiting, 'photograph')}. ` : ''}
-            {syncing ? 'Sending now…'
-              : online === false ? 'No network. It sends by itself as soon as there is one.'
+            {waiting > 0 && photosWaiting > 0
+              ? tn(photosWaiting, 'With {n} photograph.', 'With {n} photographs.') + ' ' : ''}
+            {syncing ? t('Sending now…')
+              : online === false ? t('No network. It sends by itself as soon as there is one.')
               : tabletRefused
-                ? 'The office did not accept this tablet. Nothing is lost — ask IT to check it under Devices on the dashboard.'
+                ? t('The office did not accept this tablet. Nothing is lost — ask IT to check it under Devices on the dashboard.')
               : tried && !tried.ok
-                ? `The office did not answer ${agoShort(tried.at)}. It keeps trying by itself every few minutes.`
-                : 'Safe on this tablet. It sends by itself in a moment.'}
+                ? t('The office did not answer {when}. It keeps trying by itself every few minutes.', { when: agoT(tried.at) })
+                : t('Safe on this tablet. It sends by itself in a moment.')}
           </Text>
         )}
         {waiting === 0 && photosWaiting > 0 && (
           <Text style={styles.bannerNote}>
-            The handovers have been filed. Their photographs are still on this
-            tablet, so the evidence behind any fault has not reached the office yet.
+            {t('The handovers have been filed. Their photographs are still on this tablet, so the evidence behind any fault has not reached the office yet.')}
           </Text>
         )}
         {(outbox?.rejected ?? 0) > 0 && (
           <Text style={styles.bannerBad}>
-            {outbox?.rejected} refused by the office — show a supervisor.
+            {t('{n} refused by the office — show a supervisor.', { n: outbox?.rejected })}
           </Text>
         )}
         {(outbox?.conflict ?? 0) > 0 && (
           <Text style={styles.bannerBad}>
-            {outbox?.conflict} clash with a handover already filed — show a supervisor.
+            {t('{n} clash with a handover already filed — show a supervisor.', { n: outbox?.conflict })}
           </Text>
         )}
       </Pressable>
@@ -181,27 +193,30 @@ export default function Home() {
               setSendNote(null);
               const r = await runSync({ force: true, refreshMasters: true });
               await load();
-              if (!r) { setSendNote('Could not reach the office. Try again within signal.'); return; }
+              if (!r) { setSendNote(t('Could not reach the office. It keeps trying by itself.')); return; }
               const sent = r.sessionsSent + r.photosSent;
               // "Nothing was due" and "could not be reached" are different
               // facts. Saying the second when the first is true sends somebody
               // looking for a network problem that is not there.
               setSendNote(
-                r.problems.length > 0 ? r.problems.join(' ')
-                : sent > 0 ? `Sent ${plural(r.sessionsSent, 'handover')} and ${plural(r.photosSent, 'photograph')}.`
+                r.problems.length > 0 ? r.problems.map(tm).join(' ')
+                : sent > 0 ? t('Sent {h} and {p}.', {
+                    h: tn(r.sessionsSent, '{n} handover', '{n} handovers'),
+                    p: tn(r.photosSent, '{n} photograph', '{n} photographs') })
                 : r.photosAwaitingSession > 0 && r.stillQueued === r.photosAwaitingSession
-                  ? `${plural(r.photosAwaitingSession, 'photograph')} ${verb(r.photosAwaitingSession, 'belongs', 'belong')} to a handover `
-                    + 'nobody has confirmed yet. Finish it and they go with it.'
+                  ? tn(r.photosAwaitingSession,
+                       '{n} photograph belongs to a handover nobody has confirmed yet. Finish it and they go with it.',
+                       '{n} photographs belong to a handover nobody has confirmed yet. Finish it and they go with it.')
                 : r.stillQueued > 0
-                  ? 'Could not reach the office. It is still waiting here.'
-                  : 'Nothing was waiting to be sent.');
+                  ? t('Could not reach the office. It is still waiting here.')
+                  : t('Nothing was waiting to be sent.'));
             }}
           >
-            <Text style={styles.sendText}>{syncing ? 'Sending…' : 'Send now'}</Text>
+            <Text style={styles.sendText}>{syncing ? t('Sending…') : t('Send now')}</Text>
           </Pressable>
           {sendNote && <Text style={styles.sendNote}>{sendNote}</Text>}
           {!sendNote && lastReport && lastReport.problems.length > 0 && (
-            <Text style={styles.sendNote}>{lastReport.problems[0]}</Text>
+            <Text style={styles.sendNote}>{tm(lastReport.problems[0] ?? '')}</Text>
           )}
         </View>
       )}
@@ -222,9 +237,9 @@ export default function Home() {
             await load();
           }}
         >
-          <Text style={styles.bannerTitle}>This device is not reporting its position</Text>
+          <Text style={styles.bannerTitle}>{t('This device is not reporting its position')}</Text>
           <Text style={styles.bannerNote}>
-            {trackProblem ?? 'The office has asked this device to report where it is. Tap to allow it.'}
+            {trackProblem ?? t('The office has asked this device to report where it is. Tap to allow it.')}
           </Text>
         </Pressable>
       )}
@@ -232,11 +247,11 @@ export default function Home() {
       {stale && (
         <View style={[styles.banner, styles.bannerStale]}>
           <Text style={styles.bannerTitle}>
-            This tablet last synced {plural(Math.floor((cacheAge ?? 0) / 24), 'day')} ago
+            {tn(Math.floor((cacheAge ?? 0) / 24), 'This tablet last synced {n} day ago',
+                                                  'This tablet last synced {n} days ago')}
           </Text>
           <Text style={styles.bannerNote}>
-            Machine and operator details may have changed. Handovers can still
-            be captured; each one records how old this list was.
+            {t('Machine and operator details may have changed. Handovers can still be captured; each one records how old this list was.')}
           </Text>
         </View>
       )}
@@ -250,7 +265,7 @@ export default function Home() {
       {drafts.length > 0 && (
         <View style={styles.block}>
           <View style={styles.blockHead}>
-            <Text style={styles.blockTitle}>UNFINISHED</Text>
+            <Text style={styles.blockTitle}>{t('UNFINISHED')}</Text>
             <Text style={styles.blockCount}>{drafts.length}</Text>
           </View>
           {drafts.map((d, i) => {
@@ -275,22 +290,21 @@ export default function Home() {
                   <View style={styles.draftTop}>
                     <View style={styles.draftId}>
                       <Text style={styles.draftCode}>
-                        {d.fleet_code ?? `Machine ${d.asset_id}`}
+                        {d.fleet_code ?? t('Machine {n}', { n: d.asset_id })}
                         {d.registration_no ? <Text style={styles.draftReg}>  {d.registration_no}</Text> : null}
                       </Text>
                       <Text style={[styles.draftWho, !d.operator_name && styles.draftNobody]}>
-                        {d.operator_name ?? 'Nobody identified yet'}
+                        {d.operator_name ?? t('Nobody identified yet')}
                       </Text>
                     </View>
                     <View style={styles.typeChip}>
-                      <Text style={styles.typeChipText}>{TYPE_LABEL[d.session_type]}</Text>
+                      <Text style={styles.typeChipText}>{t(TYPE_LABEL[d.session_type])}</Text>
                     </View>
                   </View>
 
                   {level === 'held' && (
                     <Text style={styles.heldLine}>
-                      A check that stops this machine failed. Finish and confirm
-                      it, so the fault reaches the workshop.
+                      {t('A check that stops this machine failed. Finish and confirm it, so the fault reaches the workshop.')}
                     </Text>
                   )}
 
@@ -301,16 +315,24 @@ export default function Home() {
                                     level === 'found' && styles.progressFound]} />
                     </View>
                     <Text style={styles.progressText}>
-                      {d.answered} of {d.total} checks
-                      {d.findings > 0 ? ` · ${plural(d.findings, 'fault')}` : ''}
+                      {t('{n} of {total} checks', { n: d.answered, total: d.total })}
+                      {d.findings > 0 ? ' · ' + tn(d.findings, '{n} fault', '{n} faults') : ''}
                     </Text>
                   </View>
 
                   <View style={styles.draftBottom}>
                     <Text style={[styles.draftWhen, stale && styles.draftStale]}>
-                      Started {ago(d.captured_at)}{stale ? ' — still needed?' : ''}
+                      {t('Started {when}', { when: agoT(d.captured_at) })}{stale ? ' — ' + t('still needed?') : ''}
                     </Text>
-                    <Text style={styles.resumeText}>Resume ›</Text>
+                    <View style={styles.draftActions}>
+                      {/* Throw it away (gap G1). Asks why, and once more. */}
+                      <Pressable testID={`discard-${d.client_uuid}`} hitSlop={10}
+                                 style={styles.discardBtn}
+                                 onPress={() => setToDiscard(d)}>
+                        <Text style={styles.discardText}>{t('Discard')}</Text>
+                      </Pressable>
+                      <Text style={styles.resumeText}>{t('Resume')} ›</Text>
+                    </View>
                   </View>
                 </PressableScale>
               </FadeIn>
@@ -324,7 +346,7 @@ export default function Home() {
         style={styles.primary}
         onPress={() => { discard(); router.push('/capture/machine'); }}
       >
-        <Text style={styles.primaryText}>Start a handover</Text>
+        <Text style={styles.primaryText}>{t('Start a handover')}</Text>
       </PressableScale>
 
       {/* ── what has been done ─────────────────────────────────────────────
@@ -334,17 +356,31 @@ export default function Home() {
       <PressableScale testID="open-history" style={styles.doneCard} scaleTo={0.985}
                       onPress={() => router.push('/history')}>
         <View style={styles.doneText}>
-          <Text style={styles.doneTitle}>Done on this tablet today</Text>
+          <Text style={styles.doneTitle}>{t('Done on this tablet today')}</Text>
           <Text style={styles.doneNote}>
             {!today || today.handovers === 0
-              ? 'Nothing confirmed yet today. Earlier days are inside.'
-              : `${plural(today.handovers, 'handover')} on ${plural(today.machines, 'machine')}`
-                + ` · ${today.atOffice} at the office`
-                + (today.waiting > 0 ? ` · ${today.waiting} waiting` : '')}
+              ? t('Nothing confirmed yet today. Earlier days are inside.')
+              : t('{h} on {m}', {
+                  h: tn(today.handovers, '{n} handover', '{n} handovers'),
+                  m: tn(today.machines, '{n} machine', '{n} machines') })
+                + ' · ' + t('{n} at the office', { n: today.atOffice })
+                + (today.waiting > 0 ? ' · ' + t('{n} waiting', { n: today.waiting }) : '')}
           </Text>
         </View>
-        <Text style={styles.doneGo}>See who did which ›</Text>
+        <Text style={styles.doneGo}>{t('See who did which')} ›</Text>
       </PressableScale>
+
+      <DiscardSheet
+        visible={toDiscard != null}
+        what={toDiscard ? `${toDiscard.fleet_code ?? toDiscard.asset_id} · ${t(TYPE_LABEL[toDiscard.session_type])}` : ''}
+        answered={toDiscard?.answered ?? 0}
+        onCancel={() => setToDiscard(null)}
+        onDiscard={async (reason) => {
+          if (toDiscard) await discardDraft(toDiscard.client_uuid, reason);
+          setToDiscard(null);
+          await load();
+        }}
+      />
     </ScrollView>
   );
 }
@@ -408,6 +444,10 @@ const styles = StyleSheet.create({
   draftWhen: { fontSize: 13, color: '#5b6a7a' },
   draftStale: { color: '#8a5a00', fontWeight: '600' },
   resumeText: { fontSize: 15, fontWeight: '800', color: '#1e5f8a' },
+  draftActions: { flexDirection: 'row', alignItems: 'center', gap: 18 },
+  discardBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1,
+                borderColor: '#e6b3ad', backgroundColor: '#fff' },
+  discardText: { fontSize: 14, fontWeight: '700', color: '#a33a2a' },
 
   doneCard: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#fff',
               borderRadius: 12, padding: 16, borderWidth: 1, borderColor: '#d8dee6' },

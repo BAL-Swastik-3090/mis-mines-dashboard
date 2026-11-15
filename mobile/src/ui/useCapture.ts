@@ -13,6 +13,7 @@ import { create } from 'zustand';
 import * as Location from 'expo-location';
 import * as FileSystem from 'expo-file-system';
 import { positionNow } from '../core/location/positionNow';
+import { discardDraft as discardDraftCore, rememberedRecorder, type DiscardReason } from '@/core/capture/drafting';
 import type { Store } from '@/core/capture/store';
 import type { CachedAsset, CachedOperator, ResolvedTemplate } from '@/core/capture/masters';
 import * as masters from '@/core/capture/masters';
@@ -55,6 +56,10 @@ interface CaptureState {
   refreshVerdict: () => Promise<void>;
   confirm: (by: string) => Promise<{ queued: boolean; status: string; problems: string[] }>;
   discard: () => void;
+  /** Throw away an unfinished handover and its photos (gap G1). */
+  discardDraft: (uuid: string, reason: DiscardReason) => Promise<void>;
+  /** The "filled in by" this draft started with came from the last handover. */
+  recorderRemembered: boolean;
 }
 
 /** The other side and the tablet-holder, read back from a stored draft. */
@@ -83,6 +88,7 @@ export const useCapture = create<CaptureState>()((set, get) => ({
   row: null, answers: new Map(), advisories: [], verdict: null, blockers: [],
   bulkAnswered: false,
   busy: false,
+  recorderRemembered: false,
 
   attach: (store) => set({ store }),
 
@@ -97,14 +103,29 @@ export const useCapture = create<CaptureState>()((set, get) => ({
       // ever, one more each time somebody tried. Found on the tablet, 16 Nov.
       const template = await masters.resolveTemplate(store, asset.asset_type_id);
       if (!template) return false;
-      const { session: row } = await session.startDraft({
+      const started = await session.startDraft({
         store, asset, sessionType: type, clientUuid: uuid,
       });
+      let row = started.session;
+      // WHO USUALLY FILLS THEM IN (gap G4). A new handover starts with the
+      // person who filled the last one in, if it was somebody other than the
+      // operator and within the shift -- a supervisor doing a section's
+      // handovers no longer picks their own name every time. A resumed draft
+      // keeps whatever it already had.
+      let remembered = false;
+      if (!started.resumed && row.recorded_by_operator_id == null) {
+        const who = await rememberedRecorder(store);
+        if (who) {
+          await session.setRecorder(store, row.client_uuid, who);
+          row = (await session.byUuid(store, row.client_uuid)) ?? row;
+          remembered = true;
+        }
+      }
       const age = await masters.cacheAgeHours(store);
       const existing = await session.responses(store, row.client_uuid);
 
       set({
-        uuid: row.client_uuid, asset, row, template,
+        uuid: row.client_uuid, asset, row, template, recorderRemembered: remembered,
         // A resumed draft brings its answers back with it.
         answers: new Map(existing.map((r) => [r.item_id, {
           itemId: r.item_id, answer: r.answer, numericValue: r.numeric_value,
@@ -141,6 +162,8 @@ export const useCapture = create<CaptureState>()((set, get) => ({
         itemId: r.item_id, answer: r.answer, numericValue: r.numeric_value, remark: r.remark,
       }])),
       advisories: [], verdict: null, blockers: [],
+      // Whoever is on a resumed draft was chosen when it was started.
+      recorderRemembered: false,
     });
     return true;
   },
@@ -262,6 +285,14 @@ export const useCapture = create<CaptureState>()((set, get) => ({
     uuid: null, asset: null, operator: null, template: null, row: null,
     counterpart: null, counterpartAbsent: false, recorder: null,
     answers: new Map(), advisories: [], verdict: null, blockers: [],
-    bulkAnswered: false,
+    bulkAnswered: false, recorderRemembered: false,
   }),
+
+  discardDraft: async (uuid, reason) => {
+    const { photoPaths } = await discardDraftCore(need(get().store), uuid, reason);
+    for (const p of photoPaths) {
+      try { await FileSystem.deleteAsync(p, { idempotent: true }); } catch { /* best effort */ }
+    }
+    if (get().uuid === uuid) get().discard();
+  },
 }));

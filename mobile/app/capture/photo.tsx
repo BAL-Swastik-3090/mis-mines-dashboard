@@ -26,6 +26,7 @@ import * as FileSystem from 'expo-file-system';
 import * as Crypto from 'expo-crypto';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCapture } from '@/ui/useCapture';
+import { useT } from '@/i18n';
 import { hashPhotoFile } from '@/core/capture/photoHash';
 import { positionNow } from '../../src/core/location/positionNow';
 
@@ -34,6 +35,7 @@ const QUALITY = 0.7;
 
 export default function Photo() {
   const router = useRouter();
+  const { t } = useT();
   const { itemId, kind } = useLocalSearchParams<{ itemId?: string; kind?: string }>();
   const isOperator = kind === 'operator';
   const store = useCapture((s) => s.store);
@@ -57,14 +59,14 @@ export default function Photo() {
   if (!permission.granted) {
     return (
       <View style={[styles.screen, styles.centre]}>
-        <Text style={styles.title}>The camera is not allowed</Text>
+        <Text style={styles.title}>{t('The camera is not allowed')}</Text>
         <Text style={styles.note}>
-          {isOperator
+          {t(isOperator
             ? 'A photo of the operator is required before a handover can start.'
-            : 'A photo is required for this check. Without the camera it cannot be completed on the tablet.'}
+            : 'A photo is required for this check. Without the camera it cannot be completed on the tablet.')}
         </Text>
         <Pressable style={styles.primary} onPress={() => void requestPermission()}>
-          <Text style={styles.primaryText}>Allow the camera</Text>
+          <Text style={styles.primaryText}>{t('Allow the camera')}</Text>
         </Pressable>
       </View>
     );
@@ -138,13 +140,13 @@ export default function Photo() {
                   facing={isOperator ? 'front' : 'back'} />
       <View style={styles.overlay}>
         <Text style={styles.what}>
-          {isOperator ? 'Photo of the operator' : (item?.label ?? 'Evidence')}
+          {isOperator ? t('Photo of the operator') : (item?.label ?? t('Evidence'))}
         </Text>
         {error && <Text style={styles.error}>{error}</Text>}
         <Pressable testID="shutter" style={styles.shutter} disabled={saving}
                    onPress={() => void take()}>
           {saving ? <ActivityIndicator color="#16202b" />
-                  : <Text style={styles.shutterText}>Take the photo</Text>}
+                  : <Text style={styles.shutterText}>{t('Take the photo')}</Text>}
         </Pressable>
       </View>
     </View>

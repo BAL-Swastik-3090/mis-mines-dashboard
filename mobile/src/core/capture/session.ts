@@ -35,6 +35,7 @@ import {
 } from '../evaluation';
 import { cacheAgeHours, resolveTemplate, type CachedAsset, type CachedOperator } from './masters';
 import { localDay } from './shifts';
+import { rememberRecorder } from './drafting';
 
 export interface SessionRow {
   client_uuid: string;
@@ -500,6 +501,15 @@ export async function confirm(args: {
       WHERE client_uuid = ? AND sync_state = 'draft'`,
     [status, verdict.blockedReason, confirmedBy, now.toISOString(), uuid],
   );
+
+  // Who filled it in, for the next handover's default (gap G4, drafting.ts).
+  const after = await byUuid(store, uuid);
+  if (after) {
+    await rememberRecorder(store, {
+      operator_id: after.recorded_by_operator_id,
+      is_operator: after.recorded_by_operator_id === after.operator_id,
+    }, now);
+  }
 
   return { queued: true, status, problems: [], verdict };
 }

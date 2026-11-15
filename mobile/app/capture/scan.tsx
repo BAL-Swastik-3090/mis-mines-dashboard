@@ -24,9 +24,11 @@ import * as Crypto from 'expo-crypto';
 import { useRouter } from 'expo-router';
 import { useCapture } from '@/ui/useCapture';
 import * as masters from '@/core/capture/masters';
+import { useT } from '@/i18n';
 
 export default function Scan() {
   const router = useRouter();
+  const { t } = useT();
   const store = useCapture((s) => s.store);
   const begin = useCapture((s) => s.begin);
 
@@ -42,13 +44,13 @@ export default function Scan() {
   if (!permission.granted) {
     return (
       <View style={[styles.screen, styles.centre]}>
-        <Text style={styles.title}>The camera is not allowed</Text>
-        <Text style={styles.note}>Find the machine by its number instead.</Text>
+        <Text style={styles.title}>{t('The camera is not allowed')}</Text>
+        <Text style={styles.note}>{t('Find the machine by its number instead.')}</Text>
         <Pressable style={styles.primary} onPress={() => void requestPermission()}>
-          <Text style={styles.primaryText}>Allow the camera</Text>
+          <Text style={styles.primaryText}>{t('Allow the camera')}</Text>
         </Pressable>
         <Pressable onPress={() => router.back()}>
-          <Text style={styles.link}>Back to the list</Text>
+          <Text style={styles.link}>{t('Back to the list')}</Text>
         </Pressable>
       </View>
     );
@@ -62,19 +64,13 @@ export default function Scan() {
     try {
       const asset = await masters.assetByQr(store, code);
       if (!asset) {
-        setProblem(
-          `This tablet does not know the code “${code}”. It is probably a ` +
-          `machine added since the last sync — find it by number, or sync ` +
-          `the tablet within signal.`,
-        );
+        setProblem(t('This tablet does not know the code “{code}”. It is probably a machine added since the last sync — find it by number, or sync the tablet within signal.', { code }));
         return;
       }
       const ok = await begin(asset, 'START_HANDOVER', Crypto.randomUUID());
       if (!ok) {
-        setProblem(
-          `${asset.fleet_code} is a ${asset.asset_type_name}, and this tablet ` +
-          `holds no checklist for one. Sync it, or use paper.`,
-        );
+        setProblem(t('{fleet} is a {type}, and this tablet holds no checklist for one. Sync it, or use paper.',
+                     { fleet: asset.fleet_code, type: asset.asset_type_name }));
         return;
       }
       router.replace('/capture/operator');
@@ -94,7 +90,7 @@ export default function Scan() {
         onBarcodeScanned={({ data }) => void onScan(data)}
       />
       <View style={styles.overlay}>
-        <Text style={styles.hint}>Point at the sticker on the cab</Text>
+        <Text style={styles.hint}>{t('Point at the sticker on the cab')}</Text>
         {busy && <ActivityIndicator color="#fff" />}
         {problem && (
           <View style={styles.problem}>
@@ -102,7 +98,7 @@ export default function Scan() {
           </View>
         )}
         <Pressable testID="scan-back" style={styles.secondary} onPress={() => router.back()}>
-          <Text style={styles.secondaryText}>Find it by number instead</Text>
+          <Text style={styles.secondaryText}>{t('Find it by number instead')}</Text>
         </Pressable>
       </View>
     </View>
