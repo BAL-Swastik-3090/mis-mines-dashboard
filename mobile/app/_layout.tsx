@@ -20,6 +20,7 @@ import { useSync } from '@/ui/useSync';
 import Enrol from './enrol';
 import { BACKGROUND_TASK, registerBackgroundSync, useSyncTriggers } from '@/ui/syncTriggers';
 import { sendFromBackground } from '@/core/sync/background';
+import { requeueDeviceRefusals } from '@/core/sync/engine';
 import { httpTransport } from '@/core/sync/transport';
 import { setRehash, syncNow } from '@/core/sync/engine';
 import { hashPhotoFile } from '@/core/capture/photoHash';
@@ -79,6 +80,9 @@ export default function RootLayout() {
     try {
       const db = await openDb();
       const store = adapt(db);
+      // Anything parked as "refused by the office" when it was the TABLET the
+      // office refused (401/403) goes back in the queue. See engine.ts.
+      await requeueDeviceRefusals(store).catch(() => undefined);
       attach(store);
 
       // A device with no credential cannot sync, so it is sent to be set up

@@ -90,10 +90,16 @@ export const useCapture = create<CaptureState>()((set, get) => ({
     const store = need(get().store);
     set({ busy: true });
     try {
+      // CHECKLIST FIRST, DRAFT SECOND. The draft used to be written before
+      // the checklist was looked up, so picking a machine with no checklist
+      // (the ambulance) said "no checklist on this tablet" and still left an
+      // unfinished handover behind -- "0 of 0 checks" on the home screen, for
+      // ever, one more each time somebody tried. Found on the tablet, 16 Nov.
+      const template = await masters.resolveTemplate(store, asset.asset_type_id);
+      if (!template) return false;
       const { session: row } = await session.startDraft({
         store, asset, sessionType: type, clientUuid: uuid,
       });
-      const template = await masters.resolveTemplate(store, asset.asset_type_id);
       const age = await masters.cacheAgeHours(store);
       const existing = await session.responses(store, row.client_uuid);
 

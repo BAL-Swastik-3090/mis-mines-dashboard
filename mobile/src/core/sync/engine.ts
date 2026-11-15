@@ -83,6 +83,21 @@ export function backoffSeconds(attempts: number): number {
   return Math.min(BASE_BACKOFF_SECONDS * 2 ** n, MAX_BACKOFF_SECONDS);
 }
 
+/**
+ * Whether the office refused the TABLET rather than the record.
+ *
+ * 401 and 403 are answered before anybody reads the handover: the device's
+ * token was missing, not recognised, or suspended -- or, as on 16 Nov, the
+ * request reached a different server altogether. Marking the handover
+ * "refused by the office" for that parked a perfectly good record under
+ * "Need a supervisor" for ever, with no way to send it again, when the office
+ * had never seen it. These stay queued and keep being tried; the screen says
+ * what is actually wrong.
+ */
+export function isDeviceRefusal(status: number): boolean {
+  return status === 401 || status === 403;
+}
+
 /** Whether this HTTP status means "try again" or "stop and tell somebody". */
 export function isRetryable(status: number): boolean {
   if (status >= 500) return true;
@@ -295,13 +310,19 @@ async function sendSession(store: Store, transport: Transport, uuid: string,
     return;
   }
 
-  if (isRetryable(answer.status)) {
+  if (isRetryable(answer.status) || isDeviceRefusal(answer.status)) {
     await mark(store, uuid, 'queued', describe(answer.body), now, true);
     await log(store, 'SESSION', uuid, false, answer.status, describe(answer.body));
+    if (isDeviceRefusal(answer.status)) {
+      report.problems.push(
+        `The office did not accept this tablet (${describe(answer.body)}). ` +
+        `Nothing has been lost: the handovers stay here and go once that is put right.`);
+    }
     return;
   }
 
-  // A 4xx. Sending it again unchanged gets the same answer forever.
+  // A 4xx about the RECORD. Sending it again unchanged gets the same answer
+  // forever.
   await mark(store, uuid, 'rejected', describe(answer.body), now, true);
   report.sessionsRefused++;
   report.problems.push(`A handover was refused: ${describe(answer.body)}`);
@@ -442,7 +463,8 @@ async function sendPhoto(store: Store, transport: Transport, p: PhotoRow,
     return;
   }
 
-  if (isRetryable(answer.status)) {
+  if (isRetryable(answer.status) || isDeviceRefusal(answer.status)) {
+    // A refusal of the tablet, not of the photograph: see isDeviceRefusal.
     await store.runAsync(
       `UPDATE photo SET sync_state = 'queued', sync_attempts = sync_attempts + 1
         WHERE photo_uuid = ?`, [p.photo_uuid]);
@@ -605,4 +627,24 @@ export async function lastAttempt(store: Store): Promise<{
       WHERE kind IN ('SESSION','PHOTO','LOCATIONS','MASTERS')
       ORDER BY local_id DESC LIMIT 1`);
   return r ? { at: r.at, ok: r.ok === 1, status: r.http_status, detail: r.detail, kind: r.kind } : null;
+}
+
+/**
+ * Put back in the queue anything parked as "refused" when it was the TABLET
+ * that was refused (401/403), before the change that stopped doing that.
+ *
+ * Run at every start; it does nothing once there is nothing to put back. A
+ * record refused for what it SAID (422, 404) is left exactly where it is.
+ */
+export async function requeueDeviceRefusals(store: Store): Promise<{ sessions: number; photos: number }> {
+  const last = (table: string, key: string) =>
+    `(SELECT l.http_status FROM sync_log l WHERE l.subject_uuid = ${table}.${key}
+       ORDER BY l.local_id DESC LIMIT 1) IN (401, 403)`;
+  const s = await store.runAsync(
+    `UPDATE session SET sync_state = 'queued'
+      WHERE sync_state = 'rejected' AND ${last('session', 'client_uuid')}`);
+  const p = await store.runAsync(
+    `UPDATE photo SET sync_state = 'queued'
+      WHERE sync_state = 'rejected' AND ${last('photo', 'photo_uuid')}`);
+  return { sessions: (s as any)?.changes ?? 0, photos: (p as any)?.changes ?? 0 };
 }

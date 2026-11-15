@@ -96,7 +96,14 @@ export default function Home() {
      photograph is the evidence behind a defect; a handover that arrived
      without its photographs has not arrived. */
   const photosWaiting = outbox?.photos ?? 0;
-  const allClear = waiting === 0 && photosWaiting === 0;
+  const refused = (outbox?.rejected ?? 0) + (outbox?.conflict ?? 0);
+  // Refused is not reached. The banner said "Everything on this tablet has
+  // reached the office" directly above "1 refused by the office".
+  const allClear = waiting === 0 && photosWaiting === 0 && refused === 0;
+  // The office answered, but about the TABLET (401/403): not recognised,
+  // suspended, or the request went to the wrong server. Nothing is lost.
+  const tabletRefused = tried != null && !tried.ok
+    && (tried.status === 401 || tried.status === 403);
 
   return (
     <ScrollView
@@ -116,18 +123,22 @@ export default function Home() {
             ? 'Everything on this tablet has reached the office'
             : waiting > 0
               ? `${plural(waiting, 'handover')} still on this tablet`
-              : `${plural(photosWaiting, 'photograph')} still on this tablet`}
+              : photosWaiting > 0
+                ? `${plural(photosWaiting, 'photograph')} still on this tablet`
+                : `${plural(refused, 'handover')} refused by the office`}
         </Text>
         {/* WHAT IS ACTUALLY HAPPENING, not "bring the tablet within signal".
             That sentence sat on a tablet with working wifi for thirty-five
             hours while the server it wanted was simply elsewhere. No network,
             a server that is not answering, and a send in progress are three
             different things, and only the first is about signal. */}
-        {!allClear && (
+        {!allClear && (waiting > 0 || photosWaiting > 0) && (
           <Text style={styles.bannerNote} testID="send-state">
             {waiting > 0 && photosWaiting > 0 ? `With ${plural(photosWaiting, 'photograph')}. ` : ''}
             {syncing ? 'Sending now…'
               : online === false ? 'No network. It sends by itself as soon as there is one.'
+              : tabletRefused
+                ? 'The office did not accept this tablet. Nothing is lost — ask IT to check it under Devices on the dashboard.'
               : tried && !tried.ok
                 ? `The office did not answer ${agoShort(tried.at)}. It keeps trying by itself every few minutes.`
                 : 'Safe on this tablet. It sends by itself in a moment.'}

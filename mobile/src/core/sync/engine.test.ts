@@ -12,7 +12,7 @@ import * as masters from '../capture/masters';
 import * as session from '../capture/session';
 import {
   backoffSeconds, describe as describeBody, dueSessions, duePhotos, isRetryable,
-  status, syncNow, MAX_BACKOFF_SECONDS, type Transport,
+  status, syncNow, MAX_BACKOFF_SECONDS, requeueDeviceRefusals, type Transport,
 } from './engine';
 import type { ChecklistItem } from '../evaluation';
 
@@ -174,6 +174,39 @@ describe('sending a handover', () => {
     // attempted, and the server's own words are what a supervisor needs.
     expect(s.sync_state).toBe('rejected');
     expect(s.sync_error).toContain('unanswered: Parking brake');
+  });
+
+  // 16 Nov: a second backend on the laptop answered "Not authenticated." and
+  // the handover was parked as refused by the office, which never saw it.
+  it('keeps a handover queued when it is the TABLET the office refused', async () => {
+    await queuedHandover();
+    for (const status of [401, 403]) {
+      const t = fakeTransport({
+        postSession: async () => ({ status, body: { detail: 'Not authenticated.' } }),
+      });
+      const r = await syncNow({ store, transport: t, force: true });
+      expect(r.sessionsRefused).toBe(0);
+      expect((await stateOf(U1)).sync_state).toBe('queued');
+      expect(r.problems.join(' ')).toContain('did not accept this tablet');
+    }
+  });
+
+  it('puts back a handover parked as refused because the tablet was', async () => {
+    await queuedHandover();
+    await syncNow({ store, force: true, transport: fakeTransport({
+      postSession: async () => ({ status: 401, body: { detail: 'Not authenticated.' } }) }) });
+    // As the build before this change left it:
+    await store.runAsync(`UPDATE session SET sync_state = 'rejected' WHERE client_uuid = ?`, [U1]);
+    expect(await requeueDeviceRefusals(store)).toMatchObject({ sessions: 1 });
+    expect((await stateOf(U1)).sync_state).toBe('queued');
+  });
+
+  it('leaves a handover refused for what it said exactly where it is', async () => {
+    await queuedHandover();
+    await syncNow({ store, force: true, transport: fakeTransport({
+      postSession: async () => ({ status: 422, body: { detail: 'unanswered: Parking brake' } }) }) });
+    expect(await requeueDeviceRefusals(store)).toMatchObject({ sessions: 0 });
+    expect((await stateOf(U1)).sync_state).toBe('rejected');
   });
 
   it('marks a clash as a conflict rather than overwriting anything', async () => {

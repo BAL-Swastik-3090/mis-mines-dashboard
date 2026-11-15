@@ -11,6 +11,7 @@
 import { openTestStore, seed, type TestStore } from './testStore';
 import * as masters from './masters';
 import * as session from './session';
+import { localDay } from './shifts';
 import type { ChecklistItem } from '../evaluation';
 
 /** Stable, valid UUIDs per test name, so assertions can still refer to 'u1'. */
@@ -584,7 +585,10 @@ describe('the payload the server will receive', () => {
     expect((p.responses as unknown[])).toHaveLength(4);
     // The production day travels with it: the server must never infer it from
     // a device clock that may have drifted.
-    expect(p.production_day).toBe(String(p.captured_at).slice(0, 10));
+    // The LOCAL day. This compared with the UTC slice of captured_at -- the very
+    // rule fixed on 13 Nov -- so it passed all day and failed between midnight
+    // and 05:30 IST, the night shift, which is when it was found (16 Nov, 00:55).
+    expect(p.production_day).toBe(localDay(String(p.captured_at)));
   });
 
   it('carries the photo count per item, which is what the server checks', async () => {
