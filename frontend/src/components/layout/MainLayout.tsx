@@ -2,6 +2,8 @@
 import AppSidebar              from "./AppSidebar";
 import CommandPalette          from "./CommandPalette";
 import SectionTabBar           from "./SectionTabBar";
+import HotoTabBar              from "./HotoTabBar";
+import { isHotoPage }          from "./hotoNav";
 import IntelligenceTabBar      from "./IntelligenceTabBar";
 import FuelManagementSection   from "@/components/sections/FuelManagementSection";
 import ElectricVehiclesSection from "@/components/sections/ElectricVehiclesSection";
@@ -23,6 +25,13 @@ import GateSection             from "@/components/sections/GateSection";
 import WeatherForecastPage     from "@/components/sections/WeatherForecastPage";
 import CapacitySection         from "@/components/sections/CapacitySection";
 import PrPoSection             from "@/components/sections/PrPoSection";
+import HotoChecklistsSection  from "@/components/sections/HotoChecklistsSection";
+import HotoRegisterSection    from "@/components/sections/HotoRegisterSection";
+import HotoDefectsSection     from "@/components/sections/HotoDefectsSection";
+import HotoBoardSection       from "@/components/sections/HotoBoardSection";
+import HotoDevicesSection     from "@/components/sections/HotoDevicesSection";
+import HotoStickersSection    from "@/components/sections/HotoStickersSection";
+import HotoAppSection         from "@/components/sections/HotoAppSection";
 import AccessControlSection    from "@/components/sections/AccessControlSection";
 import UsageSection            from "@/components/sections/UsageSection";
 import { useAppPage }          from "@/contexts/useAppPage";
@@ -46,6 +55,9 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
   // Intelligence carries its own section bar, so it needs the same
   // 115px offset the MIS page uses rather than the plain header height.
   const isIntel  = page === "intelligence" && mayOpen;
+  /* Every handover screen carries the same strip, so moving between them is
+     one click rather than a trip back out to the rail. */
+  const isHoto   = isHotoPage(page) && mayOpen;
 
   const sideW = collapsed ? "56px" : "200px";
 
@@ -68,6 +80,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
       <AppSidebar />
       {isMis && <SectionTabBar />}
       {isIntel && <IntelligenceTabBar />}
+      {isHoto && <HotoTabBar />}
 
       <main
         id="main" tabIndex={-1}
@@ -76,7 +89,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           min-h-screen pb-8
           px-4 sm:px-6 xl:px-8
           transition-[margin-left,padding-top] duration-300 ease-in-out
-          ${isMis || isIntel ? "pt-[115px]" : "pt-[76px]"}
+          ${isMis || isIntel || isHoto ? "pt-[115px]" : "pt-[76px]"}
         `}
       >
         <div className="max-w-[1920px] mx-auto">
@@ -123,6 +136,13 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           {page === "weather"          && <WeatherForecastPage />}
           {page === "capacity"         && <CapacitySection />}
           {page === "pr-po"            && <PrPoSection />}
+          {page === "hoto-checklists" && <HotoChecklistsSection />}
+          {page === "hoto-register"   && <HotoRegisterSection />}
+          {page === "hoto-defects"    && <HotoDefectsSection />}
+          {page === "hoto-board"      && <HotoBoardSection />}
+          {page === "hoto-devices"    && <HotoDevicesSection />}
+          {page === "hoto-stickers"   && <HotoStickersSection />}
+          {page === "hoto-app"        && <HotoAppSection />}
           {page === "usage"            && <UsageSection />}
           {page === "data-health"      && <DataHealthSection />}
             </>

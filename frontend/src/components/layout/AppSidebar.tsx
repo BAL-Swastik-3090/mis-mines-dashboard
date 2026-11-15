@@ -6,6 +6,7 @@ import { canOpen } from "@/contexts/pageAccess";
 import { useSidebar }               from "@/contexts/useSidebar";
 import { useAuth }                  from "@/contexts/useAuth";
 import { useDataHealth } from "@/hooks/useDataHealth";
+import { HOTO_TABS } from "./hotoNav";
 
 /** PR/PO Status is a separate application built by another IT team. It opens in
  *  its own tab rather than being embedded, so this dashboard stays alive behind
@@ -48,7 +49,7 @@ export type NavItem =
    *  where they belong, and a second column of icons in a 200px rail turns a
    *  short list into a pattern to decode. */
   | { kind: "group"; id: string; label: string; icon: React.ElementType;
-      children: { id: AppPage; label: string }[] };
+      tag?: string; children: { id: AppPage; label: string }[] };
 
 const NAV_ITEMS: NavItem[] = [
   { kind: "page", id: "executive-summary", label: "Executive Summary",        icon: ClipboardCheck  },
@@ -75,6 +76,23 @@ const NAV_ITEMS: NavItem[] = [
   // payment, with the stage derived from whatever evidence exists.
   { kind: "page", id: "pr-po",           label: "PR to Payment",              icon: Receipt,
     tag: "UAT" },
+
+  /* ── Handover, as one thing ────────────────────────────────────────────
+     Six flat entries took a quarter of the rail and put "approve a tablet",
+     done a handful of times a year, in the same list as "what is happening
+     this shift", read every morning. One heading, and the children ordered
+     by how often somebody actually opens them: the running shift, then the
+     record of what happened, then the workshop's queue, and the setup
+     screens last.
+
+     The children drop the "HOTO" prefix. The heading already says it, and
+     repeating it six times down an indented list is six words of noise in a
+     200px rail.
+
+     UAT moves to the heading. The whole module is under acceptance, not six
+     separate things, and six identical badges say less than one. */
+  { kind: "group", id: "hoto", label: "HOTO", icon: DoorOpen, tag: "UAT",
+    children: HOTO_TABS.map(({ id, label }) => ({ id, label })) },
   { kind: "link", href: PRPO_URL,        label: "PR/PO Status",               icon: ClipboardList,
     need: "link.prpo.view" },
 ];
@@ -186,13 +204,28 @@ function buildNav(user: ReturnType<typeof useAuth.getState>["user"]): NavItem[] 
 
      canOpen draws the absent/empty distinction that this used to get wrong. */
   const items: NavItem[] = [
-    ...NAV_ITEMS.filter((i) =>
-      i.kind === "link"
-        // `i.kind === "link" ||` used to end the test here, which drew every
-        // external link for everybody regardless of what they held.
-        ? (!i.need || (user?.permissions ?? []).includes(i.need))
-        : canOpen(user, i.id as AppPage),
-    ),
+    ...NAV_ITEMS.flatMap<NavItem>((i) => {
+      // `i.kind === "link" ||` used to end the test here, which drew every
+      // external link for everybody regardless of what they held.
+      if (i.kind === "link") {
+        return (!i.need || (user?.permissions ?? []).includes(i.need)) ? [i] : [];
+      }
+
+      /* A HEADING HAS NO PERMISSION OF ITS OWN. It is not a page, so asking
+         canOpen about its id asks about a page that does not exist and the
+         answer is always no -- which silently removed the whole HOTO section
+         from every rail the moment it became a group.
+
+         Its access is its children's: show the heading if the user may open
+         at least one, and show only the ones they may. A heading that
+         survives with no children under it would be a dead end. */
+      if (i.kind === "group") {
+        const children = i.children.filter((c) => canOpen(user, c.id));
+        return children.length ? [{ ...i, children }] : [];
+      }
+
+      return canOpen(user, i.id) ? [i] : [];
+    }),
     // Permission, not role name — a role created in the UI reaches these entries
     // without any code change.
     //
@@ -370,34 +403,58 @@ export default function AppSidebar() {
             const activeChild = item.children.find((c) => c.id === page);
             const isOpen = openGroups[item.id] ?? Boolean(activeChild);
             return (
-              <div key={item.id}>
+              <div key={item.id} className="relative">
                 <button
                   onClick={() => {
-                    /* COLLAPSED RAIL HAS NOWHERE TO PUT THE CHILDREN, so the
-                       heading navigates instead of expanding — to the child
-                       already open, or the first one. Toggling a list that
-                       cannot be drawn would make the click do nothing. */
-                    if (collapsed) {
-                      setPage(activeChild?.id ?? item.children[0].id);
-                      return;
-                    }
-                    setOpenGroups((g) => ({ ...g, [item.id]: !isOpen }));
+                    /* THE HEADING OPENS THE SECTION. Expanding alone made the
+                       first click do nothing useful: somebody who wants
+                       handovers wants the shift board, and asking them to
+                       click the heading and then its first child to get there
+                       is a toll on the commonest journey in the section.
+
+                       So it navigates — to the child already open, or the
+                       first one THIS USER may open, which is not always the
+                       first in the list. A heading that landed somebody on a
+                       screen they have no access to would be worse than one
+                       that only expanded.
+
+                       It expands as well, except on the collapsed rail, which
+                       has nowhere to draw the children. */
+                    const target = activeChild?.id ?? item.children[0]?.id;
+                    if (target) setPage(target);
+                    if (!collapsed) setOpenGroups((g) => ({ ...g, [item.id]: true }));
                   }}
                   title={collapsed ? label : undefined}
-                  aria-expanded={collapsed ? undefined : isOpen}
-                  className={`${ITEM_BASE} ${activeChild
+                  className={`${ITEM_BASE} ${collapsed ? "" : "!pr-7"} ${activeChild
                     ? "bg-white/10 text-white"
                     : "text-white/55 hover:text-white/90 hover:bg-white/5"}`}
                 >
                   {inner(Boolean(activeChild))}
-                  {!collapsed && (
+                </button>
+
+                {/* THE CHEVRON IS ITS OWN CONTROL, overlaid on the row's right
+                    edge rather than nested inside it — a button inside a
+                    button is not valid and the browser picks for you.
+
+                    It exists because the heading now navigates: without a
+                    separate handle there would be no way to fold a section
+                    away again, and a list that only ever grows is how a rail
+                    of twenty screens becomes unusable. */}
+                {!collapsed && (
+                  <button
+                    onClick={() => setOpenGroups((g) => ({ ...g, [item.id]: !isOpen }))}
+                    aria-expanded={isOpen}
+                    aria-label={`${isOpen ? "Collapse" : "Expand"} ${label}`}
+                    className="absolute right-1 inset-y-0 w-6 flex items-center
+                               justify-center text-white/45 hover:text-white/90
+                               hover:bg-white/10 rounded"
+                  >
                     <ChevronDown
                       size={13}
-                      className={`shrink-0 ml-auto opacity-45 transition-transform
-                                  ${isOpen ? "" : "-rotate-90"}`}
+                      className={`transition-transform ${isOpen ? "" : "-rotate-90"}`}
                     />
-                  )}
-                </button>
+                  </button>
+                )}
 
                 {!collapsed && isOpen && item.children.map((child) => {
                   const on = page === child.id;
