@@ -24,7 +24,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Ban, BatteryCharging, BatteryMedium, Check, ChevronLeft, Clock, Loader2,
+  Ban, BatteryCharging, Search, UserRound, BatteryMedium, Check, ChevronLeft, Clock, Loader2,
   MapPin, Plug, RefreshCw, ShieldCheck, Smartphone, X,
 } from "lucide-react";
 import api from "@/lib/api";
@@ -74,6 +74,13 @@ interface Device {
   last_handover_at: string | null;
   revoked_at: string | null;
   remarks: string | null;
+
+  // Whose it is (16 Nov): who it is registered to, and who has used it.
+  registered_to_name: string | null;
+  registered_to_emp: string | null;
+  last_used_by: string | null;
+  last_used_by_emp: string | null;
+  people_30d: number;
 }
 
 interface Fix {
@@ -194,7 +201,18 @@ export default function HotoDevicesSection() {
   }, [load]);
 
   const waiting = useMemo(() => devices.filter((d) => d.status === "PENDING"), [devices]);
-  const rest = useMemo(() => devices.filter((d) => d.status !== "PENDING"), [devices]);
+  const [query, setQuery] = useState("");
+  const rest = useMemo(() => {
+    const all = devices.filter((d) => d.status !== "PENDING");
+    // FIND A PERSON'S DEVICE. With people putting the app on their own
+    // phones, "which one is Prakash's" is the question; it is answered by
+    // whom a device is registered to and by who has been using it.
+    const q = query.trim().toLowerCase();
+    if (!q) return all;
+    return all.filter((d) => [d.device_code, d.label, d.model, d.manufacturer,
+      d.registered_to_name, d.registered_to_emp, d.last_used_by, d.last_used_by_emp,
+      d.requested_note].some((v) => (v ?? "").toLowerCase().includes(q)));
+  }, [devices, query]);
 
   /* Devices that can read every site's operator register, because nothing
      ever set their site. Only the ones still in service: a revoked device
@@ -308,9 +326,17 @@ export default function HotoDevicesSection() {
       )}
 
       <section className="space-y-3">
-        <h2 className="text-sm font-bold uppercase tracking-wide text-muted-foreground">
-          Devices ({rest.length})
-        </h2>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-sm font-bold uppercase tracking-wide text-muted-foreground">
+            Devices ({rest.length})
+          </h2>
+          <label className="relative block w-full max-w-xs">
+            <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <input id="device-search" value={query} onChange={(e) => setQuery(e.target.value)}
+                   placeholder="Find by person, device or phone"
+                   className="w-full rounded-md border bg-background py-2 pl-8 pr-3 text-sm" />
+          </label>
+        </div>
 
         {loading && rest.length === 0 ? (
           <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
@@ -318,7 +344,7 @@ export default function HotoDevicesSection() {
           </div>
         ) : rest.length === 0 ? (
           <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-            No devices yet.
+            {query.trim() ? `No device matches “${query.trim()}”.` : "No devices yet."}
           </p>
         ) : (
           <div className="overflow-x-auto rounded-md border">
@@ -326,6 +352,7 @@ export default function HotoDevicesSection() {
               <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
                 <tr>
                   <th className="px-3 py-2">Device</th>
+                  <th className="px-3 py-2">Whose</th>
                   <th className="px-3 py-2">Hardware</th>
                   {/* A DEVICE'S SITE DECIDES WHOSE OPERATORS IT MAY READ.
                       It did nothing until the operator query was scoped, so
@@ -355,6 +382,9 @@ export default function HotoDevicesSection() {
                         )}
                       </div>
                       <div className="text-xs text-muted-foreground">{d.label}</div>
+                    </td>
+                    <td className="px-3 py-2.5 text-xs">
+                      <Whose d={d} />
                     </td>
                     <td className="px-3 py-2.5 text-xs text-muted-foreground">
                       {hardware(d)}
@@ -462,6 +492,7 @@ function PendingCard({ d, onDone, onError }:
             <div className="text-base font-semibold">{hardware(d)}</div>
             <div className="text-sm">
               Asked for by <strong>{d.requested_by_name ?? "somebody"}</strong>
+              {" · "}{d.profile === "PERSONAL" ? "their own phone" : "a company tablet"}
               {" · "}{ago(d.requested_at)}
             </div>
             {d.requested_note && (
@@ -574,7 +605,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 function DeviceDetail({ code, onBack, onNotice }:
   { code: string; onBack: () => void; onNotice: (m: string) => void }) {
-  const [data, setData] = useState<{ device: any; fixes: Fix[]; hours: number } | null>(null);
+  const [data, setData] = useState<{ device: any; fixes: Fix[]; hours: number; people?: Person[] } | null>(null);
   const [hours, setHours] = useState(24);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -634,6 +665,8 @@ function DeviceDetail({ code, onBack, onNotice }:
           </header>
 
           <Access d={d} onChanged={async (m) => { onNotice(m); await load(); }} />
+          <Owner d={d} people={data?.people ?? []}
+                 onChanged={async (m) => { onNotice(m); await load(); }} />
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Tile title="Last seen" value={ago(d.last_seen_at)} sub={fmt(d.last_seen_at)} icon={Clock} />
@@ -913,6 +946,167 @@ function Access({ d, onChanged }: { d: any; onChanged: (message: string) => Prom
 
       {error && <p className="text-sm text-red-700 dark:text-red-300">{error}</p>}
       <History remarks={d.remarks} />
+    </section>
+  );
+}
+
+interface Person { emp_id: string | null; name: string | null; handovers: number; last_at: string }
+
+/** Whose a device is, in the list: registered to, and who used it last. */
+function Whose({ d }: { d: Device }) {
+  return (
+    <div className="space-y-0.5">
+      {d.registered_to_name ? (
+        <div className="font-medium">
+          {d.registered_to_name}
+          {d.registered_to_emp && <span className="text-muted-foreground"> · {d.registered_to_emp}</span>}
+        </div>
+      ) : (
+        <div className="text-amber-700 dark:text-amber-300">not named — open to set</div>
+      )}
+      <div className="text-muted-foreground">
+        {d.profile === "PERSONAL" ? "own phone" : "company tablet"}
+      </div>
+      {d.last_used_by && (
+        <div className="text-muted-foreground">
+          last used by {d.last_used_by}
+          {d.people_30d > 1 ? ` · ${d.people_30d} people in 30 days` : ""}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Whose a device is, on its own page: who it is registered to (settable here,
+ * for devices that registered before the app asked and for a tablet that
+ * changes hands), and everyone who has filled in a handover on it.
+ */
+function Owner({ d, people, onChanged }:
+  { d: any; people: Person[]; onChanged: (m: string) => Promise<void> }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(d.registered_to_name ?? "");
+  const [emp, setEmp] = useState(d.registered_to_emp ?? "");
+  const [profile, setProfile] = useState<"PERSONAL" | "COMPANY">(d.profile === "PERSONAL" ? "PERSONAL" : "COMPANY");
+  const [label, setLabel] = useState(d.label ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.post(`/hoto/admin/devices/${d.device_code}/owner`,
+                     { name: name.trim(), emp: emp.trim() || null, profile, label: label.trim() || null });
+      setEditing(false);
+      await onChanged(`${d.device_code} is registered to ${name.trim()}.`);
+    } catch (e: any) {
+      setError(e?.response?.data?.detail?.problems?.join(" ") ?? "That did not work.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="space-y-3 rounded-md border p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-1">
+          <h2 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-muted-foreground">
+            <UserRound className="h-4 w-4" /> Whose device
+          </h2>
+          {d.registered_to_name ? (
+            <p className="text-sm">
+              Registered to <span className="font-semibold">{d.registered_to_name}</span>
+              {d.registered_to_emp ? ` (${d.registered_to_emp})` : ""}
+              {" · "}{d.profile === "PERSONAL" ? "their own phone" : "a company tablet"}
+              {d.approved_by ? ` · allowed by ${d.approved_by}` : ""}
+            </p>
+          ) : (
+            <p className="text-sm text-amber-800 dark:text-amber-300">
+              Nobody is named for this device yet.
+            </p>
+          )}
+        </div>
+        {!editing && (
+          <button onClick={() => setEditing(true)} className="rounded-md border px-3 py-2 text-sm hover:bg-accent">
+            {d.registered_to_name ? "Change" : "Say whose it is"}
+          </button>
+        )}
+      </div>
+
+      {editing && (
+        <div className="grid gap-3 rounded-md border bg-background p-3 sm:grid-cols-2">
+          <div className="space-y-1">
+            <label className="block text-sm font-medium" htmlFor="owner-name">Name</label>
+            <input id="owner-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={80}
+                   placeholder="e.g. Prakash Parida" className="w-full rounded-md border bg-background px-3 py-2 text-sm" />
+          </div>
+          <div className="space-y-1">
+            <label className="block text-sm font-medium" htmlFor="owner-emp">Employee number (optional)</label>
+            <input id="owner-emp" value={emp} onChange={(e) => setEmp(e.target.value)} maxLength={20}
+                   placeholder="if two people share the name" className="w-full rounded-md border bg-background px-3 py-2 text-sm" />
+          </div>
+          <div className="space-y-1">
+            <span className="block text-sm font-medium">Kind of device</span>
+            <div className="flex gap-2">
+              {(["PERSONAL", "COMPANY"] as const).map((p) => (
+                <button key={p} type="button" onClick={() => setProfile(p)}
+                        className={`rounded-md border px-3 py-2 text-sm ${profile === p
+                          ? "border-slate-900 bg-slate-900 text-white dark:border-slate-100 dark:bg-slate-100 dark:text-slate-900"
+                          : "hover:bg-accent"}`}>
+                  {p === "PERSONAL" ? "Their own phone" : "Company tablet"}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="space-y-1">
+            <label className="block text-sm font-medium" htmlFor="owner-label">Call it</label>
+            <input id="owner-label" value={label} onChange={(e) => setLabel(e.target.value)} maxLength={80}
+                   placeholder="e.g. Pit 2 shift tablet" className="w-full rounded-md border bg-background px-3 py-2 text-sm" />
+          </div>
+          <div className="flex gap-2 sm:col-span-2">
+            <button disabled={busy || !name.trim()} onClick={() => void save()}
+                    className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900">
+              {busy ? "Saving\u2026" : "Save"}
+            </button>
+            <button onClick={() => { setEditing(false); setError(null); }}
+                    className="rounded-md border px-3 py-2 text-sm hover:bg-accent">Cancel</button>
+          </div>
+          {error && <p className="text-sm text-red-700 dark:text-red-300 sm:col-span-2">{error}</p>}
+        </div>
+      )}
+
+      <div className="space-y-1">
+        <h3 className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
+          Who has used it · last 30 days
+        </h3>
+        {people.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No handovers from this device in 30 days.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[420px] text-sm">
+              <thead className="text-left text-xs text-muted-foreground">
+                <tr>
+                  <th className="py-1 pr-3 font-medium">Filled in by</th>
+                  <th className="py-1 pr-3 font-medium">Employee no.</th>
+                  <th className="py-1 pr-3 text-right font-medium">Handovers</th>
+                  <th className="py-1 font-medium">Last</th>
+                </tr>
+              </thead>
+              <tbody>
+                {people.map((p) => (
+                  <tr key={`${p.emp_id}-${p.name}`} className="border-t">
+                    <td className="py-1.5 pr-3">{p.name ?? "—"}</td>
+                    <td className="py-1.5 pr-3 tabular-nums text-muted-foreground">{p.emp_id ?? "—"}</td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums">{p.handovers}</td>
+                    <td className="py-1.5 text-xs">{fmt(p.last_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </section>
   );
 }

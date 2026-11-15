@@ -237,6 +237,24 @@ def listing(db: Session) -> list[dict[str, Any]]:
                (SELECT count(*) FROM hoto_device_location gl
                  WHERE gl.device_id = d.device_id) AS location_pings,
                (SELECT count(*) FROM hoto_session s WHERE s.device_id = d.device_id) AS sessions_filed,
+               -- WHO USES IT, from the handovers it sent: whoever filled the
+               -- last one in (the operator, when nobody else is named), and how
+               -- many different people have filled one in on it in 30 days.
+               (SELECT COALESCE(rp.display_name, rp.legal_name, op.display_name, op.legal_name)
+                  FROM hoto_session s
+                  LEFT JOIN operator ro ON ro.operator_id = s.recorded_by_operator_id
+                  LEFT JOIN party rp ON rp.party_id = ro.party_id
+                  LEFT JOIN operator oo ON oo.operator_id = s.operator_id
+                  LEFT JOIN party op ON op.party_id = oo.party_id
+                 WHERE s.device_id = d.device_id
+                 ORDER BY s.received_at DESC LIMIT 1) AS last_used_by,
+               (SELECT COALESCE(s.recorded_by_emp_id, s.operator_emp_id)
+                  FROM hoto_session s WHERE s.device_id = d.device_id
+                 ORDER BY s.received_at DESC LIMIT 1) AS last_used_by_emp,
+               (SELECT count(DISTINCT COALESCE(s.recorded_by_operator_id, s.operator_id))
+                  FROM hoto_session s
+                 WHERE s.device_id = d.device_id
+                   AND s.received_at > now() - interval '30 days') AS people_30d,
                (SELECT max(s.received_at) FROM hoto_session s WHERE s.device_id = d.device_id) AS last_handover_at
           FROM hoto_device d
           LEFT JOIN plant p ON p.plant_id = d.plant_id
@@ -244,6 +262,69 @@ def listing(db: Session) -> list[dict[str, Any]]:
          ORDER BY (d.status = 'PENDING') DESC, d.requested_at DESC NULLS LAST,
                   d.status, d.device_code
     """)).mappings().all()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["registered_to_name"], d["registered_to_emp"] = _split_registered_to(d.get("requested_by_name"))
+        out.append(d)
+    return out
+
+
+def set_owner(db: Session, device_code: str, actor: str, *, name: str | None,
+              emp: str | None, profile: str | None = None,
+              label: str | None = None) -> dict[str, Any]:
+    """Say whose a device is: the person it is registered to, whether it is
+    their own phone or a company tablet, and what to call it. For devices that
+    registered before the app asked, and for a tablet that changes hands."""
+    code = (device_code or "").strip().upper()
+    problems: list[str] = []
+    if not _clean(name, 80):
+        problems.append("say whose device this is")
+    e = _clean(emp, 20)
+    if e and not _EMP_RE.match(e):
+        problems.append("an employee number is letters, digits, / or - only")
+    pr = (profile or "").upper() or None
+    if pr and pr not in ("PERSONAL", "COMPANY"):
+        problems.append("a device is someone's own phone (PERSONAL) or a company tablet (COMPANY)")
+    if problems:
+        raise DeviceError(problems)
+    owner = _registered_to(name, e)
+    n = db.execute(text("""
+        UPDATE hoto_device
+           SET requested_by_name = :o,
+               profile = COALESCE(:pr, profile),
+               label = COALESCE(:l, label),
+               remarks = COALESCE(remarks || ' | ', '') || 'registered to ' || CAST(:o_note AS text)
+                         || ' by ' || :by || ' on ' || to_char(now(), 'DD Mon YYYY HH24:MI')
+         WHERE device_code = :c
+    """), {"o": owner, "o_note": owner, "pr": pr, "l": _clean(label, 80), "by": actor,
+          "c": code}).rowcount
+    if not n:
+        raise DeviceError(["no device enrolled as " + code], status=404)
+    db.commit()
+    logger.info("device %s registered to %s by %s", code, owner, actor)
+    return {"device_code": code, "registered_to": owner}
+
+
+def people(db: Session, device_id: int, days: int = 30) -> list[dict[str, Any]]:
+    """Everyone who filled in a handover on this device, most recent first.
+
+    "Filled in" is the person holding it: the one named under Filled in by,
+    or the operator when nobody else was."""
+    rows = db.execute(text("""
+        SELECT COALESCE(s.recorded_by_emp_id, s.operator_emp_id) AS emp_id,
+               COALESCE(rp.display_name, rp.legal_name, op.display_name, op.legal_name) AS name,
+               count(*) AS handovers, max(s.captured_at) AS last_at
+          FROM hoto_session s
+          LEFT JOIN operator ro ON ro.operator_id = s.recorded_by_operator_id
+          LEFT JOIN party rp ON rp.party_id = ro.party_id
+          LEFT JOIN operator oo ON oo.operator_id = s.operator_id
+          LEFT JOIN party op ON op.party_id = oo.party_id
+         WHERE s.device_id = :d
+           AND s.received_at > now() - make_interval(days => :n)
+         GROUP BY 1, 2
+         ORDER BY max(s.captured_at) DESC
+    """), {"d": device_id, "n": days}).mappings().all()
     return [dict(r) for r in rows]
 
 
@@ -374,8 +455,29 @@ def _waiting_message(status: str, code: str) -> str:
     return code + " is " + status.lower() + "."
 
 
+_EMP_RE = re.compile(r"^[A-Za-z0-9/-]{1,20}$")
+
+
+def _registered_to(name: str | None, emp: str | None) -> str | None:
+    """"Akash Yadav (3101)": a person, and the number that tells two of the
+    same name apart. Kept in requested_by_name -- no schema change, since
+    development and production share the database -- and read back by
+    _split_registered_to."""
+    name = _clean(name, 80)
+    emp = _clean(emp, 20)
+    if not name:
+        return None
+    return f"{name} ({emp.upper()})" if emp else name
+
+
+def _split_registered_to(v: str | None) -> tuple[str | None, str | None]:
+    m = re.match(r"^(.*?)\s*\(([A-Za-z0-9/-]{1,20})\)$", (v or "").strip())
+    return (m.group(1), m.group(2)) if m else ((v or None), None)
+
+
 def register(db: Session, *, install_id: str, claim_secret: str,
              label: str | None = None, requested_by_name: str | None = None,
+             requested_by_emp: str | None = None, own_device: bool | None = None,
              requested_note: str | None = None, platform: str | None = None,
              os_version: str | None = None, manufacturer: str | None = None,
              model: str | None = None, app_version: str | None = None,
@@ -395,8 +497,14 @@ def register(db: Session, *, install_id: str, claim_secret: str,
     who = _clean(requested_by_name, 80)
     if not who:
         problems.append("say who is asking for this device to be allowed")
+    emp = _clean(requested_by_emp, 20)
+    if emp and not _EMP_RE.match(emp):
+        problems.append("an employee number is letters, digits, / or - only")
     if problems:
         raise DeviceError(problems)
+    # Asked for 16 Nov: with employees registering their own phones, the office
+    # has to be able to tell whose each one is. The number goes with the name.
+    who = _registered_to(who, emp)
 
     facts = {
         "pf": _clean(platform, 12), "os": _clean(os_version, 40),
@@ -460,10 +568,12 @@ def register(db: Session, *, install_id: str, claim_secret: str,
             (device_code, label, profile, status, install_id, claim_secret_hash,
              platform, os_version, manufacturer, model, app_version, build_number,
              requested_at, requested_by_name, requested_note, enrolled_by)
-        VALUES (:c, :l, 'COMPANY', 'PENDING', CAST(:i AS uuid), :cs,
+        VALUES (:c, :l, :pr, 'PENDING', CAST(:i AS uuid), :cs,
                 :pf, :os, :mk, :md, :av, :bn, now(), :who, :note, 'self-registered')
         RETURNING device_code, status
     """), {**facts, "c": code, "l": label, "i": install,
+           # What the person said the device is. The approver can change it.
+           "pr": "PERSONAL" if own_device else "COMPANY",
            "cs": _hash(claim_secret)}).mappings().first()
     db.commit()
     logger.info("device %s registered itself (%s %s) for %s",
@@ -772,7 +882,9 @@ def track(db: Session, device_code: str, *, hours: int = 24,
                track_location, location_interval_s,
                -- for blocking (16 Nov): why it is in the state it is in, its
                -- history, and when it last sent anything
-               decided_reason, remarks, last_sync_at, revoked_by, revoked_at
+               decided_reason, remarks, last_sync_at, revoked_by, revoked_at,
+               -- whose it is (16 Nov)
+               profile, requested_by_name, requested_note, approved_by, approved_at
           FROM hoto_device WHERE device_code = :c
     """), {"c": code}).mappings().first()
     if not dev_row:
@@ -790,8 +902,13 @@ def track(db: Session, device_code: str, *, hours: int = 24,
          LIMIT :lim
     """), {"d": dev_row["device_id"], "h": hours, "lim": limit}).mappings().all()
 
-    return {"device": dict(dev_row), "hours": hours,
-            "fixes": [dict(r) for r in rows]}
+    device = dict(dev_row)
+    device["registered_to_name"], device["registered_to_emp"] = \
+        _split_registered_to(device.get("requested_by_name"))
+    return {"device": device, "hours": hours,
+            "fixes": [dict(r) for r in rows],
+            # who has filled in handovers on it, 30 days (16 Nov)
+            "people": people(db, dev_row["device_id"])}
 
 
 def tracking_settings(db: Session, device_id: int) -> dict[str, Any]:

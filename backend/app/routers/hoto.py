@@ -846,6 +846,17 @@ def unblock_device(device_code: str, request: Request, payload: dict,
     return _devices(dvc.unblock, db, device_code, actor, payload.get("reason"))
 
 
+@router.post("/admin/devices/{device_code}/owner")
+def set_device_owner(device_code: str, request: Request, payload: dict,
+                     db: Session = Depends(get_minehub_db)) -> dict:
+    """Whose a device is: a person and their employee number, whether it is
+    their own phone or a company tablet, and what to call it."""
+    actor = _admin_guard(request, db)
+    return _devices(dvc.set_owner, db, device_code, actor,
+                    name=payload.get("name"), emp=payload.get("emp"),
+                    profile=payload.get("profile"), label=payload.get("label"))
+
+
 @router.post("/admin/devices/{device_code}/approve")
 def approve_device(device_code: str, request: Request, payload: dict,
                    db: Session = Depends(get_minehub_db)) -> dict:

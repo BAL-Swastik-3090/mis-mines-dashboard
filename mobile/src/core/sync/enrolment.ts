@@ -182,12 +182,18 @@ async function post(path: string, body: unknown): Promise<
  */
 export async function requestAccess(
   who: string, note?: string,
+  // Whose the device is (16 Nov): the office has to be able to tell, now that
+  // people put the app on their own phones. The number is optional -- a name
+  // is enough -- and only tells two people of the same name apart.
+  owner: { emp?: string; ownDevice?: boolean } = {},
 ): Promise<{ ok: true; deviceCode: string; message: string }
          | { ok: false; problem: string }> {
   const r = await post('/api/hoto/device/register', {
     install_id: await installId(),
     claim_secret: await claimSecret(),
     requested_by_name: who.trim(),
+    requested_by_emp: (owner.emp ?? '').trim() || undefined,
+    own_device: owner.ownDevice === true,
     requested_note: (note ?? '').trim() || undefined,
     ...deviceFacts(),
   });

@@ -39,6 +39,9 @@ export default function Join({ onJoined }: { onJoined?: () => void } = {}) {
 
   const [join, setJoin] = useState<JoinState | null>(null);
   const [who, setWho] = useState('');
+  const [emp, setEmp] = useState('');
+  // Null until answered: whose the device is is asked, never assumed.
+  const [ownDevice, setOwnDevice] = useState<boolean | null>(null);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -86,7 +89,7 @@ export default function Join({ onJoined }: { onJoined?: () => void } = {}) {
   const ask = async () => {
     setBusy(true);
     setProblem(null);
-    const r = await requestAccess(who, note);
+    const r = await requestAccess(who, note, { emp, ownDevice: ownDevice === true });
     if (!alive.current) return;
     setBusy(false);
     if (!r.ok) { setProblem(r.problem); return; }
@@ -269,6 +272,34 @@ export default function Join({ onJoined }: { onJoined?: () => void } = {}) {
       </View>
 
       <View style={styles.field}>
+        <Text style={styles.label}>Employee number (optional)</Text>
+        <TextInput
+          testID="emp"
+          style={styles.input}
+          value={emp}
+          onChangeText={setEmp}
+          placeholder="Only if two people share your name"
+          autoCapitalize="characters"
+          autoCorrect={false}
+        />
+      </View>
+
+      {/* WHOSE IT IS. The office's device list shows it, so a phone can be
+          matched to its owner -- the question once people use their own. */}
+      <View style={styles.field}>
+        <Text style={styles.label}>Whose device is this?</Text>
+        <View style={styles.kinds}>
+          {([[true, 'My own phone'], [false, 'A company tablet']] as const).map(([own, text]) => (
+            <Pressable key={text} testID={own ? 'own-phone' : 'company-tablet'}
+                       onPress={() => setOwnDevice(own)}
+                       style={[styles.kind, ownDevice === own && styles.kindOn]}>
+              <Text style={[styles.kindText, ownDevice === own && styles.kindTextOn]}>{text}</Text>
+            </Pressable>
+          ))}
+        </View>
+      </View>
+
+      <View style={styles.field}>
         <Text style={styles.label}>Where it will be used (optional)</Text>
         <TextInput
           testID="note"
@@ -285,12 +316,16 @@ export default function Join({ onJoined }: { onJoined?: () => void } = {}) {
 
       <Pressable
         testID="ask"
-        disabled={busy || !who.trim()}
-        style={[styles.primary, (busy || !who.trim()) && styles.primaryOff]}
+        disabled={busy || !who.trim() || ownDevice === null}
+        style={[styles.primary, (busy || !who.trim() || ownDevice === null) && styles.primaryOff]}
         onPress={() => void ask()}
       >
         {busy ? <ActivityIndicator color="#fff" />
-              : <Text style={styles.primaryText}>Ask for access</Text>}
+              : <Text style={styles.primaryText}>
+                  {!who.trim() ? 'Enter your name first'
+                    : ownDevice === null ? 'Say whose device this is'
+                    : 'Ask for access'}
+                </Text>}
       </Pressable>
 
       <Advanced show={showAdvanced} server={server} draft={serverDraft}
@@ -381,6 +416,12 @@ const styles = StyleSheet.create({
 
   field: { gap: 6 },
   label: { fontSize: 13, fontWeight: '700', color: '#16202b' },
+  kinds: { flexDirection: 'row', gap: 10 },
+  kind: { flex: 1, minHeight: 52, borderRadius: 10, borderWidth: 1.5, borderColor: '#aeb8c4',
+          alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff', paddingHorizontal: 8 },
+  kindOn: { backgroundColor: '#16202b', borderColor: '#16202b' },
+  kindText: { fontSize: 16, fontWeight: '700', color: '#16202b', textAlign: 'center' },
+  kindTextOn: { color: '#fff' },
   input: { minHeight: 56, borderWidth: 1.5, borderColor: '#aeb8c4', borderRadius: 8,
            paddingHorizontal: 14, fontSize: 17, backgroundColor: '#fff',
            color: '#16202b' },
