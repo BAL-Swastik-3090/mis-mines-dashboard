@@ -18,7 +18,7 @@
  * while he is looking at the machine, that this is the question that stops it.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { View, Text, Pressable, TextInput, StyleSheet } from 'react-native';
 import type { ChecklistItem, RawResponse } from '@/core/evaluation';
 import { evaluateOne, rangeLabel } from '@/core/evaluation';
@@ -75,6 +75,20 @@ export function ItemControl({
   const [reading, setReading] = useState(
     value?.numericValue != null ? String(value.numericValue) : '',
   );
+  // A reading given ELSEWHERE -- on the one-at-a-time screen, while this list
+  // sat underneath it -- must show here too. This box read its value once, when
+  // first drawn, so a reading of 4 bar answered on the walk-round showed as an
+  // empty box in the list: answered, counted, and looking unanswered. Found on
+  // the tablet, 15 Nov 2026. Compared as numbers, so it never overwrites a
+  // reading being typed ("10." is 10, the value already stored).
+  useEffect(() => {
+    const stored = value?.numericValue;
+    const shown = reading.trim() === '' ? null : Number(reading);
+    if ((stored ?? null) !== (Number.isFinite(shown as number) ? shown : null)) {
+      setReading(stored != null ? String(stored) : '');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value?.numericValue]);
 
   const current: RawResponse = value ?? { itemId: item.itemId };
   const ev = evaluateOne(item, { ...current, photoCount });

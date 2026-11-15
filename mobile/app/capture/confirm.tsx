@@ -147,7 +147,7 @@ export default function Confirm() {
         ) : null}
         <Text style={styles.meta}>{asset.asset_type_name}</Text>
         <Text style={styles.meta}>
-          {row.session_type.replace(/_/g, ' ').toLowerCase()} · meter {row.meter_reading ?? '—'}{' '}
+          {row.session_type === 'START_HANDOVER' ? 'Taking over' : row.session_type === 'END_HANDOVER' ? 'Handing over' : 'Mid-shift check'} · meter {row.meter_reading ?? '—'}{' '}
           {row.meter_uom ?? ''}
         </Text>
         {/* WHICH SHIFT. The office resolves this from the time of capture and

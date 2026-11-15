@@ -311,3 +311,29 @@ describe('what is still unanswered stands out (B1)', () => {
     expect(screen.getByLabelText('answered')).toBeTruthy();
   });
 });
+
+describe('a reading given on another screen', () => {
+  // Answered on the one-at-a-time screen while the list sat underneath: the
+  // list's box read its value once and showed it empty. Found on the tablet.
+  it('shows in the list when the stored reading changes', () => {
+    const onChange = jest.fn();
+    const { rerender } = render(
+      <ItemControl item={air} value={undefined} photoCount={0}
+                   onChange={onChange} onAddPhoto={jest.fn()} />);
+    expect(screen.getByTestId('reading-103').props.value).toBe('');
+    rerender(<ItemControl item={air} value={{ itemId: 103, numericValue: 100 }} photoCount={0}
+                          onChange={onChange} onAddPhoto={jest.fn()} />);
+    expect(screen.getByTestId('reading-103').props.value).toBe('100');
+  });
+
+  it('does not overwrite a reading while it is being typed', () => {
+    const onChange = jest.fn();
+    const { rerender } = render(
+      <ItemControl item={air} value={{ itemId: 103, numericValue: 10 }} photoCount={0}
+                   onChange={onChange} onAddPhoto={jest.fn()} />);
+    fireEvent.changeText(screen.getByTestId('reading-103'), '10.');
+    rerender(<ItemControl item={air} value={{ itemId: 103, numericValue: 10 }} photoCount={0}
+                          onChange={onChange} onAddPhoto={jest.fn()} />);
+    expect(screen.getByTestId('reading-103').props.value).toBe('10.');
+  });
+});
