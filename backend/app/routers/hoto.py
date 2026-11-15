@@ -876,7 +876,8 @@ def approve_device(device_code: str, request: Request, payload: dict,
                     location_id=payload.get("location_id"),
                     track_location=payload.get("track_location"),
                     location_interval_s=payload.get("location_interval_s"),
-                    reason=payload.get("reason"))
+                    reason=payload.get("reason"),
+                    pairing=payload.get("pairing_code"))
 
 
 @router.post("/admin/devices/{device_code}/reject")

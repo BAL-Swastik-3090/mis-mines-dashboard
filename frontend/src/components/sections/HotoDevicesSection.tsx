@@ -461,6 +461,10 @@ function PendingCard({ d, onDone, onError }:
   const [busy, setBusy] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
+  // THE PAIRING CODE (16 Nov): shown on the device, never here. Typing it is
+  // what proves the device being allowed is the one in front of the approver.
+  const [pairing, setPairing] = useState("");
+  const pairDigits = pairing.replace(/\D/g, "");
 
   const act = async (what: "approve" | "reject") => {
     setBusy(true);
@@ -469,6 +473,7 @@ function PendingCard({ d, onDone, onError }:
         const r = await api.post(`/hoto/admin/devices/${d.device_code}/approve`, {
           device_code: code.trim().toUpperCase() === d.device_code ? null : code.trim(),
           label, profile, track_location: track, location_interval_s: interval,
+          pairing_code: pairDigits,
         });
         onDone(r.data.note ?? `${r.data.device_code} is allowed.`);
       } else {
@@ -551,8 +556,22 @@ function PendingCard({ d, onDone, onError }:
             </p>
           )}
 
+          <div className="mt-4 max-w-xs space-y-1">
+            <label className="block text-sm font-semibold" htmlFor={`pair-${d.device_code}`}>
+              Pairing code on the device&apos;s screen
+            </label>
+            <input id={`pair-${d.device_code}`} value={pairing} inputMode="numeric" autoComplete="off"
+                   maxLength={7} placeholder="000 000"
+                   onChange={(e) => setPairing(e.target.value)}
+                   className="w-full rounded-md border bg-background px-3 py-2 font-mono text-lg tracking-[0.3em]" />
+            <p className="text-xs text-muted-foreground">
+              Ask whoever holds {d.device_code} to read it to you. It is not shown here, so a
+              request cannot be allowed without seeing or speaking to that device.
+            </p>
+          </div>
+
           <div className="mt-4 flex flex-wrap gap-2">
-            <button disabled={busy} onClick={() => void act("approve")}
+            <button disabled={busy || pairDigits.length !== 6} onClick={() => void act("approve")}
                     className="inline-flex items-center gap-2 rounded-md bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-50">
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
               Allow this device

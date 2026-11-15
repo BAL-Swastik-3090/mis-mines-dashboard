@@ -73,7 +73,10 @@ export default function Join({ onJoined }: { onJoined?: () => void } = {}) {
     setChecking(false);
     if (r.problem && manual) setProblem(r.problem);
     if (!r.problem) setProblem(null);
-    setJoin(r);
+    // A check that could not reach the office has no code in it; keep the one
+    // already on screen rather than make it vanish while somebody reads it out.
+    setJoin((prev) => (r.state === 'waiting' && !r.pairingCode && prev?.state === 'waiting'
+                       && prev.pairingCode ? { ...r, pairingCode: prev.pairingCode } : r));
     if (r.state === 'ready') setApproved({ code: r.deviceCode, label: r.label });
   }, []);
 
@@ -93,7 +96,8 @@ export default function Join({ onJoined }: { onJoined?: () => void } = {}) {
     if (!alive.current) return;
     setBusy(false);
     if (!r.ok) { setProblem(r.problem); return; }
-    setJoin({ state: 'waiting', deviceCode: r.deviceCode, message: r.message });
+    setJoin({ state: 'waiting', deviceCode: r.deviceCode, message: r.message,
+              ...(r.pairingCode ? { pairingCode: r.pairingCode } : {}) });
   };
 
   const saveServer = async () => {
@@ -216,6 +220,22 @@ export default function Join({ onJoined }: { onJoined?: () => void } = {}) {
             <Text style={styles.strong}>Devices</Text>, and allow{' '}
             <Text style={styles.strong}>{join.deviceCode}</Text>.
           </Text>
+          {/* THE PAIRING CODE. The office types it to allow this device, which
+              proves they are allowing this one and not somebody else's
+              request. It is shown here and nowhere else -- read it out to
+              them if they are not standing beside you. */}
+          {join.pairingCode ? (
+            <View style={styles.pairBox} testID="pairing-code">
+              <Text style={styles.pairLabel}>Pairing code</Text>
+              <Text style={styles.pair}>
+                {join.pairingCode.slice(0, 3)} {join.pairingCode.slice(3)}
+              </Text>
+              <Text style={styles.pairNote}>
+                The office will ask for this code to allow the device. Give it
+                only to the person allowing it.
+              </Text>
+            </View>
+          ) : null}
           <Text style={styles.note}>
             This device checks by itself and will start as soon as it is
             allowed. Nothing needs to be typed in here.
@@ -434,6 +454,13 @@ const styles = StyleSheet.create({
   waitBox: { backgroundColor: '#fff', borderRadius: 12, padding: 22, gap: 10,
              alignItems: 'center', borderWidth: 1, borderColor: '#d8dee6' },
   waitTitle: { fontSize: 20, fontWeight: '700', color: '#16202b' },
+  pairBox: { alignSelf: 'stretch', alignItems: 'center', gap: 4, marginTop: 8, padding: 16,
+             borderRadius: 12, backgroundColor: '#f2f6fa', borderWidth: 1.5, borderColor: '#1e5f8a' },
+  pairLabel: { fontSize: 13, fontWeight: '800', color: '#1e5f8a', letterSpacing: 1,
+               textTransform: 'uppercase' },
+  pair: { fontSize: 44, fontWeight: '800', color: '#16202b', letterSpacing: 6,
+          fontVariant: ['tabular-nums'] },
+  pairNote: { fontSize: 14, color: '#5b6a7a', textAlign: 'center' },
   code: { fontSize: 40, fontWeight: '800', color: '#1e5f8a', letterSpacing: 2 },
   waitHow: { fontSize: 16, color: '#16202b', textAlign: 'center', lineHeight: 23 },
 

@@ -63,7 +63,9 @@ export interface Enrolment {
 /** Where a device stands in the process of being allowed in. */
 export type JoinState =
   | { state: 'unregistered' }
-  | { state: 'waiting'; deviceCode: string; message: string }
+  // The pairing code the office types to allow it (16 Nov): shown on this
+  // device only, never on the dashboard.
+  | { state: 'waiting'; deviceCode: string; message: string; pairingCode?: string }
   | { state: 'refused'; deviceCode: string; message: string }
   | { state: 'ready'; deviceCode: string; label: string };
 
@@ -186,7 +188,7 @@ export async function requestAccess(
   // people put the app on their own phones. The number is optional -- a name
   // is enough -- and only tells two people of the same name apart.
   owner: { emp?: string; ownDevice?: boolean } = {},
-): Promise<{ ok: true; deviceCode: string; message: string }
+): Promise<{ ok: true; deviceCode: string; message: string; pairingCode?: string }
          | { ok: false; problem: string }> {
   const r = await post('/api/hoto/device/register', {
     install_id: await installId(),
@@ -200,7 +202,8 @@ export async function requestAccess(
   if (!r.ok) return { ok: false, problem: r.problem };
   const code = String(r.body.device_code ?? '');
   if (code) await put(CODE_ENTRY, code);
-  return { ok: true, deviceCode: code, message: String(r.body.message ?? '') };
+  return { ok: true, deviceCode: code, message: String(r.body.message ?? ''),
+           ...(r.body.pairing_code ? { pairingCode: String(r.body.pairing_code) } : {}) };
 }
 
 /**
@@ -252,7 +255,8 @@ export async function checkAccess(): Promise<JoinState & { problem?: string }> {
              label: (await storedLabel()) ?? code };
   }
 
-  return { state: 'waiting', deviceCode: code, message };
+  return { state: 'waiting', deviceCode: code, message,
+           ...(b.pairing_code ? { pairingCode: String(b.pairing_code) } : {}) };
 }
 
 /** Where this device stands, without asking the server. */

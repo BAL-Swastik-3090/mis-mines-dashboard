@@ -402,6 +402,7 @@ def seen(db: Session, device_id: int, app_version: str | None = None,
 # ─────────────────────────────────────────────────────────────────────────────
 
 import re
+import time
 from datetime import datetime, timezone
 
 #: How long an approved-but-uncollected credential stays collectable. A device
@@ -456,6 +457,55 @@ def _waiting_message(status: str, code: str) -> str:
 
 
 _EMP_RE = re.compile(r"^[A-Za-z0-9/-]{1,20}$")
+
+
+# ── the pairing code (16 Nov) ────────────────────────────────────────────────
+#
+# Registering is open to anyone with the app, under any name, and two waiting
+# requests look much alike on the dashboard. So a device waiting to be allowed
+# shows a six-digit code, and the approver has to type it: proof that they are
+# looking at that device, or talking to whoever holds it. The way a television
+# or a Bluetooth headset is paired.
+#
+# Shown ONLY to the device -- in the answer to its own registration and its own
+# checks, both of which prove its claim secret -- and never on the dashboard,
+# which would defeat it. Derived, not stored: the claim secret's hash, signed
+# with the server's key, so there is no new column and nothing to leak.
+
+PAIR_MAX_WRONG = 5
+PAIR_LOCK_S = 15 * 60
+_pair_wrong: dict[str, list[float]] = {}
+
+
+def pairing_code(claim_secret_hash: str | None) -> str | None:
+    if not claim_secret_hash:
+        return None
+    from app.services.jwt_auth import _KEY          # the server's own secret
+    mac = hmac.new(_KEY.encode(), ("pair:" + claim_secret_hash).encode(), "sha256").hexdigest()
+    return str(int(mac, 16) % 1_000_000).zfill(6)
+
+
+def _check_pairing(code: str, claim_secret_hash: str | None, typed: str | None) -> None:
+    """Refuse an approval without the code on the device's screen. Five wrong
+    tries lock that device's approval for fifteen minutes: the code is six
+    digits, and guessing it is the attack it exists to stop."""
+    now = time.monotonic()
+    tries = [t for t in _pair_wrong.get(code, []) if now - t < PAIR_LOCK_S]
+    _pair_wrong[code] = tries
+    if len(tries) >= PAIR_MAX_WRONG:
+        raise DeviceError([f"Too many wrong codes for {code}. Try again in 15 minutes, "
+                           "with the code on the device's screen."], status=429)
+    want = pairing_code(claim_secret_hash)
+    got = re.sub(r"\D", "", typed or "")
+    if not want or not hmac.compare_digest(want, got):
+        tries.append(now)
+        left = PAIR_MAX_WRONG - len(tries)
+        raise DeviceError(
+            [("Type the six-digit pairing code shown on the device. " if not got else
+              f"That is not the code on {code}'s screen. ")
+             + (f"{left} more {'try' if left == 1 else 'tries'} before it locks for 15 minutes."
+                if got else "")], status=403)
+    _pair_wrong.pop(code, None)
 
 
 def _registered_to(name: str | None, emp: str | None) -> str | None:
@@ -518,7 +568,8 @@ def register(db: Session, *, install_id: str, claim_secret: str,
     label_in = _clean(label, 80)
 
     existing = db.execute(text("""
-        SELECT device_id, device_code, status FROM hoto_device WHERE install_id = :i
+        SELECT device_id, device_code, status, claim_secret_hash
+          FROM hoto_device WHERE install_id = :i
     """), {"i": install}).mappings().first()
 
     if existing:
@@ -554,8 +605,13 @@ def register(db: Session, *, install_id: str, claim_secret: str,
              WHERE device_id = :d
         """), {**facts, "l": label_in, "d": existing["device_id"]})
         db.commit()
-        return {"device_code": existing["device_code"], "status": existing["status"],
-                "message": _waiting_message(existing["status"], existing["device_code"])}
+        out_again = {"device_code": existing["device_code"], "status": existing["status"],
+                     "message": _waiting_message(existing["status"], existing["device_code"])}
+        # Its pairing code, but only to the installation that holds the secret.
+        if existing["status"] == "PENDING" and existing["claim_secret_hash"] and \
+                hmac.compare_digest(existing["claim_secret_hash"], _hash(claim_secret)):
+            out_again["pairing_code"] = pairing_code(existing["claim_secret_hash"])
+        return out_again
 
     # A label nobody typed beats a blank one: the hardware name is what the
     # approver would have written anyway.
@@ -579,7 +635,8 @@ def register(db: Session, *, install_id: str, claim_secret: str,
     logger.info("device %s registered itself (%s %s) for %s",
                 code, facts["mk"], facts["md"], who)
     return {"device_code": row["device_code"], "status": row["status"],
-            "message": _waiting_message(row["status"], row["device_code"])}
+            "message": _waiting_message(row["status"], row["device_code"]),
+            "pairing_code": pairing_code(_hash(claim_secret))}
 
 
 def claim(db: Session, install_id: str, claim_secret: str) -> dict[str, Any]:
@@ -625,6 +682,8 @@ def claim(db: Session, install_id: str, claim_secret: str) -> dict[str, Any]:
         out["message"] = (row["decided_reason"] or "").strip() or out["message"]
         return out
 
+    if row["status"] == "PENDING":
+        out["pairing_code"] = pairing_code(row["claim_secret_hash"])
     if row["status"] != "ACTIVE":
         return out
 
@@ -656,11 +715,14 @@ def approve(db: Session, device_code: str, actor: str, *,
             profile: str | None = None, plant_id: int | None = None,
             location_id: int | None = None, track_location: bool | None = None,
             location_interval_s: int | None = None,
-            reason: str | None = None) -> dict[str, Any]:
-    """Let a registered device in. This is where a credential first exists."""
+            reason: str | None = None,
+            pairing: str | None = None) -> dict[str, Any]:
+    """Let a registered device in. This is where a credential first exists.
+
+    Only with the pairing code on the device's screen (see pairing_code)."""
     code = (device_code or "").strip().upper()
     row = db.execute(text("""
-        SELECT device_id, device_code, status, install_id
+        SELECT device_id, device_code, status, install_id, claim_secret_hash
           FROM hoto_device WHERE device_code = :c
     """), {"c": code}).mappings().first()
     if not row:
@@ -677,6 +739,7 @@ def approve(db: Session, device_code: str, actor: str, *,
     if profile is not None and profile not in ("PERSONAL", "COMPANY"):
         raise DeviceError(["profile must be COMPANY (a shared tablet) or "
                            "PERSONAL (one person's phone)"])
+    _check_pairing(code, row["claim_secret_hash"], pairing)
 
     wanted = _clean(new_code, 32)
     if wanted:
