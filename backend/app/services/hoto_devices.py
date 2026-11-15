@@ -136,6 +136,64 @@ def reissue(db: Session, device_code: str, actor: str) -> dict[str, Any]:
             "token_note": "The tablet's previous token stopped working the moment this was issued."}
 
 
+# ── blocking a tablet, and letting it back ───────────────────────────────────
+#
+# Asked for on 16 Nov: "from the dashboard can I block any device". Revoking
+# could already stop one, but for good: its credential is erased, it has to
+# register and be approved again, and whatever it holds can never be sent. That
+# is right for a tablet that is gone; it is wrong for one left in a canteen
+# and found the next morning.
+#
+# A BLOCK keeps the credential and only refuses it (status SUSPENDED, which
+# migrations 106 and 110 already allow). The tablet is told why, keeps every
+# handover it holds, and sends them the moment it is unblocked. No schema
+# change: who did it and when goes on the device's remarks, the way re-issuing
+# a token already does, and the reason sits in decided_reason, which is what
+# the tablet is shown.
+
+def block(db: Session, device_code: str, actor: str, reason: str) -> dict[str, Any]:
+    """Refuse an active tablet until it is unblocked. Nothing on it is lost."""
+    code = (device_code or "").strip().upper()
+    why = _clean(reason, 500)
+    if not why:
+        raise DeviceError(["say why the tablet is being blocked — whoever is "
+                           "holding it is shown the reason"])
+    n = db.execute(text("""
+        UPDATE hoto_device
+           SET status = 'SUSPENDED', decided_reason = :r,
+               remarks = COALESCE(remarks || ' | ', '') || 'blocked by ' || :by || ' on '
+                         || to_char(now(), 'DD Mon YYYY HH24:MI') || ': ' || :r
+         WHERE device_code = :c AND status = 'ACTIVE'
+    """), {"c": code, "r": why, "by": actor}).rowcount
+    if not n:
+        raise DeviceError([f"no active tablet is enrolled as {code}"], status=404)
+    db.commit()
+    logger.warning("device %s blocked by %s: %s", code, actor, why)
+    return {"device_code": code, "status": "SUSPENDED",
+            "note": ("Blocked. The tablet is refused from its next call, keeps "
+                     "everything it holds, and sends it once unblocked.")}
+
+
+def unblock(db: Session, device_code: str, actor: str, reason: str | None = None) -> dict[str, Any]:
+    """Let a blocked tablet back in, with the same credential it had."""
+    code = (device_code or "").strip().upper()
+    why = _clean(reason, 500)
+    n = db.execute(text("""
+        UPDATE hoto_device
+           SET status = 'ACTIVE', decided_reason = :r,
+               remarks = COALESCE(remarks || ' | ', '') || 'unblocked by ' || :by || ' on '
+                         || to_char(now(), 'DD Mon YYYY HH24:MI')
+                         || COALESCE(': ' || :r, '')
+         WHERE device_code = :c AND status = 'SUSPENDED'
+    """), {"c": code, "r": why, "by": actor}).rowcount
+    if not n:
+        raise DeviceError([f"no blocked tablet is enrolled as {code}"], status=404)
+    db.commit()
+    logger.info("device %s unblocked by %s", code, actor)
+    return {"device_code": code, "status": "ACTIVE",
+            "note": "Unblocked. Anything waiting on the tablet goes at its next send."}
+
+
 def revoke(db: Session, device_code: str, actor: str, reason: str) -> dict[str, Any]:
     """Stop a tablet. Its queued handovers are not deleted — see below."""
     code = device_code.strip().upper()
@@ -206,12 +264,20 @@ def authenticate(db: Session, token: str | None) -> dict[str, Any]:
     # Candidates are narrowed by the hash itself; the comparison below is what
     # actually decides, and is constant-time.
     rows = db.execute(text("""
-        SELECT device_id, device_code, label, profile, status, plant_id, token_hash
+        SELECT device_id, device_code, label, profile, status, plant_id, token_hash,
+               decided_reason
           FROM hoto_device WHERE token_hash IS NOT NULL
     """)).mappings().all()
 
     for r in rows:
         if hmac.compare_digest(r["token_hash"], digest):
+            if r["status"] == "SUSPENDED":
+                why = (r["decided_reason"] or "").strip()
+                raise DeviceError(
+                    [f"{r['device_code']} has been blocked by the office"
+                     + (f": {why}" if why else "")
+                     + ". Its handovers stay on it and go once it is unblocked."],
+                    status=403)
             if r["status"] != "ACTIVE":
                 raise DeviceError(
                     [f"{r['device_code']} is {r['status'].lower()}. "
@@ -302,7 +368,7 @@ def _waiting_message(status: str, code: str) -> str:
         return ("Waiting to be allowed. Ask the office to approve " + code +
                 " on the HOTO dashboard, under Devices.")
     if status == "SUSPENDED":
-        return code + " is paused. The office can switch it back on."
+        return code + " has been blocked by the office. It can be unblocked from the dashboard."
     if status == "ACTIVE":
         return code + " is allowed."
     return code + " is " + status.lower() + "."
@@ -445,7 +511,7 @@ def claim(db: Session, install_id: str, claim_secret: str) -> dict[str, Any]:
         "message": _waiting_message(row["status"], row["device_code"]),
     }
 
-    if row["status"] in ("REJECTED", "REVOKED"):
+    if row["status"] in ("REJECTED", "REVOKED", "SUSPENDED"):
         out["message"] = (row["decided_reason"] or "").strip() or out["message"]
         return out
 
@@ -703,7 +769,10 @@ def track(db: Session, device_code: str, *, hours: int = 24,
         SELECT device_id, device_code, label, status, model, manufacturer,
                last_seen_at, last_location_at, last_lat, last_lon,
                last_accuracy_m, last_battery_pct, last_is_charging,
-               track_location, location_interval_s
+               track_location, location_interval_s,
+               -- for blocking (16 Nov): why it is in the state it is in, its
+               -- history, and when it last sent anything
+               decided_reason, remarks, last_sync_at, revoked_by, revoked_at
           FROM hoto_device WHERE device_code = :c
     """), {"c": code}).mappings().first()
     if not dev_row:

@@ -27,6 +27,8 @@ import { TermsScreen } from '@/ui/Terms';
 import { covers, useTerms } from '@/legal/acceptance';
 import { requeueDeviceRefusals } from '@/core/sync/engine';
 import { removeEmptyDraftsWithoutChecklist } from '@/core/capture/session';
+import { pruneSentPhotos, rescueCachedPhotos } from '@/core/capture/photoFiles';
+import * as FileSystem from 'expo-file-system';
 import { httpTransport } from '@/core/sync/transport';
 import { setRehash, syncNow } from '@/core/sync/engine';
 import { hashPhotoFile } from '@/core/capture/photoHash';
@@ -100,6 +102,10 @@ export default function RootLayout() {
       await requeueDeviceRefusals(store).catch(() => undefined);
       // And drafts that can never be finished (no checklist, nothing in them).
       await removeEmptyDraftsWithoutChecklist(store).catch(() => undefined);
+      // Photographs out of the cache Android may empty, and the files of ones
+      // the office has had for a week let go (core/capture/photoFiles.ts).
+      await rescueCachedPhotos(store, FileSystem).catch(() => undefined);
+      await pruneSentPhotos(store, FileSystem).catch(() => undefined);
       attach(store);
 
       // A device with no credential cannot sync, so it is sent to be set up

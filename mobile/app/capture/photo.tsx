@@ -28,6 +28,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCapture } from '@/ui/useCapture';
 import { useT } from '@/i18n';
 import { hashPhotoFile } from '@/core/capture/photoHash';
+import { keepPhoto } from '@/core/capture/photoFiles';
 import { positionNow } from '../../src/core/location/positionNow';
 
 const LONG_EDGE = 1600;
@@ -111,11 +112,15 @@ export default function Photo() {
       const acc = fix?.accuracyM ?? null;
 
       const photoUuid = Crypto.randomUUID();
+      // OUT OF THE CACHE, where Android may delete it before it is sent
+      // (core/capture/photoFiles.ts). The full-size original is not needed.
+      const kept = await keepPhoto(FileSystem, small.uri, photoUuid);
+      void FileSystem.deleteAsync(shot.uri, { idempotent: true }).catch(() => undefined);
       await store!.runAsync(
         `INSERT INTO photo (photo_uuid, session_uuid, item_id, local_path, bytes,
                             sha256, sync_state, captured_at, kind, lat, lon, accuracy_m)
          VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
-        [photoUuid, uuid, isOperator ? null : item!.itemId, small.uri, bytes, sha256,
+        [photoUuid, uuid, isOperator ? null : item!.itemId, kept, bytes, sha256,
          new Date().toISOString(), isOperator ? 'OPERATOR' : 'ITEM', lat, lon, acc],
       );
 

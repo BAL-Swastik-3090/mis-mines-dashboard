@@ -24,8 +24,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  BatteryCharging, BatteryMedium, Check, ChevronLeft, Clock, Loader2,
-  MapPin, Plug, RefreshCw, Smartphone, X,
+  Ban, BatteryCharging, BatteryMedium, Check, ChevronLeft, Clock, Loader2,
+  MapPin, Plug, RefreshCw, ShieldCheck, Smartphone, X,
 } from "lucide-react";
 import api from "@/lib/api";
 import Explainer from "@/components/hoto/Explainer";
@@ -99,8 +99,8 @@ const STATUS_STYLE: Record<Status, string> = {
 const STATUS_WORD: Record<Status, string> = {
   PENDING: "waiting",
   ACTIVE: "allowed",
-  SUSPENDED: "paused",
-  REVOKED: "revoked",
+  SUSPENDED: "blocked",
+  REVOKED: "retired",
   REJECTED: "turned down",
 };
 
@@ -633,6 +633,8 @@ function DeviceDetail({ code, onBack, onNotice }:
             </p>
           </header>
 
+          <Access d={d} onChanged={async (m) => { onNotice(m); await load(); }} />
+
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Tile title="Last seen" value={ago(d.last_seen_at)} sub={fmt(d.last_seen_at)} icon={Clock} />
             <Tile title="Last position" value={ago(d.last_location_at)}
@@ -748,6 +750,184 @@ function DeviceDetail({ code, onBack, onNotice }:
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * Blocking a tablet, letting it back, and retiring it (asked for 16 Nov).
+ *
+ * BLOCK is the everyday one and is undoable: the tablet is refused from its
+ * next call, is told why, keeps every handover it holds, and sends them the
+ * moment it is unblocked. RETIRE is for a tablet that is gone: its credential
+ * is erased and anything it still holds can never be sent, so it asks for the
+ * tablet's code typed out, the way deleting anything important should.
+ */
+function Access({ d, onChanged }: { d: any; onChanged: (message: string) => Promise<void> }) {
+  const [mode, setMode] = useState<null | "block" | "unblock" | "retire">(null);
+  const [reason, setReason] = useState("");
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const code: string = d.device_code;
+  const close = () => { setMode(null); setReason(""); setTyped(""); setError(null); };
+
+  const run = async (what: "block" | "unblock" | "revoke", message: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.post(`/hoto/admin/devices/${code}/${what}`, { reason: reason.trim() || undefined });
+      close();
+      await onChanged(message);
+    } catch (e: any) {
+      setError(e?.response?.data?.detail?.problems?.join(" ")
+               ?? e?.response?.data?.detail?.message ?? "That did not work.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (d.status === "REVOKED") {
+    return (
+      <div className="rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-900 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200">
+        Retired{d.revoked_by ? ` by ${d.revoked_by}` : ""}{d.revoked_at ? ` on ${fmt(d.revoked_at)}` : ""}.
+        It cannot send anything again. To use this tablet again it has to register afresh.
+        <History remarks={d.remarks} />
+      </div>
+    );
+  }
+  if (d.status !== "ACTIVE" && d.status !== "SUSPENDED") return null;
+
+  const blocked = d.status === "SUSPENDED";
+  return (
+    <section className={`space-y-3 rounded-md border p-4 ${blocked
+      ? "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30" : ""}`}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-1">
+          <h2 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-muted-foreground">
+            {blocked ? <Ban className="h-4 w-4 text-amber-700" /> : <ShieldCheck className="h-4 w-4 text-emerald-700" />}
+            Access
+          </h2>
+          {blocked ? (
+            <p className="text-sm">
+              <span className="font-semibold">Blocked.</span>{" "}
+              {d.decided_reason ? <>Reason given: &ldquo;{d.decided_reason}&rdquo;. </> : null}
+              The tablet is refused and shows this reason. It keeps everything it holds and sends it once unblocked.
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Allowed to send. Last sent {ago(d.last_sync_at)}.
+            </p>
+          )}
+        </div>
+        {mode === null && (
+          <div className="flex flex-wrap gap-2">
+            {blocked ? (
+              <button onClick={() => setMode("unblock")}
+                      className="rounded-md bg-emerald-700 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-800">
+                Unblock
+              </button>
+            ) : (
+              <button onClick={() => setMode("block")}
+                      className="inline-flex items-center gap-1 rounded-md border border-amber-400 px-3 py-2 text-sm font-semibold text-amber-900 hover:bg-amber-100 dark:text-amber-200 dark:hover:bg-amber-900/40">
+                <Ban className="h-4 w-4" /> Block this tablet
+              </button>
+            )}
+            <button onClick={() => setMode("retire")}
+                    className="rounded-md border border-red-300 px-3 py-2 text-sm text-red-800 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-950/40">
+              Retire for good&hellip;
+            </button>
+          </div>
+        )}
+      </div>
+
+      {mode === "block" && (
+        <div className="space-y-2 rounded-md border bg-background p-3">
+          <p className="text-sm">
+            <span className="font-semibold">Block {code}?</span> It is refused from its next call
+            (within a few minutes). Nothing on it is lost, and you can unblock it at any time.
+          </p>
+          <label className="block text-sm font-medium" htmlFor="block-reason">
+            Why &mdash; the person holding the tablet is shown this
+          </label>
+          <textarea id="block-reason" value={reason} onChange={(e) => setReason(e.target.value)}
+                    rows={2} maxLength={500} placeholder="e.g. Reported missing from the MAN shed"
+                    className="w-full rounded-md border bg-background px-3 py-2 text-sm" />
+          <div className="flex gap-2">
+            <button disabled={busy || !reason.trim()}
+                    onClick={() => void run("block", `${code} is blocked. It keeps what it holds and sends it once unblocked.`)}
+                    className="rounded-md bg-amber-600 px-3 py-2 text-sm font-semibold text-white hover:bg-amber-700 disabled:opacity-50">
+              {busy ? "Blocking\u2026" : reason.trim() ? `Block ${code}` : "Say why first"}
+            </button>
+            <button onClick={close} className="rounded-md border px-3 py-2 text-sm hover:bg-accent">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {mode === "unblock" && (
+        <div className="space-y-2 rounded-md border bg-background p-3">
+          <p className="text-sm">
+            <span className="font-semibold">Unblock {code}?</span> It is let back in with the
+            credential it already has; anything waiting on it goes at its next send.
+          </p>
+          <label className="block text-sm font-medium" htmlFor="unblock-reason">Note (optional)</label>
+          <input id="unblock-reason" value={reason} onChange={(e) => setReason(e.target.value)}
+                 maxLength={500} placeholder="e.g. Found and checked"
+                 className="w-full rounded-md border bg-background px-3 py-2 text-sm" />
+          <div className="flex gap-2">
+            <button disabled={busy} onClick={() => void run("unblock", `${code} is unblocked.`)}
+                    className="rounded-md bg-emerald-700 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-50">
+              {busy ? "Unblocking\u2026" : `Unblock ${code}`}
+            </button>
+            <button onClick={close} className="rounded-md border px-3 py-2 text-sm hover:bg-accent">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {mode === "retire" && (
+        <div className="space-y-2 rounded-md border border-red-300 bg-background p-3 dark:border-red-800">
+          <p className="text-sm text-red-900 dark:text-red-200">
+            <span className="font-semibold">Retire {code} for good?</span> Its credential is erased and
+            this cannot be undone. Anything it holds that has not been sent can never be sent; it
+            last sent {ago(d.last_sync_at)}. To use it again it must register afresh and be approved.
+            For a tablet that may turn up, block it instead.
+          </p>
+          <label className="block text-sm font-medium" htmlFor="retire-reason">Why</label>
+          <input id="retire-reason" value={reason} onChange={(e) => setReason(e.target.value)}
+                 maxLength={500} placeholder="e.g. Stolen, reported to security"
+                 className="w-full rounded-md border bg-background px-3 py-2 text-sm" />
+          <label className="block text-sm font-medium" htmlFor="retire-code">
+            Type <span className="font-mono">{code}</span> to confirm
+          </label>
+          <input id="retire-code" value={typed} onChange={(e) => setTyped(e.target.value)}
+                 autoComplete="off" className="w-full rounded-md border bg-background px-3 py-2 font-mono text-sm" />
+          <div className="flex gap-2">
+            <button disabled={busy || !reason.trim() || typed.trim().toUpperCase() !== code}
+                    onClick={() => void run("revoke", `${code} is retired.`)}
+                    className="rounded-md bg-red-700 px-3 py-2 text-sm font-semibold text-white hover:bg-red-800 disabled:opacity-50">
+              {busy ? "Retiring\u2026" : `Retire ${code}`}
+            </button>
+            <button onClick={close} className="rounded-md border px-3 py-2 text-sm hover:bg-accent">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {error && <p className="text-sm text-red-700 dark:text-red-300">{error}</p>}
+      <History remarks={d.remarks} />
+    </section>
+  );
+}
+
+/** Who did what to this tablet, oldest first: the remarks, one line each. */
+function History({ remarks }: { remarks: string | null }) {
+  const lines = (remarks ?? "").split(" | ").map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) return null;
+  return (
+    <details className="text-xs text-muted-foreground">
+      <summary className="cursor-pointer select-none">History ({lines.length})</summary>
+      <ul className="mt-1 list-disc space-y-0.5 pl-5">
+        {lines.map((l, i) => <li key={i}>{l}</li>)}
+      </ul>
+    </details>
   );
 }
 

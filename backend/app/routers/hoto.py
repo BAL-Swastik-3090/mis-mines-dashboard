@@ -826,6 +826,26 @@ def revoke_device(device_code: str, request: Request, payload: dict,
                     payload.get("reason") or "")
 
 
+@router.post("/admin/devices/{device_code}/block")
+def block_device(device_code: str, request: Request, payload: dict,
+                 db: Session = Depends(get_minehub_db)) -> dict:
+    """Refuse a tablet for now -- mislaid, misused, under question.
+
+    Undone by unblock. The tablet keeps its credential and everything it holds,
+    and sends it once let back in. For a tablet that is gone for good, revoke.
+    """
+    actor = _admin_guard(request, db)
+    return _devices(dvc.block, db, device_code, actor, payload.get("reason") or "")
+
+
+@router.post("/admin/devices/{device_code}/unblock")
+def unblock_device(device_code: str, request: Request, payload: dict,
+                   db: Session = Depends(get_minehub_db)) -> dict:
+    """Let a blocked tablet back in."""
+    actor = _admin_guard(request, db)
+    return _devices(dvc.unblock, db, device_code, actor, payload.get("reason"))
+
+
 @router.post("/admin/devices/{device_code}/approve")
 def approve_device(device_code: str, request: Request, payload: dict,
                    db: Session = Depends(get_minehub_db)) -> dict:
