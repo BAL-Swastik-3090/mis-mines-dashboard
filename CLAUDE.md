@@ -130,6 +130,38 @@ A long-running `pg_dump` means wait for it, not retry into it. And cancel
 only sessions you started: `pg_cancel_backend` on somebody else's backup is
 how a restore goes missing.
 
+## A migration that carries its own COMMIT cannot be rehearsed
+
+The safe way to try a migration is to run it inside a transaction and roll
+back. That only works if the file leaves transaction control alone.
+
+**Check before you trust a rehearsal:**
+
+```bash
+grep -nE '^\s*(BEGIN|COMMIT|END)\s*;' minehub/migrations/*.sql
+```
+
+On 16 November 2026 four of the twelve HOTO migrations — 119, 120, 121 and
+122 — carried their own `BEGIN; … COMMIT;`. Run inside an outer transaction,
+119's COMMIT ended it, and **114 through 119 became permanent**. The
+`rollback()` at the end covered only 123 to 125. The run was reported as
+"rehearsed and rolled back, production unchanged". It was a partial live
+apply, and the proof it had happened was the next run reading 179 tables
+where it expected 167.
+
+Nothing was damaged — the files are idempotent and the set was going in
+anyway — but the assurance was false, which is worse than having no
+assurance.
+
+So: grep for transaction control first. If a file has it, either rehearse it
+on a scratch database rather than in a transaction, or accept that running it
+IS applying it and say so.
+
+**And check the end state by what the files actually do**, not by column names
+you expect. Four of the "missing" columns in that set were missing only from
+the guess: the migration adds `bulk_answered` and `kind`, not
+`taken_by_operator_id`. Read the `ADD COLUMN` lines, then look for those.
+
 ## Deploying: replace the tree, never extract over it
 
 `tar -xf` into the live directory adds and overwrites. It never DELETES, so a
