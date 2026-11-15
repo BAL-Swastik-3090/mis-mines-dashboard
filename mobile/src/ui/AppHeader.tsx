@@ -15,12 +15,13 @@
  */
 
 import type { ReactNode } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { NativeStackHeaderProps } from '@react-navigation/native-stack';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LANGS, useT } from '@/i18n';
 import { usePanel } from './panels';
+import { LOGO, LOGO_RATIO } from './brand';
 
 export function AppHeader({ navigation, options, back }: NativeStackHeaderProps) {
   const insets = useSafeAreaInsets();
@@ -33,8 +34,11 @@ export function AppHeader({ navigation, options, back }: NativeStackHeaderProps)
             <MaterialCommunityIcons name="arrow-left" size={28} color="#fff" />
           </HeaderButton>
         ) : (
-          <View style={styles.mark} accessibilityLabel="Kaliapani HOTO">
-            <MaterialCommunityIcons name="hard-hat" size={24} color="#16202b" />
+          // The company's mark on its own white plate: the logo is drawn for a
+          // light ground, and its blue letters would sink into the dark bar.
+          <View style={styles.mark}>
+            <Image source={LOGO} style={styles.logo} resizeMode="contain"
+                   accessibilityLabel="Balasore Alloys Limited" />
           </View>
         )}
         <Text style={styles.title} numberOfLines={1}>{options.title}</Text>
@@ -82,8 +86,9 @@ const styles = StyleSheet.create({
   bar: { backgroundColor: '#16202b' },
   row: { minHeight: 64, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, gap: 6 },
   title: { flex: 1, color: '#fff', fontSize: 20, fontWeight: '700', marginLeft: 4 },
-  mark: { width: 40, height: 40, borderRadius: 10, backgroundColor: '#f2b632', marginLeft: 8,
-          marginRight: 4, alignItems: 'center', justifyContent: 'center' },
+  mark: { height: 44, borderRadius: 10, backgroundColor: '#fff', marginLeft: 8, marginRight: 6,
+          paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
+  logo: { height: 28, width: 28 * LOGO_RATIO },
   actions: { flexDirection: 'row', alignItems: 'center', gap: 2 },
   button: { minWidth: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center',
             paddingHorizontal: 4 },

@@ -14,7 +14,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import {
-  Animated, Easing, Modal, Pressable, ScrollView, StyleSheet, Text, View,
+  Animated, Easing, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View,
 } from 'react-native';
 import { router, usePathname } from 'expo-router';
 import Constants from 'expo-constants';
@@ -24,6 +24,7 @@ import { LANGS, useT } from '@/i18n';
 import { useCapture } from './useCapture';
 import { useReducedMotion } from './motion';
 import { usePanel } from './panels';
+import { LOGO, LOGO_RATIO } from './brand';
 import * as session from '@/core/capture/session';
 import { draftSummaries } from '@/core/capture/drafts';
 import { doneOnTablet } from '@/core/capture/history';
@@ -92,7 +93,8 @@ export function AppMenu({ visible, onClose }: { visible: boolean; onClose: () =>
           <View style={[styles.top, { paddingTop: insets.top + 18 }]}>
             <View style={styles.topRow}>
               <View style={styles.mark}>
-                <MaterialCommunityIcons name="hard-hat" size={26} color="#16202b" />
+                <Image source={LOGO} style={styles.logo} resizeMode="contain"
+                       accessibilityLabel="Balasore Alloys Limited" />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.app}>Kaliapani HOTO</Text>
@@ -188,8 +190,9 @@ const styles = StyleSheet.create({
 
   top: { backgroundColor: '#16202b', paddingHorizontal: 18, paddingBottom: 16, gap: 14 },
   topRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  mark: { width: 44, height: 44, borderRadius: 11, backgroundColor: '#f2b632',
+  mark: { height: 52, borderRadius: 11, backgroundColor: '#fff', paddingHorizontal: 10,
           alignItems: 'center', justifyContent: 'center' },
+  logo: { height: 32, width: 32 * LOGO_RATIO },
   app: { color: '#fff', fontSize: 20, fontWeight: '800' },
   device: { color: '#aeb8c4', fontSize: 14, marginTop: 1 },
   close: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#2c3a48',

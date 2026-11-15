@@ -40,6 +40,9 @@ TABLES = {
     'src/ui/Guide.tsx': ['GUIDE', 'STEPS'],
     'src/ui/ItemControl.tsx': ['ANSWER_LABEL'],
     'src/core/capture/session.ts': ['counterpartQuestion'],
+    # The summary of the terms is translated; the full terms stay in English,
+    # which governs (src/legal/terms.ts).
+    'src/legal/terms.ts': ['SUMMARY'],
 }
 
 # Fixed sentences from core that reach a screen through t() or tm().

@@ -12,7 +12,7 @@
  */
 
 import { useCallback, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import Constants from 'expo-constants';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -22,10 +22,13 @@ import { LanguageList } from '@/ui/Guide';
 import { forgetRecorder, rememberedUntil } from '@/core/capture/drafting';
 import type { CachedOperator } from '@/core/capture/masters';
 import { storedBaseUrl, storedCode, storedLabel } from '@/core/sync/enrolment';
+import { useTerms } from '@/legal/acceptance';
+import { LOGO, LOGO_RATIO } from '@/ui/brand';
 
 export default function Settings() {
   const { t } = useT();
   const store = useCapture((s) => s.store);
+  const terms = useTerms((s) => s.accepted);
   const [remembered, setRemembered] = useState<{ who: CachedOperator; until: Date } | null>(null);
   const [device, setDevice] = useState<{ label: string | null; code: string | null; server: string | null }>(
     { label: null, code: null, server: null });
@@ -80,6 +83,33 @@ export default function Settings() {
         <Row label={t('Name')} value={`${device.label ?? t('not set up')}${device.code ? ` · ${device.code}` : ''}`} />
         <Row label={t('Office server')} value={device.server ?? '—'} />
         <Row label={t('App version')} value={Constants.expoConfig?.version ?? '—'} last />
+      </Section>
+
+      <Section icon="information-outline" title={t('About')}>
+        <View style={styles.about}>
+          <Image source={LOGO} style={styles.logo} resizeMode="contain"
+                 accessibilityLabel="Balasore Alloys Limited" />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.company}>Balasore Alloys Limited</Text>
+            <Text style={styles.site}>Kaliapani Chromite Mines · HOTO</Text>
+          </View>
+        </View>
+        <Pressable testID="settings-terms"
+                   style={({ pressed }) => [styles.link, pressed && styles.pressed]}
+                   onPress={() => router.push('/terms')}>
+          <MaterialCommunityIcons name="file-document-outline" size={24} color="#1e5f8a" />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.linkText}>{t('Terms of use')}</Text>
+            {terms && (
+              <Text style={styles.hint}>
+                {t('Accepted on this tablet on {date}, version {v}.',
+                   { date: new Date(terms.at).toLocaleDateString('en-IN',
+                     { day: '2-digit', month: 'short', year: 'numeric' }), v: terms.version })}
+              </Text>
+            )}
+          </View>
+          <MaterialCommunityIcons name="chevron-right" size={24} color="#9aa7b5" />
+        </Pressable>
       </Section>
 
       <Section icon="wrench-outline" title={t('For IT')}>
@@ -140,5 +170,9 @@ const styles = StyleSheet.create({
   rowLabel: { width: 140, fontSize: 14, fontWeight: '700', color: '#5b6a7a' },
   rowValue: { flex: 1, fontSize: 15, color: '#16202b' },
   link: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 56 },
+  about: { flexDirection: 'row', alignItems: 'center', gap: 16, paddingVertical: 4 },
+  logo: { height: 44, width: 44 * LOGO_RATIO },
+  company: { fontSize: 17, fontWeight: '800', color: '#16202b' },
+  site: { fontSize: 14, color: '#5b6a7a' },
   linkText: { flex: 1, fontSize: 16, fontWeight: '600', color: '#16202b' },
 });

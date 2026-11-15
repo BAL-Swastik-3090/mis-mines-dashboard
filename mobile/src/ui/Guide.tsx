@@ -77,6 +77,10 @@ export const GUIDE: Record<string, Page> = {
     'See who is chosen by itself under Filled in by, and forget them when the tablet changes hands.',
     "This tablet's name, the office server and the app version, for IT.",
   ] },
+  '/terms': { title: 'Terms of use', points: [
+    'The rules for using this app and this tablet, and what the app records about the people who use it.',
+    'The summary is in your language. The full terms are in English, and the English text governs.',
+  ] },
   '/sync': { title: 'Still on this tablet', points: [
     'What is still on this tablet, and what the office said about it.',
     'Sync now sends straight away. Otherwise it sends by itself.',

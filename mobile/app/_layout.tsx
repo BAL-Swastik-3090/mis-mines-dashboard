@@ -23,6 +23,8 @@ import { sendFromBackground } from '@/core/sync/background';
 import { useLang, useT } from '@/i18n';
 import { GuideHost } from '@/ui/Guide';
 import { AppHeader } from '@/ui/AppHeader';
+import { TermsScreen } from '@/ui/Terms';
+import { covers, useTerms } from '@/legal/acceptance';
 import { requeueDeviceRefusals } from '@/core/sync/engine';
 import { removeEmptyDraftsWithoutChecklist } from '@/core/capture/session';
 import { httpTransport } from '@/core/sync/transport';
@@ -70,6 +72,11 @@ export default function RootLayout() {
   const loadLang = useLang((s) => s.load);
   // The tablet's language, before the first screen is drawn.
   useEffect(() => { void loadLang(); }, [loadLang]);
+  // Whether these terms of use have been accepted on this tablet.
+  const termsReady = useTerms((s) => s.ready);
+  const accepted = useTerms((s) => s.accepted);
+  const loadTerms = useTerms((s) => s.load);
+  useEffect(() => { void loadTerms(); }, [loadTerms]);
   const [why, setWhy] = useState<string>('');
 
   /**
@@ -126,6 +133,19 @@ export default function RootLayout() {
   // Only once the database is open — a trigger that fires before it is
   // would try to read an outbox that is not there yet.
   useSyncTriggers(state === 'ready');
+
+  // ── TERMS OF USE FIRST ────────────────────────────────────────────────────
+  // Before setting up the device and before any handover: whoever installs the
+  // app accepts its terms, and a new version of them is accepted again.
+  // Nothing new can be captured until this passes. Handovers already on the
+  // tablet keep going to the office meanwhile: they were captured under the
+  // terms in force at the time, and holding them back would only risk them.
+  if (!termsReady) {
+    return <View style={styles.centre}><ActivityIndicator size="large" /></View>;
+  }
+  if (!covers(accepted)) {
+    return <SafeAreaProvider><TermsScreen mode="accept" /></SafeAreaProvider>;
+  }
 
   if (state === 'opening') {
     return (
@@ -185,6 +205,7 @@ export default function RootLayout() {
         <Stack.Screen name="sync" options={{ title: t('Still on this tablet') }} />
         <Stack.Screen name="history" options={{ title: t('Done on this tablet') }} />
         <Stack.Screen name="settings" options={{ title: t('Settings') }} />
+        <Stack.Screen name="terms" options={{ title: t('Terms of use') }} />
         <Stack.Screen name="enrol" options={{ title: t('Set up this device') }} />
       </Stack>
       {/* Drawn once, above every screen: the header buttons only open it. */}
