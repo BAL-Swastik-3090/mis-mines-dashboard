@@ -21,7 +21,7 @@ import Enrol from './enrol';
 import { BACKGROUND_TASK, registerBackgroundSync, useSyncTriggers } from '@/ui/syncTriggers';
 import { sendFromBackground } from '@/core/sync/background';
 import { useLang, useT } from '@/i18n';
-import { HeaderActions } from '@/ui/Guide';
+import { GuideHost, HeaderActions } from '@/ui/Guide';
 import { requeueDeviceRefusals } from '@/core/sync/engine';
 import { removeEmptyDraftsWithoutChecklist } from '@/core/capture/session';
 import { httpTransport } from '@/core/sync/transport';
@@ -187,6 +187,8 @@ export default function RootLayout() {
         <Stack.Screen name="history" options={{ title: t('Done on this tablet') }} />
         <Stack.Screen name="enrol" options={{ title: t('Set up this device') }} />
       </Stack>
+      {/* Drawn once, above every screen: the header buttons only open it. */}
+      <GuideHost />
     </SafeAreaProvider>
   );
 }

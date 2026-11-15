@@ -10,13 +10,24 @@
  * Written as plain sentences, translated like every other screen.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import {
   Animated, Easing, Modal, Pressable, ScrollView, StyleSheet, Text, View,
 } from 'react-native';
 import { usePathname } from 'expo-router';
+import { create } from 'zustand';
 import { LANGS, useLang, useT } from '@/i18n';
 import { useReducedMotion } from './motion';
+
+/**
+ * Which panel is open, kept outside the header, and the panels drawn once at
+ * the root (GuideHost). A new language retitles every screen and the header is
+ * drawn again: state kept in it was lost, and picking a language inside the
+ * guide closed the guide. Found on the tablet, 16 Nov. Drawn in the header,
+ * every screen in the stack would also have opened its own copy.
+ */
+const usePanel = create<{ panel: null | 'guide' | 'lang'; open: (p: null | 'guide' | 'lang') => void }>()(
+  (set) => ({ panel: null, open: (panel) => set({ panel }) }));
 
 interface Page { title: string; points: string[] }
 
@@ -85,7 +96,7 @@ const STEPS = [
 /** The language chip and the "?" for the header. */
 export function HeaderActions() {
   const { lang } = useT();
-  const [panel, setPanel] = useState<null | 'guide' | 'lang'>(null);
+  const setPanel = usePanel((s) => s.open);
   const short = LANGS.find((l) => l.code === lang)?.short ?? 'EN';
   return (
     <View style={styles.actions}>
@@ -97,9 +108,19 @@ export function HeaderActions() {
                  accessibilityLabel="Guide">
         <Text style={styles.helpText}>?</Text>
       </Pressable>
+    </View>
+  );
+}
+
+/** The guide and the language menu, drawn once beside the stack. */
+export function GuideHost() {
+  const panel = usePanel((s) => s.panel);
+  const setPanel = usePanel((s) => s.open);
+  return (
+    <>
       <GuidePanel visible={panel === 'guide'} onClose={() => setPanel(null)} />
       <LanguageMenu visible={panel === 'lang'} onClose={() => setPanel(null)} />
-    </View>
+    </>
   );
 }
 

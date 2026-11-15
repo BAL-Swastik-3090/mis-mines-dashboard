@@ -186,9 +186,12 @@ def ui_text(k):
 
 def collect():
     keys = []
+    shown = set()   # written inside t() by hand: shown, whatever it looks like
     for p in source_files():
         s = io.open(p, encoding='utf-8').read()
-        keys += from_calls(s)
+        found = from_calls(s)
+        shown.update(found)
+        keys += found
         keys += re.findall(r'excludedBecause="([^"]+)"', s)
     for rel, names in TABLES.items():
         s = io.open(os.path.join(ROOT, rel), encoding='utf-8').read()
@@ -206,7 +209,10 @@ def collect():
     keys += CORE
     seen, out = set(), []
     for k in keys:
-        if ui_text(k) and k not in seen:
+        # A table holds codes beside its labels, so only its text-like
+        # literals count. A word somebody wrapped in t() is shown, even one
+        # in capitals -- "UNFINISHED" was missed that way on 16 Nov.
+        if (ui_text(k) or (k in shown and k.strip() and not k.startswith('/'))) and k not in seen:
             seen.add(k)
             out.append(k)
     return out

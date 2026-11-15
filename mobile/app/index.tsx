@@ -265,7 +265,7 @@ export default function Home() {
       {drafts.length > 0 && (
         <View style={styles.block}>
           <View style={styles.blockHead}>
-            <Text style={styles.blockTitle}>{t('UNFINISHED')}</Text>
+            <Text style={styles.blockTitle}>{t('Unfinished').toUpperCase()}</Text>
             <Text style={styles.blockCount}>{drafts.length}</Text>
           </View>
           {drafts.map((d, i) => {

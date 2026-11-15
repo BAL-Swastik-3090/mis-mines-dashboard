@@ -156,7 +156,7 @@ export default function PickMachine() {
             </View>
             <View style={styles.flags}>
               {a.has_critical_defect === 1 && (
-                <Text style={styles.held}>{t('HELD')}</Text>
+                <Text style={styles.held}>{t('Held').toUpperCase()}</Text>
               )}
               {a.open_defect_count > 0 && (
                 <Text style={styles.defects}>
