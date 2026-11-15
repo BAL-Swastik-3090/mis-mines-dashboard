@@ -18,6 +18,18 @@ const nextConfig: NextConfig = {
   // source, so it stays gone if the app is ever served some other way.
   poweredByHeader: false,
 
+  // ── UPLOADS LARGER THAN 10 MB ───────────────────────────────────────────
+  // Requests reach the backend through the /api rewrite below, and Next.js
+  // keeps only the first 10 MB of a proxied body by default. The tablet app's
+  // APK is about 43 MB, so publishing it from HOTO > App was cut off and the
+  // backend saw a broken upload (16 Nov). The backend sets its own limits per
+  // endpoint (200 MB for the APK, 15 MB for a machine's papers), so this only
+  // stops the proxy from deciding first. In production nginx's
+  // client_max_body_size must allow the same.
+  experimental: {
+    proxyClientMaxBodySize: "200mb",
+  },
+
   // ── SECURITY HEADERS, SET BY THE APP RATHER THAN BY nginx ───────────────
   // The obvious home for these is the site's nginx server block, and that is
   // where they were written first. They live here instead because /etc/nginx
