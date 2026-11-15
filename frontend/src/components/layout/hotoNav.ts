@@ -16,7 +16,7 @@
  * end rather than in the path of daily work.
  */
 
-import { BookOpen, CalendarRange, CircleAlert, Cpu, Printer, SquareCheck }
+import { BookOpen, CalendarRange, CircleAlert, Cpu, Printer, Smartphone, SquareCheck }
   from "lucide-react";
 import type { AppPage } from "@/contexts/useAppPage";
 
@@ -34,6 +34,7 @@ export const HOTO_TABS: HotoTab[] = [
   { id: "hoto-checklists", label: "Checklists",   icon: SquareCheck   },
   { id: "hoto-devices",    label: "Devices",      icon: Cpu           },
   { id: "hoto-stickers",   label: "Cab Stickers", icon: Printer       },
+  { id: "hoto-app",        label: "App",          icon: Smartphone    },
 ];
 
 export const HOTO_PAGES: AppPage[] = HOTO_TABS.map((t) => t.id);

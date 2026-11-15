@@ -16,7 +16,7 @@ import { type AppPage } from "@/contexts/useAppPage";
 /** Screens with no period of their own: what they show is "now" or "all". */
 const DATELESS_PAGES = new Set<AppPage>([
   "hoto-board", "hoto-defects", "hoto-checklists", "hoto-devices",
-  "hoto-stickers",
+  "hoto-stickers", "hoto-app",
 ]);
 
 /** True when the selected end-date is today → sensor data is live. */

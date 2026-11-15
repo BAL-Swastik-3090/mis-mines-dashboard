@@ -22,6 +22,7 @@ for the month.
 """
 import io
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -50,6 +51,22 @@ env.update({
     "EXPO_PUBLIC_HOTO_API": os.environ.get("HOTO_API", "http://192.168.16.157:8990"),
     "NODE_ENV": "production",
 })
+
+# ── the version, from app.json ──────────────────────────────────────────────
+# android/ was generated once by `expo prebuild`, which wrote the version into
+# build.gradle and never again: every build since said 0.1.0, build 1, so the
+# dashboard's app history could not tell them apart and a phone could not tell
+# an update from a reinstall. app.json is where the version is raised; it is
+# copied into build.gradle here, every build.
+app_json = json.load(io.open(os.path.join(MOBILE, "app.json"), encoding="utf-8"))["expo"]
+version_name = app_json["version"]
+version_code = int(app_json["android"]["versionCode"])
+gradle_file = os.path.join(ANDROID, "app", "build.gradle")
+gradle = io.open(gradle_file, encoding="utf-8").read()
+gradle = re.sub(r"versionCode \d+", f"versionCode {version_code}", gradle, count=1)
+gradle = re.sub(r'versionName "[^"]*"', f'versionName "{version_name}"', gradle, count=1)
+io.open(gradle_file, "w", encoding="utf-8").write(gradle)
+print(f"version {version_name}, build {version_code}", flush=True)
 
 with open(os.path.join(ANDROID, "local.properties"), "w") as f:
     f.write("sdk.dir=" + SDK.replace("\\", "\\\\") + "\n")

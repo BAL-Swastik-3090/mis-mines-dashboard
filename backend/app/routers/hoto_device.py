@@ -31,8 +31,26 @@ from app.services import hoto_capture as cap
 from app.services import hoto_devices as dev
 from app.services import hoto_masters as svc
 from app.services import hoto_photos as pho
+from app.services import hoto_app as appr
+from fastapi.responses import FileResponse
 
 router = APIRouter(prefix="/api/hoto/device", tags=["HOTO device"])
+
+
+@router.get("/app/{rid}")
+def app_by_link(rid: str, exp: int = 0, sig: str = ""):
+    """The tablet app, by a signed link from the dashboard (its QR code).
+
+    Under this prefix because a phone being set up has no session and no
+    device token yet. Nothing is served without a signature from this server's
+    key that has not expired -- see services/hoto_app.py."""
+    try:
+        appr.check_link(rid, exp, sig)
+        path, name = appr.file_for(rid)
+    except appr.AppError as e:
+        raise HTTPException(e.status, {"message": e.problems[0]})
+    return FileResponse(path, filename=name,
+                        media_type="application/vnd.android.package-archive")
 
 
 def _device(x_hoto_device: str | None = Header(default=None),

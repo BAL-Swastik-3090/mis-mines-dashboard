@@ -33,6 +33,8 @@ from app.services import hoto_defects as dfx
 from app.services import hoto_board as brd
 from app.services import hoto_photos as pho
 from app.services import hoto_devices as dvc
+from app.services import hoto_app as appr
+from fastapi.responses import FileResponse
 
 router = APIRouter(prefix="/api/hoto", tags=["HOTO"])
 
@@ -824,6 +826,70 @@ def revoke_device(device_code: str, request: Request, payload: dict,
     actor = _admin_guard(request, db)
     return _devices(dvc.revoke, db, device_code, actor,
                     payload.get("reason") or "")
+
+
+# ── the app itself: versions, what changed, the files (16 Nov) ──────────────
+
+APK_TYPE = "application/vnd.android.package-archive"
+
+
+def _app(fn, *a, **kw):
+    try:
+        return fn(*a, **kw)
+    except appr.AppError as e:
+        raise HTTPException(e.status, {"message": "Refused.", "problems": e.problems})
+
+
+@router.get("/app/releases")
+def app_releases(request: Request, db: Session = Depends(get_minehub_db)) -> dict:
+    """Every version of the tablet app, newest first, and which is current."""
+    _guard(request, db)
+    return appr.listing()
+
+
+@router.get("/app/releases/{rid}/download")
+def app_download(rid: str, request: Request, db: Session = Depends(get_minehub_db)):
+    """The APK, for anyone who can see HOTO. Withdrawn versions only for admins."""
+    emp = _guard(request, db)
+    is_admin = access_svc.has_permission(db, emp, ADMIN_PERMISSION)
+    path, name = _app(appr.file_for, rid, allow_withdrawn=is_admin)
+    return FileResponse(path, filename=name, media_type=APK_TYPE)
+
+
+@router.post("/app/releases/{rid}/link")
+def app_share_link(rid: str, request: Request, db: Session = Depends(get_minehub_db)) -> dict:
+    """A seven-day link a phone can open without signing in (shown as a QR code)."""
+    _guard(request, db)
+    return _app(appr.share_link, rid)
+
+
+@router.post("/admin/app/releases")
+async def app_upload(request: Request, file: UploadFile = File(...), notes: str = Form(""),
+                     db: Session = Depends(get_minehub_db)) -> dict:
+    """Publish a new version. Its version and build are read from the APK."""
+    actor = _admin_guard(request, db)
+    payload = await file.read()
+    return _app(appr.upload, payload, file.filename, notes, actor)
+
+
+@router.post("/admin/app/releases/{rid}/current")
+def app_make_current(rid: str, request: Request, db: Session = Depends(get_minehub_db)) -> dict:
+    actor = _admin_guard(request, db)
+    return _app(appr.make_current, rid, actor)
+
+
+@router.post("/admin/app/releases/{rid}/withdraw")
+def app_withdraw(rid: str, request: Request, payload: dict,
+                 db: Session = Depends(get_minehub_db)) -> dict:
+    actor = _admin_guard(request, db)
+    return _app(appr.withdraw, rid, actor, payload.get("reason"))
+
+
+@router.post("/admin/app/releases/{rid}/notes")
+def app_edit_notes(rid: str, request: Request, payload: dict,
+                   db: Session = Depends(get_minehub_db)) -> dict:
+    actor = _admin_guard(request, db)
+    return _app(appr.edit_notes, rid, actor, payload.get("notes"))
 
 
 @router.post("/admin/devices/{device_code}/block")

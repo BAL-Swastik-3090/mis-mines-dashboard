@@ -94,6 +94,9 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   // Printing the cab stickers is setting the fleet up, which is the same
   // job as editing a checklist.
   "hoto-stickers": ["hoto.admin"],
+  // Installing the app is for anyone in HOTO; publishing a version is checked
+  // per action on the server (hoto.admin).
+  "hoto-app": ["hoto.view", "hoto.capture", "hoto.admin"],
   "minehub": ["platform.registry.browse"],
   "manpower": ["platform.operators.view"],
   "operations": ["ops.shift.view"],
@@ -190,6 +193,8 @@ const LANDING_RANK: Record<AppPage, number> = {
   "hoto-devices": 88,
   // Next to Devices: both are things done once when the fleet is set up.
   "hoto-stickers": 89,
+  // After the stickers: the last thing set up for a new device.
+  "hoto-app": 89,
   // Above MIS, where the mine asked for it: the one-screen management view
   // comes before the operational detail it summarises.
   "executive-summary": 5,
