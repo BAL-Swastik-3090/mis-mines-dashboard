@@ -21,7 +21,8 @@ import Enrol from './enrol';
 import { BACKGROUND_TASK, registerBackgroundSync, useSyncTriggers } from '@/ui/syncTriggers';
 import { sendFromBackground } from '@/core/sync/background';
 import { useLang, useT } from '@/i18n';
-import { GuideHost, HeaderActions } from '@/ui/Guide';
+import { GuideHost } from '@/ui/Guide';
+import { AppHeader } from '@/ui/AppHeader';
 import { requeueDeviceRefusals } from '@/core/sync/engine';
 import { removeEmptyDraftsWithoutChecklist } from '@/core/capture/session';
 import { httpTransport } from '@/core/sync/transport';
@@ -165,11 +166,9 @@ export default function RootLayout() {
           default was a fade that made moving on and going back look the
           same. The background is set here too, so nothing flashes white
           between two grey screens mid-slide. */}
-      <Stack screenOptions={{ headerStyle: { backgroundColor: '#16202b' },
-                              headerTintColor: '#fff',
-                              headerTitleStyle: { fontSize: 18 },
-                              // Language and the guide, on every screen (gaps G11, G12).
-                              headerRight: () => <HeaderActions />,
+      <Stack screenOptions={{ // Drawn by the app, not Android: the native bar cancelled
+                              // a finger's press on EN and ? (see AppHeader).
+                              header: (props) => <AppHeader {...props} />,
                               animation: 'slide_from_right',
                               contentStyle: { backgroundColor: '#f3f6f9' } }}>
         <Stack.Screen name="index" options={{ title: t('Handover') }} />
@@ -185,6 +184,7 @@ export default function RootLayout() {
                                  animation: 'slide_from_bottom' }} />
         <Stack.Screen name="sync" options={{ title: t('Still on this tablet') }} />
         <Stack.Screen name="history" options={{ title: t('Done on this tablet') }} />
+        <Stack.Screen name="settings" options={{ title: t('Settings') }} />
         <Stack.Screen name="enrol" options={{ title: t('Set up this device') }} />
       </Stack>
       {/* Drawn once, above every screen: the header buttons only open it. */}

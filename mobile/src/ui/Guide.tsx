@@ -5,7 +5,8 @@
  * is for and what to do on it, then the five steps of a handover, so somebody
  * holding the tablet for the first time is never more than one tap from being
  * told. The language chip beside it switches the whole app in one tap; the
- * panel lists the languages too, each written in itself.
+ * panel lists the languages too, each written in itself. The buttons are in
+ * AppHeader; the panels, with the menu, are drawn once by GuideHost.
  *
  * Written as plain sentences, translated like every other screen.
  */
@@ -15,19 +16,10 @@ import {
   Animated, Easing, Modal, Pressable, ScrollView, StyleSheet, Text, View,
 } from 'react-native';
 import { usePathname } from 'expo-router';
-import { create } from 'zustand';
 import { LANGS, useLang, useT } from '@/i18n';
 import { useReducedMotion } from './motion';
-
-/**
- * Which panel is open, kept outside the header, and the panels drawn once at
- * the root (GuideHost). A new language retitles every screen and the header is
- * drawn again: state kept in it was lost, and picking a language inside the
- * guide closed the guide. Found on the tablet, 16 Nov. Drawn in the header,
- * every screen in the stack would also have opened its own copy.
- */
-const usePanel = create<{ panel: null | 'guide' | 'lang'; open: (p: null | 'guide' | 'lang') => void }>()(
-  (set) => ({ panel: null, open: (panel) => set({ panel }) }));
+import { usePanel } from './panels';
+import { AppMenu } from './AppMenu';
 
 interface Page { title: string; points: string[] }
 
@@ -38,6 +30,7 @@ export const GUIDE: Record<string, Page> = {
     'Unfinished handovers are listed with how far they got. Tap one to carry on, or Discard to throw it away.',
     'Start a handover begins a new one.',
     'Done on this tablet shows which machines were handed over, and who filled each one in.',
+    'The menu at the top right opens every part of the app: home, the history, sending, the guide, language and settings.',
   ] },
   '/capture/machine': { title: 'Which machine', points: [
     'Choose the kind: taking over, handing over, or a mid-shift check.',
@@ -79,6 +72,11 @@ export const GUIDE: Record<string, Page> = {
     'Tap a name under Filled in by to see only that person\'s handovers.',
     'Each one says whether it has reached the office.',
   ] },
+  '/settings': { title: 'Settings', points: [
+    'Choose the language for this tablet.',
+    'See who is chosen by itself under Filled in by, and forget them when the tablet changes hands.',
+    "This tablet's name, the office server and the app version, for IT.",
+  ] },
   '/sync': { title: 'Still on this tablet', points: [
     'What is still on this tablet, and what the office said about it.',
     'Sync now sends straight away. Otherwise it sends by itself.',
@@ -93,38 +91,20 @@ const STEPS = [
   'Confirm: read it through and confirm. It is saved on the tablet and sent by itself.',
 ];
 
-/** The language chip and the "?" for the header. */
-export function HeaderActions() {
-  const { lang } = useT();
-  const setPanel = usePanel((s) => s.open);
-  const short = LANGS.find((l) => l.code === lang)?.short ?? 'EN';
-  return (
-    <View style={styles.actions}>
-      <Pressable testID="lang-open" hitSlop={8} style={styles.chip} onPress={() => setPanel('lang')}
-                 accessibilityLabel="Language">
-        <Text style={styles.chipText}>{short}</Text>
-      </Pressable>
-      <Pressable testID="guide-open" hitSlop={8} style={styles.help} onPress={() => setPanel('guide')}
-                 accessibilityLabel="Guide">
-        <Text style={styles.helpText}>?</Text>
-      </Pressable>
-    </View>
-  );
-}
-
-/** The guide and the language menu, drawn once beside the stack. */
+/** The menu, the guide and the language list, drawn once beside the stack. */
 export function GuideHost() {
   const panel = usePanel((s) => s.panel);
   const setPanel = usePanel((s) => s.open);
   return (
     <>
+      <AppMenu visible={panel === 'menu'} onClose={() => setPanel(null)} />
       <GuidePanel visible={panel === 'guide'} onClose={() => setPanel(null)} />
       <LanguageMenu visible={panel === 'lang'} onClose={() => setPanel(null)} />
     </>
   );
 }
 
-function LanguageList({ onPicked }: { onPicked?: () => void }) {
+export function LanguageList({ onPicked }: { onPicked?: () => void }) {
   const { lang } = useT();
   const setLang = useLang((s) => s.setLang);
   return (

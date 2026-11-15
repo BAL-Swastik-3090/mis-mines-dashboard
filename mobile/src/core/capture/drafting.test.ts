@@ -1,7 +1,7 @@
 import { openTestStore, seed, type TestStore } from './testStore';
 import * as masters from './masters';
 import * as session from './session';
-import { discardDraft, rememberedRecorder } from './drafting';
+import { discardDraft, forgetRecorder, rememberedRecorder, rememberedUntil } from './drafting';
 import type { ChecklistItem } from '../evaluation';
 
 let store: TestStore;
@@ -96,5 +96,22 @@ describe('who usually fills them in (G4)', () => {
 
   it('remembers nobody on a tablet nobody has used', async () => {
     expect(await rememberedRecorder(store)).toBeNull();
+  });
+
+  it('says until when, so Settings can tell the supervisor', async () => {
+    await confirmed(U1, six, '4102');
+    const r = await rememberedUntil(store, new Date(2026, 10, 16, 9, 0));
+    expect(r?.who.name).toBe('SUNIL BEHERA');
+    expect(r?.until.getTime()).toBe(new Date(2026, 10, 16, 18, 0).getTime());
+  });
+
+  it('forgets on request, when the tablet changes hands', async () => {
+    await confirmed(U1, six, '4102');
+    await forgetRecorder(store, new Date(2026, 10, 16, 9, 0));
+    expect(await rememberedRecorder(store, new Date(2026, 10, 16, 9, 5))).toBeNull();
+    // ...and the next supervisor to fill one in is remembered as before.
+    await confirmed(U2, new Date(2026, 10, 16, 10, 0), '4102');
+    expect((await rememberedRecorder(store, new Date(2026, 10, 16, 10, 5)))?.name)
+      .toBe('SUNIL BEHERA');
   });
 });

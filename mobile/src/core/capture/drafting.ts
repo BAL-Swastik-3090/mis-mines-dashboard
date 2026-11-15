@@ -83,12 +83,32 @@ export async function rememberRecorder(
 export async function rememberedRecorder(
   store: Store, now: Date = new Date(),
 ): Promise<CachedOperator | null> {
+  return (await rememberedUntil(store, now))?.who ?? null;
+}
+
+/** The same, with the moment the tablet stops filling them in by itself. */
+export async function rememberedUntil(
+  store: Store, now: Date = new Date(),
+): Promise<{ who: CachedOperator; until: Date } | null> {
   const row = await store.getFirstAsync<{ value: string }>(
     `SELECT value FROM meta WHERE key = ?`, [KEY]);
   if (!row) return null;
   let v: { self?: boolean; operator_id?: number; at?: string };
   try { v = JSON.parse(row.value); } catch { return null; }
   if (v.self || !v.operator_id || !v.at) return null;
-  if (now.getTime() - Date.parse(v.at) > RECORDER_MEMORY_HOURS * 3600 * 1000) return null;
-  return masters.operator(store, v.operator_id);
+  const until = new Date(Date.parse(v.at) + RECORDER_MEMORY_HOURS * 3600 * 1000);
+  if (now.getTime() > until.getTime()) return null;
+  const who = await masters.operator(store, v.operator_id);
+  return who ? { who, until } : null;
+}
+
+/**
+ * Stop filling anybody in by themself. For when a supervisor hands the tablet
+ * to somebody else before their 12 hours are up (Settings).
+ */
+export async function forgetRecorder(store: Store, now: Date = new Date()): Promise<void> {
+  await store.runAsync(
+    `INSERT INTO meta (key, value) VALUES (?, ?)
+       ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+    [KEY, JSON.stringify({ self: true, at: now.toISOString(), forgotten: true })]);
 }
