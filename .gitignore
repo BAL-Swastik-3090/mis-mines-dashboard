@@ -88,3 +88,6 @@ mobile/android/
 
 # Expo's local cache, written by prebuild and the dev server.
 mobile/.expo/
+
+# APKs built on this machine by mobile/scripts/build_local_apk.py.
+mobile/dist-apk/

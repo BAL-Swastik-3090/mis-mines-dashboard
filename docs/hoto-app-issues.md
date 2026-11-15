@@ -1,7 +1,7 @@
 # HOTO tablet app — issue list
 
 **13 November 2026.** Open list, numbered so we can pick items off.
-**23 of 27 fixed** as of 15 Nov (19 of the original 22, plus F1-F4) — marked ✅ (commits `4b79c71`, `e3e4f77`, `925aeae`, `57b8186`). Left: **D1–D3**, hiding server details, agreed for when we go to production. Each item says what is wrong and where, so we are not
+**28 of 32 fixed** as of 16 Nov (19 of the original 22, plus F1-F4 and F6-F10) — marked ✅ (commits `4b79c71`, `e3e4f77`, `925aeae`, `57b8186`). Left: **D1–D3**, hiding server details, agreed for when we go to production. Each item says what is wrong and where, so we are not
 working from screenshots when we come to fix it.
 
 Add to it freely — the numbering is stable, new items go on the end.
@@ -126,9 +126,20 @@ something, and change them when we go to production.
 | **F2** ✅ | **Nothing sent in the background.** Even positions reached the office only when somebody opened the app. The position tracker -- the one foreground service Android keeps alive -- now also sends waiting handovers, photos and positions, at most once a minute. One lock shared by the screens, the tracker and the OS task. | `src/core/sync/background.ts`, `lock.ts` |
 | **F3** ✅ | **The banner blamed the signal for everything.** It now says which: no network, the office not answering (and when it was last tried), or sending now. | `app/index.tsx` |
 | **F4** ✅ | **A supervisor could not see which vehicles they had done.** New screen, *Done on this tablet*: today / yesterday / 7 days, narrowed to whoever filled it in, with operator, other side, faults, held machines and whether each reached the office. Works offline. | `app/history.tsx`, `src/core/capture/history.ts` |
+| **F6** ✅ | **A refusal of the tablet parked the handover as "refused by the office".** A 401/403 is about the tablet (token, suspension, or -- on 16 Nov -- a second backend on the laptop answering on 127.0.0.1:8990), not the record. Now stays queued and retries; the banner says the office did not accept the tablet. Records parked that way by the older build are put back at start. | `src/core/sync/engine.ts` |
+| **F7** ✅ | **"Everything has reached the office" above "1 refused".** Refused is not reached. | `app/index.tsx` |
+| **F8** ✅ | **A machine with no checklist left a "0 of 0 checks" draft for ever.** Checklist is looked up first; existing empty ones are cleared at start. | `src/ui/useCapture.ts`, `session.ts` |
+| **F9** ✅ | **Done stacked a second home screen** with a back arrow into the finished handover's readings. Now returns to the home screen that is already there. | `app/capture/confirm.tsx` |
+| **F10** ✅ | **A reading answered one-at-a-time showed as an empty box in the list.** | `src/ui/ItemControl.tsx` |
 | **F5** | **Which machines still need a handover this shift, across every tablet.** The tablet only knows its own records. Needs the server to send the shift's status in the sync bundle. Proposed, not built. | -- |
 
-Commit `6298788`.
+Commits `6298788`, `b34b73c`, `2fb8880`, `df598d2`. **Verified on the
+tablet (DEV-004) on 16 Nov**, from a local build: a handover confirmed with
+the office unreachable said so on the home screen, and sent itself 67 seconds
+after the office came back, untouched (HOTO-0000168); "Done on this tablet"
+lists by person; the refused MAN-11 went back in the queue at start and was
+filed (HOTO-0000167). Background sending with the app closed rides on position
+reporting and was not tested on the device.
 
 ---
 
