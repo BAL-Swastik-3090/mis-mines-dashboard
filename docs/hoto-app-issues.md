@@ -1,7 +1,7 @@
 # HOTO tablet app — issue list
 
 **13 November 2026.** Open list, numbered so we can pick items off.
-**19 of 22 fixed** as of 14 Nov — marked ✅ (commits `4b79c71`, `e3e4f77`, `925aeae`, `57b8186`). Left: **D1–D3**, hiding server details, agreed for when we go to production. Each item says what is wrong and where, so we are not
+**23 of 27 fixed** as of 15 Nov (19 of the original 22, plus F1-F4) — marked ✅ (commits `4b79c71`, `e3e4f77`, `925aeae`, `57b8186`). Left: **D1–D3**, hiding server details, agreed for when we go to production. Each item says what is wrong and where, so we are not
 working from screenshots when we come to fix it.
 
 Add to it freely — the numbering is stable, new items go on the end.
@@ -117,6 +117,18 @@ something, and change them when we go to production.
 - **E7** — a check answered OK folds to one line with its answer; faults and
   unanswered checks keep the room; each section says how far it has got.
   Readings never fold, so a card cannot vanish under the finger mid-typing.
+
+## F · Raised 15 Nov, from using it
+
+| # | Issue | Where |
+|---|---|---|
+| **F1** ✅ | **On working wifi it still said "waiting for signal", and stopped trying.** The app retried only when its network came *back*. A tablet that stayed connected but could not reach the server (server down, address moved, VPN) never tried again until reopened. Found on the tablet: one handover with a photo, 35 hours old, tried twice. Now it tries every 15 s while anything is waiting (the 15 s-to-5 min backoff still applies), refreshes the machine list every 30 min, and syncs on return to the app. | `src/ui/syncTriggers.ts` |
+| **F2** ✅ | **Nothing sent in the background.** Even positions reached the office only when somebody opened the app. The position tracker -- the one foreground service Android keeps alive -- now also sends waiting handovers, photos and positions, at most once a minute. One lock shared by the screens, the tracker and the OS task. | `src/core/sync/background.ts`, `lock.ts` |
+| **F3** ✅ | **The banner blamed the signal for everything.** It now says which: no network, the office not answering (and when it was last tried), or sending now. | `app/index.tsx` |
+| **F4** ✅ | **A supervisor could not see which vehicles they had done.** New screen, *Done on this tablet*: today / yesterday / 7 days, narrowed to whoever filled it in, with operator, other side, faults, held machines and whether each reached the office. Works offline. | `app/history.tsx`, `src/core/capture/history.ts` |
+| **F5** | **Which machines still need a handover this shift, across every tablet.** The tablet only knows its own records. Needs the server to send the shift's status in the sync bundle. Proposed, not built. | -- |
+
+Commit `6298788`.
 
 ---
 
