@@ -597,3 +597,23 @@ export async function payloadFor(store: Store, uuid: string): Promise<Record<str
     })),
   };
 }
+
+/**
+ * Remove drafts that can never be finished: no checklist was found for the
+ * machine, and nothing has been answered or photographed.
+ *
+ * Until 16 Nov a draft was written before the checklist was looked up, so
+ * picking a machine with no checklist left an "Unfinished -- 0 of 0 checks"
+ * card on the home screen for ever, one more each time. Nothing can be done
+ * with one -- there are no questions to answer -- and it holds nothing, so
+ * removing it loses nothing. A draft with ANY answer or photo is never
+ * touched here, checklist or not.
+ */
+export async function removeEmptyDraftsWithoutChecklist(store: Store): Promise<number> {
+  const r = await store.runAsync(
+    `DELETE FROM session
+      WHERE sync_state = 'draft' AND template_id IS NULL
+        AND NOT EXISTS (SELECT 1 FROM response x WHERE x.session_uuid = session.client_uuid)
+        AND NOT EXISTS (SELECT 1 FROM photo p WHERE p.session_uuid = session.client_uuid)`);
+  return r.changes;
+}

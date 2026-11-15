@@ -96,7 +96,15 @@ export default function Confirm() {
         </FadeIn>
 
         <Pressable testID="done" style={styles.primary}
-                   onPress={() => { discard(); router.replace('/'); }}>
+                   // BACK TO THE HOME SCREEN THAT IS ALREADY THERE. replace('/')
+                   // put a second home on top of the whole finished handover,
+                   // with a back arrow into the readings of a record already
+                   // confirmed. Found on the tablet, 16 Nov.
+                   onPress={() => {
+                     discard();
+                     if (router.canDismiss()) router.dismissAll();
+                     else router.replace('/');
+                   }}>
           <Text style={styles.primaryText}>Done</Text>
         </Pressable>
       </View>

@@ -606,3 +606,27 @@ describe('the payload the server will receive', () => {
     expect(r).toMatchObject({ item_id: 101, photo_count: 1 });
   });
 });
+
+
+describe('drafts that can never be finished', () => {
+  it('are removed when no checklist was found and nothing is in them', async () => {
+    const dozer = (await masters.asset(store, 44))!;        // type 2: no checklist seeded
+    await session.startDraft({ store, asset: dozer, sessionType: 'START_HANDOVER',
+                               clientUuid: uu('u7') });
+    expect(await session.removeEmptyDraftsWithoutChecklist(store)).toBe(1);
+    expect(await session.openDrafts(store)).toHaveLength(0);
+  });
+
+  it('never touch a draft that has a checklist, or anything in it', async () => {
+    const a = await MAN11();
+    await session.startDraft({ store, asset: a, sessionType: 'START_HANDOVER', clientUuid: uu('u1') });
+    const dozer = (await masters.asset(store, 44))!;
+    await session.startDraft({ store, asset: dozer, sessionType: 'START_HANDOVER',
+                               clientUuid: uu('u7') });
+    await store.runAsync(`INSERT INTO photo
+        (photo_uuid, session_uuid, item_id, local_path, bytes, sha256, captured_at)
+       VALUES ('p9', ?, NULL, '/tmp/p.jpg', 1, 'x', '2026-11-16T01:00:00Z')`, [uu('u7')]);
+    expect(await session.removeEmptyDraftsWithoutChecklist(store)).toBe(0);
+    expect(await session.openDrafts(store)).toHaveLength(2);
+  });
+});
