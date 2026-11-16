@@ -189,7 +189,7 @@ FEEDS: tuple[Feed, ...] = (
          "Carries the downtime for the hired excavators."),
     Feed("excavation_actual", "Day-wise excavation - contractors",
          ("mis",),
-         MYSQL, "mines_day_wise_excavation", "Prod_date", ENTRY,
+         MINEHUB, "day_wise_excavation", "prod_date", ENTRY,
          "The CONTRACTOR half of overburden. BAL's own OB comes from SAP and is "
          "not affected when this stops, so the OB section keeps showing a "
          "figure -- just a smaller one than the mine actually moved."),
@@ -229,8 +229,8 @@ FEEDS: tuple[Feed, ...] = (
 
     # -- Plans: filled forward, judged on how far ahead they reach -----------
     Feed("plan_excavation", "Daily excavation plan",
-         ("mis", "lcm", "intelligence"), MYSQL,
-         "mines_daily_excavation_plan", "Prod_date", ENTRY,
+         ("mis", "lcm", "intelligence"), MINEHUB,
+         "excavation_plan", "prod_date", ENTRY,
          "Planned ore and OB per shift, location and face. Loaded ahead, so it "
          "is judged on how far forward it still reaches.",
          kind=PLAN),
