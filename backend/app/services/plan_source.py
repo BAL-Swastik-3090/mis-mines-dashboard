@@ -52,17 +52,28 @@ def plan_session() -> Iterator[Session | None]:
     with no plan filed -- which every one of these callers already has to
     handle, because a month the mine has not planned yet is an ordinary thing.
     """
+    # EXACTLY ONE yield, and it is not inside the except.
+    #
+    # The first version opened the session inside the try and yielded again
+    # from the except when opening failed. A contextmanager may yield once:
+    # when the WITH BODY raises, contextlib throws that exception back in at
+    # the yield, the except caught it and yielded a second time, and Python
+    # replaced the real error with "generator didn't stop after throw()".
+    # Every caller then saw that instead of the query's own failure -- which
+    # is how a `FROM minehub.` left on the MySQL session showed up as a
+    # generator error rather than "Unknown database 'minehub'".
+    #
+    # So: open the session first, let opening fail quietly, and yield once.
     pg = None
     try:
         from app.minehub_db import SessionLocal
-        if SessionLocal is None:
-            yield None
-            return
-        pg = SessionLocal()
-        yield pg
+        if SessionLocal is not None:
+            pg = SessionLocal()
     except Exception:                                   # noqa: BLE001
         logger.warning("minehub unavailable for a plan read", exc_info=True)
-        yield None
+        pg = None
+    try:
+        yield pg
     finally:
         if pg is not None:
             try:

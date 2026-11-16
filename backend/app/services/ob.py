@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from app.services.sap_movement import PRODUCTION_QTY
+from app.services.plan_source import plan_rows
 
 OB_MATERIAL_NO = "000000000016000009"   # OVERBURDEN in SAP pp_production
 OB_PLANT       = "1200"
@@ -41,8 +42,8 @@ def _get_bal_and_plan(db: Session, from_date: date, to_date: date):
     # it sums. MAX kept one row per day and understated the plan ~4x.
     sql_plan = text("""
         SELECT Prod_date AS dt,
-               ROUND(COALESCE(SUM(CAST(NULLIF(OB_QTY_Cum,'') AS DECIMAL(16,3))), 0), 2) AS ob_plan
-        FROM mines_daily_excavation_plan
+               ROUND(COALESCE(SUM(OB_QTY_Cum), 0), 2) AS ob_plan
+        FROM minehub.excavation_plan
         WHERE Prod_date BETWEEN :f AND :t
         GROUP BY Prod_date ORDER BY Prod_date
     """)
@@ -50,7 +51,7 @@ def _get_bal_and_plan(db: Session, from_date: date, to_date: date):
                 for r in db.execute(sql_bal, {"plant": OB_PLANT, "mat": OB_MATERIAL_NO,
                                               "f": from_date, "t": to_date}).fetchall()}
     plan_map = {r.dt: float(r.ob_plan or 0)
-                for r in db.execute(sql_plan, {"f": from_date, "t": to_date}).fetchall()}
+                for r in plan_rows(sql_plan, {"f": from_date, "t": to_date})}
 
     all_dates = _date_spine(from_date, to_date)
     rows = [{"date": dt, "bal_actual": bal_map.get(dt), "ob_plan": plan_map.get(dt)}
@@ -74,9 +75,15 @@ def _get_vendors(db: Session, from_date: date, to_date: date) -> list[dict]:
         SELECT e.Prod_date AS dt,
                e.Agency    AS agency_id,
                COALESCE(a.Agency_Desc, e.Agency) AS agency_desc,
-               ROUND(SUM(CAST(e.Qty AS DECIMAL(13,3))), 2) AS qty
-        FROM mines_day_wise_excavation e
-        LEFT JOIN mines_agency_master a ON e.Agency = a.Agency_Id
+               ROUND(SUM(e.Qty), 2) AS qty
+        FROM minehub.day_wise_excavation e
+        -- agency is varchar and agency_id is an integer. MySQL compared the
+        -- two by coercing; Postgres refuses with "operator does not exist:
+        -- character varying = integer". Cast the id to text rather than the
+        -- agency to a number: the agency column has held '' and could hold
+        -- anything else a person typed, and a failed cast would take the
+        -- whole query down instead of just missing a name.
+        LEFT JOIN minehub.agency_master a ON TRIM(e.Agency) = a.Agency_Id::text
         WHERE e.Variant = '3'
           AND TRIM(e.Agency)  != :bal
           AND TRIM(e.Agency)  != ''
@@ -84,7 +91,7 @@ def _get_vendors(db: Session, from_date: date, to_date: date) -> list[dict]:
         GROUP BY e.Prod_date, e.Agency, a.Agency_Desc
         ORDER BY e.Prod_date, e.Agency
     """)
-    rows = db.execute(sql, {"bal": BAL_AGENCY, "f": from_date, "t": to_date}).fetchall()
+    rows = plan_rows(sql, {"bal": BAL_AGENCY, "f": from_date, "t": to_date})
 
     # Group by agency
     agency_map: dict[str, dict] = {}

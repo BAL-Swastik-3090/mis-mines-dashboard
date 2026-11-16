@@ -60,6 +60,7 @@ from datetime import date, timedelta
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from app.services.plan_source import plan_rows
 
 # SAP's own material group for fuels. Used only to NOTICE a material nobody
 # has classified yet -- what counts as fuel is fuel_material, not this.
@@ -838,9 +839,9 @@ def _fuel_calculator(pg: Session, db: Session, plant: str, days: int) -> dict:
         # Variant 1 ore (mostly in tonnes), 3 overburden, 4 silt, in Cum.
         try:
             ex = {"ore_mt": 0.0, "ore_cum": 0.0, "ob_cum": 0.0, "silt_cum": 0.0}
-            for r in db.execute(text("""
-                SELECT Variant AS v, Units AS u, SUM(CAST(Qty AS DECIMAL(15,3))) AS q
-                  FROM mines_day_wise_excavation
+            for r in plan_rows(text("""
+                SELECT Variant AS v, Units AS u, SUM(Qty) AS q
+                  FROM minehub.day_wise_excavation
                  WHERE Prod_date > :a AND Prod_date <= :b
                  GROUP BY Variant, Units
             """), {"a": as_on - timedelta(days=BURN_DAYS), "b": as_on}).mappings():
@@ -871,11 +872,11 @@ def _fuel_calculator(pg: Session, db: Session, plant: str, days: int) -> dict:
 
         # The plan, day by day, from the mine's own daily excavation plan.
         try:
-            for r in db.execute(text("""
+            for r in plan_rows(text("""
                 SELECT Prod_date AS d,
-                       SUM(CAST(OB_QTY_Cum AS DECIMAL(12,2))) AS ob,
+                       SUM(OB_QTY_Cum) AS ob,
                        SUM(ORE_QTY) AS ore
-                  FROM mines_daily_excavation_plan
+                  FROM minehub.excavation_plan
                  WHERE Prod_date > :a AND Prod_date <= :b
                  GROUP BY Prod_date ORDER BY Prod_date
             """), {"a": as_on, "b": as_on + timedelta(days=days)}).mappings():

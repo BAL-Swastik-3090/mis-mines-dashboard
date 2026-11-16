@@ -99,16 +99,16 @@ def get_daily_ore_ob_plan(db: Session, from_date: date, to_date: date) -> list[d
             Prod_date                                    AS dt,
             SUM(ORE_QTY)                                            AS ore_plan,
             -- per shift x location x face, not cumulative — sum like ORE_QTY
-            COALESCE(SUM(CAST(NULLIF(OB_QTY_Cum,'') AS DECIMAL(16,3))), 0) AS ob_plan,
+            COALESCE(SUM(OB_QTY_Cum), 0) AS ob_plan,
             SUM(HG_QTY)                                  AS hg_plan,
             SUM(MG_QTY)                                  AS mg_plan,
             SUM(LG_QTY)                                  AS lg_plan
-        FROM mines_daily_excavation_plan
+        FROM minehub.excavation_plan
         WHERE Prod_date BETWEEN :from_date AND :to_date
         GROUP BY Prod_date
         ORDER BY Prod_date
     """)
-    rows = db.execute(sql, {"from_date": from_date, "to_date": to_date}).fetchall()
+    rows = plan_rows(sql, {"from_date": from_date, "to_date": to_date})
     return [dict(r._mapping) for r in rows]
 
 
@@ -135,14 +135,14 @@ def _get_silt_daywise(db: Session, from_date: date, to_date: date) -> dict:
     """De-silting actuals from mines_day_wise_excavation (Variant='4', Qty is VARCHAR)."""
     sql = text("""
         SELECT Prod_date AS dt,
-               ROUND(SUM(CAST(Qty AS DECIMAL(13,3))), 2) AS silt_qty
-        FROM mines_day_wise_excavation
+               ROUND(SUM(Qty), 2) AS silt_qty
+        FROM minehub.day_wise_excavation
         WHERE Variant = '4'
           AND Prod_date BETWEEN :from_date AND :to_date
         GROUP BY Prod_date
         ORDER BY Prod_date
     """)
-    rows = db.execute(sql, {"from_date": from_date, "to_date": to_date}).fetchall()
+    rows = plan_rows(sql, {"from_date": from_date, "to_date": to_date})
     return {r.dt: float(r.silt_qty) for r in rows if r.silt_qty}
 
 
@@ -225,14 +225,14 @@ def get_mtd_totals(db: Session, from_date: date, to_date: date) -> dict:
         SELECT
             SUM(ORE_QTY)                                            AS ore_plan,
             -- per shift x location x face, not cumulative — sum like ORE_QTY
-            COALESCE(SUM(CAST(NULLIF(OB_QTY_Cum,'') AS DECIMAL(16,3))), 0) AS ob_plan,
+            COALESCE(SUM(OB_QTY_Cum), 0) AS ob_plan,
             SUM(HG_QTY)                             AS hg_plan,
             SUM(MG_QTY)                             AS mg_plan,
             SUM(LG_QTY)                             AS lg_plan
-        FROM mines_daily_excavation_plan
+        FROM minehub.excavation_plan
         WHERE Prod_date BETWEEN :from_date AND :to_date
     """)
-    pr = db.execute(sql_plan, {"from_date": from_date, "to_date": to_date}).fetchone()
+    pr = plan_one(sql_plan, {"from_date": from_date, "to_date": to_date})
 
     sql_cob_plan = text("""
         SELECT SUM(Concentrate_qty) AS cob_plan
@@ -330,12 +330,12 @@ def get_rehandling_mtd(db: Session, from_date: date, to_date: date) -> float:
               AND POSTING_DATE BETWEEN :from_date AND :to_date
         ) dedup
     """)
-    row = db.execute(sql, {
+    row = plan_one(sql, {
         "plant":       PLANT_MINES,
         "work_center": "MINE_EXV",
         "from_date":   from_date,
         "to_date":     to_date,
-    }).fetchone()
+    })
     return float(row.total_m3) if row and row.total_m3 is not None else 0.0
 
 
@@ -344,11 +344,11 @@ def get_rehandling_mtd(db: Session, from_date: date, to_date: date) -> float:
 # Note: Qty stored as VARCHAR — must CAST. No plan table exists.
 def get_desilt_actual(db: Session, from_date: date, to_date: date) -> float | None:
     sql = text("""
-        SELECT ROUND(SUM(CAST(Qty AS DECIMAL(13,3))), 2) AS silt_qty
-        FROM mines_day_wise_excavation
+        SELECT ROUND(SUM(Qty), 2) AS silt_qty
+        FROM minehub.day_wise_excavation
         WHERE Variant = '4'
           AND Prod_date BETWEEN :from_date AND :to_date
     """)
-    row = db.execute(sql, {"from_date": from_date, "to_date": to_date}).fetchone()
+    row = plan_one(sql, {"from_date": from_date, "to_date": to_date})
     val = float(row.silt_qty) if row and row.silt_qty is not None else None
     return val if val and val > 0 else None

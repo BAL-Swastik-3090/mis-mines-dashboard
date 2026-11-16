@@ -36,7 +36,7 @@ from ..config import get_settings
 from ..schemas.insights import RealityCheckRow, RealityCheckResponse, InsightsResponse
 from app.services.despatch import MINES_HAULIER_PARAMS
 from app.services.sap_source import sap_one
-from app.services.plan_source import plan_one
+from app.services.plan_source import plan_one, plan_rows
 
 
 # ── Configurable constants ──────────────────────────────────────
@@ -77,9 +77,9 @@ def _month_bounds(ref: date) -> tuple[date, date]:
 
 def _latest_plan_month(db: Session) -> tuple[date, date]:
     """Return (first, last) of the most recent month that has excavation plan data."""
-    row = db.execute(text(
-        "SELECT MAX(Prod_date) AS mx FROM mines_daily_excavation_plan"
-    )).fetchone()
+    row = plan_one(text(
+        "SELECT MAX(Prod_date) AS mx FROM minehub.excavation_plan"
+    ))
     if not row or not row.mx:
         today = date.today()
         return today.replace(day=1), today
@@ -134,6 +134,8 @@ def _ore_ob_full_month_plan(db: Session, first: date, last: date) -> dict:
     """
     month = first.strftime("%Y-%m")
 
+    # STILL ON balcorpdb. mines_monthly_excavation_plan did not move with the
+    # daily plan in migration 128 and must keep the MySQL session.
     ore_row = db.execute(text("""
         SELECT COALESCE(SUM(Tonnage), 0) AS ore_plan
         FROM   mines_monthly_excavation_plan
@@ -154,12 +156,12 @@ def _ore_ob_full_month_plan(db: Session, first: date, last: date) -> dict:
     if ore <= 0 and ob <= 0:
         # No monthly plan filed for this month — fall back so the panel still
         # shows something, but say so rather than implying a full-month figure.
-        row = db.execute(text("""
+        row = plan_one(text("""
             SELECT COALESCE(SUM(ORE_QTY), 0)                                     AS ore_plan,
-                   COALESCE(SUM(CAST(NULLIF(OB_QTY_Cum,'') AS DECIMAL(16,3))), 0) AS ob_plan
-            FROM   mines_daily_excavation_plan
+                   COALESCE(SUM(OB_QTY_Cum), 0) AS ob_plan
+            FROM   minehub.excavation_plan
             WHERE  Prod_date BETWEEN :f AND :t
-        """), {"f": first, "t": last}).fetchone()
+        """), {"f": first, "t": last})
         return {"ore": _f(row.ore_plan), "ob": _f(row.ob_plan),
                 "source": "daily_elapsed", "ob_unparsed": 0}
 

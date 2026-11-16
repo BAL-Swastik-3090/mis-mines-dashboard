@@ -38,6 +38,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.minehub_db import get_minehub_db
+from app.services.plan_source import plan_rows
 
 router = APIRouter(prefix="/api/fuel-control", tags=["fuel-control"])
 
@@ -870,10 +871,10 @@ def chain(request: Request,
     exc = {"silt_cum": 0.0, "ob_cum": 0.0, "ore_cum": 0.0, "ore_mt": 0.0}
     exc_ok, exc_problem = True, None
     try:
-        for r in db.execute(text("""
+        for r in plan_rows(text("""
             SELECT Variant AS v, Units AS u,
-                   SUM(CAST(Qty AS DECIMAL(15,3))) AS q
-              FROM mines_day_wise_excavation
+                   SUM(Qty) AS q
+              FROM minehub.day_wise_excavation
              WHERE Prod_date BETWEEN :frm AND :to
              GROUP BY Variant, Units
         """), p).mappings():

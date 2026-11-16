@@ -53,7 +53,7 @@ from app.services import desilting_plan as desilt_svc
 from app.services import dewatering_entry as dewatering_svc
 import contextlib
 import logging
-from app.services.plan_source import plan_one
+from app.services.plan_source import plan_one, plan_rows
 
 logger = logging.getLogger(__name__)
 
@@ -765,15 +765,15 @@ def _grade_plan(db: Session, mf: date, rd: date) -> dict[str, dict[str, float]]:
     """
     out = {"td": {}, "mtd": {}}
 
-    r = db.execute(text("""
+    r = plan_one(text("""
         SELECT COALESCE(SUM(CASE WHEN Prod_date = :rd THEN HG_QTY END), 0) hg_td,
                COALESCE(SUM(CASE WHEN Prod_date = :rd THEN MG_QTY END), 0) mg_td,
                COALESCE(SUM(CASE WHEN Prod_date = :rd THEN LG_QTY END), 0) lg_td,
                COALESCE(SUM(HG_QTY), 0) hg, COALESCE(SUM(MG_QTY), 0) mg,
                COALESCE(SUM(LG_QTY), 0) lg
-        FROM mines_daily_excavation_plan
+        FROM minehub.excavation_plan
         WHERE Prod_date BETWEEN :mf AND :rd
-    """), {"mf": mf, "rd": rd}).fetchone()
+    """), {"mf": mf, "rd": rd})
     for g, td, mtd in (("HG", r.hg_td, r.hg), ("MG", r.mg_td, r.mg),
                        ("LG", r.lg_td, r.lg)):
         out["td"][g] = _f(td) or 0.0
@@ -826,12 +826,12 @@ def _ore_split(db: Session, mf: date, rd: date, covered: set[date],
         return {}, 0, ""
 
     plan: dict[date, dict[str, float]] = {}
-    for r in db.execute(text("""
+    for r in plan_rows(text("""
             SELECT Prod_date AS d,
                    COALESCE(SUM(HG_QTY), 0) AS hg,
                    COALESCE(SUM(MG_QTY), 0) AS mg,
                    COALESCE(SUM(LG_QTY), 0) AS lg
-            FROM mines_daily_excavation_plan
+            FROM minehub.excavation_plan
             WHERE Prod_date BETWEEN :mf AND :rd
             GROUP BY Prod_date
         """), {"mf": mf, "rd": rd}):
@@ -965,15 +965,15 @@ def _excavation(db: Session, mf: date, rd: date,
     #
     # The count is what separates the two cases the sum cannot: no rows at all
     # (nobody planned) from rows that genuinely plan zero overburden that day.
-    plan = db.execute(text("""
+    plan = plan_one(text("""
         SELECT SUM(CASE WHEN Prod_date = :rd
-                   THEN CAST(NULLIF(OB_QTY_Cum,'') AS DECIMAL(16,3)) END) AS td_plan,
-               SUM(CAST(NULLIF(OB_QTY_Cum,'') AS DECIMAL(16,3)))          AS mtd_plan,
+                   THEN OB_QTY_Cum END) AS td_plan,
+               SUM(OB_QTY_Cum)          AS mtd_plan,
                COUNT(CASE WHEN Prod_date = :rd THEN 1 END)                AS td_n,
                COUNT(*)                                                   AS mtd_n
-        FROM mines_daily_excavation_plan
+        FROM minehub.excavation_plan
         WHERE Prod_date BETWEEN :mf AND :rd
-    """), {"mf": mf, "rd": rd}).fetchone()
+    """), {"mf": mf, "rd": rd})
 
     # Variant '4' is de-silting, and Qty is VARCHAR here — the same filter and
     # cast services/production.py uses, so the two screens cannot disagree.
@@ -982,12 +982,12 @@ def _excavation(db: Session, mf: date, rd: date,
     # for are needed as well as the total: they are what stops the mine's own
     # figure standing in for a day already filed. The table is one row per day,
     # so this costs nothing over the SUM it replaces.
-    silt_rows = db.execute(text("""
-        SELECT Prod_date AS d, SUM(CAST(Qty AS DECIMAL(13,3))) AS q
-        FROM mines_day_wise_excavation
+    silt_rows = plan_rows(text("""
+        SELECT Prod_date AS d, SUM(Qty) AS q
+        FROM minehub.day_wise_excavation
         WHERE Variant = '4' AND Prod_date BETWEEN :mf AND :rd
         GROUP BY Prod_date
-    """), {"mf": mf, "rd": rd}).fetchall()
+    """), {"mf": mf, "rd": rd})
     silt_days = {r.d for r in silt_rows if r.q is not None}
     silt_td_sap = next((_f(r.q) for r in silt_rows if r.d == rd), None)
     silt_mtd_sap = sum(_f(r.q) or 0.0 for r in silt_rows) or None
