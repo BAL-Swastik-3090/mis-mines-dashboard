@@ -36,6 +36,7 @@ from ..config import get_settings
 from ..schemas.insights import RealityCheckRow, RealityCheckResponse, InsightsResponse
 from app.services.despatch import MINES_HAULIER_PARAMS
 from app.services.sap_source import sap_one
+from app.services.plan_source import plan_one
 
 
 # ── Configurable constants ──────────────────────────────────────
@@ -166,20 +167,20 @@ def _ore_ob_full_month_plan(db: Session, first: date, last: date) -> dict:
 
 
 def _cob_full_month_plan(db: Session, first: date, last: date) -> float:
-    row = db.execute(text("""
+    row = plan_one(text("""
         SELECT COALESCE(SUM(Concentrate_qty), 0) AS cob_plan
-        FROM   mines_cobp_plan
+        FROM   minehub.cobp_plan
         WHERE  Plan_date BETWEEN :f AND :t
-    """), {"f": first, "t": last}).fetchone()
+    """), {"f": first, "t": last})
     return _f(row.cob_plan)
 
 
 def _despatch_full_month_plan(db: Session, first: date, last: date) -> float:
-    row = db.execute(text("""
+    row = plan_one(text("""
         SELECT COALESCE(SUM(Grand_Total_Qty), 0) AS d_plan
-        FROM   mines_despatch_plan
+        FROM   minehub.despatch_plan
         WHERE  Plan_date BETWEEN :f AND :t
-    """), {"f": first, "t": last}).fetchone()
+    """), {"f": first, "t": last})
     return _f(row.d_plan)
 
 

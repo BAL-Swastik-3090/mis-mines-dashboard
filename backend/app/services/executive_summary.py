@@ -53,6 +53,7 @@ from app.services import desilting_plan as desilt_svc
 from app.services import dewatering_entry as dewatering_svc
 import contextlib
 import logging
+from app.services.plan_source import plan_one
 
 logger = logging.getLogger(__name__)
 
@@ -458,16 +459,23 @@ def _despatch_plan(db: Session, mf: date,
     this returns nothing for that grade and the row prints no plan, rather than
     claiming the mine planned to ship nought and then shipped 20,464 MT.
     """
+    # THE ALIASES ARE QUOTED, and must stay quoted. They are mixed case --
+    # td_Bal_HG -- and the row is read back by that exact name below. MySQL
+    # preserved it; Postgres folds an UNQUOTED alias to lower case, so after
+    # the plan moved in migration 127 the lookup raised
+    # "Could not locate column in row for column 'td_Bal_HG'" and took the
+    # whole Executive Summary down with it. Quoting keeps the name the code
+    # already expects, rather than lower-casing it here and in the reader.
     cols = ", ".join(
         f"COALESCE(SUM(CASE WHEN Plan_date = :rd THEN {p}_{g}_Qty END), 0)"
-        f" AS td_{p}_{g},"
-        f" COALESCE(SUM({p}_{g}_Qty), 0) AS mtd_{p}_{g}"
+        f' AS "td_{p}_{g}",'
+        f' COALESCE(SUM({p}_{g}_Qty), 0) AS "mtd_{p}_{g}"'
         for p in _PLAN_PREFIX.values() for g in _PLAN_GRADES)
-    r = db.execute(text(f"""
+    r = plan_one(text(f"""
         SELECT {cols}, COUNT(*) AS n
-        FROM   mines_despatch_plan
+        FROM   minehub.despatch_plan
         WHERE  Plan_date BETWEEN :mf AND :rd
-    """), {"mf": mf, "rd": rd}).fetchone()
+    """), {"mf": mf, "rd": rd})
 
     out = {p: {c: {} for c in MINES_CUSTOMERS} for p in ("td", "mtd")}
     if not r or not r.n:
@@ -771,13 +779,13 @@ def _grade_plan(db: Session, mf: date, rd: date) -> dict[str, dict[str, float]]:
         out["td"][g] = _f(td) or 0.0
         out["mtd"][g] = _f(mtd) or 0.0
 
-    c = db.execute(text("""
+    c = plan_one(text("""
         SELECT COALESCE(SUM(CASE WHEN Plan_date = :rd
                                  THEN Concentrate_qty END), 0) AS td,
                COALESCE(SUM(Concentrate_qty), 0)               AS mtd
-        FROM mines_cobp_plan
+        FROM minehub.cobp_plan
         WHERE Plan_date BETWEEN :mf AND :rd
-    """), {"mf": mf, "rd": rd}).fetchone()
+    """), {"mf": mf, "rd": rd})
     out["td"]["COB"] = _f(c.td) or 0.0
     out["mtd"]["COB"] = _f(c.mtd) or 0.0
     return out

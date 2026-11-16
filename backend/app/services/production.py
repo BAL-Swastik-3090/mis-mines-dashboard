@@ -13,6 +13,7 @@ from app.services.sap_source import sap_session
 from app.services.sap_movement import PRODUCTION_QTY
 # The de-silting plan, the one figure on this page that is not in balcorpdb.
 from app.services import desilting_plan
+from app.services.plan_source import plan_one, plan_rows
 
 
 # ── Material number constants (pp_production.MATERIAL_NO) ─────
@@ -121,11 +122,11 @@ def get_daily_cob_plan(db: Session, from_date: date, to_date: date) -> list[dict
             Tailings_qty        AS tailings_plan,
             Feed_grade_Cr2O3    AS feed_cr2o3_plan,
             Concentrate_grade_Cr2O3 AS conc_cr2o3_plan
-        FROM mines_cobp_plan
+        FROM minehub.cobp_plan
         WHERE Plan_date BETWEEN :from_date AND :to_date
         ORDER BY Plan_date
     """)
-    rows = db.execute(sql, {"from_date": from_date, "to_date": to_date}).fetchall()
+    rows = plan_rows(sql, {"from_date": from_date, "to_date": to_date})
     return [dict(r._mapping) for r in rows]
 
 
@@ -235,10 +236,10 @@ def get_mtd_totals(db: Session, from_date: date, to_date: date) -> dict:
 
     sql_cob_plan = text("""
         SELECT SUM(Concentrate_qty) AS cob_plan
-        FROM mines_cobp_plan
+        FROM minehub.cobp_plan
         WHERE Plan_date BETWEEN :from_date AND :to_date
     """)
-    cr = db.execute(sql_cob_plan, {"from_date": from_date, "to_date": to_date}).fetchone()
+    cr = plan_one(sql_cob_plan, {"from_date": from_date, "to_date": to_date})
 
     # _f() can return None when SQL SUM returns NULL (empty date range).
     # Use "or 0.0" to ensure every MTD field is always a float.

@@ -16,6 +16,7 @@ from sqlalchemy import text
 # but never subtracted the correction, so Aug 2026 tailings read 2,484 MT
 # against 2,360. See sap_movement.
 from app.services.sap_movement import PRODUCTION_QTY, CONSUMPTION_QTY
+from app.services.plan_source import plan_rows
 
 
 # ── COB plant constants ───────────────────────────────────────
@@ -137,11 +138,11 @@ def _get_plan(db: Session, from_date: date, to_date: date) -> dict:
             Feed_grade_Cr2O3            AS input_cr2o3_plan,
             Concentrate_grade_Cr2O3     AS output_cr2o3_plan,
             Tailings_grade_Cr2O3        AS tailings_cr2o3_plan
-        FROM mines_cobp_plan
+        FROM minehub.cobp_plan
         WHERE Plan_date BETWEEN :from_date AND :to_date
         ORDER BY Plan_date
     """)
-    rows = db.execute(sql, {"from_date": from_date, "to_date": to_date}).fetchall()
+    rows = plan_rows(sql, {"from_date": from_date, "to_date": to_date})
     return {r.dt: dict(r._mapping) for r in rows}
 
 

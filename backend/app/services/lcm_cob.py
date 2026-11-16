@@ -53,6 +53,7 @@ from app.services import ibm_rates
 
 # Net of SAP reversal documents — see sap_movement.
 from app.services.sap_movement import PRODUCTION_QTY, CONSUMPTION_QTY
+from app.services.plan_source import plan_one
 
 # ── Plant and materials ──────────────────────────────────────────────────────
 # Reused verbatim from the COB Plant section so the two can never disagree on
@@ -115,10 +116,10 @@ def _plan(db: Session, fd: date, td: date) -> dict:
             SUM(Concentrate_qty * Concentrate_grade_Cr2O3) AS conc_grade_num,
             SUM(CASE WHEN Concentrate_grade_Cr2O3 IS NOT NULL THEN Concentrate_qty END) AS conc_grade_den,
             COUNT(*) AS plan_days
-        FROM mines_cobp_plan
+        FROM minehub.cobp_plan
         WHERE Plan_date BETWEEN :fd AND :td
     """)
-    r = db.execute(sql, {"fd": fd, "td": td}).fetchone()
+    r = plan_one(sql, {"fd": fd, "td": td})
 
     feed = _f(r.feed)
     conc = _f(r.concentrate)

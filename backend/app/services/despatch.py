@@ -76,6 +76,7 @@ from datetime import date, timedelta
 from sqlalchemy.orm import Session
 from app.services.sap_source import sap_one, sap_rows
 from sqlalchemy import text
+from app.services.plan_source import plan_one, plan_rows
 
 
 def _f(v) -> float:
@@ -95,10 +96,10 @@ def get_plan_summary(db: Session, from_date: date, to_date: date) -> dict:
             COALESCE(SUM(Grand_Total_Qty), 0) AS total_plan,
             COALESCE(SUM(Bal_Total_Qty),   0) AS bal_plan,
             COALESCE(SUM(Suk_Total_Qty),   0) AS suk_plan
-        FROM mines_despatch_plan
+        FROM minehub.despatch_plan
         WHERE Plan_date BETWEEN :f AND :t
     """)
-    row = db.execute(sql, {"f": from_date, "t": to_date}).fetchone()
+    row = plan_one(sql, {"f": from_date, "t": to_date})
     return {
         "mtd_total_plan": _f(row.total_plan),
         "mtd_bal_plan":   _f(row.bal_plan),
@@ -112,10 +113,10 @@ def get_td_plan(db: Session, td_date: date) -> dict:
             COALESCE(SUM(Grand_Total_Qty), 0) AS total_plan,
             COALESCE(SUM(Bal_Total_Qty),   0) AS bal_plan,
             COALESCE(SUM(Suk_Total_Qty),   0) AS suk_plan
-        FROM mines_despatch_plan
+        FROM minehub.despatch_plan
         WHERE Plan_date = :d
     """)
-    row = db.execute(sql, {"d": td_date}).fetchone()
+    row = plan_one(sql, {"d": td_date})
     total = _f(row.total_plan)
     if total > 0:
         return {
@@ -207,12 +208,12 @@ def get_daywise(db: Session, from_date: date, to_date: date) -> list[dict]:
             Grand_Total_Qty AS total_plan,
             Bal_Total_Qty   AS bal_plan,
             Suk_Total_Qty   AS suk_plan
-        FROM mines_despatch_plan
+        FROM minehub.despatch_plan
         WHERE Plan_date BETWEEN :f AND :t
         ORDER BY Plan_date
     """)
-    plan_rows      = db.execute(plan_sql, {"f": from_date, "t": to_date}).fetchall()
-    plan_by_date   = {r.dt: r for r in plan_rows}
+    day_plans      = plan_rows(plan_sql, {"f": from_date, "t": to_date})
+    plan_by_date   = {r.dt: r for r in day_plans}
     actual_by_date = get_actuals_daywise(db, from_date, to_date)
 
     result = []

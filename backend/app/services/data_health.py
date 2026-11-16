@@ -235,11 +235,11 @@ FEEDS: tuple[Feed, ...] = (
          "is judged on how far forward it still reaches.",
          kind=PLAN),
     Feed("plan_cob", "COB plant plan",
-         ("mis", "lcm"), MYSQL, "mines_cobp_plan", "Plan_date", ENTRY,
+         ("mis", "lcm"), MINEHUB, "cobp_plan", "plan_date", ENTRY,
          "Planned feed, concentrate and tailings for the COB plant.",
          kind=PLAN),
     Feed("plan_despatch", "Despatch plan",
-         ("mis",), MYSQL, "mines_despatch_plan", "Plan_date", ENTRY,
+         ("mis",), MINEHUB, "despatch_plan", "plan_date", ENTRY,
          "Planned despatch to each plant, by grade.",
          kind=PLAN),
 
