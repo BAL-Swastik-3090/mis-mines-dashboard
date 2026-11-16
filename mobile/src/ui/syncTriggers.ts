@@ -14,8 +14,13 @@ import { useSync } from './useSync';
 import { waiting } from '@/core/sync/engine';
 
 const NETWORK_POLL_MS = 15_000;
-/** The machine and operator lists, refreshed this often while there is a network. */
-const MASTERS_EVERY_MS = 30 * 60_000;
+/**
+ * The machine, operator and checklist lists, refreshed this often while the
+ * app is open and there is a network. Ten minutes since 16 Nov 2026, so a new
+ * operator or checklist the office adds is on the tablet -- and announced
+ * (notices) -- within a few minutes, not half an hour. About 100 kB a time.
+ */
+const MASTERS_EVERY_MS = 10 * 60_000;
 export const BACKGROUND_TASK = 'hoto-sync';
 
 /**

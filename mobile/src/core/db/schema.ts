@@ -23,7 +23,7 @@
  * unsynced handovers, and it lives in a cab.
  */
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 /** Run in order, inside one transaction, on first open and on upgrade. */
 export const MIGRATIONS: readonly string[][] = [
@@ -370,5 +370,23 @@ export const MIGRATIONS: readonly string[][] = [
     `ALTER TABLE session ADD COLUMN counterpart_absent INTEGER NOT NULL DEFAULT 0;`,
     `ALTER TABLE session ADD COLUMN recorded_by_operator_id INTEGER;`,
     `ALTER TABLE session ADD COLUMN recorded_by_emp_id TEXT;`,
+  ],
+
+  // ── 9 · what the office changed ─────────────────────────────────────────
+  // A new operator, machine or checklist, worked out on the tablet by
+  // comparing its copy of the lists before and after a refresh (core/
+  // notices.ts), and kept until somebody has seen it. The tablet's own list:
+  // nothing here is sent anywhere.
+  [
+    `CREATE TABLE IF NOT EXISTS notice (
+       notice_id  INTEGER PRIMARY KEY AUTOINCREMENT,
+       kind       TEXT    NOT NULL,
+       subject    TEXT,
+       detail     TEXT,
+       n          INTEGER NOT NULL DEFAULT 1,
+       created_at TEXT    NOT NULL,
+       read_at    TEXT
+     );`,
+    `CREATE INDEX IF NOT EXISTS notice_unread_idx ON notice (read_at);`,
   ],
 ];

@@ -8,9 +8,10 @@
  * "my machine is not here" rather than "wait a moment".
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
-import { Stack } from 'expo-router';
+import { router, Stack } from 'expo-router';
+import * as Notifications from 'expo-notifications';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as TaskManager from 'expo-task-manager';
 import * as BackgroundTask from 'expo-background-task';
@@ -19,7 +20,9 @@ import { useCapture } from '@/ui/useCapture';
 import { useSync } from '@/ui/useSync';
 import Enrol from './enrol';
 import { BACKGROUND_TASK, registerBackgroundSync, useSyncTriggers } from '@/ui/syncTriggers';
-import { sendFromBackground } from '@/core/sync/background';
+import { sendFromBackground, setAnnouncer } from '@/core/sync/background';
+import { announce, askToNotify, configureNotifications, NOTICES_ROUTE } from '@/ui/announce';
+import { useNotices } from '@/ui/useNotices';
 import { useLang, useT } from '@/i18n';
 import { GuideHost } from '@/ui/Guide';
 import { AppHeader } from '@/ui/AppHeader';
@@ -66,6 +69,12 @@ TaskManager.defineTask(BACKGROUND_TASK, async () => {
 // implementation is supplied (the tests supply their own).
 setRehash(hashPhotoFile);
 
+// What the office changed, found by a refresh with no screen open (the
+// position tracker's wake-ups), is announced the same way as one found with
+// the app in front of somebody. Module scope, for the same reason as above.
+configureNotifications();
+setAnnouncer(announce);
+
 export default function RootLayout() {
   const attach = useCapture((s) => s.attach);
   const attachSync = useSync((s) => s.attach);
@@ -107,6 +116,7 @@ export default function RootLayout() {
       await rescueCachedPhotos(store, FileSystem).catch(() => undefined);
       await pruneSentPhotos(store, FileSystem).catch(() => undefined);
       attach(store);
+      useNotices.getState().attach(store);
 
       // A device with no credential cannot sync, so it is sent to be set up
       // rather than left looking like it is working. Its captured records are
@@ -127,6 +137,9 @@ export default function RootLayout() {
       // position. Deliberately not awaited: it asks for permissions, and a
       // device must be usable for capture while somebody decides about that.
       void applyTrackingSettings();
+      // May the app post a notification when the office changes something?
+      // Asked once; Android remembers the answer. Not awaited, like the above.
+      void askToNotify();
       setState('ready');
     } catch (e) {
       setWhy(e instanceof Error ? e.message : String(e));
@@ -211,13 +224,35 @@ export default function RootLayout() {
         <Stack.Screen name="sync" options={{ title: t('Still on this tablet') }} />
         <Stack.Screen name="history" options={{ title: t('Done on this tablet') }} />
         <Stack.Screen name="settings" options={{ title: t('Settings') }} />
+        <Stack.Screen name="notices" options={{ title: t('Updates from the office') }} />
         <Stack.Screen name="terms" options={{ title: t('Terms of use') }} />
         <Stack.Screen name="enrol" options={{ title: t('Set up this device') }} />
       </Stack>
       {/* Drawn once, above every screen: the header buttons only open it. */}
       <GuideHost />
+      <OpenFromNotification />
     </SafeAreaProvider>
   );
+}
+
+/**
+ * Tapping an "Updates from the office" notification opens the Updates screen,
+ * whether the app was in the background or closed. Each tap is acted on once:
+ * the last response is kept by Android and would otherwise reopen the screen
+ * every time the app starts.
+ */
+function OpenFromNotification() {
+  const last = Notifications.useLastNotificationResponse();
+  const done = useRef<string | null>(null);
+  useEffect(() => {
+    const id = last?.notification.request.identifier ?? null;
+    const to = last?.notification.request.content.data?.to;
+    if (!id || id === done.current || to !== NOTICES_ROUTE) return;
+    done.current = id;
+    setTimeout(() => router.push(NOTICES_ROUTE), 50);
+    void Notifications.clearLastNotificationResponseAsync().catch(() => undefined);
+  }, [last]);
+  return null;
 }
 
 const styles = StyleSheet.create({

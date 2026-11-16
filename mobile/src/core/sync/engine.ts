@@ -36,6 +36,7 @@ import {
   cacheBundle, clockDriftSeconds, DRIFT_WARN_SECONDS, type SyncBundle,
 } from '../capture/cache';
 import type { SyncState } from '../enums';
+import type { Change } from '../notices';
 
 export interface Transport {
   /** POST the session payload. Resolves for any HTTP answer; rejects only for
@@ -72,6 +73,9 @@ export interface SyncReport {
   problems: string[];
   /** Null when nothing is waiting; otherwise when to try again. */
   retryAfterSeconds: number | null;
+  /** What the office changed since the last refresh (core/notices.ts). Empty when
+   *  nothing did, or the lists were not refreshed. */
+  changes: Change[];
 }
 
 const BASE_BACKOFF_SECONDS = 15;
@@ -161,6 +165,7 @@ export async function syncNow(args: {
     locationsSent: 0, photosAwaitingSession: 0,
     machinesCached: null, clockDriftSeconds: null,
     stillQueued: 0, mastersRefreshed: false, problems: [], retryAfterSeconds: null,
+    changes: [],
   };
 
   for (const uuid of await dueSessions(store, now, force)) {
@@ -189,6 +194,7 @@ export async function syncNow(args: {
         const n = await cacheBundle(store, r.body as SyncBundle, now);
         report.mastersRefreshed = true;
         report.machinesCached = n.assets;
+        report.changes = n.changes;
         await log(store, 'MASTERS', null, true, 200,
                   `${n.assets} machines, ${n.operators} operators, ` +
                   `${n.templates} checklists, ${n.items} checks`);

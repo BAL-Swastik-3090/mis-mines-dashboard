@@ -24,6 +24,7 @@ import { LANGS, useT } from '@/i18n';
 import { useCapture } from './useCapture';
 import { useReducedMotion } from './motion';
 import { usePanel } from './panels';
+import { useNotices } from './useNotices';
 import { LOGO, LOGO_RATIO } from './brand';
 import * as session from '@/core/capture/session';
 import { draftSummaries } from '@/core/capture/drafts';
@@ -41,6 +42,7 @@ export function AppMenu({ visible, onClose }: { visible: boolean; onClose: () =>
   const store = useCapture((s) => s.store);
   const resetCapture = useCapture((s) => s.discard);
   const openPanel = usePanel((s) => s.open);
+  const unread = useNotices((s) => s.unread);
   const reduce = useReducedMotion();
   const x = useRef(new Animated.Value(1)).current;
 
@@ -137,6 +139,11 @@ export function AppMenu({ visible, onClose }: { visible: boolean; onClose: () =>
                     ? counts.waiting + counts.refused : undefined}
                   sub={counts && counts.waiting + counts.refused === 0 ? t('All sent') : undefined}
                   onPress={() => go(() => router.push('/sync'))} />
+            <Item testID="menu-notices" icon="bell-outline" label={t('Updates from the office')}
+                  current={path === '/notices'}
+                  badge={unread > 0 ? unread : undefined}
+                  sub={unread === 0 ? t('New operators, machines and checklists') : undefined}
+                  onPress={() => go(() => router.push('/notices'))} />
 
             <View style={styles.rule} />
 

@@ -29,6 +29,8 @@ import {
 import { FadeIn, PressableScale } from '@/ui/motion';
 import { useT } from '@/i18n';
 import { DiscardSheet } from '@/ui/DiscardSheet';
+import { useNotices } from '@/ui/useNotices';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 /** "just now", "3 min ago", "2 h ago", "yesterday", "4 days ago", in the tablet's language. */
 function useAgo() {
@@ -54,6 +56,7 @@ export default function Home() {
   const { t, tn, tm } = useT();
   const agoT = useAgo();
   const store = useCapture((s) => s.store);
+  const unread = useNotices((s) => s.unread);
   const resume = useCapture((s) => s.resume);
   const discard = useCapture((s) => s.discard);
   const discardDraft = useCapture((s) => s.discardDraft);
@@ -173,6 +176,23 @@ export default function Home() {
           </Text>
         )}
       </Pressable>
+
+      {/* ── what the office has changed ──────────────────────────────────
+          The bell in the header counts these too, but a bell is easy to miss
+          on the screen everybody starts from. Shown only while unread. */}
+      {unread > 0 && (
+        <Pressable testID="home-notices" onPress={() => router.push('/notices')}
+                   style={({ pressed }) => [styles.notices, pressed && { opacity: 0.85 }]}>
+          <MaterialCommunityIcons name="bell-badge-outline" size={26} color="#1e5f8a" />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.bannerTitle}>
+              {tn(unread, '{n} update from the office', '{n} updates from the office')}
+            </Text>
+            <Text style={styles.bannerNote}>{t('New operators, machines and checklists')}</Text>
+          </View>
+          <MaterialCommunityIcons name="chevron-right" size={26} color="#1e5f8a" />
+        </Pressable>
+      )}
 
       {/* ── sending by hand, when sending by itself has not worked ───────
           The app syncs on open, on reconnect and after a capture, and most of
@@ -409,6 +429,8 @@ const styles = StyleSheet.create({
 
   banner: { borderRadius: 10, padding: 14, borderWidth: 1, gap: 4 },
   bannerClear: { backgroundColor: '#eefaf1', borderColor: '#9ad6ac' },
+  notices: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 10, padding: 14,
+             borderWidth: 1, backgroundColor: '#eaf2f8', borderColor: '#9cc3de', minHeight: 64 },
   bannerWaiting: { backgroundColor: '#fff8e6', borderColor: '#e0bf6a' },
   bannerStale: { backgroundColor: '#fff8e6', borderColor: '#e0bf6a' },
   bannerTitle: { fontSize: 16, fontWeight: '700', color: '#16202b' },

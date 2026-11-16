@@ -15,6 +15,7 @@
  */
 
 import type { Store } from './store';
+import { diff, record, snapshot, type Change } from '../notices';
 
 /** The shape of GET /api/hoto/sync. Only the fields the device stores. */
 export interface SyncBundle {
@@ -58,11 +59,17 @@ const bit = (v: boolean | number | null | undefined): number => (v ? 1 : 0);
 
 export async function cacheBundle(
   store: Store, bundle: SyncBundle, now = new Date(),
-): Promise<{ assets: number; operators: number; templates: number; items: number }> {
+): Promise<{ assets: number; operators: number; templates: number; items: number; changes: Change[] }> {
   const at = now.toISOString();
   let items = 0;
+  let changes: Change[] = [];
 
   await store.withTransactionAsync(async () => {
+    // What the tablet held, read before it is replaced, so what the office
+    // changed can be told to whoever holds it (core/notices.ts). Null on the
+    // first refresh, which therefore records nothing.
+    const before = await snapshot(store);
+
     // Children first: the schema has ON DELETE CASCADE, but being explicit
     // means this does not depend on PRAGMA foreign_keys being on, which it is
     // not guaranteed to be on every SQLite build.
@@ -149,6 +156,13 @@ export async function cacheBundle(
       }
     }
 
+    // In the same transaction as the lists themselves: an interrupted refresh
+    // leaves the old lists AND no notices, and is compared again next time.
+    if (before) {
+      changes = diff(before, bundle);
+      await record(store, changes, now);
+    }
+
     await store.runAsync(
       `INSERT INTO meta (key, value) VALUES ('last_sync_at', ?)
          ON CONFLICT (key) DO UPDATE SET value = excluded.value`, [at]);
@@ -162,6 +176,7 @@ export async function cacheBundle(
     operators: bundle.operators.length,
     templates: (bundle.templates ?? []).length,
     items,
+    changes,
   };
 }
 

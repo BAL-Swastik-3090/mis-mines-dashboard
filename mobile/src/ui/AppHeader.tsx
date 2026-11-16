@@ -11,7 +11,8 @@
  * other button on the screen.
  *
  * Left: back, or the app's mark on the home screen. Then the screen's name.
- * Right: language, the guide, and the menu -- each a 48 dp target, for gloves.
+ * Right: updates from the office (a bell with a count), language, the guide,
+ * and the menu -- each a 48 dp target, for gloves.
  */
 
 import type { ReactNode } from 'react';
@@ -20,7 +21,9 @@ import type { NativeStackHeaderProps } from '@react-navigation/native-stack';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LANGS, useT } from '@/i18n';
+import { router, usePathname } from 'expo-router';
 import { usePanel } from './panels';
+import { useNotices } from './useNotices';
 import { LOGO, LOGO_RATIO } from './brand';
 
 export function AppHeader({ navigation, options, back }: NativeStackHeaderProps) {
@@ -48,13 +51,27 @@ export function AppHeader({ navigation, options, back }: NativeStackHeaderProps)
   );
 }
 
-/** Language, guide, menu. */
+/** Updates, language, guide, menu. */
 export function HeaderActions() {
   const { t, lang } = useT();
   const open = usePanel((s) => s.open);
+  const unread = useNotices((s) => s.unread);
+  const path = usePathname();
   const short = LANGS.find((l) => l.code === lang)?.short ?? 'EN';
   return (
     <View style={styles.actions}>
+      <HeaderButton testID="notices-open"
+                    label={unread ? t('{n} updates from the office', { n: unread }) : t('Updates from the office')}
+                    onPress={() => { if (path !== '/notices') router.push('/notices'); }}>
+        <View>
+          <MaterialCommunityIcons name={unread ? 'bell-badge-outline' : 'bell-outline'} size={28} color="#fff" />
+          {unread > 0 && (
+            <View style={styles.count} testID="notices-count">
+              <Text style={styles.countText}>{unread > 9 ? '9+' : unread}</Text>
+            </View>
+          )}
+        </View>
+      </HeaderButton>
       <HeaderButton testID="lang-open" label={t('Language')} onPress={() => open('lang')}>
         <View style={styles.chip}><Text style={styles.chipText}>{short}</Text></View>
       </HeaderButton>
@@ -98,4 +115,8 @@ const styles = StyleSheet.create({
   chipText: { color: '#fff', fontSize: 15, fontWeight: '800' },
   help: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#1e5f8a',
           alignItems: 'center', justifyContent: 'center' },
+  count: { position: 'absolute', top: -6, right: -9, minWidth: 20, height: 20, borderRadius: 10,
+           backgroundColor: '#d8201a', borderWidth: 2, borderColor: '#16202b',
+           alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3 },
+  countText: { color: '#fff', fontSize: 11, fontWeight: '800' },
 });

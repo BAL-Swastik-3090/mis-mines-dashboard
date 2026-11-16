@@ -2,7 +2,7 @@
   "expo": {
     "name": "Kaliapani HOTO",
     "slug": "kaliapani-hoto",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "orientation": "default",
     "scheme": "kaliapanihoto",
     "userInterfaceStyle": "light",
@@ -12,7 +12,7 @@
     ],
     "android": {
       "package": "in.balasorealloys.kaliapani.hoto",
-      "versionCode": 2,
+      "versionCode": 3,
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.ACCESS_FINE_LOCATION",
@@ -37,6 +37,13 @@
     "plugins": [
       "expo-router",
       "expo-secure-store",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#d8201a"
+        }
+      ],
       [
         "expo-camera",
         {

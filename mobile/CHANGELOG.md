@@ -8,6 +8,15 @@ Each new version needs a higher build: raise `version` and `android.versionCode`
 in `app.json` before building (`python scripts/build_local_apk.py` copies them
 into the Android build).
 
+## 0.3.0 (build 3) — 16 November 2026
+
+- Updates from the office: when the office adds or removes an operator or a machine, or changes a checklist, the tablet says so
+- A bell at the top of every screen with the number of new updates, an entry in the menu, and a line on the home screen
+- An Android notification for each batch of updates (the tablet asks once whether it may show notifications)
+- The Updates screen lists them by day, says what each one means for a handover, and has Check now
+- The tablet checks the office's lists every 10 minutes while open (was 30), and every 30 minutes in the background
+- All of it in Hindi, Odia and Bengali
+
 ## 0.2.0 (build 2) — 16 November 2026
 
 - Terms of use shown before first use, with a summary in Hindi, Odia and Bengali

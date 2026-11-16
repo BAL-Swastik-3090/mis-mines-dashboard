@@ -77,6 +77,11 @@ export const GUIDE: Record<string, Page> = {
     'See who is chosen by itself under Filled in by, and forget them when the tablet changes hands.',
     "This tablet's name, the office server and the app version, for IT.",
   ] },
+  '/notices': { title: 'Updates from the office', points: [
+    'Operators, machines and checklists the office has added, changed or taken away, newest first.',
+    'The tablet checks every few minutes while it has signal. Check now asks the office straight away.',
+    'The bell at the top shows how many are new. Opening this screen marks them seen.',
+  ] },
   '/terms': { title: 'Terms of use', points: [
     'The rules for using this app and this tablet, and what the app records about the people who use it.',
     'The summary is in your language. The full terms are in English, and the English text governs.',

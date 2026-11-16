@@ -26,6 +26,7 @@ import type { Store } from '@/core/capture/store';
 import type { Transport, SyncReport } from '@/core/sync/engine';
 import { status as readStatus, syncNow } from '@/core/sync/engine';
 import { tryLock, unlock } from '@/core/sync/lock';
+import { announce } from './announce';
 
 export type SyncStatus = Awaited<ReturnType<typeof readStatus>>;
 
@@ -70,6 +71,8 @@ export const useSync = create<SyncState>()((set, get) => ({
         refreshMasters: opts?.refreshMasters ?? false,
       });
       set({ lastReport: report, status: await readStatus(store) });
+      // What the office changed, told to whoever holds the tablet (notices).
+      if (report.mastersRefreshed) void announce(report.changes);
       return report;
     } catch (e) {
       // The engine is meant to absorb transport failures itself, so reaching
