@@ -51,6 +51,46 @@ from sqlalchemy.orm import Session
 
 from app.services import desilting_plan as desilt_svc
 from app.services import dewatering_entry as dewatering_svc
+import contextlib
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def _estimate_db():
+    """A minehub session for the hand-entered estimate.
+
+    WHY ITS OWN SESSION. prev_day_actual moved off balcorpdb in migration 126
+    and is on Postgres now, while every other query in these three functions
+    still runs on the MySQL session they are handed. Opening one here rather
+    than threading a second parameter through the callers keeps the change to
+    the three queries that moved.
+
+    Yields None when the platform database cannot be reached, and the caller
+    then behaves exactly as it did for a day with no estimate filed -- the
+    estimate is a fallback, and a fallback that cannot be read must not take
+    the page down with it.
+    """
+    pg = None
+    try:
+        from app.minehub_db import SessionLocal
+        if SessionLocal is None:
+            yield None
+            return
+        pg = SessionLocal()
+        yield pg
+    except Exception:                                   # noqa: BLE001
+        logger.warning("minehub unavailable for the estimated actual",
+                       exc_info=True)
+        yield None
+    finally:
+        if pg is not None:
+            try:
+                pg.close()
+            except Exception:                           # noqa: BLE001
+                pass
+
 from app.services import shifting as shifting_svc
 from app.services import production as prod_svc
 from app.services import stock as stock_svc
@@ -630,7 +670,7 @@ def sap_arrivals(db: Session, today: date,
     with nothing to say it did. This is what tells them.
 
     NOTHING IS STORED TO WORK THIS OUT. The estimate stays in
-    mines_prev_day_actual after SAP posts, so "what it was" and "what it is"
+    minehub.prev_day_actual after SAP posts, so "what it was" and "what it is"
     are both still on disk and the transition is simply the two being present
     for the same day. No new table, no flag to set, nothing to go stale, and
     it reads the same whoever asks and whenever.
@@ -641,13 +681,16 @@ def sap_arrivals(db: Session, today: date,
     frm = today - timedelta(days=days)
 
     est: dict[tuple[date, str], float] = {}
-    for r in db.execute(text("""
-            SELECT `Date` AS d, Material AS m, Est_Actual AS q
-            FROM mines_prev_day_actual
-            WHERE `Date` BETWEEN :f AND :t
-              AND Material IN ('ORE', 'OB', 'COB')
-        """), {"f": frm, "t": today}):
-        est[(r.d, str(r.m))] = float(r.q or 0)
+    with _estimate_db() as pg:
+        if pg is None:
+            return []
+        for r in pg.execute(text("""
+                SELECT data_date AS d, material AS m, est_actual AS q
+                FROM minehub.prev_day_actual
+                WHERE data_date BETWEEN :f AND :t
+                  AND material IN ('ORE', 'OB', 'COB')
+            """), {"f": frm, "t": today}):
+            est[(r.d, str(r.m))] = float(r.q or 0)
     if not est:
         return []
 
@@ -745,7 +788,7 @@ def _ore_split(db: Session, mf: date, rd: date, covered: set[date],
                ) -> tuple[dict[str, tuple[float, float]], int, str]:
     """The ore estimate, spread across HG / MG / LG so the grade rows can fill.
 
-    THE ESTIMATE HAS NO GRADE SPLIT OF ITS OWN. mines_prev_day_actual stores
+    THE ESTIMATE HAS NO GRADE SPLIT OF ITS OWN. prev_day_actual stores
     one ORE figure per day, full stop. The mine wants the grade rows filled
     rather than a separate line, so the split has to come from somewhere, and
     there is exactly one dated, per-day statement of which grades were being
@@ -762,10 +805,13 @@ def _ore_split(db: Session, mf: date, rd: date, covered: set[date],
     grade quantities, and reports which basis it used so the screen can say.
     Returns ({grade: (td, mtd)}, days_filled, basis).
     """
-    est = db.execute(text("""
-        SELECT `Date` AS d, Est_Actual AS q FROM mines_prev_day_actual
-        WHERE Material = 'ORE' AND `Date` BETWEEN :mf AND :rd
-    """), {"mf": mf, "rd": rd}).fetchall()
+    with _estimate_db() as pg:
+        if pg is None:
+            return {}, 0, ""
+        est = pg.execute(text("""
+            SELECT data_date AS d, est_actual AS q FROM minehub.prev_day_actual
+            WHERE material = 'ORE' AND data_date BETWEEN :mf AND :rd
+        """), {"mf": mf, "rd": rd}).fetchall()
     pending = [(r.d, float(r.q or 0)) for r in est
                if r.d not in covered and float(r.q or 0)]
     if not pending:
@@ -829,11 +875,14 @@ def _estimates(db: Session, mf: date, rd: date,
 
     Returns (td, mtd, days_filled).
     """
-    rows = db.execute(text("""
-        SELECT `Date` AS d, Est_Actual AS q
-        FROM mines_prev_day_actual
-        WHERE Material = :m AND `Date` BETWEEN :mf AND :rd
-    """), {"m": material, "mf": mf, "rd": rd}).fetchall()
+    with _estimate_db() as pg:
+        if pg is None:
+            return 0.0, 0.0, 0
+        rows = pg.execute(text("""
+            SELECT data_date AS d, est_actual AS q
+            FROM minehub.prev_day_actual
+            WHERE material = :m AND data_date BETWEEN :mf AND :rd
+        """), {"m": material, "mf": mf, "rd": rd}).fetchall()
 
     td = mtd = 0.0
     filled = 0
