@@ -33,6 +33,7 @@ from app.services.sap_source import sap_one
 from app.services import breakdown as bd
 from app.services import ibm_rates
 from app.services import equipment_plan as eqp
+from app.services import est_actual
 from app.services import lcm_settings as lset
 from app.services import equipment_settings as eqs
 from app.services.oee import EXCAVATORS as _FLEET_SPEC
@@ -530,7 +531,20 @@ def _downtime(db: Session, machines: list[dict], fd: date, td: date
 
 def _plan_actual(db: Session, fd: date, td: date) -> dict:
     """Plan from IMOS, actual from SAP — the same expressions the Production and
-    OB sections use, so LCM never disagrees with those pages."""
+    OB sections use, so LCM never disagrees with those pages.
+
+    WHERE SAP HAS NOT POSTED A DAY, THE MINE'S OWN FIGURE STANDS IN, which is
+    the rule the Executive Summary has followed since September — see
+    services/est_actual.py. Without it the matrix opened on a deviation that
+    counted the last few days as nil production, which is the largest loss
+    arithmetic can produce and the one thing nobody at the mine believed.
+
+    It is an estimate and it moves: 37% from SAP on the average day, and 19%
+    low across the span, so a window still waiting on SAP OVERSTATES the loss
+    and settles downward. Every figure below the deviation — the factor, each
+    head's tonnes and rupees, the KAM tables and their ratings — moves with
+    it, so the source is reported alongside rather than left to be inferred.
+    """
     ore_plan = db.execute(text("""
         SELECT COALESCE(SUM(ORE_QTY), 0) AS q FROM mines_daily_excavation_plan
         WHERE Prod_date BETWEEN :fd AND :td
@@ -564,11 +578,42 @@ def _plan_actual(db: Session, fd: date, td: date) -> dict:
           AND POSTING_DATE BETWEEN :fd AND :td
     """), {"plant": PLANT, "mat": OB_MATERIAL, "fd": fd, "td": td})
 
+    # ── WHICH DAYS SAP HAS ANSWERED, ORE AND OB SEPARATELY ─────────────────
+    # One scan, because the two are posted independently: in October SAP had
+    # ore for every day but was missing overburden on five of them.
+    covered_ore, covered_ob = set(), set()
+    for r in db.execute(text(f"""
+        SELECT POSTING_DATE AS d,
+               SUM(CASE WHEN MATERIAL_NO IN ({ph}) THEN 1 ELSE 0 END) AS ore_rows,
+               SUM(CASE WHEN MATERIAL_NO = :obmat THEN 1 ELSE 0 END) AS ob_rows
+          FROM pp_production
+         WHERE PLANT = :plant AND POSTING_DATE BETWEEN :fd AND :td
+         GROUP BY POSTING_DATE
+    """), {**p, "obmat": OB_MATERIAL}):
+        if r.ore_rows:
+            covered_ore.add(r.d)
+        if r.ob_rows:
+            covered_ob.add(r.d)
+
+    ore_est = est_actual.estimate(db, fd, td, est_actual.MAT_ORE, covered_ore)
+    ob_est  = est_actual.estimate(db, fd, td, est_actual.MAT_OB,  covered_ob)
+
+    ore_sap, ob_sap = _n(ore_act.q), _n(ob_act.q)
     return {
         "ore_plan":   _n(ore_plan.q),
         "ob_plan":    _n(ob_plan.q),
-        "ore_actual": _n(ore_act.q),
-        "ob_actual":  _n(ob_act.q),
+        "ore_actual": ore_sap + ore_est["qty"],
+        "ob_actual":  ob_sap + ob_est["qty"],
+        # Kept apart from the total so a screen can say how much of it the
+        # mine typed, and a reader can tell a settled month from a running one.
+        "ore_sap":    ore_sap,
+        "ob_sap":     ob_sap,
+        "ore_estimated":  ore_est["qty"],
+        "ob_estimated":   ob_est["qty"],
+        "ore_est_days":   ore_est["days"],
+        "ob_est_days":    ob_est["days"],
+        "ore_source": est_actual.source_of(ore_sap, ore_est["qty"]),
+        "ob_source":  est_actual.source_of(ob_sap, ob_est["qty"]),
     }
 
 
@@ -856,9 +901,19 @@ def get_lcm(db: Session, from_date: date, to_date: date) -> dict:
             "days":       days,
             "ore_plan":   round(pa["ore_plan"], 2),
             "ore_actual": round(pa["ore_actual"], 2),
+            # Where that actual came from. `sap` once SAP has posted every day
+            # in the window, which is what a closed month always reads.
+            "ore_sap":       round(pa["ore_sap"], 2),
+            "ore_estimated": round(pa["ore_estimated"], 2),
+            "ore_est_days":  pa["ore_est_days"],
+            "ore_source":    pa["ore_source"],
             "ore_deviation": round(ore_dev, 2),
             "ob_plan":    round(pa["ob_plan"], 2),
             "ob_actual":  round(pa["ob_actual"], 2),
+            "ob_sap":        round(pa["ob_sap"], 2),
+            "ob_estimated":  round(pa["ob_estimated"], 2),
+            "ob_est_days":   pa["ob_est_days"],
+            "ob_source":     pa["ob_source"],
             "ob_deviation":  round(ob_dev, 2),
             "total_ore_loss_hours": round(tot_ore_hrs, 2),
             "total_ob_loss_hours":  round(tot_ob_hrs, 2),

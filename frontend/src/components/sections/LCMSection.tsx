@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import { AlertTriangle, Calculator, TrendingDown, IndianRupee } from "lucide-react";
 import { useLCM } from "@/hooks/useLCM";
 import { formatIndian } from "@/lib/utils";
-import type { LCMRow } from "@/types";
+import type { LCMRow, ActualSource } from "@/types";
 
 function fmt(v: number | null | undefined, dp = 2) {
   if (v == null) return "—";
@@ -61,6 +61,28 @@ function monthName(iso: string | null | undefined): string {
   const [y, m] = iso.split("-");
   const i = Number(m) - 1;
   return PLAN_MONTHS[i] ? `${PLAN_MONTHS[i]} ${y}` : iso;
+}
+
+/* WHERE THE ACTUAL CAME FROM, ON THE FACE OF THE CARD.
+   The matrix now stands the mine's own figure in for days SAP has not posted,
+   so "Actual Ore" is no longer always SAP's number. It differs from SAP by
+   37% on the average day and runs 19% low across a span, and because a low
+   actual makes a BIGGER deviation, a window still waiting on SAP overstates
+   the loss and settles downward when SAP speaks. A reader deciding what to do
+   about a KAM's figure needs to know which of the two they are looking at,
+   so the chip is only absent when there is nothing to say. */
+function SourceChip({ source, days }: { source?: ActualSource; days?: number }) {
+  if (!source || source === "sap") return null;
+  return (
+    <span className="ml-1.5 inline-block align-[1px] px-1.5 py-[1px] rounded
+                     text-[8.5px] font-bold tracking-wide uppercase font-condensed
+                     bg-[#fff3e0] text-[#b45309] border border-[#f5d7a8]"
+          title={`${days ?? 0} day(s) in this window have no SAP posting and `
+                 + `use the mine's typed estimate. The figure will move when `
+                 + `SAP posts.`}>
+      {source === "manual" ? "Est" : "Part est"}
+    </span>
+  );
 }
 
 export default function LCMSection({ beforeMatrix }: {
@@ -214,7 +236,8 @@ export default function LCMSection({ beforeMatrix }: {
                 <tbody className="divide-y divide-border-light/50">
                   <tr><td className="py-1 text-txt-secondary">Plan Ore (IMOS)</td>
                       <td className="py-1 text-right font-semibold text-navy">{f0(b?.ore_plan)} MT</td></tr>
-                  <tr><td className="py-1 text-txt-secondary">Actual Ore (SAP)</td>
+                  <tr><td className="py-1 text-txt-secondary">Actual Ore
+                        <SourceChip source={b?.ore_source} days={b?.ore_est_days} /></td>
                       <td className="py-1 text-right font-semibold text-navy">{f0(b?.ore_actual)} MT</td></tr>
                   <tr><td className="py-1 text-txt-secondary font-semibold">Ore Deviation</td>
                       <td className="py-1 text-right font-bold text-[#c62828]">{f0(b?.ore_deviation)} MT</td></tr>
@@ -241,7 +264,8 @@ export default function LCMSection({ beforeMatrix }: {
                 <tbody className="divide-y divide-border-light/50">
                   <tr><td className="py-1 text-txt-secondary">Plan OB (IMOS)</td>
                       <td className="py-1 text-right font-semibold text-navy">{f0(b?.ob_plan)} CuM</td></tr>
-                  <tr><td className="py-1 text-txt-secondary">Actual OB (SAP)</td>
+                  <tr><td className="py-1 text-txt-secondary">Actual OB
+                        <SourceChip source={b?.ob_source} days={b?.ob_est_days} /></td>
                       <td className="py-1 text-right font-semibold text-navy">{f0(b?.ob_actual)} CuM</td></tr>
                   <tr><td className="py-1 text-txt-secondary font-semibold">OB Deviation</td>
                       <td className="py-1 text-right font-bold text-[#c62828]">{f0(b?.ob_deviation)} CuM</td></tr>

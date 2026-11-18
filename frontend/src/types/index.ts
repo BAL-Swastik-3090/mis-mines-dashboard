@@ -1176,13 +1176,27 @@ export interface LCMCosting {
   ob_costed:      boolean;
 }
 
+/** Where an actual came from. `sap` once SAP has posted every day in the
+ *  window — which is what a closed month always reads. */
+export type ActualSource = "sap" | "manual" | "mixed";
+
 export interface LCMBasis {
   days:                  number;
   ore_plan:              number;
   ore_actual:            number;
+  /** The split behind ore_actual: what SAP posted, and what the mine typed
+   *  for the days SAP has not answered yet. */
+  ore_sap: number;
+  ore_estimated: number;
+  ore_est_days: number;
+  ore_source: ActualSource;
   ore_deviation:         number;
   ob_plan:               number;
   ob_actual:             number;
+  ob_sap: number;
+  ob_estimated: number;
+  ob_est_days: number;
+  ob_source: ActualSource;
   ob_deviation:          number;
   total_ore_loss_hours:  number;
   total_ob_loss_hours:   number;
