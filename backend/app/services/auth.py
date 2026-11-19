@@ -343,6 +343,11 @@ PREFIX_PAGE: tuple[tuple[str, str], ...] = (
     # unmapped path skips the page check and would be reachable by any
     # signed-in user.
     ("/api/stock-entry", "mis"),
+    # The declared resource reserve. Mapped for the same reason as the two
+    # above, and it matters most here: this path WRITES the tonnage every
+    # remaining-reserve and valuation figure on the dashboard is derived
+    # from, and an unmapped path skips the page check entirely.
+    ("/api/resource-reserve", "mis"),
     # End-to-end quality, read-only over SAP. Mapped for the same reason as
     # the two above: an unmapped path skips the page check entirely.
     # The uploaded de-silting plan. Mapped for the same reason, and it matters

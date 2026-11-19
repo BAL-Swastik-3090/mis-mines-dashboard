@@ -31,11 +31,12 @@
  * dated the 6th is what the 5th's work left behind. Both are printed, so nobody
  * has to remember the rule to read the page.
  */
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ClipboardList, Package, Truck, Factory, Pickaxe, ShieldCheck, Send, Mountain,
-  Layers, Waves, Download, Check, Gauge, Users, AlertTriangle, Award,
+  Layers, Waves, Download, Check, Gauge, Users, AlertTriangle, Award, Gem,
+  Cog,
 } from "lucide-react";
 import api from "@/lib/api";
 import { downloadDashboard } from "@/utils/downloadDashboard";
@@ -44,6 +45,8 @@ import QualityTrendCharts from "@/components/charts/QualityTrendCharts";
 import PlantOutputTrendChart from "@/components/charts/PlantOutputTrendChart";
 import { useRainImpact } from "@/hooks/useRainImpact";
 import { useExecLossStructure, useExecLcmByEquipment } from "@/hooks/useExecLcm";
+import { useExecOee } from "@/hooks/useExecOee";
+import { KpiStrip, excavatorCoreKpis } from "@/components/sections/OeeKpiStrip";
 import { formatIndian } from "@/lib/utils";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import type {
@@ -286,6 +289,280 @@ function StockBlock({ d }: { d: ExecutiveSummaryResponse }) {
             ))}
           </tbody>
         </table>
+      </div>
+    </Card>
+  );
+}
+
+/* ── Block 1a · what is still in the ground ────────────────────────────── */
+/**
+ * THE MINE'S RESERVE SHEET, on the page it belongs to.
+ *
+ * Two rows and nothing else, because that is what the sheet has: the reserve
+ * as a survey declared it, and the reserve as it stands now. Everything
+ * between the two — which grades came out, over how many days, how much of it
+ * SAP has posted and how much is still the mine's own estimate — is said in
+ * the read-out under the table rather than as rows nobody asked for.
+ *
+ * IT FOLLOWS THE DATE FILTER through the report day, not through the filter's
+ * raw end date. The whole page is cut off at the last day that has ENDED, and
+ * a reserve block that ran on to the 30th of a month still in progress would
+ * sit beside production figures stopping on the 18th and disagree with them
+ * for a reason invisible on screen. So the closing position is the reserve on
+ * the MORNING AFTER the report day — which is the same thing as the reserve
+ * after the report day's production, and the same morning-of convention the
+ * Stock Position block above it already uses.
+ *
+ * NOTHING HERE IS A STORED BALANCE. The closing row is the declaration minus
+ * the production scan, computed per request. Change the filter and it is
+ * recomputed; correct a day in SAP and it corrects itself. See
+ * services/resource_reserve.py for why no end-of-day balance is written down.
+ *
+ * THE VALUE COLUMN IS NET OF ROYALTY, as its heading says — which is where it
+ * parts company with the sheet. The sheet's column carries the same heading
+ * and the number under it is gross, frozen at May 2026 rates; the gross figure
+ * is in the read-out so the two can be reconciled rather than silently differ.
+ */
+type ReserveValue = {
+  gross_cr: number; net_cr: number | null; charges_cr: number | null;
+  charge_pct: number | null; rate_source: string; rate_stale: boolean;
+  rates_available: boolean; unpriced: string[];
+};
+type ReserveLine = {
+  grade: string; label: string; tonnage: number; cr2o3: number | null;
+};
+type ReservePosition = {
+  as_on: string;
+  filed: boolean;
+  note?: string;
+  declared_on?: string;
+  opening: ReserveLine[];
+  closing: ReserveLine[];
+  depletion: {
+    from: string; to: string; days: number;
+    est_days: number; est_basis: string;
+    grades: Record<string, { sap: number; est: number; total: number }>;
+    total: number;
+  } | null;
+  totals: {
+    opening_tonnage: number; closing_tonnage: number; depleted_tonnage: number;
+    opening_cr2o3: number | null; closing_cr2o3: number | null;
+  } | null;
+  valuation: { opening: ReserveValue; closing: ReserveValue } | null;
+};
+
+const RESERVE_GRADES = [
+  { key: "HG", label: "High Grade" },
+  { key: "MG", label: "Medium Grade" },
+  { key: "LG", label: "Low Grade" },
+] as const;
+
+/** The day after an ISO date, in UTC arithmetic.
+ *
+ *  Date.UTC rather than a local Date whose getDate is nudged: local midnight
+ *  in IST is 18:30 the previous day in UTC, so toISOString on it returns
+ *  yesterday. That bug reads as an off-by-one in the reserve, which is exactly
+ *  the mistake this block was built to avoid. */
+function nextDayISO(iso: string): string {
+  const [y, m, dd] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, dd + 1)).toISOString().slice(0, 10);
+}
+
+function ReserveBlock({ reportDay }: { reportDay?: string | null }) {
+  const asOn = reportDay ? nextDayISO(reportDay) : undefined;
+
+  const q = useQuery<ReservePosition>({
+    queryKey: ["resource-reserve", asOn],
+    queryFn: async () =>
+      (await api.get("/resource-reserve", { params: { as_on: asOn } })).data,
+    enabled: Boolean(asOn),
+    staleTime: 5 * 60 * 1000,
+  });
+  const r = q.data;
+
+  const title = "Resource Reserve Remaining";
+  const icon = <Gem size={14} />;
+
+  if (q.isLoading || !r) {
+    return (
+      <Card icon={icon} title={title}>
+        <div className="px-4 py-6 text-[12px] text-txt-light">
+          {q.isError
+            ? "The reserve could not be read just now."
+            : "Loading the declared reserve…"}
+        </div>
+      </Card>
+    );
+  }
+
+  /* NEVER A RESERVE OF NIL. A mine with no declaration on file is a mine
+     nobody has typed the survey into yet, and printing zeros for it would be
+     a statement about the geology rather than about the data entry. */
+  if (!r.filed || !r.totals) {
+    return (
+      <Card icon={icon} title={title}>
+        <div className="px-4 py-5 text-[12px] text-txt-secondary">
+          No resource reserve has been declared yet.
+          <span className="block mt-1 text-[11px] text-txt-light">
+            File the survey from <strong>Declare Resource Reserve</strong> in
+            the ⋮ menu, and this table fills itself from the day it is dated.
+          </span>
+        </div>
+      </Card>
+    );
+  }
+
+  const dep = r.depletion;
+  const rows = [
+    {
+      key: "opening",
+      label: `Reserve as on ${niceDate(r.declared_on)}`,
+      note: "as declared",
+      lines: r.opening,
+      tonnage: r.totals.opening_tonnage,
+      cr2o3: r.totals.opening_cr2o3,
+      val: r.valuation?.opening,
+      strong: false,
+    },
+    {
+      key: "closing",
+      label: `Reserve as on ${niceDate(r.as_on)}`,
+      note: dep ? `after production to ${shortDay(dep.to)}` : undefined,
+      lines: r.closing,
+      tonnage: r.totals.closing_tonnage,
+      cr2o3: r.totals.closing_cr2o3,
+      val: r.valuation?.closing,
+      strong: true,
+    },
+  ];
+
+  const val = r.valuation?.closing;
+  const estNote = dep && dep.est_days > 0
+    ? ` ${dep.est_days} of those ${dep.days} days are the mine's own estimate — `
+      + `SAP has not posted them yet${dep.est_basis ? ` (split ${dep.est_basis})` : ""}.`
+    : "";
+
+  return (
+    <Card icon={icon} title={title}
+          sub={`as on ${niceDate(r.as_on)}`}>
+      <table className="w-full text-[12px] tabular-nums border-collapse">
+        <thead>
+          <tr className={THEAD}>
+            <th className={`${TH} text-left min-w-[180px]`} rowSpan={2}>
+              Reserve
+            </th>
+            {RESERVE_GRADES.map((g) => (
+              <th key={g.key} colSpan={2}
+                  className={`${TH} text-center ${tone(g.key).text}`}>
+                {g.label}
+              </th>
+            ))}
+            <th colSpan={2} className={`${TH} text-center ${MTD_BG}`}>Total</th>
+            <th className={`${TH} text-right min-w-[120px]`} rowSpan={2}>
+              Present Value
+              <span className="block font-normal normal-case tracking-normal
+                               text-[9px] text-txt-light">
+                net of royalty · Rs Crores
+              </span>
+            </th>
+          </tr>
+          <tr className={THEAD}>
+            {RESERVE_GRADES.map((g) => (
+              <Fragment key={g.key}>
+                <th className={`${TH} text-right`}>Tonnes</th>
+                <th className={`${TH} text-right`}>Cr<sub>2</sub>O<sub>3</sub>%</th>
+              </Fragment>
+            ))}
+            <th className={`${TH} text-right ${MTD_BG}`}>Tonnes</th>
+            <th className={`${TH} text-right ${MTD_BG}`}>
+              Cr<sub>2</sub>O<sub>3</sub>%
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.key}
+                className={row.strong ? "bg-bg-section/70" : "hover:bg-bg-light"}>
+              <td className={`${TD} font-condensed text-[11px] ${
+                row.strong ? "font-bold text-navy" : "text-txt-secondary"}`}>
+                {row.label}
+                {row.note && (
+                  <span className="block font-sans font-normal text-[10px] text-txt-light">
+                    {row.note}
+                  </span>
+                )}
+              </td>
+              {RESERVE_GRADES.map((g) => {
+                const line = row.lines.find((l) => l.grade === g.key);
+                return (
+                  <Fragment key={g.key}>
+                    <td className={`${TD} text-right`}>
+                      <N v={line?.tonnage ?? null} dp={0} strong={row.strong} />
+                    </td>
+                    <td className={`${TD} text-right`}>
+                      <N v={line?.cr2o3 ?? null} dp={2} />
+                    </td>
+                  </Fragment>
+                );
+              })}
+              <td className={`${TD} text-right ${MTD_BG}`}>
+                <N v={row.tonnage} dp={0} strong />
+              </td>
+              <td className={`${TD} text-right ${MTD_BG}`}>
+                <N v={row.cr2o3} dp={2} strong={row.strong} />
+              </td>
+              <td className={`${TD} text-right`}>
+                {row.val?.rates_available
+                  ? <N v={row.val.net_cr} dp={2} strong={row.strong} />
+                  : <span className="text-txt-light/40">—</span>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {/* THE SUBTRACTION, SPELLED OUT. Two rows of a reserve with a few lakh
+          tonnes between them invite exactly one question, and the answer is
+          one scan of SAP away — so it is printed rather than left to be asked
+          at the meeting. */}
+      <div className="px-4 py-2.5 border-t border-border-light bg-bg-soft
+                      text-[11px] text-txt-secondary leading-relaxed">
+        <strong className="text-navy">Read-out:</strong>{" "}
+        {dep && dep.total > 0 ? (
+          <>
+            {formatIndian(Math.round(dep.total), 0)} MT came out of the ground
+            over {dep.days} day{dep.days === 1 ? "" : "s"} ({shortDay(dep.from)}
+            {" – "}{shortDay(dep.to)}) —{" "}
+            {RESERVE_GRADES.map((g, i) => (
+              <Fragment key={g.key}>
+                {i > 0 && ", "}
+                <span className={tone(g.key).text}>{g.key}</span>{" "}
+                {formatIndian(Math.round(dep.grades?.[g.key]?.total ?? 0), 0)} MT
+              </Fragment>
+            ))}
+            .{estNote}
+          </>
+        ) : (
+          <>No production has been posted since the survey was declared, so the
+          reserve stands exactly as it was filed.</>
+        )}{" "}
+        <span className="text-txt-light">
+          Each band&apos;s grade is held fixed as it depletes; the total is
+          re-weighted by tonnage. Overburden, COB concentrate and despatch do
+          not deplete the reserve — only ore leaving the ground does.
+          {val?.rates_available && (
+            <> Valued at {val.rate_source}
+              {val.gross_cr != null && (
+                <> — {formatIndian(Math.round(val.gross_cr * 100) / 100, 2)} Cr
+                  gross, less {val.charge_pct ?? "—"}% royalty, DMF and NMET</>
+              )}.
+              {val.rate_stale && " Last known rates — the bulletin is overdue."}
+              {val.unpriced.length > 0
+                && ` No rate on file for ${val.unpriced.join(", ")}, so that`
+                   + ` tonnage is not in the value.`}
+            </>
+          )}
+        </span>
       </div>
     </Card>
   );
@@ -1625,6 +1902,102 @@ function ExcavationBlock({ statusTill, tdLabel, mtdLabel, td, mtd }: {
    The six tiles reuse the page's own Tile, and the table is the same ruled
    TD/MTD grid as Overburden, so the card reads as part of this report rather
    than as a dashboard pasted into it. */
+/* ── Overall Equipment OEE ─────────────────────────────────────────────── */
+/**
+ * The excavator fleet's four headline figures, on the page the day is read
+ * from — between the excavation work above it and the dewatering below.
+ *
+ * TWO BLOCKS, NOT ONE. A 58 CuM/hr machine commissioned this year and a
+ * seven-year-old 17 CuM/hr one are not answering the same question, and a
+ * single Performance figure across both says nothing anybody can act on. The
+ * OEE page splits its tables for exactly that reason; this block carries the
+ * same split rather than re-merging what that page took apart.
+ *
+ * THE FIGURES ARE THE SERVER'S, ALREADY WEIGHTED. Every percentage is a ratio
+ * of sums — Σ available ÷ Σ ideal time, Σ actual ÷ Σ ideal CuM — so a machine
+ * that ran two shifts counts for two shifts. Averaging the rows in the browser
+ * overstates fleet Performance and OEE by roughly half, which is why nothing
+ * here is re-derived and why the cards come from the same helper the OEE page
+ * uses. Follow a figure to that page and it reads identically, because it is
+ * the same response.
+ *
+ * UTILISATION IS NOT A FACTOR OF OEE and is shown first anyway. Availability,
+ * Performance and Quality multiply into OEE; Utilisation answers the question
+ * Availability raises — the machine was free to work, did it?
+ */
+function OeeBlock({ from, to, statusTill }: {
+  from?: string | null; to?: string | null; statusTill: string;
+}) {
+  const q = useExecOee(from, to);
+  const d = q.data;
+
+  const fleets = [
+    { key: "old", title: "Old Excavator", fleet: d?.fleet_old },
+    { key: "new", title: "New Excavator", fleet: d?.fleet_new },
+  ];
+
+  return (
+    <Card icon={<Cog size={14} />} title="Overall Equipment OEE"
+          sub={statusTill}>
+      {q.isError ? (
+        <div className="px-4 py-6 text-[12px] text-txt-light">
+          The equipment roll-up could not be read just now.
+        </div>
+      ) : (
+        <div className="divide-y divide-border-light">
+          {fleets.map((f) => (
+            <div key={f.key}>
+              <div className="px-4 pt-3 flex items-baseline gap-2 flex-wrap">
+                <span className="font-condensed font-bold text-[11px] tracking-widest
+                                 uppercase text-txt-secondary">
+                  {f.title}
+                </span>
+                <span className="text-[10px] text-txt-light font-condensed
+                                 uppercase tracking-wider">
+                  {f.fleet
+                    ? `${f.fleet.machine_count} machine`
+                      + `${f.fleet.machine_count === 1 ? "" : "s"} · `
+                      + `${formatIndian(Math.round(f.fleet.actual_cum), 0)} M³ excavated`
+                    : ""}
+                </span>
+                {/* A MACHINE THAT NEVER TURNED UP IS NAMED, not quietly left
+                    out. It is on the roster for this window and has no shift
+                    rows at all, so it is absent from the weighting as well as
+                    from the table — and a fleet figure that silently covers
+                    fewer machines than the roster is the kind of number that
+                    gets quoted and then cannot be explained. */}
+                {f.fleet && f.fleet.absent_machines?.length > 0 && (
+                  <span className="text-[10px] text-amber-700"
+                        title="On the roster for this window but with no shift rows at all — not in these figures">
+                    {f.fleet.absent_machines.length} not reported
+                  </span>
+                )}
+              </div>
+              <KpiStrip cards={excavatorCoreKpis(f.fleet)}
+                        loading={q.isLoading} dense />
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="px-4 py-2.5 border-t border-border-light bg-bg-soft
+                      text-[10px] text-txt-light leading-relaxed">
+        <strong className="text-txt-secondary">OEE</strong> · availability ×
+        performance × quality, weighted across the machines in each fleet —
+        never an average of their percentages.{" "}
+        <strong className="text-txt-secondary">Utilisation</strong> sits beside
+        the three and is not one of them.{" "}
+        <strong className="text-txt-secondary">Sources</strong> · loss hours
+        from IMOS, breakdown from SAP for owned machines and the IMOS shift log
+        for hired ones, excavation from SAP, the fleet and each machine&apos;s
+        rate from the Equipment Status Selector
+        {d?.roster_as_on ? `, as set on ${niceDate(d.roster_as_on)}` : ""}.
+        The OEE section carries the same figures machine by machine.
+      </div>
+    </Card>
+  );
+}
+
 function DewateringBlock({ d }: { d: ExecDewateringBlock }) {
   const k = d.kpi;
 
@@ -2289,6 +2662,14 @@ export default function ExecutiveSummarySection() {
 
           <StockBlock d={d} />
 
+          {/* BETWEEN THE STOCK AND THE KPIs, where the mine asked for it: what
+              is on the stacks, then what is still in the ground, then how the
+              month is running against its plan. It takes the report day rather
+              than the whole payload -- it fetches its own position from
+              /api/resource-reserve, so the executive summary endpoint does not
+              grow a block it would have to recompute on every call. */}
+          <ReserveBlock reportDay={d.report_day} />
+
           {/* ABOVE MINES PRODUCTION, where the mine asked for it: the one-line
               verdict on the month comes before the grade detail that explains
               it. Given the whole payload rather than a dozen props -- it reads
@@ -2321,6 +2702,14 @@ export default function ExecutiveSummarySection() {
           <ExcavationBlock statusTill={statusTill}
             tdLabel={tdLabel} mtdLabel={mtdLabel}
             td={d.td.excavation ?? []} mtd={d.mtd.excavation ?? []} />
+
+          {/* BETWEEN THE EXCAVATION AND THE PUMPS, where the mine asked for
+              it: how much was moved, then how well the machines that moved it
+              were run, then what was pumped out from under them. It fetches
+              its own roll-up over the summary's window -- see useExecOee for
+              why that is a separate request and not another block of
+              /executive-summary. */}
+          <OeeBlock from={d.mtd_from} to={d.report_day} statusTill={statusTill} />
 
           {/* Dewatering sits with the excavation work above it rather than
               with the despatch blocks below: keeping the pit dry is what

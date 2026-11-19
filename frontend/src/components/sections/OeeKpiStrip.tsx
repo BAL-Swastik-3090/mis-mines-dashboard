@@ -70,6 +70,7 @@ export interface Kpi {
  *  cards and the tipper strip six, and neither should leave a card stranded
  *  alone on a row. */
 const GRID: Record<number, string> = {
+  4: "grid-cols-2 xl:grid-cols-4",
   5: "grid-cols-2 md:grid-cols-3 xl:grid-cols-5",
   6: "grid-cols-2 md:grid-cols-3 xl:grid-cols-6",
   7: "grid-cols-2 md:grid-cols-4 xl:grid-cols-7",
@@ -194,6 +195,30 @@ export function excavatorKpis(fleet: OEEFleet | undefined): Kpi[] {
       fmt: fmt0,
     },
   ];
+}
+
+/**
+ * The four the Executive Summary carries, in the mine's order: was the
+ * machine used, was it free to be used, how hard did it work, and what do the
+ * three factors multiply to.
+ *
+ * PICKED OUT OF excavatorKpis BY LABEL rather than restated here. Thresholds,
+ * formula captions and the weighted figures they read all stay defined in one
+ * place, so a card on the summary page and the same card on the OEE page can
+ * never colour one figure two different ways -- which is the whole reason the
+ * strip was pulled out of OEESection in the first place.
+ *
+ * UTILISATION LEADS AND IS NOT A FACTOR OF OEE. Availability, Performance and
+ * Quality multiply into OEE; Utilisation does not. It is first because it is
+ * the question the rest answer in detail.
+ */
+const EXEC_CORE = ["Utilisation", "Availability", "Performance", "Fleet OEE"];
+
+export function excavatorCoreKpis(fleet: OEEFleet | undefined): Kpi[] {
+  const all = excavatorKpis(fleet);
+  return EXEC_CORE
+    .map((label) => all.find((k) => k.label === label))
+    .filter((k): k is Kpi => Boolean(k));
 }
 
 // ── Tippers ──────────────────────────────────────────────────────────────────
