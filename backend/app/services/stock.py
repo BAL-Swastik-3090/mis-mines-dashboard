@@ -1,5 +1,5 @@
 """
-Mines stock position — from `mines_stock_entry`, filled in on the dashboard.
+Mines stock position — from `minehub.mines_stock_entry`, filled in on the dashboard.
 
 Replaces the IMOS table `mines_stock`, which in turn replaced the SAP
 `mm_mb52_inventory_new` feed that nobody maintained.
@@ -37,11 +37,11 @@ from datetime import date
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
-TABLE = "mines_stock_entry"
+TABLE = "minehub.mines_stock_entry"
 
 # Entered on the same form, against the same date. SKD = Sukinda, BLS =
 # Balasore. Qty is never stored — it is the sum, computed here as on the form.
-DESPATCH_TABLE = "mines_proposed_despatch"
+DESPATCH_TABLE = "minehub.mines_proposed_despatch"
 DESPATCH_TO = [("SKD", "Sukinda"), ("BLS", "Balasore")]
 
 # The four positions at the mine. Their sum is Total Stock, and the same rows
@@ -177,17 +177,17 @@ def _proposed_despatch(db: Session, day: date | None) -> dict:
     if day is None:
         return empty
     rows = db.execute(text(f"""
-        SELECT Destination, SUM(Qty) AS qty
+        SELECT destination, SUM(qty) AS qty
         FROM   {DESPATCH_TABLE}
-        WHERE  Despatch_Date = :d
-        GROUP  BY Destination
+        WHERE  despatch_date = :d
+        GROUP  BY destination
     """), {"d": day}).fetchall()
     if not rows:
         return empty
     by = {k: 0.0 for k, _ in DESPATCH_TO}
     for r in rows:
-        if r.Destination in by:
-            by[r.Destination] = round(_f(r.qty), 2)
+        if r.destination in by:
+            by[r.destination] = round(_f(r.qty), 2)
     return {
         "total": round(sum(by.values()), 2),
         "by_destination": by,
@@ -264,9 +264,9 @@ def _resolve_snapshot_date(db: Session, as_on: date | None) -> date | None:
     states which snapshot it is showing.
     """
     if as_on is None:
-        return db.execute(text(f"SELECT MAX(Stock_Date) FROM {TABLE}")).scalar()
+        return db.execute(text(f"SELECT MAX(stock_date) FROM {TABLE}")).scalar()
     return db.execute(text(
-        f"SELECT MAX(Stock_Date) FROM {TABLE} WHERE Stock_Date <= :d"
+        f"SELECT MAX(stock_date) FROM {TABLE} WHERE stock_date <= :d"
     ), {"d": as_on}).scalar()
 
 
@@ -279,17 +279,43 @@ def _last_changed(db: Session, day: date) -> tuple[object | None, str | None]:
     while the thing the user had just corrected sat in the other table.
     """
     row = db.execute(text(f"""
-        SELECT Updated_At AS t, Updated_By AS who FROM {TABLE}
-         WHERE Stock_Date = :d
+        SELECT updated_at AS t, updated_by AS who FROM {TABLE}
+         WHERE stock_date = :d
         UNION ALL
-        SELECT Updated_At, Updated_By FROM {DESPATCH_TABLE}
-         WHERE Despatch_Date = :d
+        SELECT updated_at, updated_by FROM {DESPATCH_TABLE}
+         WHERE despatch_date = :d
         ORDER BY t DESC LIMIT 1
     """), {"d": day}).mappings().first()
     return (row["t"], row["who"]) if row else (None, None)
 
 
-def get_stock_position(db: Session, as_on: date | None = None) -> dict:
+def get_stock_position(as_on: date | None = None) -> dict:
+    """The stock position as on a date, read from minehub.
+
+    THIS MODULE'S TWO TABLES LIVE IN minehub, not in the shared MySQL
+    instance, so it opens its own session rather than taking one. Its callers
+    -- the Stock router, the Executive Summary and Reality Check -- are
+    otherwise mid-way through a balcorpdb query, and the session they hold
+    cannot read these. Same arrangement as est_actual and lcm_settings.
+
+    UNLIKE est_actual, AN UNREACHABLE minehub RAISES HERE. There the estimate
+    is the optional half of a figure SAP also answers, so returning nothing
+    degrades the screen gracefully. This IS the stock position -- there is no
+    other source for it, and a silent empty panel would read as "the mine is
+    holding nothing", which is a claim rather than an absence.
+    """
+    from app.minehub_db import SessionLocal as _PG
+    if _PG is None:
+        raise RuntimeError("minehub is unavailable; the stock position "
+                           "cannot be read")
+    db = _PG()
+    try:
+        return _stock_position(db, as_on)
+    finally:
+        db.close()
+
+
+def _stock_position(db: Session, as_on: date | None) -> dict:
     snap = _resolve_snapshot_date(db, as_on)
 
     if snap is None:
@@ -311,10 +337,10 @@ def get_stock_position(db: Session, as_on: date | None = None) -> dict:
     # status rows are this grouped by Bucket. Reading them from one result
     # rather than two queries is also what guarantees they agree.
     mine_rows = db.execute(text(f"""
-        SELECT Grade, Bucket, SUM(Qty) AS qty
+        SELECT grade, bucket, SUM(qty) AS qty
         FROM   {TABLE}
-        WHERE  Stock_Date = :d AND Bucket IN ({_MINE_IN})
-        GROUP  BY Grade, Bucket
+        WHERE  stock_date = :d AND bucket IN ({_MINE_IN})
+        GROUP  BY grade, bucket
     """), {"d": snap}).fetchall()
 
     by_grade: dict[str, float] = {}
@@ -327,10 +353,10 @@ def get_stock_position(db: Session, as_on: date | None = None) -> dict:
     totalled = {b for b, _ in MINE_BUCKETS}
     for r in mine_rows:
         q = _f(r.qty)
-        grid[(r.Grade, r.Bucket)] = grid.get((r.Grade, r.Bucket), 0.0) + q
-        by_bucket[r.Bucket] = by_bucket.get(r.Bucket, 0.0) + q
-        if r.Bucket in totalled:
-            by_grade[r.Grade] = by_grade.get(r.Grade, 0.0) + q
+        grid[(r.grade, r.bucket)] = grid.get((r.grade, r.bucket), 0.0) + q
+        by_bucket[r.bucket] = by_bucket.get(r.bucket, 0.0) + q
+        if r.bucket in totalled:
+            by_grade[r.grade] = by_grade.get(r.grade, 0.0) + q
 
     grades = [{
         "grade_key":   key,
@@ -355,16 +381,16 @@ def get_stock_position(db: Session, as_on: date | None = None) -> dict:
 
     # ── stock held elsewhere ─────────────────────────────────────────────────
     loc_rows = db.execute(text(f"""
-        SELECT Grade, Bucket, SUM(Qty) AS qty
+        SELECT grade, bucket, SUM(qty) AS qty
         FROM   {TABLE}
-        WHERE  Stock_Date = :d AND Bucket NOT IN ({_MINE_IN})
-        GROUP  BY Grade, Bucket
+        WHERE  stock_date = :d AND bucket NOT IN ({_MINE_IN})
+        GROUP  BY grade, bucket
     """), {"d": snap}).fetchall()
     loc: dict[str, float] = {}
     for r in loc_rows:
         q = _f(r.qty)
-        loc[r.Bucket] = loc.get(r.Bucket, 0.0) + q
-        grid[(r.Grade, r.Bucket)] = grid.get((r.Grade, r.Bucket), 0.0) + q
+        loc[r.bucket] = loc.get(r.bucket, 0.0) + q
+        grid[(r.grade, r.bucket)] = grid.get((r.grade, r.bucket), 0.0) + q
 
     bal        = loc.get("BAL_PLANT", 0.0)
     suk        = loc.get("SUK_PLANT", 0.0)

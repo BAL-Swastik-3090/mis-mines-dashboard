@@ -1153,7 +1153,7 @@ def get_executive_summary(db: Session, report_day: date,
         "report_day": report_day.isoformat(),
         "stock_as_on": stock_as_on.isoformat(),
         "mtd_from": mtd_from.isoformat(),
-        "stock": stock_svc.get_stock_position(db, stock_as_on),
+        "stock": stock_svc.get_stock_position(stock_as_on),
         "td": block("td"),
         "mtd": block("mtd"),
         # OUTSIDE td/mtd, UNLIKE EVERY OTHER BLOCK ON THIS PAGE. Dewatering

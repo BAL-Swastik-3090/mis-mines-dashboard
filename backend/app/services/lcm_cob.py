@@ -49,6 +49,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from app.services.sap_source import sap_one, sap_rows
 
+from app.services import est_actual
 from app.services import ibm_rates
 
 # Net of SAP reversal documents — see sap_movement.
@@ -151,6 +152,19 @@ def _actual_qty(db: Session, fd: date, td: date) -> dict:
 
     Movement types and material descriptions are those the COB Plant section
     already uses, so the LCM's denominators match what that page displays.
+
+    CONCENTRATE FALLS BACK TO THE MINE'S ESTIMATE where SAP has not posted the
+    day, the same rule as the mines matrix -- see services/est_actual.py.
+
+    FEED DOES NOT, BECAUSE THE MINE DOES NOT TYPE IT. mines_prev_day_actual
+    carries ORE, OB and COB, and its COB row is the concentrate OUT of the
+    plant; there is no row for the low-grade ore going in. So a window still
+    waiting on SAP has an estimated numerator over a SAP denominator, which
+    lifts the apparent recovery and moves loss from the Recovery head onto
+    Feed volume. The deviation itself is unaffected -- feed volume and
+    recovery sum to it by algebra whatever the split -- but the attribution
+    between those two heads is provisional until SAP posts, and `conc_source`
+    below is what says so.
     """
     sql = text(f"""
         SELECT
@@ -165,9 +179,23 @@ def _actual_qty(db: Session, fd: date, td: date) -> dict:
           AND POSTING_DATE BETWEEN :fd AND :td
     """)
     r = sap_one(db, sql, {"plant": PLANT_COB, "fd": fd, "td": td})
+
+    # Presence of a posting for the plant is the test, exactly as it is for
+    # ore and overburden: SAP answering a day with nothing is still an answer.
+    covered = est_actual.posted_days(db, """
+        SELECT DISTINCT POSTING_DATE FROM pp_production
+         WHERE PLANT = :plant AND POSTING_DATE BETWEEN :fd AND :td
+    """, {"plant": PLANT_COB, "fd": fd, "td": td})
+    est = est_actual.estimate(fd, td, est_actual.MAT_COB, covered)
+
+    conc_sap = _f(r.concentrate)
     return {
         "feed":        _f(r.feed),
-        "concentrate": _f(r.concentrate),
+        "concentrate": conc_sap + est["qty"],
+        "conc_sap":        conc_sap,
+        "conc_estimated":  est["qty"],
+        "conc_est_days":   est["days"],
+        "conc_source":     est_actual.source_of(conc_sap, est["qty"]),
         "posted_days": int(r.posted_days or 0),
         "last_posted": r.last_posted,
     }

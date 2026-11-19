@@ -28,7 +28,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.minehub_db import get_minehub_db
 
 router = APIRouter(prefix="/api/stock-entry", tags=["Mines Stock Entry"])
 
@@ -40,7 +40,7 @@ GRADES = ("HG", "MG", "COB", "LG")
 DESPATCH_DESTINATIONS = ("SKD", "BLS")
 
 # Bucket -> whether it sits at the mine. Must match the CHECK constraint in
-# scripts/sql/005_mines_stock_entry.sql; this is its only counterpart in code.
+# minehub/migrations/110; this is its only counterpart in code.
 BUCKETS: dict[str, bool] = {
     "MINE_PERMISSION_IN_HAND":    True,
     "MINE_AWAITING_PERMISSION":   True,
@@ -92,18 +92,18 @@ def _valid_cell(grade: str, bucket: str) -> bool:
 @router.get("", summary="The stock position entered for one day")
 def get_day(
     on_date: date = Query(..., description="The Stock_Date to read"),
-    db: Session = Depends(get_db),
+    pg: Session = Depends(get_minehub_db),
 ) -> dict:
-    rows = db.execute(text("""
-        SELECT Grade, Bucket, Qty, Entry_Id, Entry_Date, Updated_At, Updated_By
-          FROM mines_stock_entry
-         WHERE Stock_Date = :d
+    rows = pg.execute(text("""
+        SELECT grade, bucket, qty, entry_id, entry_date, updated_at, updated_by
+          FROM minehub.mines_stock_entry
+         WHERE stock_date = :d
     """), {"d": on_date}).mappings().all()
 
-    proposed = db.execute(text("""
-        SELECT Destination, Qty, Entry_Date, Updated_At, Updated_By
-          FROM mines_proposed_despatch
-         WHERE Despatch_Date = :d
+    proposed = pg.execute(text("""
+        SELECT destination, qty, entry_date, updated_at, updated_by
+          FROM minehub.mines_proposed_despatch
+         WHERE despatch_date = :d
     """), {"d": on_date}).mappings().all()
 
     # THE LATEST CHANGE ACROSS THE WHOLE DAY, stock and proposed despatch
@@ -112,20 +112,20 @@ def get_day(
     # "unchanged" after an edit that only touched the despatch boxes, which is
     # the exact case this was built for.
     stamped = [*rows, *proposed]
-    latest = max(stamped, key=lambda r: r["Updated_At"]) if stamped else None
+    latest = max(stamped, key=lambda r: r["updated_at"]) if stamped else None
 
     # Keyed "GRADE|BUCKET" so the form reads one cell without searching.
     return {
         "on_date": on_date,
         "has_data": len(rows) > 0,
-        "cells": {f"{r['Grade']}|{r['Bucket']}": float(r["Qty"]) for r in rows},
-        "proposed_despatch": {r["Destination"]: float(r["Qty"]) for r in proposed},
+        "cells": {f"{r['grade']}|{r['bucket']}": float(r["qty"]) for r in rows},
+        "proposed_despatch": {r["destination"]: float(r["qty"]) for r in proposed},
         # First filed, and last changed. Equal until somebody edits the day.
-        "entered_by": rows[0]["Entry_Id"] if rows else None,
-        "entered_at": (min(r["Entry_Date"] for r in stamped).isoformat()
+        "entered_by": rows[0]["entry_id"] if rows else None,
+        "entered_at": (min(r["entry_date"] for r in stamped).isoformat()
                        if stamped else None),
-        "updated_by": latest["Updated_By"] if latest else None,
-        "updated_at": latest["Updated_At"].isoformat() if latest else None,
+        "updated_by": latest["updated_by"] if latest else None,
+        "updated_at": latest["updated_at"].isoformat() if latest else None,
     }
 
 
@@ -137,11 +137,11 @@ def put_day(
     cells: list[dict] = Body(..., embed=True),
     # {"SKD": 120, "BLS": 300} — the day's proposed despatch, optional.
     proposed_despatch: dict | None = Body(None, embed=True),
-    db: Session = Depends(get_db),
+    pg: Session = Depends(get_minehub_db),
 ) -> dict:
     if STOCK_PERMISSION:
         from app.services import access as access_svc
-        if not access_svc.has_permission(db, _actor(request), STOCK_PERMISSION):
+        if not access_svc.has_permission(pg, _actor(request), STOCK_PERMISSION):
             raise HTTPException(403, "You may not enter stock figures.")
 
     if on_date > date.today():
@@ -217,7 +217,7 @@ def put_day(
     # second apart and a brand-new day read as already edited; datetime.now() is
     # a different machine's clock again. A save is one action, so it gets one
     # timestamp, and "never edited" is exactly Entry_Date == Updated_At.
-    saved_at = db.execute(text("SELECT NOW()")).scalar()
+    saved_at = pg.execute(text("SELECT now()")).scalar()
 
     # WHO FILED THIS DAY FIRST, AND WHEN — read before the delete removes it.
     # Replacing the day would otherwise reset Entry_Date to now on every save,
@@ -225,24 +225,24 @@ def put_day(
     # correction. Carried forward here so Entry_Date means "first filed" and
     # Updated_At means "last changed"; a day being filed for the first time has
     # no earlier value, so the two are set to the same moment.
-    first = db.execute(text("""
-        SELECT Entry_Date, Entry_Id FROM mines_stock_entry
-         WHERE Stock_Date = :d ORDER BY Entry_Date LIMIT 1
+    first = pg.execute(text("""
+        SELECT entry_date, entry_id FROM minehub.mines_stock_entry
+         WHERE stock_date = :d ORDER BY entry_date LIMIT 1
     """), {"d": on_date}).mappings().first()
     # None on a first entry, and the INSERT falls back to NOW(). Deliberately
     # NOT datetime.now(): that is the app server's clock while NOW() is the
     # database's, and the two differ by about a second here — enough to make a
     # brand-new entry look like it had already been edited, because the screen
     # decides that by comparing these two timestamps. One clock, both columns.
-    born_at = first["Entry_Date"] if first else None
-    born_by = first["Entry_Id"] if first else who
+    born_at = first["entry_date"] if first else None
+    born_by = first["entry_id"] if first else who
 
-    db.execute(text("DELETE FROM mines_stock_entry WHERE Stock_Date = :d"),
+    pg.execute(text("DELETE FROM minehub.mines_stock_entry WHERE stock_date = :d"),
                {"d": on_date})
-    db.execute(text("""
-        INSERT INTO mines_stock_entry
-               (Stock_Date, Grade, Bucket, Qty,
-                Entry_Id, Entry_Date, Updated_By, Updated_At)
+    pg.execute(text("""
+        INSERT INTO minehub.mines_stock_entry
+               (stock_date, grade, bucket, qty,
+                entry_id, entry_date, updated_by, updated_at)
         VALUES (:d, :g, :b, :q, :born_by, COALESCE(:born_at, :at), :who, :at)
     """), [{"d": on_date, "g": g, "b": b, "q": q, "at": saved_at,
             "who": who, "born_by": born_by, "born_at": born_at}
@@ -250,25 +250,25 @@ def put_day(
 
     # Replaced wholesale alongside the stock, in the same transaction, so the
     # day is never half one submission and half the one before it.
-    p_first = db.execute(text("""
-        SELECT Entry_Date, Entry_Id FROM mines_proposed_despatch
-         WHERE Despatch_Date = :d ORDER BY Entry_Date LIMIT 1
+    p_first = pg.execute(text("""
+        SELECT entry_date, entry_id FROM minehub.mines_proposed_despatch
+         WHERE despatch_date = :d ORDER BY entry_date LIMIT 1
     """), {"d": on_date}).mappings().first()
-    p_born_at = p_first["Entry_Date"] if p_first else None   # see born_at above
-    p_born_by = p_first["Entry_Id"] if p_first else who
+    p_born_at = p_first["entry_date"] if p_first else None   # see born_at above
+    p_born_by = p_first["entry_id"] if p_first else who
 
-    db.execute(text("DELETE FROM mines_proposed_despatch WHERE Despatch_Date = :d"),
+    pg.execute(text("DELETE FROM minehub.mines_proposed_despatch WHERE despatch_date = :d"),
                {"d": on_date})
     if proposed:
-        db.execute(text("""
-            INSERT INTO mines_proposed_despatch
-                   (Despatch_Date, Destination, Qty,
-                    Entry_Id, Entry_Date, Updated_By, Updated_At)
+        pg.execute(text("""
+            INSERT INTO minehub.mines_proposed_despatch
+                   (despatch_date, destination, qty,
+                    entry_id, entry_date, updated_by, updated_at)
             VALUES (:d, :dest, :q, :born_by, COALESCE(:born_at, :at), :who, :at)
         """), [{"d": on_date, "dest": dest, "q": q, "at": saved_at,
                 "who": who, "born_by": p_born_by, "born_at": p_born_at}
                for dest, q in proposed])
-    db.commit()
+    pg.commit()
 
     return {"on_date": on_date, "saved": len(clean),
             "proposed_saved": len(proposed), "entered_by": who}
@@ -278,19 +278,19 @@ def put_day(
 def delete_day(
     request: Request,
     on_date: date = Query(...),
-    db: Session = Depends(get_db),
+    pg: Session = Depends(get_minehub_db),
 ) -> dict:
     if STOCK_PERMISSION:
         from app.services import access as access_svc
-        if not access_svc.has_permission(db, _actor(request), STOCK_PERMISSION):
+        if not access_svc.has_permission(pg, _actor(request), STOCK_PERMISSION):
             raise HTTPException(403, "You may not enter stock figures.")
-    r = db.execute(text("DELETE FROM mines_stock_entry WHERE Stock_Date = :d"),
+    r = pg.execute(text("DELETE FROM minehub.mines_stock_entry WHERE stock_date = :d"),
                    {"d": on_date})
     # The day's proposed despatch goes with it. It is entered on the same form
     # and against the same date; leaving it behind would strand a proposal with
     # no stock position it was judged against.
-    p = db.execute(text("DELETE FROM mines_proposed_despatch WHERE Despatch_Date = :d"),
+    p = pg.execute(text("DELETE FROM minehub.mines_proposed_despatch WHERE despatch_date = :d"),
                    {"d": on_date})
-    db.commit()
+    pg.commit()
     return {"on_date": on_date, "removed": r.rowcount or 0,
             "proposed_removed": p.rowcount or 0}
