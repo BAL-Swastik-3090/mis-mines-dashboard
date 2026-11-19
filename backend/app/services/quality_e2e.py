@@ -122,6 +122,11 @@ STACK_SHAPE = "^[A-Za-z][0-9]{6,}$"
 # far below one truck, so it cannot merge two consignments by accident.
 QTY_TOL = 0.05
 
+# How many lots either side of a partial despatch the subset search will try.
+# A lab split is one or two trucks, never ten: beyond that it is not a split,
+# and the search would stop being cheap on a 105-lot group.
+SUBSET_MAX_LOTS = 3
+
 # How far either side of the window to look for a stack's other despatch days.
 BATCH_PAD_DAYS = 60
 
@@ -277,6 +282,10 @@ def _consign(lots: list[dict], by: tuple[str, ...]) -> list[dict]:
             "trips": len(members),
             "first": min(m["lot"] for m in members),
             "material": members[0]["material"],
+            # The individual truck sizes, so a consignment that is only PART
+            # of this group can be recognised -- see _match_by_qty attempt 4.
+            # Sorted for a stable search order, never for meaning.
+            "lot_qtys": sorted(m["qty"] for m in members),
             **{p: _wavg([(m[p], m["qty"]) for m in members]) for p in PARAMS},
         })
     return sorted(out, key=lambda g: g["first"])
@@ -297,6 +306,33 @@ def _merge_groups(members: tuple[dict, ...]) -> dict:
         "material": members[0]["material"],
         **{p: _wavg([(g[p], g["qty"]) for g in members]) for p in PARAMS},
     }
+
+
+def _contains(group: dict, qty: float, trips: int) -> bool:
+    """Could this consignment be PART of this group, and only part of it?
+
+    True when the group holds strictly more trucks and more tonnage, and the
+    difference can be made up out of the group's own lot sizes with the right
+    number of trucks. Requiring the count as well as the tonnage is what makes
+    it safe -- tonnage alone could be reached by any number of trucks, and
+    would happily explain a consignment that has nothing to do with the group.
+    """
+    lots = group.get("lot_qtys") or []
+    if len(lots) != group["trips"]:
+        return False                      # a group we cannot account for
+    if trips >= group["trips"] or qty >= group["qty"] + QTY_TOL:
+        return False                      # not strictly smaller: not a subset
+    drop_n = group["trips"] - trips
+    # Search whichever side is fewer trucks. The two are complementary, so
+    # finding one proves the other.
+    if drop_n <= trips:
+        want, take = round(group["qty"] - qty, 2), drop_n
+    else:
+        want, take = qty, trips
+    if take > SUBSET_MAX_LOTS:
+        return False
+    return any(abs(sum(c) - want) < QTY_TOL
+               for c in combinations(lots, take))
 
 
 def _match_by_qty(groups: list[dict], qty: float,
@@ -330,9 +366,33 @@ def _match_by_qty(groups: list[dict], qty: float,
        Two and three groups only -- beyond that it is not a lab split, and the
        search would stop being cheap.
 
+    4. A SUBSET OF EXACTLY ONE GROUP. The mirror of attempt 3. There, one
+       consignment had been filed as several groups and the fix was to add
+       them up; here ONE GROUP IS SPLIT ACROSS SEVERAL DESPATCH DAYS, and
+       adding cannot reach it. On 14 November K263004208 is 104 trips and
+       1,227.38 t against a group of 105 lots and 1,239.08 t -- one assayed
+       truck of 11.70 t that had not left the yard. Waiting does not help:
+       the 14th will still read 104 trips when it does.
+
+       THE ASSAY IS EXACT HERE, NOT APPROXIMATED. _consign groups on all
+       four parameters, so every lot inside a group carries identical values
+       and 104 of 105 reads precisely what 105 reads. There is no weighting
+       judgement to get wrong, which is what makes this safe where matching
+       on tonnage alone would not be.
+
+       Whichever side is smaller is the one searched -- the lots dropped or
+       the lots kept -- so the leftover truck's own day, 1 lot out of 105,
+       costs the same as the day it was taken from. Two groups that could
+       both contain the consignment are an ambiguity and still return None.
+
     What does not change: a consignment the lab has not assayed, or one where
     the answer is genuinely unclear, still renders blank. A borrowed figure is
     worse than a blank, because a blank says so.
+
+    THE RETURNED DICT IS READ FOR ITS ASSAY AND ITS MATERIAL, NOTHING ELSE.
+    A row's trips and tonnage come from the gate record, never from the match
+    -- which is why attempt 4 can hand back the whole group although the
+    consignment was only part of it.
     """
     hits = [g for g in groups if abs(g["qty"] - qty) < QTY_TOL]
     if len(hits) == 1:
@@ -366,7 +426,11 @@ def _match_by_qty(groups: list[dict], qty: float,
         if best < second:
             return _merge_groups(found[0])
         return None                       # equally good: a real ambiguity
-    return None
+
+    candidates = [g for g in groups if _contains(g, qty, trips)]
+    if len(candidates) == 1:
+        return candidates[0]
+    return None                           # none, or more than one: no answer
 
 
 def _allocate(lots: list[dict], days: list[dict]) -> dict[int, list[dict]]:
