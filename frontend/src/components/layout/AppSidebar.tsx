@@ -1,23 +1,12 @@
 "use client";
 import { useState } from "react";
-import { Activity, BarChart3, Boxes, Calculator, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, ClipboardCheck, ClipboardList, CloudSun, Database, DoorOpen, ExternalLink, Gauge, Layers, LayoutDashboard, LineChart, Network, Radar, Receipt, Scale, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
+import { Activity, BarChart3, Boxes, Calculator, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, ClipboardCheck, CloudSun, Database, DoorOpen, ExternalLink, Gauge, Layers, LayoutDashboard, LineChart, Network, Radar, Receipt, Scale, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { canOpen } from "@/contexts/pageAccess";
 import { useSidebar }               from "@/contexts/useSidebar";
 import { useAuth }                  from "@/contexts/useAuth";
 import { useDataHealth } from "@/hooks/useDataHealth";
 import { HOTO_TABS } from "./hotoNav";
-
-/** PR/PO Status is a separate application built by another IT team. It opens in
- *  its own tab rather than being embedded, so this dashboard stays alive behind
- *  it with its date filter and scroll position intact, and whatever login that
- *  app has is handled there.
- *
- *  Overridable per environment. NEXT_PUBLIC_* is inlined at build time, so
- *  changing it still needs a rebuild — the variable only keeps the host out of
- *  the component. */
-const PRPO_URL =
-  process.env.NEXT_PUBLIC_PRPO_URL ?? "http://192.168.10.29:3000/requisition-status-kaliapani";
 
 /** A nav entry is EITHER an internal page or an external link — never both.
  *
@@ -93,8 +82,6 @@ const NAV_ITEMS: NavItem[] = [
      separate things, and six identical badges say less than one. */
   { kind: "group", id: "hoto", label: "HOTO", icon: DoorOpen, tag: "UAT",
     children: HOTO_TABS.map(({ id, label }) => ({ id, label })) },
-  { kind: "link", href: PRPO_URL,        label: "PR/PO Status",               icon: ClipboardList,
-    need: "link.prpo.view" },
 ];
 
 /* Two administration entries, split by audience rather than merged for tidiness.
