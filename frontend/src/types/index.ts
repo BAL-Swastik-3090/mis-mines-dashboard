@@ -718,6 +718,11 @@ export interface RealityCheckRow {
   required_per_day: number | null;
   uplift:           number | null;
   verdict:          InsightVerdict;
+  /** Where the actual came from. "sap" once SAP has posted every elapsed day.
+   *  null on the rows that never had a SAP side to wait for — despatch comes
+   *  from the gate record and disposal from IMOS, and neither lags. */
+  source:           ActualSource | null;
+  est_days:         number | null;
 }
 
 export interface RealityCheckResponse {

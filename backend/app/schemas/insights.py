@@ -13,6 +13,13 @@ class RealityCheckRow(BaseModel):
     required_per_day: Optional[float]
     uplift:           Optional[float]
     verdict:          str   # "ACHIEVABLE" | "STRETCH" | "NOT_FEASIBLE" | "NO_DATA" | "N/A"
+    # Where the actual came from. "sap" once SAP has posted every elapsed day,
+    # which is what a closed month always reads; "mixed"/"manual" while some of
+    # the window is still the mine's own typed figure. None for the rows that
+    # never had a SAP side -- despatch comes from the gate record and disposal
+    # from IMOS, and neither lags.
+    source:           Optional[str] = None
+    est_days:         Optional[int] = None
 
 
 class RealityCheckResponse(BaseModel):

@@ -24,6 +24,7 @@ from typing import AsyncIterator
 import httpx
 from sqlalchemy.orm import Session
 
+from app.services import est_actual
 from app.services import breakdown as bd
 from app.services.oee import EXCAVATORS as OEE_EXCAVATORS
 from sqlalchemy import text
@@ -185,6 +186,24 @@ def _despatch_full_month_plan(db: Session, first: date, last: date) -> float:
 # ── actual queries ─────────────────────────────────────────────
 
 def _production_mtd(db: Session, from_date: date, to_date: date) -> dict:
+    """Ore, overburden and concentrate for the window.
+
+    WHERE SAP HAS NOT POSTED A DAY, THE MINE'S OWN FIGURE STANDS IN -- the
+    same rule as the Executive Summary and the Lost Cost Matrix, and the same
+    implementation, services/est_actual.py, so the three cannot drift apart.
+
+    It matters more here than anywhere else on the dashboard. Reality Check
+    divides the remaining gap by the days left to get the uplift a shift
+    manager is being asked for, so a day SAP has not posted does not merely
+    read low -- it is counted as nil production, inflating the gap AND the
+    multiple. On 18 November the narrative beneath this table read the last
+    three days as "0 -> 0 -> 0 MT" for exactly that reason.
+
+    DESPATCH IS DELIBERATELY NOT INCLUDED. It comes from the gate record,
+    written when the truck is weighed rather than posted in arrears, and it is
+    current to today -- there is no gap for an estimate to fill. Only
+    pp_production lags.
+    """
     row = db.execute(text(f"""
         SELECT
             -- Match on MATERIAL_NO, not MATERIAL_DESC. The description list
@@ -204,11 +223,43 @@ def _production_mtd(db: Session, from_date: date, to_date: date) -> dict:
         FROM pp_production
         WHERE POSTING_DATE BETWEEN :f AND :t
     """), {"f": from_date, "t": to_date}).fetchone()
-    return {
-        "ore": _f(row.ore),
-        "ob":  _f(row.ob),
-        "cob": _f(row.cob),
-    }
+    # ── WHICH DAYS SAP HAS ANSWERED, EACH MATERIAL SEPARATELY ──────────────
+    # One scan. They are posted independently: in October SAP had ore for
+    # every day and was missing overburden on five of them.
+    cov = {"ore": set(), "ob": set(), "cob": set()}
+    for r in db.execute(text("""
+        SELECT POSTING_DATE AS d,
+               SUM(CASE WHEN PLANT='1200' AND MATERIAL_NO IN (
+                       '000000000025000001','000000000025000002',
+                       '000000000025000003') THEN 1 ELSE 0 END) AS ore,
+               SUM(CASE WHEN PLANT='1200' AND MATERIAL_DESC='OVERBURDEN'
+                        THEN 1 ELSE 0 END) AS ob,
+               SUM(CASE WHEN PLANT='1210'
+                        AND MATERIAL_DESC='CONCENTRATE WITH STD MOISTURE'
+                        THEN 1 ELSE 0 END) AS cob
+          FROM pp_production
+         WHERE POSTING_DATE BETWEEN :f AND :t
+         GROUP BY POSTING_DATE
+    """), {"f": from_date, "t": to_date}):
+        for k in cov:
+            if getattr(r, k):
+                cov[k].add(r.d)
+
+    out = {}
+    for key, material in (("ore", est_actual.MAT_ORE),
+                          ("ob",  est_actual.MAT_OB),
+                          ("cob", est_actual.MAT_COB)):
+        sap = _f(getattr(row, key))
+        est = est_actual.estimate(db, from_date, to_date, material, cov[key])
+        out[key] = sap + est["qty"]
+        # Kept alongside so the table can say which it is showing. A day with
+        # NEITHER a posting nor a typed figure stays absent from both -- there
+        # is nothing to stand in with, and inventing one would be worse.
+        out[f"{key}_sap"] = sap
+        out[f"{key}_estimated"] = est["qty"]
+        out[f"{key}_est_days"] = est["days"]
+        out[f"{key}_source"] = est_actual.source_of(sap, est["qty"])
+    return out
 
 
 def _despatch_mtd_actual(db: Session, from_date: date, to_date: date) -> float | None:
@@ -381,12 +432,14 @@ def compute_reality_check(
     # a full-month target.
     plan_fallback    = plans.get("source") == "daily_elapsed"
 
-    def make_row(kpi, unit, plan, actual) -> RealityCheckRow:
+    def make_row(kpi, unit, plan, actual, source=None,
+                 est_days=None) -> RealityCheckRow:
         if actual is None:
             return RealityCheckRow(
                 kpi=kpi, unit=unit, plan=plan, actual=0,
                 gap=plan, run_rate_per_day=None,
                 required_per_day=None, uplift=None, verdict="NO_DATA",
+                source=source, est_days=est_days,
             )
         gap = round(plan - actual, 1)
         rr  = round(actual / elapsed, 1) if elapsed > 0 else None
@@ -397,6 +450,7 @@ def compute_reality_check(
                 kpi=kpi, unit=unit, plan=round(plan, 0), actual=round(actual, 0),
                 gap=gap, run_rate_per_day=rr,
                 required_per_day=0.0, uplift=0.0, verdict="ACHIEVABLE",
+                source=source, est_days=est_days,
             )
 
         req    = round(gap / remaining, 1) if remaining > 0 else None
@@ -406,12 +460,18 @@ def compute_reality_check(
             gap=gap, run_rate_per_day=rr,
             required_per_day=req if req and req > 0 else 0.0,
             uplift=uplift, verdict=_verdict(uplift),
+            source=source, est_days=est_days,
         )
 
     rows = [
-        make_row("Ore Production",   "MT",  plans["ore"],   actuals["ore"]),
-        make_row("OB Excavation",    "CuM", plans["ob"],    actuals["ob"]),
-        make_row("COB Production",   "MT",  cob_plan,       actuals["cob"]),
+        make_row("Ore Production",   "MT",  plans["ore"],   actuals["ore"],
+                 actuals["ore_source"], actuals["ore_est_days"]),
+        make_row("OB Excavation",    "CuM", plans["ob"],    actuals["ob"],
+                 actuals["ob_source"], actuals["ob_est_days"]),
+        make_row("COB Production",   "MT",  cob_plan,       actuals["cob"],
+                 actuals["cob_source"], actuals["cob_est_days"]),
+        # Despatch has no estimate and needs none: the gate record is written
+        # when the truck is weighed, not posted in arrears.
         make_row("Despatch",         "MT",  desp_plan,      desp_act),
         make_row("Water Disposal",   "M³",  dew_full["disp_plan"], dew["disp_act"]),
     ]
@@ -450,14 +510,40 @@ def _production_daily_rows(db: Session, from_date: date, to_date: date) -> list[
         ORDER BY POSTING_DATE DESC
         LIMIT 12
     """), {"f": from_date, "t": to_date}).fetchall()
+
+    # ── THE SAME FALLBACK AS THE MTD TOTAL, AND NOT OPTIONAL ───────────────
+    # This trend is what the narrative reads the recent sequence off, and on
+    # 18 November it reported "0 -> 0 -> 0 MT" for three days SAP had not yet
+    # posted. Filling the total but not these rows would be worse than leaving
+    # both alone: the trend would stop adding up to the figure printed above
+    # it, and nobody reading the two together could tell which was wrong.
+    #
+    # A day with NEITHER a posting nor a typed figure keeps no row at all, as
+    # before. There is nothing to stand in with, and a fabricated zero is the
+    # thing this is fixing.
+    by_day = {r.dt: {"ore": _f(r.ore), "ob": _f(r.ob), "cob": _f(r.cob)}
+              for r in rows}
+    for key, material in (("ore", est_actual.MAT_ORE),
+                          ("ob",  est_actual.MAT_OB),
+                          ("cob", est_actual.MAT_COB)):
+        covered = {d for d, v in by_day.items() if v[key]}
+        for d, q in db.execute(text("""
+            SELECT `Date` AS d, Est_Actual AS q FROM mines_prev_day_actual
+             WHERE Material = :m AND `Date` BETWEEN :f AND :t
+        """), {"m": material, "f": from_date, "t": to_date}):
+            if d in covered:
+                continue                  # SAP has spoken for this day
+            by_day.setdefault(d, {"ore": 0.0, "ob": 0.0, "cob": 0.0})
+            by_day[d][key] = float(q or 0)
+
     return [
         {
-            "date": str(r.dt),
-            "ore":  round(_f(r.ore)),
-            "ob":   round(_f(r.ob)),
-            "cob":  round(_f(r.cob)),
+            "date": str(d),
+            "ore":  round(v["ore"]),
+            "ob":   round(v["ob"]),
+            "cob":  round(v["cob"]),
         }
-        for r in rows
+        for d, v in sorted(by_day.items(), reverse=True)[:12]
     ]
 
 
