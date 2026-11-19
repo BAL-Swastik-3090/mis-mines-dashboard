@@ -17,6 +17,7 @@ import { create } from "zustand";
 export type EntryDialog =
   | "prev-day"
   | "mines-stock"
+  | "mines-reserve"
   | "desilting-plan"
   | "equipment-plan"
   | "shifting-actual"

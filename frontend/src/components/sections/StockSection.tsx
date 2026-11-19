@@ -27,6 +27,7 @@ import { useStockPosition } from "@/hooks/useStock";
 import { formatIndian } from "@/lib/utils";
 import { useEntryDialog } from "@/contexts/useEntryDialog";
 import MinesStockEntryModal from "@/components/sections/MinesStockEntryModal";
+import MinesReserveEntryModal from "@/components/sections/MinesReserveEntryModal";
 import LastChanged from "@/components/ui/LastChanged";
 
 function mt(v: number | null | undefined) {
@@ -81,12 +82,32 @@ export default function StockSection() {
     void qc.invalidateQueries({ queryKey: ["stock-entry"] });
   }, [qc]);
 
+  // A saved reserve declaration changes the remaining-reserve figures, which
+  // are derived and not stored, so only the reserve queries need refreshing.
+  const afterReserveSave = useCallback(() => {
+    void qc.invalidateQueries({ queryKey: ["resource-reserve"] });
+    void qc.invalidateQueries({ queryKey: ["resource-reserve-entry"] });
+    void qc.invalidateQueries({ queryKey: ["resource-reserve-value"] });
+  }, [qc]);
+
+  // BOTH dialogs are mounted here. The reserve is not part of the stock
+  // position -- one is ore above ground awaiting clearance, the other is ore
+  // still in the ground -- but this is the section about how much ore the mine
+  // has, and a dialog has to be mounted somewhere its own section exists.
+  // It moves when the reserve gets a section of its own.
   const entryModal = (
-    <MinesStockEntryModal
-      open={dialog === "mines-stock"}
-      onClose={closeDialog}
-      onSaved={afterSave}
-    />
+    <>
+      <MinesStockEntryModal
+        open={dialog === "mines-stock"}
+        onClose={closeDialog}
+        onSaved={afterSave}
+      />
+      <MinesReserveEntryModal
+        open={dialog === "mines-reserve"}
+        onClose={closeDialog}
+        onSaved={afterReserveSave}
+      />
+    </>
   );
 
   if (isError) {
