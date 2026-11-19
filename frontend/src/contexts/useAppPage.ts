@@ -26,7 +26,7 @@ import { persist } from "zustand/middleware";
 // and nowhere else is the list repeated -- pageAccess.ts keys off this type,
 // so a page added here without a permission beside it fails to compile
 // rather than appearing to everyone.
-export type AppPage = "mis" | "executive-summary" | "weather" | "fuel-management" | "ev-tracking" | "product-costing" | "oee" | "lcm" | "intelligence" | "amira" | "access-control" | "data-health" | "minehub" | "manpower" | "operations" | "workforce" | "market" | "organisation" | "weighbridge" | "weighbridge-sap" | "gate" | "capacity" | "usage" | "pr-po" | "hoto-checklists" | "hoto-register" | "hoto-defects" | "hoto-board" | "hoto-devices" | "hoto-stickers" | "hoto-app";
+export type AppPage = "mis" | "executive-summary" | "weather" | "fuel-management" | "ev-tracking" | "product-costing" | "oee" | "lcm" | "intelligence" | "amira" | "access-control" | "data-health" | "minehub" | "manpower" | "operations" | "workforce" | "market" | "organisation" | "weighbridge" | "weighbridge-sap" | "gate" | "capacity" | "usage" | "pr-po" | "hoto-checklists" | "hoto-register" | "hoto-defects" | "hoto-board" | "hoto-devices" | "hoto-stickers" | "hoto-app" | "plan-despatch" | "plan-cobp" | "plan-excavation" | "plan-faces";
 
 interface AppPageStore {
   page: AppPage;

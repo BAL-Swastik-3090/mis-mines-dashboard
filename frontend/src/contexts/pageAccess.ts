@@ -79,6 +79,15 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   // Read-only, so a wider audience than the editor: supervisors, workshop,
   // safety and management all have reason to open a handover record.
   "hoto-register": ["hoto.view", "hoto.admin"],
+  // Reading a plan needs plan.view; whether the Save button does
+  // anything is decided by the server, which returns may_edit.
+  "plan-despatch":   ["plan.view", "plan.despatch.edit"],
+  "plan-cobp":       ["plan.view", "plan.despatch.edit"],
+  "plan-excavation": ["plan.view", "plan.excavation.edit"],
+  // The faces are the excavation plan's own vocabulary, so whoever files
+  // that plan maintains them.
+  "plan-faces":      ["plan.view", "plan.excavation.edit"],
+
   // The workshop reads this and the workshop acts on it, so the same
   // permission that lets somebody file a handover lets them move a defect
   // along -- the server checks hoto.capture on the transition itself.
@@ -195,6 +204,10 @@ const LANDING_RANK: Record<AppPage, number> = {
   // and this is a thing they visit rather than open to.
   "hoto-checklists": 90,
   "hoto-register": 88,
+  "plan-despatch": 128,
+  "plan-cobp": 129,
+  "plan-excavation": 130,
+  "plan-faces": 131,
   // Higher than the register: a fitter opening the dashboard wants the
   // queue of what is broken, not the archive of what was handed over.
   "hoto-defects": 86,

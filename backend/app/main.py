@@ -452,6 +452,12 @@ _PERMISSION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("/api/usage",   ("usage.view", "access.users.view")),
     ("/api/roles",   ("access.users.manage",)),
     ("/api/minehub", ("platform.registry.view",)),
+    # The three plans the mine files. Reading needs plan.view; which of
+    # the two departments may WRITE which plan is checked inside the
+    # router, because PPIC files despatch and COB while Geology files
+    # excavation and neither should reach the other by accident.
+    ("/api/plan-entry", ("plan.view",)),
+
     # The competency dimensions and handover checks. Reading them is reading
     # the platform's vocabulary, which migration 038 established every register
     # needs — an operator registrar cannot assess anybody without it. Changing
@@ -723,6 +729,7 @@ from app.routers import checklists, operators_analytics
 from app.routers import prev_day_actual
 from app.routers import stock_entry
 from app.routers import desilting_plan
+from app.routers import plan_entry
 from app.routers import shifting
 from app.routers import dewatering_entry
 from app.routers import equipment_plan
@@ -779,6 +786,7 @@ app.include_router(minehub.router)
 app.include_router(prev_day_actual.router)
 app.include_router(stock_entry.router)
 app.include_router(desilting_plan.router)
+app.include_router(plan_entry.router)
 app.include_router(shifting.router)
 app.include_router(dewatering_entry.router)
 app.include_router(equipment_plan.router)

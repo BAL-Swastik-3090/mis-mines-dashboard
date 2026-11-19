@@ -1,12 +1,13 @@
 "use client";
 import { useState } from "react";
-import { Activity, BarChart3, Boxes, Calculator, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, ClipboardCheck, CloudSun, Database, DoorOpen, ExternalLink, Gauge, Layers, LayoutDashboard, LineChart, Network, Radar, Receipt, Scale, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
+import { Activity, BarChart3, Boxes, Calculator, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, ClipboardCheck, ClipboardPaste, CloudSun, Database, DoorOpen, ExternalLink, Gauge, Layers, LayoutDashboard, LineChart, Network, Radar, Receipt, Scale, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { canOpen } from "@/contexts/pageAccess";
 import { useSidebar }               from "@/contexts/useSidebar";
 import { useAuth }                  from "@/contexts/useAuth";
 import { useDataHealth } from "@/hooks/useDataHealth";
 import { HOTO_TABS } from "./hotoNav";
+import { PLAN_TABS } from "./planNav";
 
 /** A nav entry is EITHER an internal page or an external link — never both.
  *
@@ -82,6 +83,14 @@ const NAV_ITEMS: NavItem[] = [
      separate things, and six identical badges say less than one. */
   { kind: "group", id: "hoto", label: "HOTO", icon: DoorOpen, tag: "UAT",
     children: HOTO_TABS.map(({ id, label }) => ({ id, label })) },
+  /* The three plans the mine files, grouped because they are one job done by
+     two departments: PPIC types despatch and COB, Geology types excavation.
+     Their figures moved onto this platform in migrations 127 and 128 and have
+     been READ from here since; until these screens existed nothing wrote
+     them, and the copy the two of them were still filing stopped reaching the
+     dashboard. */
+  { kind: "group", id: "plans", label: "Plans", icon: ClipboardPaste, tag: "NEW",
+    children: PLAN_TABS.map(({ id, label }) => ({ id, label })) },
 ];
 
 /* Two administration entries, split by audience rather than merged for tidiness.

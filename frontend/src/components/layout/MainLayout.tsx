@@ -3,7 +3,9 @@ import AppSidebar              from "./AppSidebar";
 import CommandPalette          from "./CommandPalette";
 import SectionTabBar           from "./SectionTabBar";
 import HotoTabBar              from "./HotoTabBar";
+import PlanTabBar              from "./PlanTabBar";
 import { isHotoPage }          from "./hotoNav";
+import { isPlanPage }          from "./planNav";
 import IntelligenceTabBar      from "./IntelligenceTabBar";
 import FuelManagementSection   from "@/components/sections/FuelManagementSection";
 import ElectricVehiclesSection from "@/components/sections/ElectricVehiclesSection";
@@ -27,6 +29,8 @@ import CapacitySection         from "@/components/sections/CapacitySection";
 import PrPoSection             from "@/components/sections/PrPoSection";
 import HotoChecklistsSection  from "@/components/sections/HotoChecklistsSection";
 import HotoRegisterSection    from "@/components/sections/HotoRegisterSection";
+import PlanEntrySection       from "@/components/sections/PlanEntrySection";
+import MineFacesSection       from "@/components/sections/MineFacesSection";
 import HotoDefectsSection     from "@/components/sections/HotoDefectsSection";
 import HotoBoardSection       from "@/components/sections/HotoBoardSection";
 import HotoDevicesSection     from "@/components/sections/HotoDevicesSection";
@@ -58,6 +62,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
   /* Every handover screen carries the same strip, so moving between them is
      one click rather than a trip back out to the rail. */
   const isHoto   = isHotoPage(page) && mayOpen;
+  const isPlan   = isPlanPage(page) && mayOpen;
 
   const sideW = collapsed ? "56px" : "200px";
 
@@ -81,6 +86,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
       {isMis && <SectionTabBar />}
       {isIntel && <IntelligenceTabBar />}
       {isHoto && <HotoTabBar />}
+      {isPlan && <PlanTabBar />}
 
       <main
         id="main" tabIndex={-1}
@@ -89,7 +95,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           min-h-screen pb-8
           px-4 sm:px-6 xl:px-8
           transition-[margin-left,padding-top] duration-300 ease-in-out
-          ${isMis || isIntel || isHoto ? "pt-[115px]" : "pt-[76px]"}
+          ${isMis || isIntel || isHoto || isPlan ? "pt-[115px]" : "pt-[76px]"}
         `}
       >
         <div className="max-w-[1920px] mx-auto">
@@ -138,6 +144,10 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           {page === "pr-po"            && <PrPoSection />}
           {page === "hoto-checklists" && <HotoChecklistsSection />}
           {page === "hoto-register"   && <HotoRegisterSection />}
+          {page === "plan-despatch"   && <PlanEntrySection kind="despatch" />}
+          {page === "plan-cobp"       && <PlanEntrySection kind="cobp" />}
+          {page === "plan-excavation" && <PlanEntrySection kind="excavation" />}
+          {page === "plan-faces"      && <MineFacesSection />}
           {page === "hoto-defects"    && <HotoDefectsSection />}
           {page === "hoto-board"      && <HotoBoardSection />}
           {page === "hoto-devices"    && <HotoDevicesSection />}
