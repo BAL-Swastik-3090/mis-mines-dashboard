@@ -361,6 +361,31 @@ def _rechain(db: Session, after: date, revision: int,
     return {"chained": changed, "stopped_at": stopped_at}
 
 
+# The five inputs the generated closing stock is computed from. Any one of
+# them left blank makes closing_stock_m3 NULL, and a day with no closing
+# stock hands nothing on to the day after it.
+_CLOSING_INPUTS = {
+    "opening_stock_m3":    "opening stock",
+    "seepage_m3":          "seepage",
+    "rainfall_mm":         "rainfall",
+    "actual_pump_hr":      "actual pump hours",
+    "pump_capacity_m3_hr": "pump capacity",
+}
+
+
+def missing_for_closing(row: dict[str, Any] | None) -> list[str]:
+    """Which inputs a day is short of, named as the form names them.
+
+    Empty when the closing stock resolves. The point is to say WHICH figure
+    is missing: the chain banner used to assume pump hours and capacity, and
+    the day that actually broke the Executive Summary on 6 November was short
+    of rainfall, which that wording would have sent somebody looking past.
+    """
+    if row is None or row.get("closing_stock_m3") is not None:
+        return []
+    return [label for field, label in _CLOSING_INPUTS.items() if row.get(field) is None]
+
+
 def save_day(db: Session, d: date, values: dict[str, Any],
              actor: str, rechain: bool = True) -> dict[str, Any]:
     """Store or edit one day, then carry the change forward.
@@ -463,6 +488,12 @@ def save_day(db: Session, d: date, values: dict[str, Any],
             {f for f in clean if _as_text(clean[f]) != _as_text(before.get(f))}),
         "chained": chain["chained"],
         "stopped_at": chain["stopped_at"],
+        # What this day itself is short of, if anything. stopped_at only ever
+        # describes days AFTER this one, so saving the latest day -- the
+        # ordinary case -- warned about nothing even when the day just stored
+        # could not resolve its own closing stock. That is what happened on
+        # 6 November: saved, accepted, and silently unusable.
+        "closing_unresolved": missing_for_closing(after),
         "stored": after,
     }
 
@@ -767,17 +798,22 @@ def _summary(pg: Session, frm: date, to: date, rd: date) -> dict[str, Any]:
             "plan_dry_from": (chain["dry_from"].isoformat()
                               if chain["dry_from"] else None),
             "plan_dry_days": chain["dry_days"],
-            # BOTH ENDS, NOT JUST THE OPENING. The guard tested `opening`
-            # alone, so a window whose LAST entered day has no closing stock
-            # -- 13 November 2026, filed with the pump hours but not yet the
-            # rainfall -- reached a None minus a float and raised. The caller
-            # catches that and returns the whole dewatering block as None, so
-            # one missing figure on one day blanked the sump, the disposal,
-            # the pump hours and the Executive Summary's dewatering KPI
-            # together. `drawdown` above already guards both ends; this is
-            # the same test.
+            # BOTH ENDS, NOT JUST THE OPENING. closing is NULL whenever a
+            # day is short of a figure the balance needs -- rainfall left
+            # blank makes rain_water_m3 NULL, and the generated closing stock
+            # with it. Guarded on `opening` alone this reached a None minus a
+            # float and raised; the caller catches that and returns the whole
+            # dewatering block as None, so one blank cell on one day blanked
+            # the sump, the disposal, the pump hours and the Executive
+            # Summary's dewatering KPI together. drawdown and days_to_clear
+            # above already test both ends; this is the same test.
+            #
+            # FOUND TWICE, INDEPENDENTLY -- here on 6 November and again on
+            # the 13th, when a day filed with pump hours but no rainfall hit
+            # it. The second finding came off a branch forked before the
+            # first fix, which is what a long-lived fork from 398c54a costs.
             "stock_change_pct": (round((closing - opening) / opening * 100, 1)
-                                 if (opening and closing is not None) else None),
+                                 if opening and closing is not None else None),
             "net_drawdown": drawdown,
             "days_to_clear": days_to_clear,
             "completeness_pct": completeness,

@@ -43,14 +43,10 @@ from app.minehub_db import SessionLocal as PGSession          # noqa: E402
 IST = timezone(timedelta(hours=5, minutes=30))
 
 # (table, key columns, all columns in MySQL spelling, same in minehub spelling)
+# The previous day's actual is NOT copied: production already moved it, with
+# its history, to minehub.prev_day_actual (migration 126), and the screens read
+# that table. A second copy here would split the mine's entries in two.
 SPECS = (
-    ("mines_prev_day_actual",
-     ("date", "material"),
-     ("`Date`", "Material", "`Plan`", "Est_Actual",
-      "Entry_Id", "Entry_Date", "Updated_At", "Updated_By"),
-     ("date", "material", "plan", "est_actual",
-      "entry_id", "entry_date", "updated_at", "updated_by")),
-
     ("mines_stock_entry",
      ("stock_date", "grade", "bucket"),
      ("Stock_Date", "Grade", "Bucket", "Qty",

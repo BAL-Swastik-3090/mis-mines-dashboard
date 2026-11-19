@@ -57,6 +57,55 @@ const OPEN_PAGES: ReadonlySet<AppPage> = new Set<AppPage>([
  *  the machine register to do their own work, which is how a permission
  *  becomes meaningless. Each tab inside still states what it needs. */
 export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
+  // Procurement carries quotation values, vendor pricing and payment
+  // positions. Not every holder of a dashboard login should see those, so
+  // the page is gated the same way the endpoints behind it are.
+  //
+  // TWO CODES, AND THE SECOND IS WHY ANYONE CAN OPEN IT TODAY.
+  // mines.prpo.view is the precise one and nobody holds it yet -- it is new,
+  // and the map that grants it is maintained in the registry, not here.
+  // Listed alone it would ship a page invisible to everybody including the
+  // person who has to grant it, and the first thing anyone would do about
+  // that is take the check out. link.prpo.view already gates the other
+  // team's PR/PO Status link, so the people who may already look at Mines
+  // procurement can open this too, which is the right audience on day one.
+  // Granting mines.prpo.view later narrows it without touching this file.
+  "pr-po": ["mines.prpo.view", "link.prpo.view"],
+  // Its OWN permission, not one borrowed from a widely-held entry.
+  // link.prpo.view above is held by thirteen of fifteen roles because it
+  // was created for an unrelated shortcut; gating a checklist editor that
+  // way would let anyone who can sign in change what blocks a machine.
+  "hoto-checklists": ["hoto.admin"],
+  // Read-only, so a wider audience than the editor: supervisors, workshop,
+  // safety and management all have reason to open a handover record.
+  "hoto-register": ["hoto.view", "hoto.admin"],
+  // Reading a plan needs plan.view; whether the Save button does
+  // anything is decided by the server, which returns may_edit.
+  "plan-despatch":   ["plan.view", "plan.despatch.edit"],
+  "plan-cobp":       ["plan.view", "plan.despatch.edit"],
+  "plan-excavation": ["plan.view", "plan.excavation.edit"],
+  // The faces are the excavation plan's own vocabulary, so whoever files
+  // that plan maintains them.
+  "plan-faces":      ["plan.view", "plan.excavation.edit"],
+
+  // The workshop reads this and the workshop acts on it, so the same
+  // permission that lets somebody file a handover lets them move a defect
+  // along -- the server checks hoto.capture on the transition itself.
+  "hoto-defects": ["hoto.view", "hoto.capture", "hoto.admin"],
+  // A supervisor reads this and acts on it from the same screen. Whether a
+  // particular action is allowed is decided per action on the server -- the
+  // override is the one that needs more than hoto.capture.
+  "hoto-board": ["hoto.view", "hoto.capture", "hoto.admin"],
+  // Approving a device is letting something into the mine's data, so this
+  // one is admin only -- unlike every other HOTO screen, which a supervisor
+  // needs in order to do the job.
+  "hoto-devices": ["hoto.admin"],
+  // Printing the cab stickers is setting the fleet up, which is the same
+  // job as editing a checklist.
+  "hoto-stickers": ["hoto.admin"],
+  // Installing the app is for anyone in HOTO; publishing a version is checked
+  // per action on the server (hoto.admin).
+  "hoto-app": ["hoto.view", "hoto.capture", "hoto.admin"],
   "minehub": ["platform.registry.browse"],
   "manpower": ["platform.operators.view"],
   "operations": ["ops.shift.view"],
@@ -147,6 +196,31 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
  * the people who have no dashboard are usually there to use one.
  */
 const LANDING_RANK: Record<AppPage, number> = {
+  // Below Product Costing and beside the external PR/PO Status link it
+  // complements: costing says what a tonne cost, this says what is still
+  // sitting unordered, unapproved or unpaid behind it.
+  "pr-po": 62,
+  // Low: whoever administers checklists has a dashboard to land on first,
+  // and this is a thing they visit rather than open to.
+  "hoto-checklists": 90,
+  "hoto-register": 88,
+  "plan-despatch": 128,
+  "plan-cobp": 129,
+  "plan-excavation": 130,
+  "plan-faces": 131,
+  // Higher than the register: a fitter opening the dashboard wants the
+  // queue of what is broken, not the archive of what was handed over.
+  "hoto-defects": 86,
+  // The highest of the HOTO screens: a supervisor opening the dashboard at
+  // the start of a shift wants the board, not the archive or the queue.
+  "hoto-board": 84,
+  // Below the operational screens: this is set up once and visited when a
+  // device is waiting, not every shift.
+  "hoto-devices": 88,
+  // Next to Devices: both are things done once when the fleet is set up.
+  "hoto-stickers": 89,
+  // After the stickers: the last thing set up for a new device.
+  "hoto-app": 89,
   // Above MIS, where the mine asked for it: the one-screen management view
   // comes before the operational detail it summarises.
   "executive-summary": 5,

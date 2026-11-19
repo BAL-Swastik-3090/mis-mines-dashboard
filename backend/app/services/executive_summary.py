@@ -49,9 +49,49 @@ from typing import Any, NamedTuple
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.services import est_actual
 from app.services import desilting_plan as desilt_svc
 from app.services import dewatering_entry as dewatering_svc
+import contextlib
+import logging
+from app.services.plan_source import plan_one, plan_rows
+
+logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def _estimate_db():
+    """A minehub session for the hand-entered estimate.
+
+    WHY ITS OWN SESSION. prev_day_actual moved off balcorpdb in migration 126
+    and is on Postgres now, while every other query in these three functions
+    still runs on the MySQL session they are handed. Opening one here rather
+    than threading a second parameter through the callers keeps the change to
+    the three queries that moved.
+
+    Yields None when the platform database cannot be reached, and the caller
+    then behaves exactly as it did for a day with no estimate filed -- the
+    estimate is a fallback, and a fallback that cannot be read must not take
+    the page down with it.
+    """
+    pg = None
+    try:
+        from app.minehub_db import SessionLocal
+        if SessionLocal is None:
+            yield None
+            return
+        pg = SessionLocal()
+        yield pg
+    except Exception:                                   # noqa: BLE001
+        logger.warning("minehub unavailable for the estimated actual",
+                       exc_info=True)
+        yield None
+    finally:
+        if pg is not None:
+            try:
+                pg.close()
+            except Exception:                           # noqa: BLE001
+                pass
+
 from app.services import shifting as shifting_svc
 from app.services import production as prod_svc
 from app.services import stock as stock_svc
@@ -419,16 +459,23 @@ def _despatch_plan(db: Session, mf: date,
     this returns nothing for that grade and the row prints no plan, rather than
     claiming the mine planned to ship nought and then shipped 20,464 MT.
     """
+    # THE ALIASES ARE QUOTED, and must stay quoted. They are mixed case --
+    # td_Bal_HG -- and the row is read back by that exact name below. MySQL
+    # preserved it; Postgres folds an UNQUOTED alias to lower case, so after
+    # the plan moved in migration 127 the lookup raised
+    # "Could not locate column in row for column 'td_Bal_HG'" and took the
+    # whole Executive Summary down with it. Quoting keeps the name the code
+    # already expects, rather than lower-casing it here and in the reader.
     cols = ", ".join(
         f"COALESCE(SUM(CASE WHEN Plan_date = :rd THEN {p}_{g}_Qty END), 0)"
-        f" AS td_{p}_{g},"
-        f" COALESCE(SUM({p}_{g}_Qty), 0) AS mtd_{p}_{g}"
+        f' AS "td_{p}_{g}",'
+        f' COALESCE(SUM({p}_{g}_Qty), 0) AS "mtd_{p}_{g}"'
         for p in _PLAN_PREFIX.values() for g in _PLAN_GRADES)
-    r = db.execute(text(f"""
+    r = plan_one(text(f"""
         SELECT {cols}, COUNT(*) AS n
-        FROM   mines_despatch_plan
+        FROM   minehub.despatch_plan
         WHERE  Plan_date BETWEEN :mf AND :rd
-    """), {"mf": mf, "rd": rd}).fetchone()
+    """), {"mf": mf, "rd": rd})
 
     out = {p: {c: {} for c in MINES_CUSTOMERS} for p in ("td", "mtd")}
     if not r or not r.n:
@@ -631,7 +678,7 @@ def sap_arrivals(db: Session, today: date,
     with nothing to say it did. This is what tells them.
 
     NOTHING IS STORED TO WORK THIS OUT. The estimate stays in
-    mines_prev_day_actual after SAP posts, so "what it was" and "what it is"
+    minehub.prev_day_actual after SAP posts, so "what it was" and "what it is"
     are both still on disk and the transition is simply the two being present
     for the same day. No new table, no flag to set, nothing to go stale, and
     it reads the same whoever asks and whenever.
@@ -641,10 +688,17 @@ def sap_arrivals(db: Session, today: date,
     """
     frm = today - timedelta(days=days)
 
-    # minehub, not the session this function holds -- see est_actual.
-    est: dict[tuple[date, str], float] = {
-        (d, m): q for d, m, q in
-        est_actual.rows(frm, today, ("ORE", "OB", "COB"))}
+    est: dict[tuple[date, str], float] = {}
+    with _estimate_db() as pg:
+        if pg is None:
+            return []
+        for r in pg.execute(text("""
+                SELECT data_date AS d, material AS m, est_actual AS q
+                FROM minehub.prev_day_actual
+                WHERE data_date BETWEEN :f AND :t
+                  AND material IN ('ORE', 'OB', 'COB')
+            """), {"f": frm, "t": today}):
+            est[(r.d, str(r.m))] = float(r.q or 0)
     if not est:
         return []
 
@@ -711,27 +765,27 @@ def _grade_plan(db: Session, mf: date, rd: date) -> dict[str, dict[str, float]]:
     """
     out = {"td": {}, "mtd": {}}
 
-    r = db.execute(text("""
+    r = plan_one(text("""
         SELECT COALESCE(SUM(CASE WHEN Prod_date = :rd THEN HG_QTY END), 0) hg_td,
                COALESCE(SUM(CASE WHEN Prod_date = :rd THEN MG_QTY END), 0) mg_td,
                COALESCE(SUM(CASE WHEN Prod_date = :rd THEN LG_QTY END), 0) lg_td,
                COALESCE(SUM(HG_QTY), 0) hg, COALESCE(SUM(MG_QTY), 0) mg,
                COALESCE(SUM(LG_QTY), 0) lg
-        FROM mines_daily_excavation_plan
+        FROM minehub.excavation_plan
         WHERE Prod_date BETWEEN :mf AND :rd
-    """), {"mf": mf, "rd": rd}).fetchone()
+    """), {"mf": mf, "rd": rd})
     for g, td, mtd in (("HG", r.hg_td, r.hg), ("MG", r.mg_td, r.mg),
                        ("LG", r.lg_td, r.lg)):
         out["td"][g] = _f(td) or 0.0
         out["mtd"][g] = _f(mtd) or 0.0
 
-    c = db.execute(text("""
+    c = plan_one(text("""
         SELECT COALESCE(SUM(CASE WHEN Plan_date = :rd
                                  THEN Concentrate_qty END), 0) AS td,
                COALESCE(SUM(Concentrate_qty), 0)               AS mtd
-        FROM mines_cobp_plan
+        FROM minehub.cobp_plan
         WHERE Plan_date BETWEEN :mf AND :rd
-    """), {"mf": mf, "rd": rd}).fetchone()
+    """), {"mf": mf, "rd": rd})
     out["td"]["COB"] = _f(c.td) or 0.0
     out["mtd"]["COB"] = _f(c.mtd) or 0.0
     return out
@@ -742,7 +796,7 @@ def _ore_split(db: Session, mf: date, rd: date, covered: set[date],
                ) -> tuple[dict[str, tuple[float, float]], int, str]:
     """The ore estimate, spread across HG / MG / LG so the grade rows can fill.
 
-    THE ESTIMATE HAS NO GRADE SPLIT OF ITS OWN. mines_prev_day_actual stores
+    THE ESTIMATE HAS NO GRADE SPLIT OF ITS OWN. prev_day_actual stores
     one ORE figure per day, full stop. The mine wants the grade rows filled
     rather than a separate line, so the split has to come from somewhere, and
     there is exactly one dated, per-day statement of which grades were being
@@ -759,18 +813,25 @@ def _ore_split(db: Session, mf: date, rd: date, covered: set[date],
     grade quantities, and reports which basis it used so the screen can say.
     Returns ({grade: (td, mtd)}, days_filled, basis).
     """
-    est = est_actual.rows(mf, rd, ("ORE",))
-    pending = [(d, q) for d, _m, q in est if d not in covered and q]
+    with _estimate_db() as pg:
+        if pg is None:
+            return {}, 0, ""
+        est = pg.execute(text("""
+            SELECT data_date AS d, est_actual AS q FROM minehub.prev_day_actual
+            WHERE material = 'ORE' AND data_date BETWEEN :mf AND :rd
+        """), {"mf": mf, "rd": rd}).fetchall()
+    pending = [(r.d, float(r.q or 0)) for r in est
+               if r.d not in covered and float(r.q or 0)]
     if not pending:
         return {}, 0, ""
 
     plan: dict[date, dict[str, float]] = {}
-    for r in db.execute(text("""
+    for r in plan_rows(text("""
             SELECT Prod_date AS d,
                    COALESCE(SUM(HG_QTY), 0) AS hg,
                    COALESCE(SUM(MG_QTY), 0) AS mg,
                    COALESCE(SUM(LG_QTY), 0) AS lg
-            FROM mines_daily_excavation_plan
+            FROM minehub.excavation_plan
             WHERE Prod_date BETWEEN :mf AND :rd
             GROUP BY Prod_date
         """), {"mf": mf, "rd": rd}):
@@ -822,16 +883,24 @@ def _estimates(db: Session, mf: date, rd: date,
 
     Returns (td, mtd, days_filled).
     """
-    rows = est_actual.rows(mf, rd, (material,))
+    with _estimate_db() as pg:
+        if pg is None:
+            return 0.0, 0.0, 0
+        rows = pg.execute(text("""
+            SELECT data_date AS d, est_actual AS q
+            FROM minehub.prev_day_actual
+            WHERE material = :m AND data_date BETWEEN :mf AND :rd
+        """), {"m": material, "mf": mf, "rd": rd}).fetchall()
 
     td = mtd = 0.0
     filled = 0
-    for d, _m, q in rows:
-        if d in covered:
+    for r in rows:
+        if r.d in covered:
             continue                      # SAP has spoken for this day
+        q = float(r.q or 0)
         mtd += q
         filled += 1
-        if d == rd:
+        if r.d == rd:
             td = q
     return td, mtd, filled
 
@@ -896,15 +965,15 @@ def _excavation(db: Session, mf: date, rd: date,
     #
     # The count is what separates the two cases the sum cannot: no rows at all
     # (nobody planned) from rows that genuinely plan zero overburden that day.
-    plan = db.execute(text("""
+    plan = plan_one(text("""
         SELECT SUM(CASE WHEN Prod_date = :rd
-                   THEN CAST(NULLIF(OB_QTY_Cum,'') AS DECIMAL(16,3)) END) AS td_plan,
-               SUM(CAST(NULLIF(OB_QTY_Cum,'') AS DECIMAL(16,3)))          AS mtd_plan,
+                   THEN OB_QTY_Cum END) AS td_plan,
+               SUM(OB_QTY_Cum)          AS mtd_plan,
                COUNT(CASE WHEN Prod_date = :rd THEN 1 END)                AS td_n,
                COUNT(*)                                                   AS mtd_n
-        FROM mines_daily_excavation_plan
+        FROM minehub.excavation_plan
         WHERE Prod_date BETWEEN :mf AND :rd
-    """), {"mf": mf, "rd": rd}).fetchone()
+    """), {"mf": mf, "rd": rd})
 
     # Variant '4' is de-silting, and Qty is VARCHAR here — the same filter and
     # cast services/production.py uses, so the two screens cannot disagree.
@@ -913,12 +982,12 @@ def _excavation(db: Session, mf: date, rd: date,
     # for are needed as well as the total: they are what stops the mine's own
     # figure standing in for a day already filed. The table is one row per day,
     # so this costs nothing over the SUM it replaces.
-    silt_rows = db.execute(text("""
-        SELECT Prod_date AS d, SUM(CAST(Qty AS DECIMAL(13,3))) AS q
-        FROM mines_day_wise_excavation
+    silt_rows = plan_rows(text("""
+        SELECT Prod_date AS d, SUM(Qty) AS q
+        FROM minehub.day_wise_excavation
         WHERE Variant = '4' AND Prod_date BETWEEN :mf AND :rd
         GROUP BY Prod_date
-    """), {"mf": mf, "rd": rd}).fetchall()
+    """), {"mf": mf, "rd": rd})
     silt_days = {r.d for r in silt_rows if r.q is not None}
     silt_td_sap = next((_f(r.q) for r in silt_rows if r.d == rd), None)
     silt_mtd_sap = sum(_f(r.q) or 0.0 for r in silt_rows) or None

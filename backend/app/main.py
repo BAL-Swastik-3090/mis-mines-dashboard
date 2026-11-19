@@ -14,6 +14,25 @@ from app.database import test_connection, idle_connection_reaper, engine, pool_s
 
 settings = get_settings()
 
+# ── THE LOG MUST NOT CARE WHAT THE CONSOLE'S CODE PAGE IS ──────────────────
+# Several log lines carry a tick or a warning sign. On a Windows console
+# running cp1252 -- which is every developer machine here -- writing one
+# raises UnicodeEncodeError inside the logging handler, and the first thing
+# any run printed was a traceback for "Database connected" having succeeded.
+#
+# It is noise, but noise at start-up is expensive: it sat in the log for
+# days being dismissed as cosmetic, and while it was there nobody read the
+# start-up lines closely enough to notice a reload that had announced
+# itself and never finished. Make the stream UTF-8 and the question does
+# not arise. errors="replace" so an exotic character still never costs a
+# log line. In the container stdout is already UTF-8 and this changes
+# nothing.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+    except (AttributeError, ValueError, OSError):
+        pass
+
 # ── THE SERVICE'S OWN LOG HAS TO REACH THE CONTAINER LOG ───────────────────
 # There was no logging configuration at all, so the root logger kept its
 # default of WARNING with no handler and every logger.info in this application
@@ -400,7 +419,18 @@ _AUTH_EXEMPT = ("/api/auth/", "/api/health", "/api/docs", "/api/redoc", "/api/op
                 # people and stays behind the middleware. The handler authenticates
                 # the token itself and can do nothing but add readings to the one
                 # bridge that token names.
-                "/api/weighbridge/readings")
+                "/api/weighbridge/readings",
+                # A HOTO tablet is the same case. It carries a device token, not a
+                # session: the session JWT idles out in twenty minutes and the
+                # platform allows one per employee, so two tablets enrolled against
+                # one person would evict each other mid-shift. Every handler under
+                # this prefix authenticates the device token itself, and the prefix
+                # carries only what a device does -- pull masters, file handovers,
+                # upload photos. The register, the board, the defect queue and the
+                # template editor are NOT here and stay behind the session check,
+                # so a stolen tablet token cannot read the operator register or
+                # change a checklist.
+                "/api/hoto/device/")
 
 # The permission a path prefix requires. Permissions rather than role names, so
 # a new role created in the UI can be given exactly these without any code
@@ -422,6 +452,12 @@ _PERMISSION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("/api/usage",   ("usage.view", "access.users.view")),
     ("/api/roles",   ("access.users.manage",)),
     ("/api/minehub", ("platform.registry.view",)),
+    # The three plans the mine files. Reading needs plan.view; which of
+    # the two departments may WRITE which plan is checked inside the
+    # router, because PPIC files despatch and COB while Geology files
+    # excavation and neither should reach the other by accident.
+    ("/api/plan-entry", ("plan.view",)),
+
     # The competency dimensions and handover checks. Reading them is reading
     # the platform's vocabulary, which migration 038 established every register
     # needs — an operator registrar cannot assess anybody without it. Changing
@@ -694,10 +730,14 @@ from app.routers import prev_day_actual
 from app.routers import stock_entry
 from app.routers import resource_reserve
 from app.routers import desilting_plan
+from app.routers import plan_entry
 from app.routers import shifting
 from app.routers import dewatering_entry
 from app.routers import equipment_plan
+from app.routers import pr_po
 from app.routers import oee_settings
+from app.routers import hoto
+from app.routers import hoto_device
 from app.routers import quality_e2e
 from app.routers import amira
 from app.routers import executive_summary
@@ -748,10 +788,14 @@ app.include_router(prev_day_actual.router)
 app.include_router(stock_entry.router)
 app.include_router(resource_reserve.router)
 app.include_router(desilting_plan.router)
+app.include_router(plan_entry.router)
 app.include_router(shifting.router)
 app.include_router(dewatering_entry.router)
 app.include_router(equipment_plan.router)
+app.include_router(pr_po.router)
 app.include_router(oee_settings.router)
+app.include_router(hoto.router)
+app.include_router(hoto_device.router)
 app.include_router(quality_e2e.router)
 app.include_router(amira.router)
 app.include_router(executive_summary.router)

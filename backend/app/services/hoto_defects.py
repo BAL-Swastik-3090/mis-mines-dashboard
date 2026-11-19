@@ -1,0 +1,466 @@
+"""Defects, and what a failed check does to a machine.
+
+── THE ESCALATION RULES ─────────────────────────────────────────────────────
+Severity comes from the checklist item (migration 105), so the mine tunes it in
+the admin panel rather than asking for a release. What each severity *does* is
+here:
+
+    LOW        recorded. Somebody is told.
+    MEDIUM     a defect is raised and owned.
+    HIGH       the machine is RESTRICTED -- limited operation, acknowledged.
+    CRITICAL   the machine is LOCKED and does not go to work.
+
+The state change is the part people underestimate. A defect that raises a
+ticket and leaves the machine running is a ticket; a defect that stops the
+machine is a control. Only HIGH and CRITICAL move the machine, because a mine
+that locks a machine over a dim cabin light stops using the system by Friday.
+
+── WHY A DEFECT IS RAISED BY THE SERVER, NOT THE DEVICE ─────────────────────
+The device decides whether an ANSWER is adverse -- it must, because it has to
+tell the operator at the machine. Whether that adverse answer is a NEW defect
+or the fourth sighting of one raised last Tuesday depends on what else is open
+across every device and every shift, which no single tablet knows. So the
+device reports findings and the server decides what they mean.
+"""
+from __future__ import annotations
+
+import logging
+from datetime import date, timedelta
+from typing import Any
+
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
+
+# What each severity does to the machine. Absent means: record it, move nothing.
+SEVERITY_STATE = {"HIGH": "RESTRICTED", "CRITICAL": "LOCKED"}
+OPEN_STATES = ("RAISED", "ACKNOWLEDGED", "RECTIFIED", "VERIFIED")
+
+ALLOWED = {
+    "RAISED":       {"ACKNOWLEDGED", "CANCELLED"},
+    "ACKNOWLEDGED": {"RECTIFIED", "CANCELLED"},
+    # A repair that failed its check goes BACK, and that is worth seeing.
+    "RECTIFIED":    {"VERIFIED", "ACKNOWLEDGED", "CANCELLED"},
+    "VERIFIED":     {"CLOSED", "ACKNOWLEDGED"},
+    "CLOSED":       set(),
+    "CANCELLED":    set(),
+}
+
+
+class DefectError(ValueError):
+    def __init__(self, problems: list[str], status: int = 422):
+        self.problems = problems
+        self.status = status
+        super().__init__("; ".join(problems))
+
+
+# ── raising ──────────────────────────────────────────────────────────────────
+
+def raise_from_session(db: Session, session_id: int, actor: str) -> dict[str, Any]:
+    """Turn a session's adverse answers into defects, and move the machine.
+
+    Called from the capture path. Idempotent by construction: a second run
+    finds the open defect and adds a sighting rather than a duplicate, and the
+    unique index behind that is enforced by the database, not by this function
+    remembering to check.
+    """
+    sess = db.execute(text("""
+        SELECT session_id, asset_id, shift_instance_id, operator_id, status
+          FROM hoto_session WHERE session_id = :s
+    """), {"s": session_id}).mappings().first()
+    if not sess:
+        raise DefectError([f"no such handover: {session_id}"], status=404)
+
+    adverse = db.execute(text("""
+        SELECT r.response_id, r.item_id, r.item_label, r.answer, r.numeric_value,
+               r.severity, r.remark, i.is_critical
+          FROM hoto_response r
+          LEFT JOIN hoto_checklist_item i ON i.item_id = r.item_id
+         WHERE r.session_id = :s
+           -- A FAULT IS AN ANSWER WITH A SEVERITY. The evaluator sets one on
+           -- a fault and only on a fault, at capture, by the rules in force
+           -- then. The answer-text test alone missed every yes/no fault: after
+           -- the 13 Nov fix a "ROPS damage: YES" handover was marked BLOCKED,
+           -- raised no defect and locked nothing. The old test stays alongside
+           -- for rows filed before severity was stored.
+           AND (r.severity IS NOT NULL
+                OR r.answer IN ('NOT_OK', 'CAUTION') OR r.in_range = false)
+    """), {"s": session_id}).mappings().all()
+
+    raised, sighted = [], []
+    worst = None
+
+    for a in adverse:
+        sev = a["severity"] or "MEDIUM"
+        if worst is None or _rank(sev) > _rank(worst):
+            worst = sev
+
+        existing = db.execute(text("""
+            SELECT defect_id FROM hoto_defect
+             WHERE asset_id = :a AND item_id = :i AND state = ANY(:open)
+        """), {"a": sess["asset_id"], "i": a["item_id"],
+               "open": list(OPEN_STATES)}).scalar()
+
+        if existing:
+            # The fourth sighting of a known defect, not a fourth defect.
+            db.execute(text("""
+                INSERT INTO hoto_defect_sighting
+                    (defect_id, session_id, response_id, observed_by, answer,
+                     numeric_value, remark)
+                VALUES (:d, :s, :r, :by, :ans, :num, :rem)
+                ON CONFLICT (defect_id, response_id) DO NOTHING
+            """), {"d": existing, "s": session_id, "r": a["response_id"],
+                   "by": actor, "ans": a["answer"], "num": a["numeric_value"],
+                   "rem": a["remark"]})
+            sighted.append({"defect_id": existing, "item": a["item_label"]})
+            continue
+
+        did = db.execute(text("""
+            INSERT INTO hoto_defect
+                (asset_id, raised_session_id, raised_response_id, item_id, item_label,
+                 severity, description, blocks_operation, owner_role, raised_by)
+            VALUES (:a, :s, :r, :i, :lbl, :sev, :desc, :blocks, 'MAINTENANCE', :by)
+            RETURNING defect_id
+        """), {"a": sess["asset_id"], "s": session_id, "r": a["response_id"],
+               "i": a["item_id"], "lbl": a["item_label"], "sev": sev,
+               "desc": a["remark"] or f"{a['item_label']} reported "
+                                      f"{(a['answer'] or 'out of range').replace('_', ' ').lower()}",
+               # Only a critical item holds the machine. A HIGH restricts it;
+               # the machine still works, under acknowledgement.
+               "blocks": bool(a["is_critical"]), "by": actor}).scalar()
+        db.execute(text("""
+            UPDATE hoto_defect SET defect_ref = 'DEF-' || LPAD(CAST(:d AS text), 7, '0')
+             WHERE defect_id = :d
+        """), {"d": did})
+        db.execute(text("""
+            INSERT INTO hoto_defect_event (defect_id, from_state, to_state, actor, note)
+            VALUES (:d, NULL, 'RAISED', :by, :n)
+        """), {"d": did, "by": actor,
+               "n": f"From handover {session_id}, {a['item_label']}"})
+        db.execute(text("""
+            INSERT INTO hoto_defect_sighting
+                (defect_id, session_id, response_id, observed_by, answer, numeric_value, remark)
+            VALUES (:d, :s, :r, :by, :ans, :num, :rem)
+            ON CONFLICT DO NOTHING
+        """), {"d": did, "s": session_id, "r": a["response_id"], "by": actor,
+               "ans": a["answer"], "num": a["numeric_value"], "rem": a["remark"]})
+        raised.append({"defect_id": did, "item": a["item_label"], "severity": sev})
+
+    moved = None
+    if worst and worst in SEVERITY_STATE:
+        moved = set_state(db, sess["asset_id"], SEVERITY_STATE[worst],
+                          reason=f"{worst} defect from handover {session_id}",
+                          actor=actor, shift_instance_id=sess["shift_instance_id"])
+
+    return {"raised": raised, "sighted": sighted,
+            "worst_severity": worst, "state_change": moved}
+
+
+def _rank(s: str) -> int:
+    return {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}.get(s, 0)
+
+
+# ── the machine's state ──────────────────────────────────────────────────────
+
+def current_state(db: Session, asset_id: int) -> dict[str, Any] | None:
+    """The open availability window, which is the current state."""
+    row = db.execute(text("""
+        SELECT availability_event_id, state, reason, started_at, source, recorded_by
+          FROM availability_event
+         WHERE asset_id = :a AND ended_at IS NULL
+         ORDER BY started_at DESC LIMIT 1
+    """), {"a": asset_id}).mappings().first()
+    return dict(row) if row else None
+
+
+def set_state(db: Session, asset_id: int, state: str, *, reason: str, actor: str,
+              shift_instance_id: int | None = None) -> dict[str, Any] | None:
+    """Close the open window and open a new one.
+
+    A NO-OP IF THE MACHINE IS ALREADY THERE. Re-locking a locked machine every
+    time another handover finds the same fault would bury the moment it was
+    first locked under forty identical rows, and that moment is the one
+    somebody will want.
+    """
+    now = current_state(db, asset_id)
+    if now and now["state"] == state:
+        return None
+
+    if now:
+        db.execute(text("""
+            UPDATE availability_event SET ended_at = now(), released_by = :by
+             WHERE availability_event_id = :id
+        """), {"id": now["availability_event_id"], "by": actor})
+
+    db.execute(text("""
+        INSERT INTO availability_event
+            (asset_id, state, reason, started_at, shift_instance_id, source, recorded_by)
+        VALUES (:a, :s, :r, now(), :si, 'HOTO', :by)
+    """), {"a": asset_id, "s": state, "r": reason, "si": shift_instance_id, "by": actor})
+
+    logger.info("asset %s %s -> %s (%s)", asset_id,
+                now["state"] if now else "none", state, reason)
+    return {"from": now["state"] if now else None, "to": state, "reason": reason}
+
+
+def _recompute_state(db: Session, asset_id: int, actor: str,
+                     because: str) -> dict[str, Any] | None:
+    """Set the machine to whatever everything still open against it implies.
+
+    The worst still-open severity decides, through the same SEVERITY_STATE map
+    that raising uses -- so the state a defect put the machine into is the state
+    its repair takes it out of, and no other defect's repair can do it instead.
+    A no-op when the machine is already there.
+    """
+    worst = db.execute(text("""
+        SELECT severity FROM hoto_defect
+         WHERE asset_id = :a
+           AND state IN ('RAISED', 'ACKNOWLEDGED', 'RECTIFIED')
+         ORDER BY CASE severity WHEN 'CRITICAL' THEN 4 WHEN 'HIGH' THEN 3
+                                WHEN 'MEDIUM' THEN 2 ELSE 1 END DESC
+         LIMIT 1
+    """), {"a": asset_id}).scalar()
+    want = SEVERITY_STATE.get(worst or "", "AVAILABLE")
+    reason = because if want == "AVAILABLE" else f"{because}; a {worst} defect is still open"
+    return set_state(db, asset_id, want, reason=reason, actor=actor)
+
+
+# ── who is fixing it, and by when (migration 116) ────────────────────────────
+
+#: When nobody has set a target, a defect is judged by these. They are the
+#: intervals the defect screen already used to call a defect overdue --
+#: moved here so the date it suggests and the date it judges by are one rule.
+#: The mine's norms to set; these are a starting point, and the screen says so.
+TARGET_DAYS = {"CRITICAL": 1, "HIGH": 3, "MEDIUM": 7, "LOW": 14}
+
+_UNSET = object()
+
+#: Where a repair is still owed. VERIFIED is open in the queue's sense --
+#: awaiting closure -- but the work is done and checked, so it is neither
+#: planned nor late.
+_OWED = ("RAISED", "ACKNOWLEDGED", "RECTIFIED")
+
+
+def plan(db: Session, defect_id: int, actor: str, *,
+         assigned_to: Any = _UNSET, target_date: Any = _UNSET) -> dict[str, Any]:
+    """Say who is fixing a defect, and by when. Either, or both.
+
+    Every change goes in the defect's history with what it was before, so a
+    target that is quietly moved every time it is missed leaves a trail of
+    exactly that.
+    """
+    d = db.execute(text("""
+        SELECT defect_id, state, raised_at, assigned_to, target_date
+          FROM hoto_defect WHERE defect_id = :d
+    """), {"d": defect_id}).mappings().first()
+    if not d:
+        raise DefectError([f"no such defect: {defect_id}"], status=404)
+    if d["state"] not in _OWED:
+        raise DefectError([f"a {d['state']} defect has been repaired; there is nothing left to plan"],
+                          status=409)
+
+    problems: list[str] = []
+    who = None
+    if assigned_to is not _UNSET:
+        who = (assigned_to or "").strip()
+        if len(who) < 2:
+            problems.append("say who is fixing it -- a name, a team or a contractor")
+        elif len(who) > 120:
+            problems.append("keep who is fixing it under 120 characters")
+    when = None
+    if target_date is not _UNSET:
+        try:
+            when = target_date if isinstance(target_date, date) else date.fromisoformat(str(target_date))
+        except ValueError:
+            problems.append("the target date is not a date")
+        else:
+            if when < d["raised_at"].date():
+                problems.append("the target cannot be before the defect was raised")
+    if assigned_to is _UNSET and target_date is _UNSET:
+        problems.append("nothing to change: give who is fixing it, a target date, or both")
+    if problems:
+        raise DefectError(problems)
+
+    if who is not None and who != d["assigned_to"]:
+        db.execute(text("""UPDATE hoto_defect SET assigned_to = :w, assigned_by = :by,
+                                              assigned_at = now(), updated_at = now()
+                             WHERE defect_id = :d"""), {"w": who, "by": actor, "d": defect_id})
+        db.execute(text("""
+            INSERT INTO hoto_defect_event (defect_id, from_state, to_state, actor, note, kind)
+            VALUES (:d, :st, :st, :by, :n, 'ASSIGNED')
+        """), {"d": defect_id, "st": d["state"], "by": actor,
+               "n": (f"Assigned to {who}" if not d["assigned_to"]
+                     else f"Reassigned from {d['assigned_to']} to {who}")})
+    if when is not None and when != d["target_date"]:
+        db.execute(text("""UPDATE hoto_defect SET target_date = :t, target_set_by = :by,
+                                              target_set_at = now(), updated_at = now()
+                             WHERE defect_id = :d"""), {"t": when, "by": actor, "d": defect_id})
+        db.execute(text("""
+            INSERT INTO hoto_defect_event (defect_id, from_state, to_state, actor, note, kind)
+            VALUES (:d, :st, :st, :by, :n, 'TARGET')
+        """), {"d": defect_id, "st": d["state"], "by": actor,
+               "n": (f"Target set for {when:%d %b %Y}" if not d["target_date"]
+                     else f"Target moved from {d['target_date']:%d %b %Y} to {when:%d %b %Y}")})
+    db.commit()
+    return {"defect_id": defect_id, "assigned_to": who if who is not None else d["assigned_to"],
+            "target_date": (when or d["target_date"])}
+
+
+def _due(row: dict[str, Any], today: date | None = None) -> dict[str, Any]:
+    """When a defect is due, whether a person set that, and how late it is."""
+    today = today or date.today()
+    set_ = row.get("target_date") is not None
+    due = row["target_date"] if set_ else (
+        row["raised_at"].date() + timedelta(days=TARGET_DAYS.get(row["severity"], 7)))
+    late = (today - due).days if row["state"] in _OWED else 0
+    return {"due_date": due, "due_is_set": set_, "overdue_days": max(0, late)}
+
+
+# ── the workshop's queue ─────────────────────────────────────────────────────
+
+def queue(db: Session, *, asset_id: int | None = None, state: str | None = None,
+          severity: str | None = None, open_only: bool = True,
+          limit: int = 200) -> list[dict[str, Any]]:
+    rows = db.execute(text("""
+        SELECT d.defect_id, d.defect_ref, d.state, d.severity, d.blocks_operation,
+               d.item_label, d.description, d.owner_role,
+               d.raised_by, d.raised_at, d.acknowledged_at,
+               d.rectified_by, d.rectified_at, d.rectification_note,
+               d.verified_by, d.verified_at, d.closed_at, d.cancel_reason,
+               d.assigned_to, d.assigned_at, d.target_date,
+               a.asset_id, a.fleet_code, at.name AS asset_type_name,
+               -- How long it has been open. The number the morning meeting
+               -- asks for, and the reason repeat reports are sightings rather
+               -- than new defects.
+               EXTRACT(DAY FROM now() - d.raised_at)::int AS age_days,
+               (SELECT count(*) FROM hoto_defect_sighting s WHERE s.defect_id = d.defect_id) AS sightings,
+               (SELECT max(s.observed_at) FROM hoto_defect_sighting s
+                 WHERE s.defect_id = d.defect_id) AS last_seen_at,
+               (SELECT ae.state FROM availability_event ae
+                 WHERE ae.asset_id = d.asset_id AND ae.ended_at IS NULL
+                 ORDER BY ae.started_at DESC LIMIT 1) AS machine_state
+          FROM hoto_defect d
+          JOIN asset a       ON a.asset_id = d.asset_id
+          JOIN asset_type at ON at.asset_type_id = a.asset_type_id
+         WHERE (NOT :open_only OR d.state = ANY(:open))
+           AND (CAST(:asset AS bigint) IS NULL OR d.asset_id = CAST(:asset AS bigint))
+           AND (CAST(:state AS text)   IS NULL OR d.state    = CAST(:state AS text))
+           AND (CAST(:sev   AS text)   IS NULL OR d.severity = CAST(:sev AS text))
+         ORDER BY d.blocks_operation DESC,
+                  CASE d.severity WHEN 'CRITICAL' THEN 4 WHEN 'HIGH' THEN 3
+                                  WHEN 'MEDIUM' THEN 2 ELSE 1 END DESC,
+                  d.raised_at
+         LIMIT :lim
+    """), {"open_only": open_only, "open": list(OPEN_STATES), "asset": asset_id,
+           "state": state, "sev": severity, "lim": min(limit, 1000)}).mappings().all()
+    return [{**dict(r), **_due(dict(r))} for r in rows]
+
+
+def detail(db: Session, defect_id: int) -> dict[str, Any] | None:
+    head = db.execute(text("""
+        SELECT d.*, a.fleet_code, at.name AS asset_type_name
+          FROM hoto_defect d
+          JOIN asset a ON a.asset_id = d.asset_id
+          JOIN asset_type at ON at.asset_type_id = a.asset_type_id
+         WHERE d.defect_id = :d
+    """), {"d": defect_id}).mappings().first()
+    if not head:
+        return None
+    out = dict(head)
+    out.update(_due(out))
+    out["target_norm_days"] = TARGET_DAYS.get(out["severity"], 7)
+    out["sightings"] = [dict(r) for r in db.execute(text("""
+        SELECT s.sighting_id, s.observed_by, s.observed_at, s.answer,
+               s.numeric_value, s.remark, hs.session_ref
+          FROM hoto_defect_sighting s
+          LEFT JOIN hoto_session hs ON hs.session_id = s.session_id
+         WHERE s.defect_id = :d ORDER BY s.observed_at
+    """), {"d": defect_id}).mappings().all()]
+    out["events"] = [dict(r) for r in db.execute(text("""
+        SELECT from_state, to_state, actor, at, note, kind FROM hoto_defect_event
+         WHERE defect_id = :d ORDER BY at
+    """), {"d": defect_id}).mappings().all()]
+    return out
+
+
+def transition(db: Session, defect_id: int, to_state: str, actor: str,
+               *, note: str | None = None) -> dict[str, Any]:
+    """Move a defect along, and release the machine when it is genuinely fixed.
+
+    The database refuses a fitter verifying his own repair (migration 108). This
+    refuses the moves that make no sense in order, and says which ones would.
+    """
+    d = db.execute(text("""
+        SELECT defect_id, asset_id, state, severity, blocks_operation,
+               rectified_by, item_label
+          FROM hoto_defect WHERE defect_id = :d
+    """), {"d": defect_id}).mappings().first()
+    if not d:
+        raise DefectError([f"no such defect: {defect_id}"], status=404)
+
+    if to_state not in ALLOWED.get(d["state"], set()):
+        allowed = ", ".join(sorted(ALLOWED.get(d["state"], set()))) or "nothing"
+        raise DefectError(
+            [f"a {d['state']} defect cannot become {to_state}. From here: {allowed}."],
+            status=409)
+
+    if to_state == "VERIFIED" and d["rectified_by"] == actor:
+        raise DefectError(
+            ["you repaired this, so you cannot be the one who verifies it — "
+             "verification has to be independent or it is not verification"],
+            status=409)
+    if to_state == "CANCELLED" and not (note or "").strip():
+        raise DefectError(["say why it is being cancelled"])
+    if to_state == "RECTIFIED" and not (note or "").strip():
+        raise DefectError(["say what was done"])
+
+    cols = {
+        "ACKNOWLEDGED": "state=:st, acknowledged_by=:by, acknowledged_at=now()",
+        "RECTIFIED":    "state=:st, rectified_by=:by, rectified_at=now(), rectification_note=:note",
+        "VERIFIED":     "state=:st, verified_by=:by, verified_at=now()",
+        "CLOSED":       "state=:st, closed_by=:by, closed_at=now()",
+        "CANCELLED":    "state=:st, cancel_reason=:note",
+    }[to_state]
+
+    # Going back to ACKNOWLEDGED means the repair failed its check. Clear the
+    # rectification so the next verification is of the NEXT repair, not a
+    # timestamp left over from the one that did not work.
+    if to_state == "ACKNOWLEDGED" and d["state"] in ("RECTIFIED", "VERIFIED"):
+        cols = ("state=:st, acknowledged_by=:by, acknowledged_at=now(), "
+                "rectified_by=NULL, rectified_at=NULL, rectification_note=NULL, "
+                "verified_by=NULL, verified_at=NULL")
+
+    db.execute(text(f"UPDATE hoto_defect SET {cols}, updated_at=now() WHERE defect_id=:d"),
+               {"d": defect_id, "st": to_state, "by": actor, "note": note})
+    db.execute(text("""
+        INSERT INTO hoto_defect_event (defect_id, from_state, to_state, actor, note)
+        VALUES (:d, :frm, :to, :by, :n)
+    """), {"d": defect_id, "frm": d["state"], "to": to_state, "by": actor, "n": note})
+
+    # ── releasing the machine ────────────────────────────────────────────────
+    # The state is RECOMPUTED from everything still open against the machine,
+    # not set to AVAILABLE because this one defect is finished. Two mistakes
+    # live here, and seeding one machine with a spread of defects found the
+    # second of them:
+    #
+    #   * a machine with two critical defects must not come back on the first
+    #     repair -- so the worst still-open severity decides, not this defect's;
+    #   * a machine RESTRICTED by an open HIGH defect must not be handed back as
+    #     AVAILABLE because an unrelated MEDIUM was verified. That is how a
+    #     machine with unrepaired steering comes to read as ready for work.
+    #
+    # VERIFIED counts as repaired; RAISED, ACKNOWLEDGED and RECTIFIED do not --
+    # a repair nobody has checked is still a reason to hold the machine.
+    #
+    # It runs on the way BACK as well. A machine released on a verification,
+    # whose repair then fails its re-check, must be held again -- otherwise a
+    # reversal leaves a locked machine's defect open and the machine working.
+    released = None
+    if to_state in ("VERIFIED", "CLOSED", "CANCELLED", "ACKNOWLEDGED"):
+        released = _recompute_state(db, d["asset_id"], actor,
+                                    f"{d['item_label']} ({defect_id}) -> {to_state}")
+
+    db.commit()
+    return {"defect_id": defect_id, "from": d["state"], "to": to_state,
+            "machine_released": released}

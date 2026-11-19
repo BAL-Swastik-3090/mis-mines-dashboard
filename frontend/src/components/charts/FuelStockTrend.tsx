@@ -24,17 +24,24 @@ const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
  */
 interface Movement {
   day: string; plant: string; name: string;
-  opening_l: number; received_l: number; issued_l: number; closing_l: number;
+  opening_l: number | null; received_l: number; issued_l: number; closing_l: number | null;
 }
-interface Projected { day: string; litres: number; arriving_l: number; dry: boolean }
+interface Projected {
+  day: string; litres: number; arriving_l: number; dry: boolean;
+  nothing_l?: number; nothing_dry?: boolean;
+}
 
 export default function FuelStockTrend({
-  movements, projection, burnPerDay, plantName,
+  movements, projection, burnPerDay, plantName, deadStock = 0, everyDays = null,
 }: {
   movements: Movement[];
   projection: Projected[];
   burnPerDay: number;
   plantName: string;
+  /** Litres the pump cannot lift. Drawn as a floor across the chart. */
+  deadStock?: number;
+  /** How often supply has been arriving, for the caption. */
+  everyDays?: number | null;
 }) {
   const option = useMemo(() => {
     // Oldest first for a time axis; the API returns newest first because a
@@ -62,6 +69,11 @@ export default function FuelStockTrend({
       ...new Array(past.length).fill(null),
       ...projection.map((p) => p.litres),
     ];
+    const nothing = [
+      ...new Array(past.length).fill(null),
+      ...projection.map((p) => p.nothing_l ?? null),
+    ];
+    const firstDry = projection.find((p, i) => i > 0 && (p.nothing_dry ?? p.dry));
     const arrivals = [
       ...past.map((m) => (m.received_l > 0 ? m.received_l : null)),
       ...projection.map((p) => (p.arriving_l > 0 ? p.arriving_l : null)),
@@ -75,7 +87,7 @@ export default function FuelStockTrend({
           v === null || v === undefined ? "—" : `${Math.round(v).toLocaleString("en-IN")} L`,
       },
       legend: {
-        data: ["In tank", "If nothing changes", "Arrived / due"],
+        data: ["In tank", "On the usual supply", "If nothing arrives", "Arrived / due"],
         bottom: 0, itemWidth: 14, itemHeight: 8,
         textStyle: { fontSize: 10, color: "#64748b" },
       },
@@ -107,7 +119,26 @@ export default function FuelStockTrend({
           areaStyle: { color: "rgba(30,58,95,0.07)" },
         },
         {
-          name: "If nothing changes", type: "line", data: forecast,
+          name: "On the usual supply", type: "line", data: forecast,
+          smooth: false, symbol: "none",
+          lineStyle: { width: 2, type: "dashed", color: "#0ea5e9" },
+          itemStyle: { color: "#0ea5e9" },
+          ...(deadStock > 0 ? {
+            markLine: {
+              symbol: "none", silent: true,
+              data: [{
+                yAxis: deadStock,
+                lineStyle: { color: "#f59e0b", width: 1.5, type: "dotted" },
+                label: {
+                  formatter: `dead stock · ${Math.round(deadStock).toLocaleString("en-IN")} L`,
+                  position: "insideStartTop", fontSize: 9.5, color: "#b45309",
+                },
+              }],
+            },
+          } : {}),
+        },
+        {
+          name: "If nothing arrives", type: "line", data: nothing,
           smooth: false, symbol: "none",
           lineStyle: { width: 2, type: "dashed", color: "#e11d48" },
           itemStyle: { color: "#e11d48" },
@@ -136,11 +167,11 @@ export default function FuelStockTrend({
                   borderRadius: 3,
                 },
               }] : []),
-              ...(projection.some((p) => p.dry) ? [{
-                xAxis: days.indexOf(projection.find((p) => p.dry)!.day),
+              ...(firstDry ? [{
+                xAxis: days.indexOf(firstDry.day),
                 lineStyle: { color: "#e11d48", width: 2 },
                 label: {
-                  formatter: `dry · ${short(projection.find((p) => p.dry)!.day)}`,
+                  formatter: `stops · ${short(firstDry.day)}`,
                   position: "insideEndTop", fontSize: 9.5, color: "#fff",
                   backgroundColor: "#e11d48", padding: [2, 6],
                   borderRadius: 3,
@@ -151,17 +182,18 @@ export default function FuelStockTrend({
         },
       ],
     };
-  }, [movements, projection]);
+  }, [movements, projection, deadStock]);
 
   return (
     <div>
       <ReactECharts option={option} style={{ height: 260 }}
                     opts={{ renderer: "canvas" }} notMerge />
       <p className="px-1 pt-1 text-[10.5px] text-txt-muted leading-relaxed">
-        {plantName} is drawing about {Math.round(burnPerDay).toLocaleString("en-IN")} L
-        a day. The dashed line carries that rate forward and adds deliveries on
-        the date SAP holds for them — orders already overdue are left out, so
-        this is what happens if nothing changes.
+        {plantName} consumes about {Math.round(burnPerDay).toLocaleString("en-IN")} L
+        a day. The blue line assumes supply keeps arriving as it has
+        {everyDays ? ` — about every ${everyDays} days` : ""}; the red line
+        assumes nothing more arrives, and its red mark is the day the pump
+        would stop.
       </p>
     </div>
   );

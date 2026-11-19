@@ -1,0 +1,85 @@
+{
+  "expo": {
+    "name": "Kaliapani HOTO",
+    "slug": "kaliapani-hoto",
+    "version": "0.2.0",
+    "orientation": "default",
+    "scheme": "kaliapanihoto",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "android": {
+      "package": "in.balasorealloys.kaliapani.hoto",
+      "versionCode": 2,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.INTERNET"
+      ],
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#16202b"
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "A photo is required for some checks — a cracked hose or a leaking seal is a defect the workshop can act on, where a tick is not.",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "This device reports where it is to the mine office, including while the app is closed, and records where each handover was captured. The office can switch this off for this device.",
+          "locationWhenInUsePermission": "Each handover records where it was captured, so a record can be tied to the machine it describes.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ],
+      [
+        "expo-sqlite",
+        {
+          "enableFTS": false,
+          "useSQLCipher": true
+        }
+      ],
+      "expo-background-task",
+      "expo-task-manager",
+      "expo-asset",
+      "expo-build-properties"
+    ],
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "9a050ab6-6e15-4952-a7a6-8bd97ebe1643"
+      }
+    },
+    "owner": "balasore-alloys-limited",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#16202b"
+    },
+    "primaryColor": "#1e5f8a"
+  }
+}

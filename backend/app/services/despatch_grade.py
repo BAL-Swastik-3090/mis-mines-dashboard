@@ -52,6 +52,7 @@ from datetime import date
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from app.services.plan_source import plan_rows
 
 # Mines despatch. Same classification the Despatch section already uses, so the
 # two can never disagree on what a mines despatch is.
@@ -186,15 +187,20 @@ def _plan_rows(db: Session, fd: date, td: date) -> tuple[dict, dict, float, int]
 
     Returns (by_day, by_band, unmapped_total, days_with_plan).
     """
-    cols = ", ".join(f"COALESCE({c}, 0) AS {c}"
+    # QUOTED, for the reason given in executive_summary's own plan query:
+    # these aliases are mixed case -- Tot_HG_Qty -- and are read back by that
+    # exact name from r._mapping below. Postgres folds an unquoted alias to
+    # lower case, so after migration 127 moved the plan the lookup would miss
+    # every band and the grade split would silently read nought planned.
+    cols = ", ".join(f'COALESCE({c}, 0) AS "{c}"'
                      for c in list(PLAN_BAND_COLUMNS.values()) + list(PLAN_UNMAPPED_COLUMNS))
-    rows = db.execute(text(f"""
+    rows = plan_rows(text(f"""
         SELECT Plan_date AS dt, {cols},
                COALESCE(Grand_Total_Qty, 0) AS grand
-        FROM   mines_despatch_plan
+        FROM   minehub.despatch_plan
         WHERE  Plan_date BETWEEN :fd AND :td
         ORDER BY Plan_date
-    """), {"fd": fd, "td": td}).fetchall()
+    """), {"fd": fd, "td": td})
 
     by_day: dict[date, dict] = {}
     by_band: dict[str, float] = {k: 0.0 for k in PLAN_BAND_COLUMNS}

@@ -42,6 +42,7 @@ from app.services.oee import EXCAVATORS as _FLEET_SPEC
 # was UNDERSTATED — Aug 2026 read 8,366 MT / Rs 13.75 Cr instead of
 # 11,806 MT / Rs 19.41 Cr, because reversals inflated the actual.
 from app.services.sap_movement import PRODUCTION_QTY
+from app.services.plan_source import plan_one
 
 # ── Machine groups ───────────────────────────────────────────────────────────
 # WHICH MACHINE DIGS WHAT IS NO LONGER WRITTEN HERE. The mine assigns each
@@ -531,24 +532,11 @@ def _downtime(db: Session, machines: list[dict], fd: date, td: date
 
 def _plan_actual(db: Session, fd: date, td: date) -> dict:
     """Plan from IMOS, actual from SAP — the same expressions the Production and
-    OB sections use, so LCM never disagrees with those pages.
-
-    WHERE SAP HAS NOT POSTED A DAY, THE MINE'S OWN FIGURE STANDS IN, which is
-    the rule the Executive Summary has followed since September — see
-    services/est_actual.py. Without it the matrix opened on a deviation that
-    counted the last few days as nil production, which is the largest loss
-    arithmetic can produce and the one thing nobody at the mine believed.
-
-    It is an estimate and it moves: 37% from SAP on the average day, and 19%
-    low across the span, so a window still waiting on SAP OVERSTATES the loss
-    and settles downward. Every figure below the deviation — the factor, each
-    head's tonnes and rupees, the KAM tables and their ratings — moves with
-    it, so the source is reported alongside rather than left to be inferred.
-    """
-    ore_plan = db.execute(text("""
-        SELECT COALESCE(SUM(ORE_QTY), 0) AS q FROM mines_daily_excavation_plan
+    OB sections use, so LCM never disagrees with those pages."""
+    ore_plan = plan_one(text("""
+        SELECT COALESCE(SUM(ORE_QTY), 0) AS q FROM minehub.excavation_plan
         WHERE Prod_date BETWEEN :fd AND :td
-    """), {"fd": fd, "td": td}).fetchone()
+    """), {"fd": fd, "td": td})
 
     # OB_QTY_Cum is NOT cumulative despite the name — the table is one row per
     # shift per location per face, and the value repeats identically across
@@ -556,11 +544,11 @@ def _plan_actual(db: Session, fd: date, td: date) -> dict:
     # times). It is a per-shift-per-face plan quantity, the same grain as
     # ORE_QTY, so it sums the same way. MAX-per-date discards every row but one
     # and understates the OB plan roughly fivefold.
-    ob_plan = db.execute(text("""
-        SELECT COALESCE(SUM(CAST(NULLIF(OB_QTY_Cum,'') AS DECIMAL(16,3))), 0) AS q
-        FROM mines_daily_excavation_plan
+    ob_plan = plan_one(text("""
+        SELECT COALESCE(SUM(OB_QTY_Cum), 0) AS q
+        FROM minehub.excavation_plan
         WHERE Prod_date BETWEEN :fd AND :td
-    """), {"fd": fd, "td": td}).fetchone()
+    """), {"fd": fd, "td": td})
 
     ph = ", ".join(f":m{i}" for i in range(len(ORE_MATERIALS)))
     p = {"fd": fd, "td": td, "plant": PLANT}
@@ -623,13 +611,13 @@ def _grade_plan(db: Session, fd: date, td: date) -> dict[str, float]:
     HG_QTY / MG_QTY / LG_QTY sit on mines_daily_excavation_plan at the same
     shift x location x face grain as ORE_QTY, so they sum the same way.
     """
-    r = db.execute(text("""
+    r = plan_one(text("""
         SELECT COALESCE(SUM(HG_QTY), 0) AS hg,
                COALESCE(SUM(MG_QTY), 0) AS mg,
                COALESCE(SUM(LG_QTY), 0) AS lg
-        FROM mines_daily_excavation_plan
+        FROM minehub.excavation_plan
         WHERE Prod_date BETWEEN :fd AND :td
-    """), {"fd": fd, "td": td}).fetchone()
+    """), {"fd": fd, "td": td})
     return {"HG": _n(r.hg), "MG": _n(r.mg), "LG": _n(r.lg)}
 
 

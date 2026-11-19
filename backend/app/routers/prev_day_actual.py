@@ -27,6 +27,9 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+# MOVED OFF balcorpdb BY MIGRATION 126. This table is in minehub now, on
+# Postgres, so this router takes the platform session rather than the shared
+# MySQL one. See the migration header for the outage that prompted it.
 from app.minehub_db import get_minehub_db
 
 router = APIRouter(prefix="/api/prev-day-actual", tags=["Previous Day Actual"])
@@ -34,7 +37,7 @@ router = APIRouter(prefix="/api/prev-day-actual", tags=["Previous Day Actual"])
 # The dashboard's keys, and the Material codes stored in the table. Kept as an
 # explicit map rather than .upper() so the column keys and the stored codes can
 # never drift apart silently — and so the CHECK constraint in
-# minehub/migrations/110 has exactly one counterpart here.
+# minehub/migrations/126 has exactly one counterpart here.
 MATERIALS: dict[str, str] = {
     "ore": "ORE",
     "ob": "OB",
@@ -61,33 +64,38 @@ def get_day(
     db: Session = Depends(get_minehub_db),
 ) -> dict:
     rows = db.execute(text("""
-        SELECT material, plan, est_actual,
-               entry_id, entry_date, updated_at, updated_by
-          FROM minehub.mines_prev_day_actual
-         WHERE date = :d
+        SELECT material     AS "Material",
+               plan_qty     AS "Plan",
+               est_actual   AS "Est_Actual",
+               entry_id     AS "Entry_Id",
+               entry_date   AS "Entry_Date",
+               updated_at   AS "Updated_At",
+               updated_by   AS "Updated_By"
+          FROM minehub.prev_day_actual
+         WHERE data_date = :d
     """), {"d": on_date}).mappings().all()
 
     # The most recent change anywhere in the day, so the panel can say when the
     # figures it is showing last moved without the client sorting five rows.
-    latest = max(rows, key=lambda r: r["updated_at"]) if rows else None
+    latest = max(rows, key=lambda r: r["Updated_At"]) if rows else None
 
     return {
         "on_date": on_date,
-        "updated_at": latest["updated_at"].isoformat() if latest else None,
-        "updated_by": latest["updated_by"] if latest else None,
+        "updated_at": latest["Updated_At"].isoformat() if latest else None,
+        "updated_by": latest["Updated_By"] if latest else None,
         # Keyed by the dashboard's own column key, so the client reads
         # values[key] without searching. An unknown code is skipped rather than
         # crashing the panel.
         "values": {
-            BY_CODE[r["material"]]: {
-                "value": float(r["est_actual"]),
-                "plan": float(r["plan"]) if r["plan"] is not None else None,
-                "entered_by": r["entry_id"],
-                "entered_at": r["entry_date"].isoformat() if r["entry_date"] else None,
-                "updated_by": r["updated_by"],
-                "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+            BY_CODE[r["Material"]]: {
+                "value": float(r["Est_Actual"]),
+                "plan": float(r["Plan"]) if r["Plan"] is not None else None,
+                "entered_by": r["Entry_Id"],
+                "entered_at": r["Entry_Date"].isoformat() if r["Entry_Date"] else None,
+                "updated_by": r["Updated_By"],
+                "updated_at": r["Updated_At"].isoformat() if r["Updated_At"] else None,
             }
-            for r in rows if r["material"] in BY_CODE
+            for r in rows if r["Material"] in BY_CODE
         },
     }
 
@@ -135,32 +143,83 @@ def put_day(
     for key, value in value_of.items():
         material = MATERIALS[key]
         if value is None:
-            r = db.execute(text("""
-                DELETE FROM minehub.mines_prev_day_actual
-                 WHERE date = :d AND material = :m
-            """), {"d": on_date, "m": material})
-            cleared += r.rowcount or 0
+            # WHAT IT SAID BEFORE IS KEPT. The row goes, the trail does not --
+            # a figure cleared by mistake has to be answerable afterwards, and
+            # the row itself can no longer answer it.
+            gone = db.execute(text("""
+                DELETE FROM minehub.prev_day_actual
+                 WHERE data_date = :d AND material = :m
+                RETURNING est_actual, revision
+            """), {"d": on_date, "m": material}).first()
+            if gone:
+                db.execute(text("""
+                    INSERT INTO minehub.prev_day_actual_hist
+                           (data_date, material, action, field,
+                            old_value, new_value, revision, entry_id)
+                    VALUES (:d, :m, 'REMOVED', 'est_actual',
+                            :old, NULL, :rev, :who)
+                # Formatted the same way the save branch formats it, so one
+                # field's trail does not read 333 in one row and 333.00 in the
+                # next for the same figure.
+                """), {"d": on_date, "m": material,
+                       "old": f"{float(gone[0]):g}",
+                       "rev": int(gone[1]) + 1, "who": who})
+            cleared += 1 if gone else 0
             continue
         # ENTRY_DATE AND ENTRY_ID ARE NOT TOUCHED ON THE UPDATE BRANCH, so they
         # keep saying who first filed this figure and when. Updated_At and
         # Updated_By carry the correction.
         #
-        # updated_at is set explicitly rather than left to a trigger: a save
-        # is a change to the person who pressed the button, whether or not the
-        # digits moved, so re-entering a figure that matches what is already
-        # stored must still be recorded as a change.
+        # Updated_At is set explicitly rather than left to an ON UPDATE clause
+        # (which the migration removed): MySQL fires ON UPDATE only when a
+        # value actually changes, so re-entering a figure that happens to match
+        # what is already stored would not be recorded as a change at all. A
+        # save is a change to the person who pressed the button, whether or not
+        # the digits moved.
+        # WHAT IT SAID BEFORE, read inside the same transaction as the write
+        # that replaces it, so the trail cannot disagree with the row.
+        was = db.execute(text("""
+            SELECT plan_qty, est_actual, revision FROM minehub.prev_day_actual
+             WHERE data_date = :d AND material = :m
+        """), {"d": on_date, "m": material}).first()
+
         db.execute(text("""
-            INSERT INTO minehub.mines_prev_day_actual
-                   (date, material, plan, est_actual,
-                    entry_id, updated_by, updated_at)
-            VALUES (:d, :m, :p, :v, :who, :who, now())
-            ON CONFLICT (date, material) DO UPDATE SET
-                   plan       = EXCLUDED.plan,
+            INSERT INTO minehub.prev_day_actual
+                   (data_date, material, plan_qty, est_actual,
+                    entry_id, entry_date, updated_by, updated_at, revision)
+            VALUES (:d, :m, :p, :v, :who, now(), :who, now(), 1)
+            ON CONFLICT (data_date, material) DO UPDATE SET
+                   plan_qty   = EXCLUDED.plan_qty,
                    est_actual = EXCLUDED.est_actual,
                    updated_by = EXCLUDED.updated_by,
-                   updated_at = now()
+                   -- Written explicitly, not by a trigger: a trigger fires
+                   -- only when a value moves, and re-entering a figure that
+                   -- matches what is stored is still a save to the person who
+                   -- pressed the button.
+                   updated_at = now(),
+                   revision   = minehub.prev_day_actual.revision + 1
         """), {"d": on_date, "m": material, "p": plan_of[key],
                "v": value, "who": who})
+
+        # One history row per field that actually moved. A re-save that
+        # changes nothing records nothing -- updated_at already carries the
+        # fact that somebody pressed the button.
+        rev = (int(was[2]) + 1) if was else 1
+        for fname, before, after in (
+                ("est_actual", None if was is None else was[1], value),
+                ("plan_qty",   None if was is None else was[0], plan_of[key])):
+            b = None if before is None else f"{float(before):g}"
+            a = None if after is None else f"{float(after):g}"
+            if b == a:
+                continue
+            db.execute(text("""
+                INSERT INTO minehub.prev_day_actual_hist
+                       (data_date, material, action, field,
+                        old_value, new_value, revision, entry_id)
+                VALUES (:d, :m, :act, :f, :old, :new, :rev, :who)
+            """), {"d": on_date, "m": material,
+                   "act": "ADDED" if was is None else "CHANGED",
+                   "f": fname, "old": b, "new": a, "rev": rev, "who": who})
         saved += 1
 
     db.commit()

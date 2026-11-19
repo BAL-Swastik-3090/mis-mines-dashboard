@@ -1,7 +1,7 @@
 """The mine's own figure, for the days SAP has not answered for yet.
 
 SAP posts production in arrears. Until it does, the only number that exists
-for yesterday is the one the mine typed into minehub.mines_prev_day_actual, and a
+for yesterday is the one the mine typed into minehub.prev_day_actual, and a
 screen built on SAP alone opens on a zero for the day everybody has just
 finished discussing. The Executive Summary has stood the estimate in for that
 gap since September; this module is the same rule, extracted, so the Lost Cost
@@ -76,9 +76,9 @@ def rows(fd: date, td: date, materials: tuple[str, ...]
         return []
     try:
         return [(r.d, str(r.m), float(r.q or 0)) for r in pg.execute(text("""
-            SELECT date AS d, material AS m, est_actual AS q
-            FROM minehub.mines_prev_day_actual
-            WHERE date BETWEEN :f AND :t AND material IN :mats
+            SELECT data_date AS d, material AS m, est_actual AS q
+            FROM minehub.prev_day_actual
+            WHERE data_date BETWEEN :f AND :t AND material IN :mats
         """).bindparams(bindparam("mats", expanding=True)),
             {"f": fd, "t": td, "mats": list(materials)})]
     except Exception:                                       # noqa: BLE001
@@ -123,9 +123,9 @@ def estimate(fd: date, td: date, material: str, covered: set[date]) -> dict:
 
     try:
         rows = pg.execute(text("""
-            SELECT date AS d, est_actual AS q
-            FROM minehub.mines_prev_day_actual
-            WHERE material = :m AND date BETWEEN :f AND :t
+            SELECT data_date AS d, est_actual AS q
+            FROM minehub.prev_day_actual
+            WHERE material = :m AND data_date BETWEEN :f AND :t
         """), {"m": material, "f": fd, "t": td}).fetchall()
     except Exception:                                       # noqa: BLE001
         logger.warning("the previous day's actual could not be read",

@@ -36,6 +36,8 @@ from openai import AsyncOpenAI
 from ..config import get_settings
 from ..schemas.insights import RealityCheckRow, RealityCheckResponse, InsightsResponse
 from app.services.despatch import MINES_HAULIER_PARAMS
+from app.services.sap_source import sap_one
+from app.services.plan_source import plan_one, plan_rows
 
 
 # ── Configurable constants ──────────────────────────────────────
@@ -76,9 +78,9 @@ def _month_bounds(ref: date) -> tuple[date, date]:
 
 def _latest_plan_month(db: Session) -> tuple[date, date]:
     """Return (first, last) of the most recent month that has excavation plan data."""
-    row = db.execute(text(
-        "SELECT MAX(Prod_date) AS mx FROM mines_daily_excavation_plan"
-    )).fetchone()
+    row = plan_one(text(
+        "SELECT MAX(Prod_date) AS mx FROM minehub.excavation_plan"
+    ))
     if not row or not row.mx:
         today = date.today()
         return today.replace(day=1), today
@@ -133,6 +135,8 @@ def _ore_ob_full_month_plan(db: Session, first: date, last: date) -> dict:
     """
     month = first.strftime("%Y-%m")
 
+    # STILL ON balcorpdb. mines_monthly_excavation_plan did not move with the
+    # daily plan in migration 128 and must keep the MySQL session.
     ore_row = db.execute(text("""
         SELECT COALESCE(SUM(Tonnage), 0) AS ore_plan
         FROM   mines_monthly_excavation_plan
@@ -153,12 +157,12 @@ def _ore_ob_full_month_plan(db: Session, first: date, last: date) -> dict:
     if ore <= 0 and ob <= 0:
         # No monthly plan filed for this month — fall back so the panel still
         # shows something, but say so rather than implying a full-month figure.
-        row = db.execute(text("""
+        row = plan_one(text("""
             SELECT COALESCE(SUM(ORE_QTY), 0)                                     AS ore_plan,
-                   COALESCE(SUM(CAST(NULLIF(OB_QTY_Cum,'') AS DECIMAL(16,3))), 0) AS ob_plan
-            FROM   mines_daily_excavation_plan
+                   COALESCE(SUM(OB_QTY_Cum), 0) AS ob_plan
+            FROM   minehub.excavation_plan
             WHERE  Prod_date BETWEEN :f AND :t
-        """), {"f": first, "t": last}).fetchone()
+        """), {"f": first, "t": last})
         return {"ore": _f(row.ore_plan), "ob": _f(row.ob_plan),
                 "source": "daily_elapsed", "ob_unparsed": 0}
 
@@ -166,20 +170,20 @@ def _ore_ob_full_month_plan(db: Session, first: date, last: date) -> dict:
 
 
 def _cob_full_month_plan(db: Session, first: date, last: date) -> float:
-    row = db.execute(text("""
+    row = plan_one(text("""
         SELECT COALESCE(SUM(Concentrate_qty), 0) AS cob_plan
-        FROM   mines_cobp_plan
+        FROM   minehub.cobp_plan
         WHERE  Plan_date BETWEEN :f AND :t
-    """), {"f": first, "t": last}).fetchone()
+    """), {"f": first, "t": last})
     return _f(row.cob_plan)
 
 
 def _despatch_full_month_plan(db: Session, first: date, last: date) -> float:
-    row = db.execute(text("""
+    row = plan_one(text("""
         SELECT COALESCE(SUM(Grand_Total_Qty), 0) AS d_plan
-        FROM   mines_despatch_plan
+        FROM   minehub.despatch_plan
         WHERE  Plan_date BETWEEN :f AND :t
-    """), {"f": first, "t": last}).fetchone()
+    """), {"f": first, "t": last})
     return _f(row.d_plan)
 
 
@@ -272,17 +276,18 @@ def _despatch_mtd_actual(db: Session, from_date: date, to_date: date) -> float |
     transporter.
     """
     try:
-        row = db.execute(text("""
+        row = sap_one(db, text("""
             SELECT COALESCE(SUM(z.NETWEIGHT), 0) AS actual
             FROM (
-                SELECT DELIVERYNO, MAX(NETWEIGHT) AS NETWEIGHT
+                SELECT DELIVERYNO,
+                       MAX(CAST(NULLIF(TRIM(NETWEIGHT),'') AS DECIMAL(16,3))) AS NETWEIGHT
                 FROM   zsd_outbound_despatch
-                WHERE  DATE(GATEINDATE) BETWEEN :f AND :t
+                WHERE  GATEINDATE BETWEEN :f AND :t
                   AND  CUSTOMERNO IN ('BAL', 'JABAMOYEE')
                   AND  (COALESCE(WEIGHBRIDGE, '') = :wb OR COALESCE(TRANSPORTER, '') LIKE :hauler)
                 GROUP  BY DELIVERYNO
             ) z
-        """), {"f": from_date, "t": to_date, **MINES_HAULIER_PARAMS}).fetchone()
+        """), {"f": from_date, "t": to_date, **MINES_HAULIER_PARAMS})
         val = _f(row.actual) if row else None
         return val if val and val > 0 else None
     except Exception:
@@ -676,7 +681,7 @@ def _despatch_split_mtd(db: Session, from_date: date, to_date: date) -> dict:
     Despatch dashboard section's own numbers.
     """
     try:
-        row = db.execute(text("""
+        row = sap_one(db, text("""
             SELECT
                 COALESCE(SUM(CASE WHEN z.CUSTOMERNO = 'BAL'       THEN z.NETWEIGHT END), 0) AS bal,
                 COALESCE(SUM(CASE WHEN z.CUSTOMERNO = 'JABAMOYEE' THEN z.NETWEIGHT END), 0) AS suk,
@@ -684,14 +689,14 @@ def _despatch_split_mtd(db: Session, from_date: date, to_date: date) -> dict:
             FROM (
                 SELECT DELIVERYNO,
                        MAX(CUSTOMERNO) AS CUSTOMERNO,
-                       MAX(NETWEIGHT)  AS NETWEIGHT
+                       MAX(CAST(NULLIF(TRIM(NETWEIGHT),'') AS DECIMAL(16,3)))  AS NETWEIGHT
                 FROM zsd_outbound_despatch
-                WHERE DATE(GATEINDATE) BETWEEN :f AND :t
+                WHERE GATEINDATE BETWEEN :f AND :t
                   AND CUSTOMERNO IN ('BAL', 'JABAMOYEE')
                   AND (COALESCE(WEIGHBRIDGE, '') = :wb OR COALESCE(TRANSPORTER, '') LIKE :hauler)
                 GROUP BY DELIVERYNO
             ) z
-        """), {"f": from_date, "t": to_date, **MINES_HAULIER_PARAMS}).fetchone()
+        """), {"f": from_date, "t": to_date, **MINES_HAULIER_PARAMS})
         return {
             "bal":   round(float(row.bal   or 0), 1),
             "suk":   round(float(row.suk   or 0), 1),

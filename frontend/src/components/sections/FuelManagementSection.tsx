@@ -514,20 +514,18 @@ function VehicleRow({ v, onSelect }: { v: FuelVehicle; onSelect: (v: FuelVehicle
 type FuelTab = "live" | "summary" | "stock" | "control";
 
 const TABS: { id: FuelTab; label: string }[] = [
+  /* Stock first: what is in the tank and what is coming is the question the
+   * fuel office opens this page to answer. Then what was handed out, then
+   * what the sensors saw, then the period summary. */
+  { id: "stock",   label: "Stock & Supply" },
+  { id: "control", label: "Fuel Control"  },
   { id: "live",    label: "Live Overview" },
   { id: "summary", label: "Fuel Summary"  },
-  /* What is in the tank, from SAP. The three tabs answer three different
-   * questions about the same diesel: what the machines burnt, what is left,
-   * and what was handed out. None of them is the others. */
-  { id: "stock",   label: "Stock & Supply" },
-  /* The sensors say what a machine burnt. The register says what was handed
-   * out. Neither is the other, and until this tab nothing compared them. */
-  { id: "control", label: "Fuel Control"  },
 ];
 
 export default function FuelManagementSection() {
   const { data, loading, error, lastUpdated, refetch } = useFuelManagement();
-  const [tab,             setTab]             = useState<FuelTab>("live");
+  const [tab,             setTab]             = useState<FuelTab>("stock");
   const [search,          setSearch]          = useState("");
   const [filterStatus,    setFilterStatus]    = useState<string>("all");
   const [filterCategory,  setFilterCategory]  = useState<string>("all");
