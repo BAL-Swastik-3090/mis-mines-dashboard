@@ -27,14 +27,14 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.minehub_db import get_minehub_db
 
 router = APIRouter(prefix="/api/prev-day-actual", tags=["Previous Day Actual"])
 
 # The dashboard's keys, and the Material codes stored in the table. Kept as an
 # explicit map rather than .upper() so the column keys and the stored codes can
 # never drift apart silently — and so the CHECK constraint in
-# scripts/sql/004_mines_prev_day_actual.sql has exactly one counterpart here.
+# minehub/migrations/110 has exactly one counterpart here.
 MATERIALS: dict[str, str] = {
     "ore": "ORE",
     "ob": "OB",
@@ -58,36 +58,36 @@ def _actor(request: Request) -> str:
 @router.get("", summary="Hand-entered figures for one day")
 def get_day(
     on_date: date = Query(..., description="The day the figures belong to"),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_minehub_db),
 ) -> dict:
     rows = db.execute(text("""
-        SELECT Material, `Plan`, Est_Actual,
-               Entry_Id, Entry_Date, Updated_At, Updated_By
-          FROM mines_prev_day_actual
-         WHERE `Date` = :d
+        SELECT material, plan, est_actual,
+               entry_id, entry_date, updated_at, updated_by
+          FROM minehub.mines_prev_day_actual
+         WHERE date = :d
     """), {"d": on_date}).mappings().all()
 
     # The most recent change anywhere in the day, so the panel can say when the
     # figures it is showing last moved without the client sorting five rows.
-    latest = max(rows, key=lambda r: r["Updated_At"]) if rows else None
+    latest = max(rows, key=lambda r: r["updated_at"]) if rows else None
 
     return {
         "on_date": on_date,
-        "updated_at": latest["Updated_At"].isoformat() if latest else None,
-        "updated_by": latest["Updated_By"] if latest else None,
+        "updated_at": latest["updated_at"].isoformat() if latest else None,
+        "updated_by": latest["updated_by"] if latest else None,
         # Keyed by the dashboard's own column key, so the client reads
         # values[key] without searching. An unknown code is skipped rather than
         # crashing the panel.
         "values": {
-            BY_CODE[r["Material"]]: {
-                "value": float(r["Est_Actual"]),
-                "plan": float(r["Plan"]) if r["Plan"] is not None else None,
-                "entered_by": r["Entry_Id"],
-                "entered_at": r["Entry_Date"].isoformat() if r["Entry_Date"] else None,
-                "updated_by": r["Updated_By"],
-                "updated_at": r["Updated_At"].isoformat() if r["Updated_At"] else None,
+            BY_CODE[r["material"]]: {
+                "value": float(r["est_actual"]),
+                "plan": float(r["plan"]) if r["plan"] is not None else None,
+                "entered_by": r["entry_id"],
+                "entered_at": r["entry_date"].isoformat() if r["entry_date"] else None,
+                "updated_by": r["updated_by"],
+                "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
             }
-            for r in rows if r["Material"] in BY_CODE
+            for r in rows if r["material"] in BY_CODE
         },
     }
 
@@ -101,7 +101,7 @@ def put_day(
     # does. Saving cell by cell could leave a half-recorded day behind a failed
     # request, which is worse than not saving at all because it looks complete.
     entries: list[dict] = Body(..., embed=True),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_minehub_db),
 ) -> dict:
     if on_date > date.today():
         raise HTTPException(400, "Cannot record an actual for a future date.")
@@ -136,8 +136,8 @@ def put_day(
         material = MATERIALS[key]
         if value is None:
             r = db.execute(text("""
-                DELETE FROM mines_prev_day_actual
-                 WHERE `Date` = :d AND Material = :m
+                DELETE FROM minehub.mines_prev_day_actual
+                 WHERE date = :d AND material = :m
             """), {"d": on_date, "m": material})
             cleared += r.rowcount or 0
             continue
@@ -145,22 +145,20 @@ def put_day(
         # keep saying who first filed this figure and when. Updated_At and
         # Updated_By carry the correction.
         #
-        # Updated_At is set explicitly rather than left to an ON UPDATE clause
-        # (which the migration removed): MySQL fires ON UPDATE only when a
-        # value actually changes, so re-entering a figure that happens to match
-        # what is already stored would not be recorded as a change at all. A
-        # save is a change to the person who pressed the button, whether or not
-        # the digits moved.
+        # updated_at is set explicitly rather than left to a trigger: a save
+        # is a change to the person who pressed the button, whether or not the
+        # digits moved, so re-entering a figure that matches what is already
+        # stored must still be recorded as a change.
         db.execute(text("""
-            INSERT INTO mines_prev_day_actual
-                   (`Date`, Material, `Plan`, Est_Actual,
-                    Entry_Id, Updated_By, Updated_At)
-            VALUES (:d, :m, :p, :v, :who, :who, NOW())
-            ON DUPLICATE KEY UPDATE
-                   `Plan`     = VALUES(`Plan`),
-                   Est_Actual = VALUES(Est_Actual),
-                   Updated_By = VALUES(Updated_By),
-                   Updated_At = NOW()
+            INSERT INTO minehub.mines_prev_day_actual
+                   (date, material, plan, est_actual,
+                    entry_id, updated_by, updated_at)
+            VALUES (:d, :m, :p, :v, :who, :who, now())
+            ON CONFLICT (date, material) DO UPDATE SET
+                   plan       = EXCLUDED.plan,
+                   est_actual = EXCLUDED.est_actual,
+                   updated_by = EXCLUDED.updated_by,
+                   updated_at = now()
         """), {"d": on_date, "m": material, "p": plan_of[key],
                "v": value, "who": who})
         saved += 1

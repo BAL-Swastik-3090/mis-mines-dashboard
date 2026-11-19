@@ -250,7 +250,7 @@ def _production_mtd(db: Session, from_date: date, to_date: date) -> dict:
                           ("ob",  est_actual.MAT_OB),
                           ("cob", est_actual.MAT_COB)):
         sap = _f(getattr(row, key))
-        est = est_actual.estimate(db, from_date, to_date, material, cov[key])
+        est = est_actual.estimate(from_date, to_date, material, cov[key])
         out[key] = sap + est["qty"]
         # Kept alongside so the table can say which it is showing. A day with
         # NEITHER a posting nor a typed figure stays absent from both -- there
@@ -527,10 +527,7 @@ def _production_daily_rows(db: Session, from_date: date, to_date: date) -> list[
                           ("ob",  est_actual.MAT_OB),
                           ("cob", est_actual.MAT_COB)):
         covered = {d for d, v in by_day.items() if v[key]}
-        for d, q in db.execute(text("""
-            SELECT `Date` AS d, Est_Actual AS q FROM mines_prev_day_actual
-             WHERE Material = :m AND `Date` BETWEEN :f AND :t
-        """), {"m": material, "f": from_date, "t": to_date}):
+        for d, _m, q in est_actual.rows(from_date, to_date, (material,)):
             if d in covered:
                 continue                  # SAP has spoken for this day
             by_day.setdefault(d, {"ore": 0.0, "ob": 0.0, "cob": 0.0})
@@ -661,7 +658,7 @@ def _stock_snapshot(db: Session) -> dict:
     """
     try:
         from app.services.stock import get_stock_position
-        pos = get_stock_position(db, None)      # latest snapshot
+        pos = get_stock_position(None)      # latest snapshot
         if not pos.get("has_data"):
             return {}
         result = {g["grade_key"]: g["mines"] for g in pos["grades"]}

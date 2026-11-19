@@ -49,6 +49,7 @@ from typing import Any, NamedTuple
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.services import est_actual
 from app.services import desilting_plan as desilt_svc
 from app.services import dewatering_entry as dewatering_svc
 from app.services import shifting as shifting_svc
@@ -640,14 +641,10 @@ def sap_arrivals(db: Session, today: date,
     """
     frm = today - timedelta(days=days)
 
-    est: dict[tuple[date, str], float] = {}
-    for r in db.execute(text("""
-            SELECT `Date` AS d, Material AS m, Est_Actual AS q
-            FROM mines_prev_day_actual
-            WHERE `Date` BETWEEN :f AND :t
-              AND Material IN ('ORE', 'OB', 'COB')
-        """), {"f": frm, "t": today}):
-        est[(r.d, str(r.m))] = float(r.q or 0)
+    # minehub, not the session this function holds -- see est_actual.
+    est: dict[tuple[date, str], float] = {
+        (d, m): q for d, m, q in
+        est_actual.rows(frm, today, ("ORE", "OB", "COB"))}
     if not est:
         return []
 
@@ -762,12 +759,8 @@ def _ore_split(db: Session, mf: date, rd: date, covered: set[date],
     grade quantities, and reports which basis it used so the screen can say.
     Returns ({grade: (td, mtd)}, days_filled, basis).
     """
-    est = db.execute(text("""
-        SELECT `Date` AS d, Est_Actual AS q FROM mines_prev_day_actual
-        WHERE Material = 'ORE' AND `Date` BETWEEN :mf AND :rd
-    """), {"mf": mf, "rd": rd}).fetchall()
-    pending = [(r.d, float(r.q or 0)) for r in est
-               if r.d not in covered and float(r.q or 0)]
+    est = est_actual.rows(mf, rd, ("ORE",))
+    pending = [(d, q) for d, _m, q in est if d not in covered and q]
     if not pending:
         return {}, 0, ""
 
@@ -829,21 +822,16 @@ def _estimates(db: Session, mf: date, rd: date,
 
     Returns (td, mtd, days_filled).
     """
-    rows = db.execute(text("""
-        SELECT `Date` AS d, Est_Actual AS q
-        FROM mines_prev_day_actual
-        WHERE Material = :m AND `Date` BETWEEN :mf AND :rd
-    """), {"m": material, "mf": mf, "rd": rd}).fetchall()
+    rows = est_actual.rows(mf, rd, (material,))
 
     td = mtd = 0.0
     filled = 0
-    for r in rows:
-        if r.d in covered:
+    for d, _m, q in rows:
+        if d in covered:
             continue                      # SAP has spoken for this day
-        q = float(r.q or 0)
         mtd += q
         filled += 1
-        if r.d == rd:
+        if d == rd:
             td = q
     return td, mtd, filled
 
@@ -1096,7 +1084,7 @@ def get_executive_summary(db: Session, report_day: date,
         "report_day": report_day.isoformat(),
         "stock_as_on": stock_as_on.isoformat(),
         "mtd_from": mtd_from.isoformat(),
-        "stock": stock_svc.get_stock_position(db, stock_as_on),
+        "stock": stock_svc.get_stock_position(stock_as_on),
         "td": block("td"),
         "mtd": block("mtd"),
         # OUTSIDE td/mtd, UNLIKE EVERY OTHER BLOCK ON THIS PAGE. Dewatering

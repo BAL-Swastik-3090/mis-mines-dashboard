@@ -185,7 +185,7 @@ def _actual_qty(db: Session, fd: date, td: date) -> dict:
         SELECT DISTINCT POSTING_DATE FROM pp_production
          WHERE PLANT = :plant AND POSTING_DATE BETWEEN :fd AND :td
     """, {"plant": PLANT_COB, "fd": fd, "td": td})
-    est = est_actual.estimate(db, fd, td, est_actual.MAT_COB, covered)
+    est = est_actual.estimate(fd, td, est_actual.MAT_COB, covered)
 
     conc_sap = _f(r.concentrate)
     return {

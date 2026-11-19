@@ -165,7 +165,7 @@ FEEDS: tuple[Feed, ...] = (
     # -- Entered at the mine -------------------------------------------------
     Feed("stock_entry", "Mine stock position",
          ("executive-summary", "mis"),
-         MYSQL, "mines_stock_entry", "Stock_Date", ENTRY,
+         MINEHUB, "mines_stock_entry", "stock_date", ENTRY,
          "Filed each morning on the dashboard. A Stock_Date is the START of "
          "that day, so today's entry is what yesterday's work left behind -- "
          "which is why this one is expected to hold TODAY, not yesterday.",

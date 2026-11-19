@@ -595,8 +595,8 @@ def _plan_actual(db: Session, fd: date, td: date) -> dict:
         if r.ob_rows:
             covered_ob.add(r.d)
 
-    ore_est = est_actual.estimate(db, fd, td, est_actual.MAT_ORE, covered_ore)
-    ob_est  = est_actual.estimate(db, fd, td, est_actual.MAT_OB,  covered_ob)
+    ore_est = est_actual.estimate(fd, td, est_actual.MAT_ORE, covered_ore)
+    ob_est  = est_actual.estimate(fd, td, est_actual.MAT_OB,  covered_ob)
 
     ore_sap, ob_sap = _n(ore_act.q), _n(ob_act.q)
     return {

@@ -1,7 +1,7 @@
 """The mine's own figure, for the days SAP has not answered for yet.
 
 SAP posts production in arrears. Until it does, the only number that exists
-for yesterday is the one the mine typed into mines_prev_day_actual, and a
+for yesterday is the one the mine typed into minehub.mines_prev_day_actual, and a
 screen built on SAP alone opens on a zero for the day everybody has just
 finished discussing. The Executive Summary has stood the estimate in for that
 gap since September; this module is the same rule, extracted, so the Lost Cost
@@ -28,10 +28,14 @@ printing one number as though it were the same thing either way.
 """
 from __future__ import annotations
 
+import logging
+
 from datetime import date
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 # What the mine types, and what each row means in the matrices that read it.
 MAT_ORE = "ORE"
@@ -51,19 +55,84 @@ def posted_days(db: Session, sql: str, params: dict) -> set[date]:
     return {r[0] for r in db.execute(text(sql), params) if r[0] is not None}
 
 
-def estimate(db: Session, fd: date, td: date, material: str,
-             covered: set[date]) -> dict:
+def rows(fd: date, td: date, materials: tuple[str, ...]
+         ) -> list[tuple[date, str, float]]:
+    """(day, material, figure) for a window, straight from minehub.
+
+    The Executive Summary needs the rows rather than a total -- it splits the
+    ore figure across grades and reports the day each one arrived -- so it
+    reads them here instead of opening a fourth session of its own.
+
+    An unreachable minehub yields no rows, for the reason `estimate` gives.
+    """
+    try:
+        from app.minehub_db import SessionLocal
+        if SessionLocal is None:
+            return []
+        pg = SessionLocal()
+    except Exception:                                       # noqa: BLE001
+        logger.warning("minehub unavailable for the previous day's actual",
+                       exc_info=True)
+        return []
+    try:
+        return [(r.d, str(r.m), float(r.q or 0)) for r in pg.execute(text("""
+            SELECT date AS d, material AS m, est_actual AS q
+            FROM minehub.mines_prev_day_actual
+            WHERE date BETWEEN :f AND :t AND material IN :mats
+        """).bindparams(bindparam("mats", expanding=True)),
+            {"f": fd, "t": td, "mats": list(materials)})]
+    except Exception:                                       # noqa: BLE001
+        logger.warning("the previous day's actual could not be read",
+                       exc_info=True)
+        return []
+    finally:
+        pg.close()
+
+
+_NOTHING = {"qty": 0.0, "days": 0, "last_day": None}
+
+
+def estimate(fd: date, td: date, material: str, covered: set[date]) -> dict:
     """The mine's figure for the days inside the window that SAP has not posted.
 
     Returns the tonnage to ADD to the SAP figure, how many days it came from,
     and the last day it covers -- which is what a screen needs to say "filled
     to the 15th" rather than leaving a reader to guess how much is estimated.
+
+    IT OPENS ITS OWN SESSION AND TAKES NONE. The table lives in minehub while
+    every caller here is mid-way through a balcorpdb query -- the Lost Cost
+    Matrix, the COB matrix, Reality Check and the Executive Summary are all
+    built on MySQL -- so the session they hold cannot read it. Same arrangement
+    as lcm_settings.resolve_detached, and for the same reason.
+
+    A MINEHUB IT CANNOT REACH MEANS NO ESTIMATE, NOT AN ERROR. Every caller
+    adds this to a SAP figure, so returning nothing degrades the screen to
+    SAP-only -- which is exactly what it showed before any of this existed.
+    Raising instead would take down the Executive Summary, the LCM and Reality
+    Check together over a figure that is, by construction, the optional half.
     """
-    rows = db.execute(text("""
-        SELECT `Date` AS d, Est_Actual AS q
-        FROM mines_prev_day_actual
-        WHERE Material = :m AND `Date` BETWEEN :f AND :t
-    """), {"m": material, "f": fd, "t": td}).fetchall()
+    try:
+        from app.minehub_db import SessionLocal
+        if SessionLocal is None:
+            return dict(_NOTHING)
+        pg = SessionLocal()
+    except Exception:                                       # noqa: BLE001
+        logger.warning("minehub unavailable for the previous day's actual",
+                       exc_info=True)
+        return dict(_NOTHING)
+
+    try:
+        rows = pg.execute(text("""
+            SELECT date AS d, est_actual AS q
+            FROM minehub.mines_prev_day_actual
+            WHERE material = :m AND date BETWEEN :f AND :t
+        """), {"m": material, "f": fd, "t": td}).fetchall()
+    except Exception:                                       # noqa: BLE001
+        logger.warning("the previous day's actual could not be read",
+                       exc_info=True)
+        return dict(_NOTHING)
+    finally:
+        pg.close()
 
     qty = 0.0
     days: list[date] = []

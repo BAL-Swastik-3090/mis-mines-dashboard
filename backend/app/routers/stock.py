@@ -24,4 +24,4 @@ def stock_position(
     as_on: date = Query(default=None, description="Show the latest snapshot on or before this date"),
     db: Session = Depends(get_db),
 ):
-    return StockPosition(**svc.get_stock_position(db, as_on))
+    return StockPosition(**svc.get_stock_position(as_on))
