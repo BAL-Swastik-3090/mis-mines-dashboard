@@ -28,7 +28,6 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.database import get_db
 from app.minehub_db import get_minehub_db
 
 router = APIRouter(prefix="/api/stock-entry", tags=["Mines Stock Entry"])
@@ -93,9 +92,6 @@ def _valid_cell(grade: str, bucket: str) -> bool:
 @router.get("", summary="The stock position entered for one day")
 def get_day(
     on_date: date = Query(..., description="The Stock_Date to read"),
-    db: Session = Depends(get_db),
-    # minehub holds the two tables; `db` stays for the permission check, whose
-    # fallback reads the old MySQL role column when minehub is cold.
     pg: Session = Depends(get_minehub_db),
 ) -> dict:
     rows = pg.execute(text("""
@@ -141,14 +137,11 @@ def put_day(
     cells: list[dict] = Body(..., embed=True),
     # {"SKD": 120, "BLS": 300} — the day's proposed despatch, optional.
     proposed_despatch: dict | None = Body(None, embed=True),
-    db: Session = Depends(get_db),
-    # minehub holds the two tables; `db` stays for the permission check, whose
-    # fallback reads the old MySQL role column when minehub is cold.
     pg: Session = Depends(get_minehub_db),
 ) -> dict:
     if STOCK_PERMISSION:
         from app.services import access as access_svc
-        if not access_svc.has_permission(db, _actor(request), STOCK_PERMISSION):
+        if not access_svc.has_permission(pg, _actor(request), STOCK_PERMISSION):
             raise HTTPException(403, "You may not enter stock figures.")
 
     if on_date > date.today():
@@ -285,14 +278,11 @@ def put_day(
 def delete_day(
     request: Request,
     on_date: date = Query(...),
-    db: Session = Depends(get_db),
-    # minehub holds the two tables; `db` stays for the permission check, whose
-    # fallback reads the old MySQL role column when minehub is cold.
     pg: Session = Depends(get_minehub_db),
 ) -> dict:
     if STOCK_PERMISSION:
         from app.services import access as access_svc
-        if not access_svc.has_permission(db, _actor(request), STOCK_PERMISSION):
+        if not access_svc.has_permission(pg, _actor(request), STOCK_PERMISSION):
             raise HTTPException(403, "You may not enter stock figures.")
     r = pg.execute(text("DELETE FROM minehub.mines_stock_entry WHERE stock_date = :d"),
                    {"d": on_date})

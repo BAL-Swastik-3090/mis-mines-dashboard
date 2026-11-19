@@ -34,10 +34,13 @@
 -- them as UTC would silently move every entry timestamp five and a half hours
 -- and make "who filed this, and when" wrong for 2,042 rows.
 --
--- ── THE OLD TABLES ARE NOT DROPPED ───────────────────────────────────────
--- They stay in balcorpdb untouched, as they are, so this is reversible by
--- pointing the code back. Nothing here writes to them and nothing here
--- depends on them.
+-- ── THE OLD TABLES ARE LEFT WHERE THEY ARE, NOT KEPT AS A WAY BACK ───────
+-- balcorpdb is being retired once everything has moved off it, so "point the
+-- code back" is not a plan that will still work and this migration does not
+-- pretend otherwise. The old tables are simply not this migration's to drop:
+-- they go when the instance does. Until then nothing here reads or writes
+-- them, and copy_mine_entries.py is the only thing that still opens balcorpdb
+-- at all -- by design, since its whole job is to empty it.
 
 SET LOCAL search_path = minehub, public;
 

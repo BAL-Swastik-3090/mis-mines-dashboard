@@ -1,14 +1,12 @@
 """
-Stock router — mines stock position from `mines_stock_entry`.
+Stock router — mines stock position from `minehub.mines_stock_entry`.
 
-Takes a date because the table is a snapshot per Stock_Date, not a live feed.
+Takes a date because the table is a snapshot per stock_date, not a live feed.
 The service resolves the latest snapshot on or before that date.
 """
 from datetime import date
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Query
 
-from app.database import get_db
 from app.schemas.stock import StockPosition
 from app.services import stock as svc
 
@@ -22,6 +20,5 @@ router = APIRouter()
 )
 def stock_position(
     as_on: date = Query(default=None, description="Show the latest snapshot on or before this date"),
-    db: Session = Depends(get_db),
 ):
     return StockPosition(**svc.get_stock_position(as_on))

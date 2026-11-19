@@ -1,5 +1,11 @@
 """Copy the mine's three entry tables from MySQL balcorpdb into minehub.
 
+THIS SCRIPT HAS A FINITE LIFE. balcorpdb is being retired, and when it goes
+this goes with it -- it is the last thing in the platform that opens that
+instance for these three tables. Until the switch it exists to be run twice:
+once to seed, once more after deploying to sweep up whatever the mine entered
+in between. Delete it when balcorpdb is gone.
+
 RUN IT AS OFTEN AS YOU LIKE. Every row is an upsert keyed on the table's own
 primary key, so a second run changes nothing except rows that have been edited
 in MySQL since the first. That is the whole point: the mine types into these
