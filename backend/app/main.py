@@ -692,6 +692,7 @@ from app.routers import fields
 from app.routers import checklists, operators_analytics
 from app.routers import prev_day_actual
 from app.routers import stock_entry
+from app.routers import resource_reserve
 from app.routers import desilting_plan
 from app.routers import shifting
 from app.routers import dewatering_entry
@@ -745,6 +746,7 @@ app.include_router(roles.router)
 app.include_router(minehub.router)
 app.include_router(prev_day_actual.router)
 app.include_router(stock_entry.router)
+app.include_router(resource_reserve.router)
 app.include_router(desilting_plan.router)
 app.include_router(shifting.router)
 app.include_router(dewatering_entry.router)
