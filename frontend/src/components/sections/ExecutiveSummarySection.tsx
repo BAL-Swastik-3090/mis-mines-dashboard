@@ -318,10 +318,17 @@ function StockBlock({ d }: { d: ExecutiveSummaryResponse }) {
  * recomputed; correct a day in SAP and it corrects itself. See
  * services/resource_reserve.py for why no end-of-day balance is written down.
  *
- * THE VALUE COLUMN IS NET OF ROYALTY, as its heading says — which is where it
- * parts company with the sheet. The sheet's column carries the same heading
- * and the number under it is gross, frozen at May 2026 rates; the gross figure
- * is in the read-out so the two can be reconciled rather than silently differ.
+ * THE VALUE COLUMN IS THE GROSS PRESENT VALUE — the same figure the entry
+ * form shows under Present Value, at the mine's instruction, so the number on
+ * this page and the number somebody saw when they filed the survey are one
+ * number. It is the tonnage at the IBM average sale price for each band, with
+ * nothing deducted.
+ *
+ * That is also what the mine's own sheet holds. Its column is headed "Present
+ * Value (Net of Royalty)" and the figure under it is gross — checked against
+ * every issue on file. The heading here says what the figure is instead of
+ * repeating a label the number never matched, and the read-out carries the
+ * net, so royalty is a line away rather than silently applied.
  */
 type ReserveValue = {
   gross_cr: number; net_cr: number | null; charges_cr: number | null;
@@ -462,7 +469,7 @@ function ReserveBlock({ reportDay }: { reportDay?: string | null }) {
               Present Value
               <span className="block font-normal normal-case tracking-normal
                                text-[9px] text-txt-light">
-                net of royalty · Rs Crores
+                gross · Rs Crores
               </span>
             </th>
           </tr>
@@ -513,7 +520,7 @@ function ReserveBlock({ reportDay }: { reportDay?: string | null }) {
               </td>
               <td className={`${TD} text-right`}>
                 {row.val?.rates_available
-                  ? <N v={row.val.net_cr} dp={2} strong={row.strong} />
+                  ? <N v={row.val.gross_cr} dp={2} strong={row.strong} />
                   : <span className="text-txt-light/40">—</span>}
               </td>
             </tr>
@@ -551,11 +558,11 @@ function ReserveBlock({ reportDay }: { reportDay?: string | null }) {
           re-weighted by tonnage. Overburden, COB concentrate and despatch do
           not deplete the reserve — only ore leaving the ground does.
           {val?.rates_available && (
-            <> Valued at {val.rate_source}
-              {val.gross_cr != null && (
-                <> — {formatIndian(Math.round(val.gross_cr * 100) / 100, 2)} Cr
-                  gross, less {val.charge_pct ?? "—"}% royalty, DMF and NMET</>
-              )}.
+            <> Valued at {val.rate_source}, with nothing deducted.
+              {val.net_cr != null && (
+                <> Less {val.charge_pct ?? "—"}% royalty, DMF and NMET it is{" "}
+                  {formatIndian(Math.round(val.net_cr * 100) / 100, 2)} Cr.</>
+              )}
               {val.rate_stale && " Last known rates — the bulletin is overdue."}
               {val.unpriced.length > 0
                 && ` No rate on file for ${val.unpriced.join(", ")}, so that`

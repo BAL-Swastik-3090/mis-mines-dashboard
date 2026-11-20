@@ -21,11 +21,16 @@
  * the answer, so the figure seen before saving is produced by the same code,
  * and the same bulletin issue, as the figure the dashboard shows afterwards.
  *
- * BOTH GROSS AND NET OF ROYALTY ARE SHOWN. The mine's sheet has one column
- * headed "Present Value (Net of Royalty)" and the number under it is gross —
- * checked against every issue on file, its 7,223.14 Cr is the tonnage valued
- * at May 2026 rates with nothing deducted. Showing one figure would have meant
- * disagreeing with the sheet for a reason nobody could see on screen.
+ * ONE FIGURE, GROSS, AND THE RATES IT WAS STRUCK AT. Royalty, DMF and NMET
+ * are not on this form by the mine's instruction: it answers what the reserve
+ * is worth, and the deduction is a separate question the Executive Summary's
+ * read-out answers. The service still returns both — nothing was taken out of
+ * the calculation to take them off the screen.
+ *
+ * Gross is also what the mine's own sheet holds, despite its column being
+ * headed "Present Value (Net of Royalty)": checked against every issue on
+ * file, its 7,223.14 Cr is the tonnage at May 2026 rates with nothing
+ * deducted. So this figure and that column are the same kind of number.
  *
  * EDITING IS NORMAL. A reserve is restated whenever a survey restates it, and
  * corrected whenever a typo is spotted. Picking a date that already has a
@@ -62,6 +67,19 @@ const GRADES = [
 type GradeKey = (typeof GRADES)[number]["key"];
 type Draft = Record<string, { tonnage: string; cr2o3: string }>;
 
+/** One survey as the API returns it — the shape both the "which survey is in
+ *  force" lookup and the per-date reload read. */
+type DeclarationResponse = {
+  as_on_date: string | null;
+  exists: boolean;
+  grades: { grade: string; label: string; tonnage: number | null; cr2o3: number | null }[];
+  remarks: string | null;
+  entry_id: string | null;
+  entry_date: string | null;
+  updated_at: string | null;
+  updated_by: string | null;
+};
+
 const EMPTY: Draft = Object.fromEntries(
   GRADES.map((g) => [g.key, { tonnage: "", cr2o3: g.cr2o3 }]),
 );
@@ -89,13 +107,17 @@ const BOX =
   "border border-border focus:border-accent focus:outline-none " +
   "focus:ring-1 focus:ring-accent/40";
 
-function Derived({ v, unit, strong }: {
-  v: number | null; unit?: string; strong?: boolean;
+/** `dp` is not cosmetic. formatIndian defaults to whole numbers, so a
+ *  weighted assay of 46.34 printed as "46" and a value of 3,989.68 as
+ *  "3,990" -- a grade rounded to the tonne is a different grade, and the
+ *  Executive Summary block shows both to two places. */
+function Derived({ v, unit, strong, dp = 0 }: {
+  v: number | null; unit?: string; strong?: boolean; dp?: number;
 }) {
   return (
     <span className={`text-[12px] font-mono tabular-nums ${
       strong ? "font-extrabold text-navy" : "text-txt-primary"}`}>
-      {v == null ? "—" : formatIndian(Math.round(v * 100) / 100)}
+      {v == null ? "—" : formatIndian(Number(v.toFixed(dp)), dp)}
       {unit && v != null && <span className="text-txt-light font-sans"> {unit}</span>}
     </span>
   );
@@ -111,32 +133,48 @@ export default function MinesReserveEntryModal({
   // The date the SURVEY declares the reserve for — not the day it is typed,
   // and not necessarily today. A survey dated the 1st is routinely entered in
   // the second week, so no maximum is imposed beyond today.
-  const [day, setDay] = useState(todayISO);
+  // EMPTY UNTIL THE LATEST SURVEY ANSWERS. A reserve is filed a few times a
+  // year, so today is almost never the date being worked on and opening the
+  // form on it meant six blank boxes and a date nobody wanted. The dialog
+  // opens on the survey that is actually in force.
+  const [day, setDay] = useState("");
   const [draft, setDraft] = useState<Draft>(EMPTY);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const maxDay = todayISO();
 
+  // Cleared on every open so the bootstrap below runs again: a survey filed
+  // since the dialog was last closed should be the one it comes back to.
   useEffect(() => {
     if (!open) return;
     setError(null);
+    setDay("");
   }, [open]);
+
+  /* ── which survey the form opens on ───────────────────────────────────── */
+  // The latest declaration on or before today, asked for with no date at all.
+  // Separate from the per-date query below because that one is deliberately
+  // EXACT — it must never fall back — and this one is deliberately a fallback.
+  const latest = useQuery<DeclarationResponse>({
+    queryKey: ["resource-reserve-entry", "latest"],
+    queryFn: async () => (await api.get("/resource-reserve/declaration")).data,
+    enabled: open,
+    staleTime: 30 * 1000,
+  });
+
+  useEffect(() => {
+    if (!open || day || !latest.data) return;
+    // Nothing on file at all: a blank form dated today, which is the only
+    // sensible thing to offer somebody filing the first survey.
+    setDay(latest.data.as_on_date ?? todayISO());
+  }, [open, day, latest.data]);
 
   // ── what is already on file for that exact date ───────────────────────────
   // Asked for an EXACT date, never "latest on or before". Falling back would
   // paint the previous survey's figures under a new date, which reads as
   // though that date already had a declaration — and a Save would then file
   // last quarter's tonnage as this quarter's survey.
-  const existing = useQuery<{
-    as_on_date: string | null;
-    exists: boolean;
-    grades: { grade: string; label: string; tonnage: number | null; cr2o3: number | null }[];
-    remarks: string | null;
-    entry_id: string | null;
-    entry_date: string | null;
-    updated_at: string | null;
-    updated_by: string | null;
-  }>({
+  const existing = useQuery<DeclarationResponse>({
     queryKey: ["resource-reserve-entry", day],
     queryFn: async () =>
       (await api.get("/resource-reserve/declaration", {
@@ -149,7 +187,7 @@ export default function MinesReserveEntryModal({
   // Keyed on the day as well, so changing the date replaces the draft rather
   // than carrying one survey's typing onto another's date.
   useEffect(() => {
-    if (!open || !existing.data) return;
+    if (!open || !day || !existing.data) return;
     if (!existing.data.exists) {
       setDraft(EMPTY);
       return;
@@ -348,8 +386,11 @@ export default function MinesReserveEntryModal({
           </label>
           <DateField id="reserve-date" value={day} max={maxDay}
                      onChange={setDay} className="w-[140px]" />
-          <span className="text-[11px] text-txt-muted">{dayLabel(day)}</span>
-          {existing.isFetching && <Loader2 size={12} className="animate-spin text-txt-light" />}
+          {day
+            ? <span className="text-[11px] text-txt-muted">{dayLabel(day)}</span>
+            : <span className="text-[11px] text-txt-light">Pick the date the survey declares the reserve for</span>}
+          {(existing.isFetching || latest.isFetching)
+            && <Loader2 size={12} className="animate-spin text-txt-light" />}
           {existing.data?.exists && (
             <span className="text-[10px] text-txt-light flex items-center gap-1.5">
               filed by {existing.data.entry_id}
@@ -420,7 +461,7 @@ export default function MinesReserveEntryModal({
                       />
                     </td>
                     <td className="py-2 pl-3 text-right">
-                      <Derived v={line?.value_cr ?? null} />
+                      <Derived v={line?.value_cr ?? null} dp={2} />
                     </td>
                   </tr>
                 );
@@ -431,10 +472,10 @@ export default function MinesReserveEntryModal({
                   <Derived v={totals.tonnage || null} strong />
                 </td>
                 <td className="py-2 pl-2 text-right">
-                  <Derived v={totals.cr2o3} strong />
+                  <Derived v={totals.cr2o3} strong dp={2} />
                 </td>
                 <td className="py-2 pl-3 text-right">
-                  <Derived v={val?.gross_cr ?? null} strong />
+                  <Derived v={val?.gross_cr ?? null} strong dp={2} />
                 </td>
               </tr>
             </tbody>
@@ -456,36 +497,35 @@ export default function MinesReserveEntryModal({
 
             {val && val.rates_available ? (
               <>
-                <div className="mt-1.5 grid grid-cols-3 gap-3">
+                {/* THE FIGURE, AND THE RATES IT WAS STRUCK AT. Royalty, DMF
+                    and NMET are not shown here by the mine's instruction: this
+                    panel answers what the reserve is worth, and the deduction
+                    is a separate question asked on the Executive Summary. The
+                    server still returns both — see resource_reserve.value —
+                    so nothing had to be removed from the calculation to take
+                    them off the screen.
+
+                    The per-band rates are printed beside the total because
+                    this is the one figure on the form nobody typed, and
+                    "where did 7,188 come from" is otherwise a question only
+                    the API can answer. */}
+                <div className="mt-1.5 flex items-end gap-4 flex-wrap">
                   <div>
-                    <div className="text-[10px] uppercase tracking-wider text-txt-light">
-                      Gross
-                    </div>
                     <div className="text-[15px] font-mono tabular-nums font-extrabold text-navy">
-                      {formatIndian(Math.round(val.gross_cr * 100) / 100)}
+                      {formatIndian(Number(val.gross_cr.toFixed(2)), 2)}
                       <span className="text-[10px] font-sans text-txt-light"> Cr</span>
                     </div>
                   </div>
-                  <div>
-                    <div className="text-[10px] uppercase tracking-wider text-txt-light">
-                      Royalty + DMF + NMET
-                      {val.charge_pct != null && ` (${val.charge_pct}%)`}
-                    </div>
-                    <div className="text-[15px] font-mono tabular-nums text-txt-secondary">
-                      {val.charges_cr == null ? "—"
-                        : `−${formatIndian(Math.round(val.charges_cr * 100) / 100)}`}
-                      <span className="text-[10px] font-sans text-txt-light"> Cr</span>
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-[10px] uppercase tracking-wider text-txt-light">
-                      Net of Royalty
-                    </div>
-                    <div className="text-[15px] font-mono tabular-nums font-extrabold text-accent">
-                      {val.net_cr == null ? "—"
-                        : formatIndian(Math.round(val.net_cr * 100) / 100)}
-                      <span className="text-[10px] font-sans text-txt-light"> Cr</span>
-                    </div>
+                  <div className="flex items-center gap-3 pb-0.5">
+                    {val.lines.map((l) => (
+                      <span key={l.grade} className="text-[10px] text-txt-light">
+                        {l.grade}{" "}
+                        <span className="font-mono tabular-nums text-txt-secondary">
+                          {l.rate == null ? "—" : `₹${formatIndian(l.rate, 0)}`}
+                        </span>
+                        <span className="text-txt-light">/MT</span>
+                      </span>
+                    ))}
                   </div>
                 </div>
                 <p className="mt-1.5 text-[10px] text-txt-light leading-relaxed">
@@ -494,7 +534,7 @@ export default function MinesReserveEntryModal({
                   {val.unpriced.length > 0 && (
                     <strong className="text-danger">
                       No rate on file for {val.unpriced.join(", ")} — that
-                      tonnage is not in either figure.
+                      tonnage is not in the figure.
                     </strong>
                   )}
                 </p>
@@ -551,7 +591,8 @@ export default function MinesReserveEntryModal({
           </button>
           <button
             onClick={submit}
-            disabled={saving || anyInvalid || futureDay || incomplete.length > 0}
+            disabled={saving || !day || anyInvalid || futureDay
+                      || incomplete.length > 0}
             className="flex items-center gap-1.5 px-3.5 py-1.5 rounded text-[12px] font-bold
               bg-navy text-white shadow-sm transition-colors
               hover:bg-navy-2 disabled:opacity-40 disabled:cursor-not-allowed"
