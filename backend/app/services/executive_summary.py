@@ -283,9 +283,17 @@ class _Qty(NamedTuple):
     """One pass of pp_production, read four ways."""
     ore:      dict[str, tuple[float, float]]   # material -> (td, mtd)
     cob:      tuple[float, float]
-    ore_days: set[date]    # days SAP has posted ORE for, whatever the value
-    cob_days: set[date]    # days SAP has posted CONCENTRATE for
-    ob_days:  set[date]    # days SAP has posted OVERBURDEN for
+    # DAYS THE MINE HAS POSTED ANYTHING AT ALL, not one set per material.
+    # SAP never posts a zero -- a row exists only where a movement was made --
+    # so "no ore row" cannot be told apart from "ore not entered yet" by
+    # looking at ore alone. What CAN be told apart is whether the mine filed
+    # its day: once plant 1200 has posted any material for a date, that date
+    # has been answered for, and a material with no row against it was not
+    # produced. Keeping separate sets made 16 November 2026 read as unanswered
+    # because only overburden had been posted, and the estimate filled a day
+    # SAP had already closed.
+    mine_days: set[date]   # days SAP has posted ANY material at plant 1200
+    cob_days: set[date]    # days SAP has posted CONCENTRATE for (plant 1210)
 
 
 def _prod_qty(db: Session, mf: date, rd: date) -> _Qty:
@@ -299,9 +307,8 @@ def _prod_qty(db: Session, mf: date, rd: date) -> _Qty:
     """
     ore: dict[str, tuple[float, float]] = {}
     cob_qty = (0.0, 0.0)
-    ore_days: set[date] = set()
+    mine_days: set[date] = set()
     cob_days: set[date] = set()
-    ob_days: set[date] = set()
     # pp_production, from the feed. balcorpdb has no index on POSTING_DATE and
     # this is the one scan the whole page's tonnage comes from.
     with sap_session(db) as sap:
@@ -322,15 +329,18 @@ def _prod_qty(db: Session, mf: date, rd: date) -> _Qty:
             k = str(r.material_no)[-8:]
             prev = ore.get(k, (0.0, 0.0))
             ore[k] = (prev[0] + td, prev[1] + mtd)
-            # PRESENCE, NOT A NON-ZERO VALUE. A day SAP has posted and that
-            # nets to nought -- a shift reversed, or genuinely no work -- is a
-            # day SAP has answered for. Testing the value instead would let the
-            # estimate overwrite a real zero.
-            if k in PROD_MATERIALS.values():
-                ore_days.add(day)
-            elif k == _OB_NO:
-                ob_days.add(day)
-    return _Qty(ore, cob_qty, ore_days, cob_days, ob_days)
+            # PRESENCE OF THE DAY, NOT OF THE MATERIAL, AND NOT A NON-ZERO
+            # VALUE. Any row at the mine marks the date as answered: a day that
+            # nets to nought (a shift reversed, or genuinely no work) is still
+            # a day SAP spoke for, and so is a day where overburden went in and
+            # ore did not. A material with no row on an answered day reads as
+            # zero, which is what it is.
+            #
+            # A LATE POSTING STILL CORRECTS ITSELF. Nothing here is stored --
+            # every read re-scans pp_production -- so the moment a missing row
+            # lands, it is simply part of the answer.
+            mine_days.add(day)
+    return _Qty(ore, cob_qty, mine_days, cob_days)
 
 
 def _production_both(db: Session, mf: date, rd: date,
@@ -366,7 +376,7 @@ def _production_both(db: Session, mf: date, rd: date,
     # loop, because the fallback needs the month's SAP mix across all grades.
     sap_mix = {g: ore.get(PROD_MATERIALS[g], (0.0, 0.0))[1]
                for g in ("HG", "MG", "LG")}
-    split, est_days, split_basis = _ore_split(db, mf, rd, q.ore_days, sap_mix)
+    split, est_days, split_basis = _ore_split(db, mf, rd, q.mine_days, sap_mix)
     gplan = _grade_plan(db, mf, rd)
 
     out: dict[str, list[dict]] = {"td": [], "mtd": []}
@@ -918,7 +928,7 @@ def _source(sap_qty: float, est_qty: float) -> str:
 
 def _excavation(db: Session, mf: date, rd: date,
                 ob_actual: tuple[float, float],
-                ob_days: set[date]) -> dict[str, list[dict]]:
+                mine_days: set[date]) -> dict[str, list[dict]]:
     """Overburden and De-Silting, plan against actual, TD and MTD.
 
     THE SAME FIGURES THE MIS DASHBOARD REPORTS, and a test asserts that against
@@ -947,9 +957,12 @@ def _excavation(db: Session, mf: date, rd: date,
     ob_td, ob_mtd = ob_actual
 
     # The mine's own OB figure for days SAP has not posted, on the same rule
-    # as production above. Overburden is one material with no grade split, so
-    # it needs no apportioning -- the entered figure goes straight onto the row.
-    e_td, e_mtd, ob_est_days = _estimates(db, mf, rd, ob_days, "OB")
+    # as production above -- and on the same SET, deliberately. A day the mine
+    # posted ore for but no overburden is a day that was filed; the missing
+    # material is a nought, not an absence waiting to be guessed at. Overburden
+    # is one material with no grade split, so it needs no apportioning and the
+    # entered figure goes straight onto the row.
+    e_td, e_mtd, ob_est_days = _estimates(db, mf, rd, mine_days, "OB")
     ob_td += e_td
     ob_mtd += e_mtd
 
@@ -1125,7 +1138,7 @@ def get_executive_summary(db: Session, report_day: date,
     prod = _production_both(db, mtd_from, report_day, qty)
     # Overburden comes out of the scan `qty` already did — see _excavation.
     exca = _excavation(db, mtd_from, report_day,
-                       qty.ore.get(_OB_NO, (0.0, 0.0)), qty.ob_days)
+                       qty.ore.get(_OB_NO, (0.0, 0.0)), qty.mine_days)
     desp = _despatch_both(db, mtd_from, report_day)
     plant = _plant_both(db, mtd_from, report_day)
 

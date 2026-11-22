@@ -227,17 +227,30 @@ def _production_mtd(db: Session, from_date: date, to_date: date) -> dict:
         FROM pp_production
         WHERE POSTING_DATE BETWEEN :f AND :t
     """), {"f": from_date, "t": to_date}).fetchone()
-    # ── WHICH DAYS SAP HAS ANSWERED, EACH MATERIAL SEPARATELY ──────────────
-    # One scan. They are posted independently: in October SAP had ore for
-    # every day and was missing overburden on five of them.
-    cov = {"ore": set(), "ob": set(), "cob": set()}
+    # ── WHICH DAYS THE MINE HAS BEEN POSTED FOR ─────────────────────
+    # ONE SET FOR THE WHOLE MINE, not one per material. This is the rule the
+    # Executive Summary settled on, and reading it the same way here is the
+    # point: the two pages quote the same ore actual or they are not two views
+    # of one month.
+    #
+    # SAP NEVER POSTS A ZERO -- a row exists only where a movement was made --
+    # so "no ore row" cannot be told apart from "ore not keyed in yet" by
+    # looking at ore alone. What CAN be told apart is whether the mine filed
+    # its day at all: once plant 1200 has posted ANY material for a date, that
+    # date has been answered for, and a material with no row against it was
+    # not produced. 16 November 2026 is the case that proves it -- 2,586 CuM
+    # of overburden went in and no ore did, and a per-material set read that
+    # as an unanswered day and let the mine's own 242 MT stand in on a day SAP
+    # had already closed.
+    #
+    # CONCENTRATE KEEPS ITS OWN SET. It is made at plant 1210, a different
+    # place filing its own day, so a posting at the mine says nothing about
+    # whether the plant has reported.
+    mine_days: set[date] = set()
+    cob_days: set[date] = set()
     for r in db.execute(text("""
         SELECT POSTING_DATE AS d,
-               SUM(CASE WHEN PLANT='1200' AND MATERIAL_NO IN (
-                       '000000000025000001','000000000025000002',
-                       '000000000025000003') THEN 1 ELSE 0 END) AS ore,
-               SUM(CASE WHEN PLANT='1200' AND MATERIAL_DESC='OVERBURDEN'
-                        THEN 1 ELSE 0 END) AS ob,
+               SUM(CASE WHEN PLANT='1200' THEN 1 ELSE 0 END) AS mine,
                SUM(CASE WHEN PLANT='1210'
                         AND MATERIAL_DESC='CONCENTRATE WITH STD MOISTURE'
                         THEN 1 ELSE 0 END) AS cob
@@ -245,9 +258,11 @@ def _production_mtd(db: Session, from_date: date, to_date: date) -> dict:
          WHERE POSTING_DATE BETWEEN :f AND :t
          GROUP BY POSTING_DATE
     """), {"f": from_date, "t": to_date}):
-        for k in cov:
-            if getattr(r, k):
-                cov[k].add(r.d)
+        if r.mine:
+            mine_days.add(r.d)
+        if r.cob:
+            cob_days.add(r.d)
+    cov = {"ore": mine_days, "ob": mine_days, "cob": cob_days}
 
     out = {}
     for key, material in (("ore", est_actual.MAT_ORE),

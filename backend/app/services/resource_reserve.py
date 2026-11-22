@@ -163,7 +163,7 @@ def depletion(db: Session, frm: date, to: date) -> dict:
            for g in GRADES}
 
     # The ungraded estimate, spread the same way every other screen spreads it.
-    split, est_days, basis = es._ore_split(db, frm, to, q.ore_days, sap)
+    split, est_days, basis = es._ore_split(db, frm, to, q.mine_days, sap)
 
     out: dict[str, dict] = {}
     for g in GRADES:

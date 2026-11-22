@@ -2,7 +2,7 @@
 import { AlertTriangle } from "lucide-react";
 import { useRealityCheck } from "@/hooks/useInsights";
 import { useDateFilter } from "@/contexts/useDateFilter";
-import type { RealityCheckRow, InsightVerdict, ActualSource } from "@/types";
+import type { RealityCheckRow, InsightVerdict } from "@/types";
 
 // ── Verdict styling ────────────────────────────────────────────
 const VERDICT_CONFIG: Record<InsightVerdict, { label: string; cls: string }> = {
@@ -36,28 +36,6 @@ function Shimmer({ w = "w-20", h = "h-5" }: { w?: string; h?: string }) {
 }
 
 // ── Row ───────────────────────────────────────────────────────
-/* WHETHER THIS ROW'S ACTUAL IS STILL PART ESTIMATE.
-   The uplift beside it is the gap divided by the days left, so an actual that
-   is short reads straight through into the multiple a shift manager is being
-   asked for. Where some of the window is the mine's own typed figure rather
-   than SAP's posting, the row says so instead of presenting both the same way.
-   Absent once SAP has posted every elapsed day, which is the usual case and
-   what every closed month reads. */
-function RcSourceChip({ source, days }: {
-  source?: ActualSource | null; days?: number | null;
-}) {
-  if (!source || source === "sap") return null;
-  return (
-    <span className="ml-1.5 inline-block align-[1px] px-1 py-[1px] rounded
-                     text-[8px] font-bold tracking-wide uppercase
-                     bg-[#fff3e0] text-[#b45309] border border-[#f5d7a8]"
-          title={`${days ?? 0} day(s) in this window have no SAP posting and `
-                 + `use the mine's own figure. It will move when SAP posts.`}>
-      {source === "manual" ? "Est" : "Part est"}
-    </span>
-  );
-}
-
 function RcRow({ row, loading }: { row?: RealityCheckRow; loading: boolean }) {
   if (loading || !row) {
     return (
@@ -86,7 +64,6 @@ function RcRow({ row, loading }: { row?: RealityCheckRow; loading: boolean }) {
       </td>
       <td className="px-3 py-3 text-right font-mono text-[12px] text-accent font-semibold">
         {fmt(row.actual)}
-        <RcSourceChip source={row.source} days={row.est_days} />
       </td>
       <td className={`px-3 py-3 text-right font-mono text-[12px] font-semibold ${gapColor}`}>
         {fmt(row.gap)}
