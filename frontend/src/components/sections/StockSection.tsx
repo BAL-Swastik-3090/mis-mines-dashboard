@@ -28,6 +28,7 @@ import { formatIndian } from "@/lib/utils";
 import { useEntryDialog } from "@/contexts/useEntryDialog";
 import MinesStockEntryModal from "@/components/sections/MinesStockEntryModal";
 import MinesReserveEntryModal from "@/components/sections/MinesReserveEntryModal";
+import MinesRomEntryModal from "@/components/sections/MinesRomEntryModal";
 import LastChanged from "@/components/ui/LastChanged";
 
 function mt(v: number | null | undefined) {
@@ -90,7 +91,17 @@ export default function StockSection() {
     void qc.invalidateQueries({ queryKey: ["resource-reserve-value"] });
   }, [qc]);
 
-  // BOTH dialogs are mounted here. The reserve is not part of the stock
+  // The day's ROM is what the stacks are made of, so its own queries are the
+  // only ones a save disturbs. The stock position is counted, not derived
+  // from this, and must not be refreshed as though it were.
+  const afterRomSave = useCallback(() => {
+    void qc.invalidateQueries({ queryKey: ["rom-day"] });
+    void qc.invalidateQueries({ queryKey: ["rom-range"] });
+    void qc.invalidateQueries({ queryKey: ["rom-pending"] });
+    void qc.invalidateQueries({ queryKey: ["rom-locations"] });
+  }, [qc]);
+
+  // ALL THREE dialogs are mounted here. The reserve is not part of the stock
   // position -- one is ore above ground awaiting clearance, the other is ore
   // still in the ground -- but this is the section about how much ore the mine
   // has, and a dialog has to be mounted somewhere its own section exists.
@@ -106,6 +117,11 @@ export default function StockSection() {
         open={dialog === "mines-reserve"}
         onClose={closeDialog}
         onSaved={afterReserveSave}
+      />
+      <MinesRomEntryModal
+        open={dialog === "daywise-rom"}
+        onClose={closeDialog}
+        onSaved={afterRomSave}
       />
     </>
   );

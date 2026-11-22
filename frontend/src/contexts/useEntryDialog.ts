@@ -18,6 +18,7 @@ export type EntryDialog =
   | "prev-day"
   | "mines-stock"
   | "mines-reserve"
+  | "daywise-rom"
   | "desilting-plan"
   | "equipment-plan"
   | "shifting-actual"
