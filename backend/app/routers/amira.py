@@ -1,8 +1,10 @@
 """AMIRA accounting — contained chromium followed from mine to plant.
 
-READ-ONLY and derived entirely from SAP, through the same service that feeds
-the End-to-End Quality section. Nothing is entered and nothing is stored, so a
-corrected assay appears here as soon as the lab posts it.
+READ-ONLY and derived: the despatch and plant stages from SAP, through the same
+service that feeds the End-to-End Quality section, and the ROM stage from the
+mine's own day-wise ROM entry in minehub. Nothing is entered here and no figure
+is stored, so a corrected assay -- posted by the lab or typed on the ROM entry
+screen -- appears here on the next read.
 
 WHO MAY LOOK. Mapped to the "mis" page in services/auth.py, so the middleware
 already requires dashboard.mis — the same permission as the despatch and

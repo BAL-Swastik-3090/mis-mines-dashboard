@@ -9,8 +9,9 @@
  * would make that comparison vertical and break every reader's muscle memory
  * for a sheet they already use. The shape here matches the sheet exactly.
  *
- * THE FIVE EMPTY COLUMNS ARE DELIBERATE. Phase 1 sources only Mines Despatch
- * and Plant Receipt. The other five are still drawn, greyed, because the chain
+ * THE THREE EMPTY COLUMNS ARE DELIBERATE. Phase 1 sources Block Model, ROM,
+ * Mines Despatch and Plant Receipt. The other three are drawn, greyed, because
+ * the chain
  * starting at the block model IS the point of the table; dropping the columns
  * until they have data would quietly change what the screen is about, and the
  * day they arrive nobody would recognise it as the same table.
@@ -171,6 +172,12 @@ export default function AmiraAccountingTable() {
                                      border-r border-border-light whitespace-nowrap">
                         {m.uom}
                       </td>
+                      {/* The stage a loss was measured against is NOT printed in
+                          the cell -- at the mine's instruction, 24 Nov 2026. The
+                          API still sends `loss_against` and the footnote still
+                          says which stages Mines Despatch spans, so the
+                          provenance is on the screen in prose rather than as a
+                          label under every figure. */}
                       {stages.map((s) => (
                         <td
                           key={s.key}
@@ -214,11 +221,62 @@ export default function AmiraAccountingTable() {
           <div className="px-3 py-2 border-t border-border-light/40 bg-[#fff8e1] space-y-1">
             <p className="text-[9px] text-txt-secondary leading-relaxed">
               <span className="font-bold text-navy">Phase 1. </span>
-              {q.data.pending_stages.join(", ")} are not yet sourced — the block model
-              carries no tonnage, ROM carries no moisture, and stock history begins in
-              August 2026. Chromium Loss is measured against the stage immediately to the
-              left, so <span className="font-semibold">Mines Despatch shows no loss until
-              ROM Stack is built</span>.
+              {q.data.pending_stages.join(", ")} are not yet sourced — the ROM stack is
+              not held anywhere as a period figure, and stock history begins in August
+              2026. Chromium Loss is measured against{" "}
+              <span className="font-semibold">the last column that carries a figure</span>,
+              which while the chain is part-sourced is not always the one immediately to the
+              left.
+            </p>
+            <p className="text-[9px] text-txt-secondary leading-relaxed">
+              <span className="font-bold text-navy">Block Model is a grade, not a reserve. </span>
+              Geology&apos;s Cr<sub>2</sub>O<sub>3</sub> for the ground each ROM sample came
+              out of, weighted by that sample&apos;s own tonnage so it is comparable with the
+              ROM column beside it. <span className="font-semibold">The Ore Quantity and
+              Moisture shown in this column are ROM&apos;s, not the model&apos;s</span> — the
+              block model is Surpac output and no tonnage has ever been loaded, so what is
+              printed here is the same weight the grade was averaged on, shown so the Net
+              Chromium beneath it can be checked against the cells that made it. Read it as
+              the metal that grade implies on the ore actually mined, never as a reserve.
+              Block Model itself shows no loss: it is the start of the chain and has no
+              stage to its left to lose against.
+            </p>
+            <p className="text-[9px] text-txt-secondary leading-relaxed">
+              <span className="font-bold text-navy">ROM&apos;s loss is a grade variance, not
+              a tonnage one. </span>
+              Net Chromium for Block Model is computed on the ROM tonnage and ROM moisture
+              beside it — the same weight that produced the block grade in the first place,
+              which is why those two cells now repeat ROM&apos;s figures exactly. Both sides
+              therefore carry identical tonnage and moisture and everything cancels but the
+              grade, so <span className="font-semibold">ROM&apos;s Chromium Loss is the gap
+              between the two Cr<sub>2</sub>O<sub>3</sub> figures and nothing else</span> —
+              a negative loss means the ground assayed better than Geology called it.{" "}
+              <span className="font-semibold">It is not the mine workbook&apos;s Block Model
+              loss</span>, which also carries whatever tonnage the model promised and the
+              mine did not dig; that half needs the Surpac tonnage loaded and will move this
+              figure when it arrives.
+            </p>
+            <p className="text-[9px] text-txt-secondary leading-relaxed">
+              <span className="font-bold text-navy">ROM is the mine&apos;s own entry. </span>
+              Tonnage and Cr<sub>2</sub>O<sub>3</sub> are summed from the day-wise ROM
+              analysis filed shift by shift, not from the lab&apos;s inspection lots.
+              Moisture is the lab&apos;s daily composite for the mine&apos;s ROM lots,
+              carried onto every sample of that day. <span className="font-semibold">It is
+              reported only when every sample in the period carries one</span> — one day
+              the lab was silent on keeps the column, and Net Chromium with it, blank
+              rather than computed off a part-measured month.
+            </p>
+            <p className="text-[9px] text-txt-secondary leading-relaxed">
+              <span className="font-bold text-navy">Mines Despatch is measured across the
+              three unsourced stages. </span>
+              Its loss is the drop from ROM, because ROM Stack and Mines Closing Stock have
+              no figures to measure against yet, so the gap carries whatever happened in
+              them. <span className="font-semibold">That is why it reads negative.</span> The
+              mine despatched 1,639.06 Mt MORE than it mined in this window and drew the
+              difference out of stock, so the arithmetic returns a gain. It is a true
+              difference between two true figures — it is not metal found, and it should not
+              be read as a mining performance. It resolves on its own, with no change here,
+              the day the stock stages are sourced and the chain stops stepping over them.
             </p>
             {q.data.plant_qty_mirrors_despatch && (
               <p className="text-[9px] text-txt-secondary leading-relaxed">

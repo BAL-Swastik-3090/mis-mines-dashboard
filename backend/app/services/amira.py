@@ -20,28 +20,35 @@ Reproduces the mine's own workbook to the decimal. On its April 2026 sheet:
 Block Model 4,353 / ROM 3,566 / ROM Stack 3,639 / Despatch 3,604 / Plant 3,572,
 and this formula returns 4,353.1 / 3,566.1 / 3,639.5 / 3,604.1 / 3,572.1.
 
-── PHASE 1: TWO STAGES OF SEVEN ──────────────────────────────────────────────
-Only Mines Despatch and Plant Receipt are built. The other five are declared
+── PHASE 1: FOUR STAGES OF SEVEN ──────────────────────────────────────────────
+Block Model, ROM, Mines Despatch and Plant Receipt are built. The other three
+are declared
 here, in chain order, and returned UNAVAILABLE rather than left out, because
 the shape of the table is the point — a reader has to see that the chain starts
 at the block model even while those cells are empty.
 
 They are empty for reasons, not oversight:
 
-  Block Model      mines_geology_block_sample_analysis holds grade and no
-                   tonnage at all, 83 rows, and stops in January 2026. The
-                   block model itself is Surpac output and has never been
-                   loaded.
-  ROM              mines_daywise_rom_entry has Qty and Cr2O3 and is current to
-                   October 2026, but carries NO MOISTURE, and moisture is a
-                   term in the formula above. The mine's sheet uses one assumed
-                   figure (10.24) at three stages; that assumption has to come
-                   from the mine, not from here.
-  ROM Stack        same moisture problem, and the stack tonnage is not held
-                   anywhere as a period figure.
-  Closing Stock    mines_stock spans 17 Aug - 25 Sep 2026 and mines_stock_entry
-                   begins later still. There is no stock history to read.
+  ROM Stack        the stack tonnage is not held anywhere as a period figure,
+                   and the sheet's own ROM row is this stack figure copied
+                   across -- see the note above _ROM_SQL.
+  Closing Stock    mines_stock_entry now runs to date, but it holds TONNAGE
+                   ONLY -- no Cr2O3 and no moisture -- so a stock column could
+                   carry a weight and never a Net Chromium, and the chain
+                   would step over it anyway. Blocked on an assay, not a date.
   Production + CS  derived from the two above.
+
+Block Model and ROM are the exceptions and read minehub.mines_rom_entry, the
+mine's own day-wise analysis -- the two halves of one row, geology's and
+production's. BLOCK MODEL CARRIES A GRADE AND NO TONNAGE OF ITS OWN: the model
+is Surpac output and has never been loaded here, so the tonnage and moisture
+printed in that column are ROM's, which is what its grade was weighted by in
+the first place. See _block_model().
+
+ROM's own figures are tonnage, grade and the lab's daily composite moisture.
+A characteristic is reported only if EVERY sample in the period carries it, so
+one day the lab is silent on keeps the column blank rather than quietly
+averaging the days it did reach.
 
 ── WHY IT READS get_quality_e2e RATHER THAN THE TABLES ───────────────────────
 The despatch and plant figures already exist, assayed and consignment-matched,
@@ -52,14 +59,16 @@ different tonnages for the same month with nothing to say which was right.
 """
 from __future__ import annotations
 
+import logging
 from datetime import date
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from app.services.sap_source import sap_one, sap_rows
 
 from app.services.quality_e2e import get_quality_e2e
+
+logger = logging.getLogger(__name__)
 
 # Cr2O3 -> Cr. Stoichiometric: (2 x 52.00) / (2 x 52.00 + 3 x 16.00).
 CR2O3_TO_CR = 104.0 / 152.0
@@ -94,82 +103,172 @@ FECR_CR_CONTENT = 0.60
 # Rs -> Rs. Lacs, the 10^5 in the formula.
 LAKH = 100_000.0
 
-# ── ROM, STRAIGHT OFF THE WEIGHED LOTS ───────────────────────────────────────
-# PLANT 1200 / STORAGE_LOCATION 'ROM1' in pp_quality_inspection: one inspection
-# lot per day of run-of-mine ore, LOT_QUANTITY as the tonnage and the Cr2O3
-# characteristic as the grade. 602 lots since April 2024.
+# -- ROM, OFF THE MINE'S OWN DAY-WISE ANALYSIS -------------------------------
+# minehub.mines_rom_entry -- one row per sample, filed shift by shift from the
+# "ENTRY DAYWISE ROM" screen (migration 132). The period's tonnage is the sum
+# of its rows and the grade is the tonnage-weighted mean of them; neither is
+# stored, here or anywhere, so no total can disagree with its parts.
 #
-# THIS IS NOT WHERE THE WORKBOOK GETS ITS ROM ROW. Summary!D5 is
-# 'APRIL-26 Details'!F113, and F5 is =AC5 — the ROM STACK's FSQ — so the sheet's
-# ROM tonnage is the stack tonnage copied across, and its Cr2O3 is weighted by
-# shift quantity rather than by lot. April 2026 is 13,265.54 @ 43.7693 there
-# against ROM1's 13,976.00 @ 44.0113, a gap of 710 MT. The mine asked for ROM1,
-# so ROM1 is what this reads; the difference is a question about which figure
-# the business wants, not a defect here.
-ROM_PLANT = "1200"
-ROM_STORAGE = "ROM1"
-
-# ONE ROW PER CHARACTERISTIC, so LOT_QUANTITY repeats down the table. A plain
-# SUM reads 626,931 MT against the real 424,398 — every lot counted once per
-# characteristic it carries. The DISTINCT sub-select is the whole reason this
-# query is shaped the way it is; do not flatten it into one GROUP BY.
+# -- WHY IT NO LONGER READS SAP ----------------------------------------------
+# It used to read PLANT 1200 / STORAGE_LOCATION 'ROM1' in pp_quality_inspection
+# -- one inspection lot per day, LOT_QUANTITY as the tonnage and the CR2O3
+# characteristic as the grade. That is the LAB's record of what it tested. This
+# is the MINE's record of what it dug, shift by shift and face by face, and the
+# mine asked for its own.
+#
+# The two were never the same number, and neither is the workbook's. Summary!D5
+# is 'APRIL-26 Details'!F113 and F5 is =AC5 -- the ROM STACK's FSQ -- so the
+# sheet's ROM tonnage is the stack tonnage copied across and its Cr2O3 is
+# weighted by shift quantity rather than by lot. April 2026 reads 13,265.54 @
+# 43.7693 in the sheet against ROM1's 13,976.00 @ 44.0113. Which of the three a
+# reader wants is a question for the business; this one answers "what the mine
+# filed", and that is a figure somebody owns and can correct on screen.
+#
+# MOISTURE WILL READ BLANK, AND THAT IS NOT A FAULT. The entry form carries a
+# %MOISTURE box and nobody fills it. Null means nobody measured it, which is
+# not the same as dry -- so Net Chromium stays blank with it rather than being
+# computed off an assumed figure. The day the mine starts entering moisture,
+# both fill in on their own and nothing here has to change.
 _ROM_SQL = text("""
     SELECT
-        COUNT(*) AS lots,
-        SUM(l.qty) AS ore_qty,
-        SUM(CASE WHEN c.v IS NOT NULL THEN 1 ELSE 0 END) AS lots_cr2o3,
-        SUM(CASE WHEN m.v IS NOT NULL THEN 1 ELSE 0 END) AS lots_moisture,
-        SUM(CASE WHEN c.v IS NOT NULL THEN l.qty * c.v END)
-          / NULLIF(SUM(CASE WHEN c.v IS NOT NULL THEN l.qty END), 0) AS cr2o3,
-        SUM(CASE WHEN m.v IS NOT NULL THEN l.qty * m.v END)
-          / NULLIF(SUM(CASE WHEN m.v IS NOT NULL THEN l.qty END), 0) AS moisture
-    FROM (
-        SELECT DISTINCT LOT_NUMBER, LOT_QUANTITY AS qty
-          FROM pp_quality_inspection
-         WHERE PLANT = :plant AND STORAGE_LOCATION = :sloc
-           AND QLT_START_DATE BETWEEN :frm AND :to
-           AND LOT_QUANTITY IS NOT NULL
-    ) l
-    LEFT JOIN (
-        SELECT LOT_NUMBER, MAX(CAST(RESULT AS DECIMAL(16,6))) AS v
-          FROM pp_quality_inspection
-         WHERE PLANT = :plant AND STORAGE_LOCATION = :sloc
-           AND QLT_START_DATE BETWEEN :frm AND :to
-           AND UPPER(SHORT_TEXT_INS_CHAR) = 'CR2O3'
-         GROUP BY LOT_NUMBER
-    ) c ON c.LOT_NUMBER = l.LOT_NUMBER
-    LEFT JOIN (
-        SELECT LOT_NUMBER, MAX(CAST(RESULT AS DECIMAL(16,6))) AS v
-          FROM pp_quality_inspection
-         WHERE PLANT = :plant AND STORAGE_LOCATION = :sloc
-           AND QLT_START_DATE BETWEEN :frm AND :to
-           AND UPPER(SHORT_TEXT_INS_CHAR) = 'MOISTURE'
-         GROUP BY LOT_NUMBER
-    ) m ON m.LOT_NUMBER = l.LOT_NUMBER
+        COUNT(*)    AS samples,
+        SUM(qty_mt) AS ore_qty,
+        SUM(CASE WHEN cr2o3_pct    IS NOT NULL THEN 1 ELSE 0 END) AS n_cr2o3,
+        SUM(CASE WHEN moisture_pct IS NOT NULL THEN 1 ELSE 0 END) AS n_moisture,
+        SUM(CASE WHEN cr2o3_pct IS NOT NULL THEN qty_mt * cr2o3_pct END)
+          / NULLIF(SUM(CASE WHEN cr2o3_pct IS NOT NULL THEN qty_mt END), 0)
+            AS cr2o3,
+        SUM(CASE WHEN moisture_pct IS NOT NULL THEN qty_mt * moisture_pct END)
+          / NULLIF(SUM(CASE WHEN moisture_pct IS NOT NULL THEN qty_mt END), 0)
+            AS moisture,
+        -- THE BLOCK HALF, WEIGHTED BY THE SAME TONNAGE. See _block_model().
+        SUM(CASE WHEN block_cr2o3_pct IS NOT NULL THEN 1 ELSE 0 END) AS n_block,
+        SUM(CASE WHEN block_cr2o3_pct IS NOT NULL THEN qty_mt * block_cr2o3_pct END)
+          / NULLIF(SUM(CASE WHEN block_cr2o3_pct IS NOT NULL THEN qty_mt END), 0)
+            AS block_cr2o3
+      FROM minehub.mines_rom_entry
+     WHERE on_date BETWEEN :frm AND :to
 """)
 
 
-def _rom(db: Session, frm: date, to: date) -> dict[str, float | None]:
-    """ROM tonnage and assay for the period; empty dict when there are no lots.
+def _mine_entry(frm: date, to: date) -> dict[str, dict[str, float | None]]:
+    """The two stages the mine files itself: {"block_model": .., "rom": ..}.
 
-    A CHARACTERISTIC IS REPORTED ONLY IF EVERY LOT CARRIES IT. Weighting across
-    whichever lots happen to have been tested, and presenting that as the
-    month's figure, is how a grade quietly becomes a sample of itself. Moisture
-    is the live case: ROM1 has it on 2 lots out of 602, both in May 2024, so
-    moisture reads blank — and Net Chromium with it, since the formula needs all
-    three terms. Both fill in on their own the day the lab starts posting
-    moisture against ROM lots; nothing here has to change.
+    ONE QUERY FOR BOTH. They are two halves of one row -- production files the
+    left, geology the right -- so reading them separately would mean two
+    sessions and two scans of the same rows to produce figures that must agree
+    about which rows exist. A stage with nothing to show is an empty dict.
+
+    Below, for the ROM half:
+
+    A CHARACTERISTIC IS REPORTED ONLY IF EVERY SAMPLE CARRIES IT. Weighting
+    across whichever rows happen to have been measured, and presenting that as
+    the period's figure, is how a grade quietly becomes a sample of itself.
+    Moisture is the live case and reads blank for exactly that reason.
+
+    IT OPENS ITS OWN SESSION rather than using the one it was handed. That one
+    is MySQL, and this table exists only in minehub with no MySQL counterpart
+    to fall back to -- so there is nothing for sap_source to route. An
+    unreachable minehub means the ROM stage is unsourced, which is what the
+    empty dict says, and the table keeps the shape of the chain regardless.
     """
-    r = sap_one(db, _ROM_SQL, {"plant": ROM_PLANT, "sloc": ROM_STORAGE,
-                               "frm": frm, "to": to})
-    if not r or not r.lots:
+    try:
+        from app.minehub_db import SessionLocal
+        if SessionLocal is None:
+            return {}
+        pg = SessionLocal()
+    except Exception:                                       # noqa: BLE001
+        logger.warning("minehub unavailable for the mine's own stages",
+                       exc_info=True)
         return {}
-    full = lambda n: n is not None and int(n) == int(r.lots)  # noqa: E731
-    return {
+    try:
+        r = pg.execute(_ROM_SQL, {"frm": frm, "to": to}).first()
+    except Exception:                                       # noqa: BLE001
+        logger.warning("the mine's own stages could not be read", exc_info=True)
+        return {}
+    finally:
+        pg.close()
+
+    if not r or not r.samples:
+        return {}
+    full = lambda n: n is not None and int(n) == int(r.samples)  # noqa: E731
+    rom = {
         "ore_qty": float(r.ore_qty) if r.ore_qty is not None else None,
-        "cr2o3": float(r.cr2o3) if full(r.lots_cr2o3) and r.cr2o3 is not None else None,
+        "cr2o3": float(r.cr2o3) if full(r.n_cr2o3) and r.cr2o3 is not None else None,
         "moisture": (float(r.moisture)
-                     if full(r.lots_moisture) and r.moisture is not None else None),
+                     if full(r.n_moisture) and r.moisture is not None else None),
+    }
+    return {"block_model": _block_model(r, full, rom), "rom": rom}
+
+
+def _block_model(r, full, rom: dict) -> dict[str, float | None]:
+    """The block model's grade for the period, on ROM's tonnage and moisture.
+
+    ── THE TONNAGE AND MOISTURE SHOWN HERE ARE ROM'S, AND SAY SO ────────────
+    The block model is Surpac output and carries no tonnage into this platform
+    -- mines_geology_block_sample_analysis holds grade and nothing else, and
+    the model itself has never been loaded. What the mine files against a ROM
+    sample is the block's GRADE for the ground that sample came out of, not a
+    reserve figure.
+
+    So the tonnage in this column is not the model's. It is the ROM tonnage
+    the grade was already weighted by, four paragraphs down, and the moisture
+    is the ROM moisture that tonnage was measured with. They are PRINTED, at
+    the mine's instruction (24 Nov 2026), because the Net Chromium below them
+    is computed from them and a reader cannot check a figure against cells
+    that are blank. The footnote carries the warning the blank cells used to:
+    this is not a reserve, and the model has not been reconciled against
+    production.
+
+    MOISTURE IS ROM'S, AND MUST BE. The (1 - moisture) term converts a WET
+    weighbridge tonnage to a dry one, because every assay in this chain is
+    dry-basis. The tonnage here IS ROM's wet tonnage, so it needs ROM's
+    moisture taken off it. Treating the model as dry and passing 0 does not
+    describe an in-situ reserve -- it leaves November's 11.35% of water in the
+    tonnage and prints 416 MT of it as chromium, which then shows up as a
+    369 MT "loss" that is entirely water. The model having no moisture of its
+    own is not a reason to apply none.
+
+    ── WHAT THE RESULTING LOSS MEANS, AND WHAT IT DOES NOT ──────────────────
+    Both sides carry the same tonnage and the same moisture, so everything
+    cancels but the grade: this is a GRADE variance, the thing the entry
+    screen already prints as "Block model 42.74 vs ROM 33.55". It is NOT the
+    mine workbook's Block Model loss, which also carries whatever tonnage the
+    model promised and the mine did not dig. Back-solving the April sheet
+    (Block Model 4,353.1 against ROM 3,566.1 on 13,265.54 MT @ 43.7693) needs
+    either a block grade of 47.96% or a block tonnage near 16,193 MT, and
+    nothing here can say which. So this figure is the grade half only, and it
+    will move -- probably a long way -- the day Surpac tonnage is loaded.
+
+    ── WHY THE ROM TONNAGE IS STILL THE WEIGHT ──────────────────────────────
+    A grade on its own cannot be averaged across a period: 51.80% won off 120
+    MT and 43.39% won off 710 MT are not two equal opinions about November. The
+    only tonnage that exists for the ground each block figure describes is the
+    ROM that came out of it, so that is the weight -- the same weight, row for
+    row, that produces the ROM column's own Cr2O3. The two columns are then
+    comparable by construction, and the difference between them is the thing a
+    reader is here to see: what the model said the ground held against what
+    came off it.
+
+    ── AND IT IS REPORTED ONLY IF EVERY SAMPLE CARRIES IT ───────────────────
+    The block half is filled by geology, after the fact and separately, so a
+    period part-filled is the normal state rather than an error. Weighting
+    across whichever rows geology has reached, and printing that as the
+    month's block grade, would move the figure every time somebody filed one
+    more row -- and move it most while the sample is smallest. The same rule
+    that keeps a half-measured moisture out of the ROM column keeps a
+    half-filled block model out of this one.
+    """
+    if not full(r.n_block) or r.block_cr2o3 is None:
+        return {}
+    grade = float(r.block_cr2o3)
+    return {
+        # ROM's, both of them -- see above. Shown rather than blank so that the
+        # Net Chromium under them can be checked against the cells that made
+        # it, which is the rule every other stage in this table already keeps.
+        "ore_qty": rom.get("ore_qty"),
+        "cr2o3": grade,
+        "moisture": rom.get("moisture"),
     }
 
 
@@ -187,7 +286,7 @@ STAGES: tuple[tuple[str, str], ...] = (
 )
 
 # Built in phase 1. Everything else returns available=False.
-BUILT = ("rom", "mine_despatch", "plant_receipt")
+BUILT = ("block_model", "rom", "mine_despatch", "plant_receipt")
 
 
 def _net_chromium(ore_qty: float | None,
@@ -230,7 +329,7 @@ def get_amira_accounting(db: Session, frm: date, to: date) -> dict[str, Any]:
     # Both destinations together: AMIRA accounts for what left the mine, not for
     # where it went. The per-plant split is the End-to-End Quality section's job.
     figures: dict[str, dict[str, float | None]] = {
-        "rom": _rom(db, frm, to),
+        **_mine_entry(frm, to),
         "mine_despatch": {
             "ore_qty":  tot.get("mines_qty"),
             "cr2o3":    tot.get("mines_cr2o3"),
@@ -245,23 +344,36 @@ def get_amira_accounting(db: Session, frm: date, to: date) -> dict[str, Any]:
 
     stages: list[dict[str, Any]] = []
     prev_net: float | None = None
-    prev_available = False
+    prev_label: str | None = None
 
     for key, label in STAGES:
         available = key in BUILT and bool(figures.get(key))
         f = figures.get(key, {}) if available else {}
         ore, cr, moist = f.get("ore_qty"), f.get("cr2o3"), f.get("moisture")
+        # EVERY stage computes from the three cells a reader can see. Block
+        # Model was the one exception until 24 Nov 2026, when its borrowed
+        # tonnage and moisture started being printed; there is now no stage
+        # whose Net Chromium cannot be reproduced from the column above it.
         net = _net_chromium(ore, cr, moist)
 
-        # LOSS IS AGAINST THE STAGE IMMEDIATELY BEFORE, NOT THE LAST ONE WE
-        # HAPPEN TO HAVE. Mines Despatch therefore shows no loss in phase 1:
-        # its predecessor is ROM Stack, which is blank. Reaching further back to
-        # whatever is populated would print the drop from ROM — or from the
-        # block model — under the Despatch heading, which is a different and
-        # much larger number wearing the wrong label.
-        loss = (None if not (prev_available and available)
-                or prev_net is None or net is None
+        # LOSS IS AGAINST THE LAST STAGE THAT CARRIES A FIGURE, which while
+        # the chain is part-sourced is not always the stage immediately to the
+        # left. At the mine's instruction (24 Nov 2026), so that Mines Despatch
+        # shows a loss now rather than waiting for the stock stages.
+        #
+        # READ THE RESULT WITH ITS LABEL, NOT ALONE. `loss_against` names the
+        # stage each figure was actually measured against, and the screen
+        # prints it, because a gap that spans skipped stages contains whatever
+        # happened in them. Mines Despatch is the live example: it despatched
+        # 1,639 MT MORE than ROM mined, having drawn the difference out of
+        # stock, so its "loss" comes out NEGATIVE — around (520) MT — and that
+        # is stock movement, not metal found. It is a real arithmetic
+        # difference between two real figures; it is not a mining gain, and it
+        # stops being a stock artefact only when ROM Stack and Closing Stock
+        # are sourced and the skip disappears on its own.
+        loss = (None if prev_net is None or net is None
                 else prev_net - net)
+        loss_against = prev_label if loss is not None else None
 
         stages.append({
             "key": key,
@@ -273,8 +385,12 @@ def get_amira_accounting(db: Session, frm: date, to: date) -> dict[str, Any]:
             "net_chromium": _round(net),
             "chromium_loss": _round(loss),
             "contribution_loss": _round(_contribution(loss)),
+            "loss_against": loss_against,
         })
-        prev_net, prev_available = net, available
+        # Only a stage that HAS a figure becomes the next one's baseline. An
+        # unsourced stage is stepped over rather than resetting the chain.
+        if net is not None:
+            prev_net, prev_label = net, label
 
     # ── THE TOTAL COLUMN ────────────────────────────────────────────────────
     # Summary!J9 is =SUM(C9:I9) and J10 is =SUM(C10:I10): the losses only. The

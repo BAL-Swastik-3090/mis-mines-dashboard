@@ -20,10 +20,15 @@ class AmiraStage(BaseModel):
     cr2o3:     Optional[float] = None
     moisture:  Optional[float] = None
     net_chromium: Optional[float] = None
-    # Against the stage immediately before this one; None when that stage is
-    # itself unavailable.
+    # Against the last stage that carries a figure, which while the chain is
+    # part-sourced is not always the stage immediately to the left.
     chromium_loss:     Optional[float] = None
     contribution_loss: Optional[float] = None
+    # WHICH stage the loss above was measured against. KEEP DECLARED -- without
+    # it response_model drops the key and the screen silently stops saying that
+    # a figure spans skipped stages, which is the one thing that makes a
+    # skipped-stage loss readable.
+    loss_against:      Optional[str] = None
 
 
 class AmiraTotal(BaseModel):

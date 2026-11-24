@@ -1110,10 +1110,14 @@ export interface AmiraStage {
   cr2o3:         number | null;
   moisture:      number | null;
   net_chromium:  number | null;
-  /** Against the stage immediately before this one; null when that one is
-   *  itself unavailable. */
+  /** Against the last stage that carries a figure, which while the chain is
+   *  part-sourced is not always the one immediately to the left. */
   chromium_loss:     number | null;
   contribution_loss: number | null;
+  /** WHICH stage the loss was measured against. The table prints it under the
+   *  figure whenever that is not the adjacent column, because a loss spanning
+   *  skipped stages contains whatever happened in them. */
+  loss_against:      string | null;
 }
 
 /** The workbook's Total column: the two loss rows only, signed. The other rows
