@@ -64,8 +64,13 @@ SHIFTS = ("A", "B", "C")
 
 # What a production save is allowed to write. The block columns are not here,
 # and that is the enforcement, not a comment about intent.
+# moisture_source is in here because it is AUDITED, not because the form
+# sends it -- the form cannot. Migration 134 ties a moisture to where it came
+# from, and a seeded 'SAP ROM1 DAY' figure that the mine later overtypes has
+# to become 'MEASURED' in the same breath. That flip is a provenance change
+# and belongs in the log beside the figure that caused it.
 ROM_FIELDS = ("shift", "location_id", "trips", "qty_mt",
-              "moisture_pct", "cr2o3_pct", "feo_pct")
+              "moisture_pct", "moisture_source", "cr2o3_pct", "feo_pct")
 BLOCK_FIELDS = ("block_mrl", "block_cr2o3_pct")
 
 
@@ -103,7 +108,8 @@ def _wavg(rows: list[dict], field: str, weight: str = "qty_mt") -> float | None:
 _SELECT = """
     SELECT e.rom_id, e.on_date, e.shift, e.location_id, l.name AS location,
            l.is_active AS location_active,
-           e.trips, e.qty_mt, e.moisture_pct, e.cr2o3_pct, e.feo_pct,
+           e.trips, e.qty_mt, e.moisture_pct, e.moisture_source,
+           e.cr2o3_pct, e.feo_pct,
            e.block_mrl, e.block_cr2o3_pct,
            e.block_entry_id, e.block_entry_date,
            e.rom_entry_id, e.rom_entry_date, e.updated_at, e.updated_by

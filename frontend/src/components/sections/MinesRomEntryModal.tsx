@@ -157,6 +157,15 @@ const SEL =
   "focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/40 " +
   "disabled:bg-bg-section disabled:text-txt-light";
 
+/** The mark on a column that will not let the day be filed without it.
+    Only the seven ROM columns carry it; the two tinted Block Model boxes are
+    Geology's and are allowed to be empty, so the mark is what says which is
+    which before anybody presses Submit rather than after. aria-hidden because
+    the message under the table already names the row and the field. */
+function Req() {
+  return <span className="text-danger font-bold ml-0.5" aria-hidden>*</span>;
+}
+
 function Fig({ v, dp = 2, strong }: { v: number | null; dp?: number; strong?: boolean }) {
   return (
     <span className={`text-[12px] font-mono tabular-nums ${
@@ -293,8 +302,20 @@ export default function MinesRomEntryModal({
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
       const at = `Row ${i + 1}`;
+      // EVERY ROM BOX IS REQUIRED, at the mine's instruction (24 Nov 2026).
+      // Only the two tinted Block Model boxes may be left empty, because they
+      // are Geology's and arrive later -- blockProblem below is what governs
+      // those. The rule is enforced in the router too: this check is the
+      // sentence the user reads, not the thing that keeps a half-row out of
+      // the table.
+      if (!r.shift) return `${at}: pick a shift.`;
       if (!r.location_id) return `${at}: pick a location.`;
+      if (!filled(r.trips)) return `${at}: trips is needed.`;
       if (!filled(r.qty_mt)) return `${at}: tonnage is needed.`;
+      // Moisture joins the required set now that migration 134 records where
+      // each figure came from: a blank typed here is no longer "not measured
+      // yet" but a gap nobody can later tell apart from a real zero.
+      if (!filled(r.moisture_pct)) return `${at}: moisture is needed.`;
       if (!filled(r.cr2o3_pct) || !filled(r.feo_pct))
         return `${at}: Cr₂O₃% and FeO% are both needed.`;
       if (bad(r.qty_mt)) return `${at}: tonnage is not a valid number.`;
@@ -459,17 +480,17 @@ export default function MinesRomEntryModal({
           <table className="w-full border-collapse">
             <thead>
               <tr>
-                <th className={`${TH} text-left`} rowSpan={2}>Shift</th>
-                <th className={`${TH} text-left min-w-[150px]`} rowSpan={2}>Location</th>
-                <th className={`${TH} text-right w-[80px]`} rowSpan={2}>Trips</th>
-                <th className={`${TH} text-right w-[110px]`} rowSpan={2}>Total Qty</th>
+                <th className={`${TH} text-left`} rowSpan={2}>Shift<Req /></th>
+                <th className={`${TH} text-left min-w-[150px]`} rowSpan={2}>Location<Req /></th>
+                <th className={`${TH} text-right w-[80px]`} rowSpan={2}>Trips<Req /></th>
+                <th className={`${TH} text-right w-[110px]`} rowSpan={2}>Total Qty<Req /></th>
                 {/* The block pair is tinted as one group, because it is one
                     person's work and arrives after everything to its left. */}
                 <th className={`${TH} text-center bg-amber-50 border-x border-amber-200`}
                     colSpan={2}>Block Model</th>
-                <th className={`${TH} text-right w-[90px]`} rowSpan={2}>%Moisture</th>
-                <th className={`${TH} text-right w-[95px]`} rowSpan={2}>Cr<sub>2</sub>O<sub>3</sub>%</th>
-                <th className={`${TH} text-right w-[95px]`} rowSpan={2}>FeO%</th>
+                <th className={`${TH} text-right w-[90px]`} rowSpan={2}>%Moisture<Req /></th>
+                <th className={`${TH} text-right w-[95px]`} rowSpan={2}>Cr<sub>2</sub>O<sub>3</sub>%<Req /></th>
+                <th className={`${TH} text-right w-[95px]`} rowSpan={2}>FeO%<Req /></th>
                 <th className={`${TH} text-right w-[80px]`} rowSpan={2}>Ratio</th>
                 <th className={`${TH} w-[1%]`} rowSpan={2} />
               </tr>

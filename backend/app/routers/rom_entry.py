@@ -266,13 +266,31 @@ def _clean_row(item: dict, i: int) -> dict:
                      f"{f:g}. Is a tonnage in an assay column?")
         return f
 
+    # REQUIRED SINCE 24 NOV 2026, at the mine's instruction, and required HERE
+    # and not only on the form. The screen's own check is the sentence a user
+    # reads; this is the one that keeps a half-filled row out of the table,
+    # because every other way in -- a replayed request, a script, a second
+    # client -- goes through here and not through the form.
+    #
+    # Nothing historical is shut out by the change: all 52 rows then in
+    # mines_rom_entry already carried trips, moisture, Cr2O3 and FeO, so no
+    # existing day became unsavable. Check that again before adding another.
+    moisture = num("moisture_pct", "moisture", True, 0, 100)
+
     return {
         "rom_id": item.get("rom_id"),
         "shift": shift,
         "location_id": loc,
-        "trips": num("trips", "trips", False, 0),
+        "trips": num("trips", "trips", True, 0),
         "qty_mt": num("qty_mt", "tonnage", True, 0),
-        "moisture_pct": num("moisture_pct", "moisture", False, 0, 100),
+        "moisture_pct": moisture,
+        # DERIVED HERE, NEVER SENT BY THE FORM. A figure arriving through this
+        # endpoint was typed against this parcel by the mine, which is what
+        # MEASURED means -- so the client has nothing to decide and no way to
+        # claim a provenance it does not have. The pair also has to move
+        # together: clearing the box clears the source, or migration 134's
+        # CHECK rejects the row, which is exactly what it is for.
+        "moisture_source": "MEASURED" if moisture is not None else None,
         "cr2o3_pct": num("cr2o3_pct", "Cr2O3%", True, 0, 100),
         "feo_pct": num("feo_pct", "FeO%", True, 0, 100),
     }
@@ -297,7 +315,7 @@ def save_day(request: Request, body: dict = Body(...),
 
     before = {r["rom_id"]: r for r in pg.execute(text("""
         SELECT rom_id, shift, location_id, trips, qty_mt, moisture_pct,
-               cr2o3_pct, feo_pct, block_cr2o3_pct
+               moisture_source, cr2o3_pct, feo_pct, block_cr2o3_pct
           FROM minehub.mines_rom_entry WHERE on_date = :d
     """), {"d": on_date}).mappings()}
 
@@ -325,6 +343,7 @@ def save_day(request: Request, body: dict = Body(...),
                        SET shift = :shift, location_id = :location_id,
                            trips = :trips, qty_mt = :qty_mt,
                            moisture_pct = :moisture_pct,
+                           moisture_source = :moisture_source,
                            cr2o3_pct = :cr2o3_pct, feo_pct = :feo_pct,
                            updated_by = :a, updated_at = now()
                      WHERE rom_id = :rom_id
@@ -338,9 +357,11 @@ def save_day(request: Request, body: dict = Body(...),
                 new_id = pg.execute(text("""
                     INSERT INTO minehub.mines_rom_entry
                            (on_date, shift, location_id, trips, qty_mt,
-                            moisture_pct, cr2o3_pct, feo_pct, rom_entry_id, updated_by)
+                            moisture_pct, moisture_source,
+                            cr2o3_pct, feo_pct, rom_entry_id, updated_by)
                     VALUES (:d, :shift, :location_id, :trips, :qty_mt,
-                            :moisture_pct, :cr2o3_pct, :feo_pct, :a, :a)
+                            :moisture_pct, :moisture_source,
+                            :cr2o3_pct, :feo_pct, :a, :a)
                  RETURNING rom_id
                 """), {**r, "d": on_date, "a": actor}).scalar()
                 rom.log(pg, new_id, on_date, "INSERT", "ROM", None,
@@ -476,7 +497,8 @@ def remove(request: Request, rom_id: int,
     actor = _actor(request)
     old = pg.execute(text("""
         SELECT rom_id, on_date, shift, location_id, trips, qty_mt,
-               moisture_pct, cr2o3_pct, feo_pct, block_mrl, block_cr2o3_pct
+               moisture_pct, moisture_source,
+               cr2o3_pct, feo_pct, block_mrl, block_cr2o3_pct
           FROM minehub.mines_rom_entry WHERE rom_id = :id
     """), {"id": rom_id}).mappings().first()
     if old is None:
