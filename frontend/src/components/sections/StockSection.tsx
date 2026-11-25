@@ -29,6 +29,7 @@ import { useEntryDialog } from "@/contexts/useEntryDialog";
 import MinesStockEntryModal from "@/components/sections/MinesStockEntryModal";
 import MinesReserveEntryModal from "@/components/sections/MinesReserveEntryModal";
 import MinesRomEntryModal from "@/components/sections/MinesRomEntryModal";
+import MinesRomStackEntryModal from "@/components/sections/MinesRomStackEntryModal";
 import LastChanged from "@/components/ui/LastChanged";
 
 function mt(v: number | null | undefined) {
@@ -101,6 +102,15 @@ export default function StockSection() {
     void qc.invalidateQueries({ queryKey: ["rom-locations"] });
   }, [qc]);
 
+  // A saved stack changes the stacks and how much of each ROM sample is left
+  // to stack -- and nothing else. The ROM entry itself is untouched by
+  // building a stack out of it, so ["rom-day"] is deliberately NOT in here:
+  // refreshing it would say the day's figures had moved when they had not.
+  const afterStackSave = useCallback(() => {
+    void qc.invalidateQueries({ queryKey: ["rom-stack"] });
+    void qc.invalidateQueries({ queryKey: ["rom-stack-samples"] });
+  }, [qc]);
+
   // ALL THREE dialogs are mounted here. The reserve is not part of the stock
   // position -- one is ore above ground awaiting clearance, the other is ore
   // still in the ground -- but this is the section about how much ore the mine
@@ -122,6 +132,11 @@ export default function StockSection() {
         open={dialog === "daywise-rom"}
         onClose={closeDialog}
         onSaved={afterRomSave}
+      />
+      <MinesRomStackEntryModal
+        open={dialog === "rom-stack"}
+        onClose={closeDialog}
+        onSaved={afterStackSave}
       />
     </>
   );

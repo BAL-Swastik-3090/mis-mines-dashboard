@@ -730,6 +730,7 @@ from app.routers import prev_day_actual
 from app.routers import stock_entry
 from app.routers import resource_reserve
 from app.routers import rom_entry
+from app.routers import rom_stack
 from app.routers import desilting_plan
 from app.routers import plan_entry
 from app.routers import shifting
@@ -789,6 +790,7 @@ app.include_router(prev_day_actual.router)
 app.include_router(stock_entry.router)
 app.include_router(resource_reserve.router)
 app.include_router(rom_entry.router)
+app.include_router(rom_stack.router)
 app.include_router(desilting_plan.router)
 app.include_router(plan_entry.router)
 app.include_router(shifting.router)
