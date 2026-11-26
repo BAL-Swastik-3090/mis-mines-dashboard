@@ -333,29 +333,54 @@ PAGE_LABELS = {
 
 # Longest prefixes first — /api/live-tracking must not be shadowed by a shorter
 # entry, and the lookup takes the first match.
-PREFIX_PAGE: tuple[tuple[str, str], ...] = (
-    # Hand-entered previous-day actuals for the MIS Plan vs Actual table.
-    # Mapped so it needs dashboard.mis: without an entry here an unmapped path
+PREFIX_PAGE: tuple[tuple[str, str | None], ...] = (
+    # ── THE DAILY ENTRY FORMS: GATED BY PERMISSION, NOT BY PAGE ─────────────
+    # A page maps to exactly one dashboard.* code, and seven of these used to
+    # map to "mis" -- which was right while the only way to reach a form was
+    # from the MIS dashboard, and became wrong the moment each form got a
+    # permission of its own (migration 137) and a role of its own (138).
+    #
+    # The whole point of those roles is that a person can be given one form
+    # and nothing else. Somebody holding only "Entry · Mines Stock" has no
+    # dashboard.mis, so the page check refused them at the door and the form
+    # they had just been granted answered 403: the tab was visible, the
+    # permission was held, and the request never reached the router that
+    # checks it.
+    #
+    # An explicit None does NOT mean unguarded -- that is the failure the
+    # comments further down were written about. It means the gate is
+    # _PERMISSION_RULES in main.py, which is checked FIRST and is strictly
+    # stronger here: it names the form's own view/edit codes instead of a
+    # whole dashboard's. Every prefix is listed, even where nothing shadows
+    # it today, so that a broader prefix added later cannot silently recapture
+    # one -- which is exactly what /api/equipment and /api/dewatering were
+    # already doing to the two marked below.
+    ("/api/prev-day-actual", None),
+    ("/api/stock-entry", None),
+    ("/api/resource-reserve", None),
+    ("/api/rom-entry", None),
+    ("/api/rom-stack", None),
+    ("/api/desilting-plan", None),
+    ("/api/equipment-plan", None),   # MUST stay above /api/equipment
+    ("/api/shifting", None),
+    ("/api/dewatering-entry", None),  # MUST stay above /api/dewatering
+
+    # ── TWO READS THE EST ACTUAL FORM CANNOT DO WITHOUT ────────────────────
+    # The form exists to set the mine's own estimate against what SAP has
+    # posted, side by side, and it builds its rows from these two. Left on
+    # page "mis" they answered 403 to somebody holding only "Entry · Est
+    # Actual", and the form opened with the comparison it is FOR missing.
+    #
+    # Only the /daywise read is excepted, and only for one day at a time as
+    # the form asks for it -- the rest of /api/production and /api/despatch
+    # stays on dashboard.mis, immediately below. The rule in main.py still
+    # lists dashboard.mis first, so nothing changes for anyone who has it.
+    ("/api/production/daywise", None),   # MUST stay above /api/production
+    ("/api/despatch/daywise", None),     # MUST stay above /api/despatch
+
+    # End-to-end quality, read-only over SAP. Mapped because an unmapped path
     # passes the page check entirely and would be reachable by any signed-in
     # user, including one with no MIS access at all.
-    ("/api/prev-day-actual", "mis"),
-    # Hand-entered mines stock position. Same reasoning as above: an
-    # unmapped path skips the page check and would be reachable by any
-    # signed-in user.
-    ("/api/stock-entry", "mis"),
-    # The declared resource reserve. Mapped for the same reason as the two
-    # above, and it matters most here: this path WRITES the tonnage every
-    # remaining-reserve and valuation figure on the dashboard is derived
-    # from, and an unmapped path skips the page check entirely.
-    ("/api/resource-reserve", "mis"),
-    # End-to-end quality, read-only over SAP. Mapped for the same reason as
-    # the two above: an unmapped path skips the page check entirely.
-    # The uploaded de-silting plan. Mapped for the same reason, and it matters
-    # more here than for a read-only path: this one WRITES the target every
-    # de-silting achievement on the dashboard is measured against. Listed
-    # before /api/despatch because neither prefixes the other today, and
-    # keeping the entry-point paths together makes that easy to keep true.
-    ("/api/desilting-plan", "mis"),
     ("/api/quality-e2e", "mis"),
     # Its own page, not the MIS dashboard's. Reading the chromium balance is
     # a narrower right than reading production figures, and this is the line
@@ -401,7 +426,13 @@ PREFIX_PAGE: tuple[tuple[str, str], ...] = (
 
 
 def page_for_path(path: str) -> str | None:
-    """The page a request belongs to, or None if it is not page-specific."""
+    """The page a request belongs to, or None if it is not page-specific.
+
+    An entry whose page is None matches and yields None, which ENDS the
+    search: that is how a path says "my gate is a permission rule, not a
+    page", and it is also what stops a broader prefix listed after it from
+    claiming the path.
+    """
     return next((pg for pre, pg in PREFIX_PAGE if path.startswith(pre)), None)
 
 

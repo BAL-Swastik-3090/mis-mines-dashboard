@@ -21,10 +21,17 @@ from fastapi import (APIRouter, Depends, File, HTTPException, Query, Request,
 from sqlalchemy.orm import Session
 
 from app.minehub_db import get_minehub_db
+from app.services import perm
 from app.services import desilting_plan as svc
 from app.services.desilting_plan import SheetError
 
 router = APIRouter(prefix="/api/desilting-plan", tags=["De-Silting Plan"])
+
+#: Migration 137. Until it this rode on dashboard.mis -- eight roles, the
+#: read-only ones among them -- and this path WRITES the target every
+#: de-silting achievement on the dashboard is measured against.
+VIEW = "desilting.view"
+EDIT = "desilting.edit"
 
 #: An .xlsx is 20-odd kB. Anything approaching this is not a month's plan.
 MAX_UPLOAD = 5 * 1024 * 1024
@@ -74,9 +81,11 @@ def _sheet_error(e: SheetError) -> HTTPException:
 
 
 @router.get("", summary="The de-silting plan stored for one month")
-def get_month(year: int = Query(..., ge=2020, le=2100),
+def get_month(request: Request,
+              year: int = Query(..., ge=2020, le=2100),
               month: int = Query(..., ge=1, le=12),
               db: Session = Depends(get_minehub_db)) -> dict:
+    perm.require_any(request, (VIEW, EDIT), "read the de-silting plan")
     rows = svc.read_month(db, year, month)
     return {
         "year": year, "month": month,
@@ -95,7 +104,13 @@ async def preview(request: Request,
                   month: int = Query(..., ge=1, le=12),
                   file: UploadFile = File(...),
                   db: Session = Depends(get_minehub_db)) -> dict:
-    """NOTHING IS STORED HERE. Not the rows, not the file."""
+    """NOTHING IS STORED HERE. Not the rows, not the file.
+
+    Gated on EDIT even so: a preview reads the uploaded workbook against the
+    stored month and reports the difference, which is the plan itself in
+    another shape. Somebody who may not change the month has no reason to
+    diff a file against it."""
+    perm.require(request, EDIT, "upload the de-silting plan")
     data = await _payload(file)
     try:
         parsed = svc.parse(data, year, month)
@@ -122,6 +137,7 @@ async def submit(request: Request,
                  file: UploadFile = File(...),
                  db: Session = Depends(get_minehub_db)) -> dict:
     """Make the month exactly what the file holds, and say what changed."""
+    perm.require(request, EDIT, "upload the de-silting plan")
     data = await _payload(file)
     try:
         parsed = svc.parse(data, year, month)
@@ -146,9 +162,13 @@ def clear_month(request: Request,
                 db: Session = Depends(get_minehub_db)) -> dict:
     """For a month uploaded by mistake.
 
+    Same permission as the upload: putting a month in and taking it out are
+    the same right over the same figures.
+
     Deleted rather than zeroed, so the dashboard goes back to saying no plan
     exists instead of claiming the mine planned to shift nothing.
     """
+    perm.require(request, EDIT, "remove the de-silting plan")
     from calendar import monthrange
     from sqlalchemy import text
     n = db.execute(text("""

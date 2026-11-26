@@ -37,12 +37,28 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.minehub_db import get_minehub_db
+from app.services import perm
 from app.services import resource_reserve as rr
 
 router = APIRouter(prefix="/api/resource-reserve", tags=["Mines Resource Reserve"])
 
 GRADES = rr.GRADES
-RESERVE_PERMISSION: str | None = None
+#: The hook this file carried from the start, now filled in by migration 137.
+#: reserve.edit is marked SENSITIVE in that migration: every remaining-reserve
+#: and valuation figure on the dashboard is derived from what is filed here,
+#: it is filed a handful of times a year, and a wrong tonnage is wrong
+#: everywhere without anything on screen to say so.
+VIEW = "reserve.view"
+EDIT = "reserve.edit"
+
+#: ...and what the MIS DASHBOARD holds. The Executive Summary draws the
+#: remaining reserve from the position endpoint below, so gating that one read
+#: on reserve.* alone would have emptied a panel on a page those people are
+#: already entitled to -- the figure is published to them either way. It
+#: applies to the POSITION only: the survey as typed, the history and the
+#: valuation sandbox are the form's own and stay with reserve.*, and every
+#: write stays with reserve.edit, which migration 137 marks SENSITIVE.
+DASHBOARD = "dashboard.mis"
 
 
 def _actor(request: Request) -> str:
@@ -53,20 +69,25 @@ def _actor(request: Request) -> str:
 
 @router.get("", summary="Declared reserve, depletion since, and what is left")
 def get_position(
+    request: Request,
     as_on: date | None = Query(None, description="Defaults to today"),
     db: Session = Depends(get_db),
     pg: Session = Depends(get_minehub_db),
 ) -> dict:
+    perm.require_any(request, (VIEW, EDIT, DASHBOARD),
+                     "read the declared resource reserve")
     return rr.position(db, pg, as_on)
 
 
 @router.get("/declaration", summary="One survey exactly as it was typed")
 def get_declaration(
+    request: Request,
     as_on_date: date | None = Query(
         None, description="The exact survey date; latest on or before today "
                           "when omitted"),
     pg: Session = Depends(get_minehub_db),
 ) -> dict:
+    perm.require_any(request, (VIEW, EDIT), "read the declared resource reserve")
     """What the form reloads when it is reopened.
 
     Asked for an EXACT date it returns that survey or an empty one — never the
@@ -106,12 +127,15 @@ def get_declaration(
 
 
 @router.get("/history", summary="Every survey on file, newest first")
-def get_history(pg: Session = Depends(get_minehub_db)) -> dict:
+def get_history(request: Request,
+                pg: Session = Depends(get_minehub_db)) -> dict:
+    perm.require_any(request, (VIEW, EDIT), "read the declared resource reserve")
     return {"declarations": rr.declarations(pg)}
 
 
 @router.get("/valuation", summary="Value a position without storing it")
 def get_valuation(
+    request: Request,
     hg: float = Query(0, ge=0), mg: float = Query(0, ge=0),
     lg: float = Query(0, ge=0),
     as_on: date | None = Query(None),
@@ -119,11 +143,16 @@ def get_valuation(
 ) -> dict:
     """What the form shows while it is being filled in.
 
+    GATED LIKE THE STORED DECLARATION, although it stores nothing. It prices
+    a tonnage, so leaving it open would hand the valuation out to anybody who
+    knows the URL -- the arithmetic is the sensitive part, not the row.
+
     Priced on the server rather than in the browser so that the figure the
     person sees before saving is produced by the same code, and the same IBM
     issue, as the figure the dashboard shows afterwards. A rate copied into the
     frontend is a rate that goes stale on its own.
     """
+    perm.require_any(request, (VIEW, EDIT), "value the resource reserve")
     when = as_on or date.today()
     tonnes = {"HG": hg, "MG": mg, "LG": lg}
     val = rr.value(pg, tonnes, when)
@@ -183,6 +212,7 @@ def _clean(body: dict) -> tuple[date, list[tuple[str, float, float]], str | None
 @router.put("", summary="File or restate a survey")
 def save(request: Request, body: dict = Body(...),
          pg: Session = Depends(get_minehub_db)) -> dict:
+    perm.require(request, EDIT, "declare the resource reserve")
     when, rows, remarks = _clean(body)
     actor = _actor(request)
 
@@ -249,6 +279,7 @@ def save(request: Request, body: dict = Body(...),
 def remove(request: Request,
            as_on_date: date = Query(..., description="The survey to withdraw"),
            pg: Session = Depends(get_minehub_db)) -> dict:
+    perm.require(request, EDIT, "withdraw a resource reserve survey")
     actor = _actor(request)
     rows = [dict(r) for r in pg.execute(text("""
         SELECT grade, tonnage_mt, cr2o3_pct FROM minehub.mines_resource_reserve

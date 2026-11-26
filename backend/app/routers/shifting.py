@@ -23,10 +23,23 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.minehub_db import get_minehub_db
+from app.services import perm
 from app.services import shifting as svc
 from app.services.shifting import SheetError
 
 router = APIRouter(prefix="/api/shifting", tags=["Shifting"])
+
+#: Migration 137, and this one was the urgent case. /api/shifting has NO entry
+#: in services/auth.py's PREFIX_PAGE, and an unmapped path skips the page
+#: check entirely -- so until these guards existed, any signed-in account
+#: could write the mine's shifting figures. The prefix is mapped in the same
+#: commit; these checks are what make it a permission rather than a dashboard.
+#:
+#: ONE PAIR FOR THE DAY AND THE MONTH. The typed actual and the uploaded plan
+#: are one job read against each other, so separate codes would mean granting
+#: two things to let one person do one job.
+VIEW = "shifting.view"
+EDIT = "shifting.edit"
 
 #: An .xlsx of thirty rows is 20-odd kB. Anything near this is not a plan.
 MAX_UPLOAD = 5 * 1024 * 1024
@@ -90,13 +103,15 @@ class ActualIn(BaseModel):
 
 
 @router.get("/actual")
-def read_actual(entry_date: date = Query(...),
+def read_actual(request: Request,
+                entry_date: date = Query(...),
                 db: Session = Depends(get_minehub_db)) -> dict:
     """One day as the form shows it: three rows, plan beside actual.
 
     The plan travels with it so the person entering sees the target against
     the figure they are typing, rather than opening a second screen for it.
     """
+    perm.require_any(request, (VIEW, EDIT), "read the shifting figures")
     rows = svc.day(db, entry_date)
     return {
         "date": entry_date.isoformat(),
@@ -112,6 +127,7 @@ def read_actual(entry_date: date = Query(...),
 def save_actual(body: ActualIn, request: Request,
                 db: Session = Depends(get_minehub_db)) -> dict:
     """Store or edit one day. Editing is the same call -- see _apply."""
+    perm.require(request, EDIT, "enter the shifting figures")
     qty = {svc.LG: body.lg, svc.TAILINGS: body.tailings,
            svc.REHANDLING: body.rehandling}
     try:
@@ -123,9 +139,11 @@ def save_actual(body: ActualIn, request: Request,
 
 
 @router.get("/actual/month")
-def read_actual_month(year: int = Query(...), month: int = Query(...),
+def read_actual_month(request: Request,
+                      year: int = Query(...), month: int = Query(...),
                       db: Session = Depends(get_minehub_db)) -> dict:
     """A whole month of actuals beside the plan — what a table would show."""
+    perm.require_any(request, (VIEW, EDIT), "read the shifting figures")
     frm = _month(year, month)
     to = svc.month_end(frm)
     plan = svc.plan_for(db, frm, to)
@@ -149,9 +167,11 @@ def read_actual_month(year: int = Query(...), month: int = Query(...),
 
 # ── The month's plan ─────────────────────────────────────────────────────────
 @router.get("/plan")
-def read_plan(year: int = Query(...), month: int = Query(...),
+def read_plan(request: Request,
+              year: int = Query(...), month: int = Query(...),
               db: Session = Depends(get_minehub_db)) -> dict:
     """What is stored for the month, with its totals and how it got there."""
+    perm.require_any(request, (VIEW, EDIT), "read the shifting figures")
     frm = _month(year, month)
     to = svc.month_end(frm)
     rows = svc.read_range(db, frm, to, "shifting_plan")
@@ -179,6 +199,7 @@ async def preview_plan(request: Request,
                        file: UploadFile = File(...),
                        db: Session = Depends(get_minehub_db)) -> dict:
     """Read a workbook and say what it WOULD change. Writes nothing."""
+    perm.require(request, EDIT, "upload the shifting plan")
     data = await _payload(file)
     try:
         parsed = svc.parse(data, year, month)
@@ -202,6 +223,7 @@ async def submit_plan(request: Request,
                       file: UploadFile = File(...),
                       db: Session = Depends(get_minehub_db)) -> dict:
     """Store the month, replacing what was there and keeping what it replaced."""
+    perm.require(request, EDIT, "upload the shifting plan")
     data = await _payload(file)
     try:
         parsed = svc.parse(data, year, month)
@@ -213,12 +235,14 @@ async def submit_plan(request: Request,
 
 # ── The trail ────────────────────────────────────────────────────────────────
 @router.get("/history")
-def read_history(which: str = Query("plan", pattern="^(plan|actual)$"),
+def read_history(request: Request,
+                 which: str = Query("plan", pattern="^(plan|actual)$"),
                  year: int | None = Query(None), month: int | None = Query(None),
                  material: str | None = Query(None),
                  limit: int = Query(300, ge=1, le=2000),
                  db: Session = Depends(get_minehub_db)) -> dict:
     """Every change, newest first, with the value before and after."""
+    perm.require_any(request, (VIEW, EDIT), "read the shifting figures")
     frm = to = None
     if year and month:
         frm = _month(year, month)

@@ -194,6 +194,41 @@ def pending_block(pg: Session, limit: int = 200) -> list[dict]:
         {"n": limit}).mappings()]
 
 
+def mrls(pg: Session, limit: int = 60) -> list[str]:
+    """Every mRL already filed against a sample, commonest first.
+
+    WHY THE FORM OFFERS THESE. The mRL became free text on 26 November 2026
+    (migration 136), and free text is how a list of twenty benches turns into
+    eighty spellings of them -- which is exactly what happened to the location
+    column before it was given a table of its own. There is no table to give
+    this one: a bench is not a thing the mine maintains a register of, it is
+    whatever the survey said. So the list is derived from what has been typed,
+    and offering it is the cheapest way to make the second person to file
+    '80-82' pick the first person's spelling of it.
+
+    COMMONEST FIRST, NOT ALPHABETICAL. The point of the list is the one or two
+    benches being worked this month; sorting by name buries them under every
+    bench ever recorded. The count is not shown -- it would read as a figure
+    about the bench rather than about the list.
+
+    BOTH TABLES, because a stack line can carry an mRL that no surviving
+    sample does: the sample it was built from may since have been corrected or
+    removed, and the spelling on the stack is still one somebody chose.
+    """
+    return [r[0] for r in pg.execute(text("""
+        SELECT mrl, count(*) AS n FROM (
+            SELECT block_mrl AS mrl FROM minehub.mines_rom_entry
+             WHERE block_mrl IS NOT NULL
+            UNION ALL
+            SELECT block_mrl FROM minehub.mines_rom_stack_line
+             WHERE block_mrl IS NOT NULL
+        ) t
+         GROUP BY mrl
+         ORDER BY n DESC, mrl
+         LIMIT :lim
+    """), {"lim": limit}).all()]
+
+
 def locations(pg: Session, include_inactive: bool = False) -> list[dict]:
     """The dropdown. Inactive locations are still returned for reading history.
 

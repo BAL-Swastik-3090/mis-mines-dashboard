@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 # Postgres, so this router takes the platform session rather than the shared
 # MySQL one. See the migration header for the outage that prompted it.
 from app.minehub_db import get_minehub_db
+from app.services import perm
 
 router = APIRouter(prefix="/api/prev-day-actual", tags=["Previous Day Actual"])
 
@@ -54,15 +55,33 @@ MATERIALS: dict[str, str] = {
 BY_CODE = {v: k for k, v in MATERIALS.items()}
 
 
+#: What a person must hold to read, and to write, the estimated actuals.
+#: Migration 137. Until it, this rode on dashboard.mis -- which eight roles
+#: hold, including the read-only ones.
+VIEW = "prevday.view"
+EDIT = "prevday.edit"
+
+#: ...and what the MIS DASHBOARD holds. The Plan vs Actual table on the MIS
+#: dashboard reads this same endpoint to draw the variance -- it is the figure
+#: the morning meeting argues over, shown to everybody who can open that
+#: dashboard. Gating the read on prevday.* alone would have taken that column
+#: away from every MIS holder who does not also FILE the figures, which is
+#: almost all of them. Reading is the dashboard's right; writing stays
+#: prevday.edit, below.
+DASHBOARD = "dashboard.mis"
+
+
 def _actor(request: Request) -> str:
     return getattr(request.state, "emp_id", None) or "unknown"
 
 
 @router.get("", summary="Hand-entered figures for one day")
 def get_day(
+    request: Request,
     on_date: date = Query(..., description="The day the figures belong to"),
     db: Session = Depends(get_minehub_db),
 ) -> dict:
+    perm.require_any(request, (VIEW, EDIT, DASHBOARD), "read the estimated actuals")
     rows = db.execute(text("""
         SELECT material     AS "Material",
                plan_qty     AS "Plan",
@@ -111,6 +130,7 @@ def put_day(
     entries: list[dict] = Body(..., embed=True),
     db: Session = Depends(get_minehub_db),
 ) -> dict:
+    perm.require(request, EDIT, "enter the estimated actuals")
     if on_date > date.today():
         raise HTTPException(400, "Cannot record an actual for a future date.")
     if not entries:

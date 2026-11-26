@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.minehub_db import get_minehub_db
+from app.services import perm
 from app.services import equipment_plan as svc
 from app.services.equipment_plan import PlanError
 
@@ -31,6 +32,12 @@ from app.services.equipment_plan import PlanError
 # path is an identifier nine call sites depend on, and renaming it buys
 # nothing a reader can see. The screen is now the OEE Master Selector and
 # these endpoints are its Excavation Plan tab, so that is what the docs say.
+#: Migration 137. Until it this inherited dashboard.mis from the shorter
+#: /api/equipment prefix in services/auth.py. These are the three standing
+#: decisions the OEE and the Lost Cost Matrix are calculated from.
+VIEW = "oeemaster.view"
+EDIT = "oeemaster.edit"
+
 router = APIRouter(prefix="/api/equipment-plan",
                    tags=["OEE Master Selector"])
 
@@ -58,9 +65,11 @@ class MonthIn(BaseModel):
 
 
 @router.get("")
-def read(year: int = Query(...), month: int = Query(...),
+def read(request: Request,
+         year: int = Query(...), month: int = Query(...),
          db: Session = Depends(get_minehub_db)) -> dict:
     """The fleet, what is stored for this month, and what is in force."""
+    perm.require_any(request, (VIEW, EDIT), "read the OEE master selections")
     m = _month(year, month)
     stored = {r["equipment_name"]: r for r in svc.read_month(db, m)}
     effective = svc.resolve(db, m)
@@ -104,6 +113,7 @@ def read(year: int = Query(...), month: int = Query(...),
 def save(body: MonthIn, request: Request,
          db: Session = Depends(get_minehub_db)) -> dict:
     """Store the month. All active machines or none — see save_month()."""
+    perm.require(request, EDIT, "set the OEE master selections")
     m = _month(body.year, body.month)
     assignments = {a.equipment_name: a.material_type for a in body.assignments}
     if len(assignments) != len(body.assignments):
@@ -119,7 +129,8 @@ def save(body: MonthIn, request: Request,
 
 
 @router.get("/history")
-def read_history(year: int | None = Query(None), month: int | None = Query(None),
+def read_history(request: Request,
+                 year: int | None = Query(None), month: int | None = Query(None),
                  equipment_name: str | None = Query(None),
                  limit: int = Query(200, ge=1, le=1000),
                  db: Session = Depends(get_minehub_db)) -> dict:
@@ -129,6 +140,7 @@ def read_history(year: int | None = Query(None), month: int | None = Query(None)
     changed in this plan", a machine answers "when did this one move between
     ore and overburden", and the two together narrow to a single row's story.
     """
+    perm.require_any(request, (VIEW, EDIT), "read the OEE master selections")
     m = _month(year, month) if year and month else None
     rows = svc.history(db, m, equipment_name, limit)
     return {"month": m.isoformat() if m else None,
@@ -137,7 +149,9 @@ def read_history(year: int | None = Query(None), month: int | None = Query(None)
 
 
 @router.get("/fleet")
-def fleet(include_inactive: bool = Query(False),
+def fleet(request: Request,
+          include_inactive: bool = Query(False),
           db: Session = Depends(get_minehub_db)) -> dict:
     """The equipment master itself, for a screen that manages the fleet."""
+    perm.require_any(request, (VIEW, EDIT), "read the OEE master selections")
     return {"machines": svc.fleet(db, include_inactive=include_inactive)}

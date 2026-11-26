@@ -15,10 +15,11 @@ removed from the form, or a grade that stops being reported, would otherwise
 linger from an earlier save and quietly inflate a total nobody is looking at.
 Replacing the day means what is stored is exactly what was submitted.
 
-WHO MAY EDIT. Anyone who can open the MIS dashboard — the prefix is mapped to
-the "mis" page in services/auth.py, so the middleware already requires
-dashboard.mis. Set STOCK_PERMISSION below to tighten it from Access Control
-later; nothing else needs to change. Every row records who saved it and when.
+WHO MAY EDIT. stock.view to read a day, stock.edit to write or remove one --
+migration 137. Until it this rode on dashboard.mis, which eight roles hold
+including the read-only ones, so a DASHBOARD_VIEWER was being offered the form
+that rewrites the mine's stock position. Every row records who saved it and
+when.
 """
 from __future__ import annotations
 
@@ -29,6 +30,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.minehub_db import get_minehub_db
+from app.services import perm
 
 router = APIRouter(prefix="/api/stock-entry", tags=["Mines Stock Entry"])
 
@@ -74,9 +76,12 @@ AWAITING_PERMISSION_PARTS = ("MINE_AWAIT_ANALYSIS_REPORT",
 # every other grade, and the database refuses anything else.
 LG_ONLY = "LG_FOR_COB"
 
-# None means "anyone who can open the MIS dashboard". Put a permission code here
-# to restrict it.
-STOCK_PERMISSION: str | None = None
+#: The hook this file has carried since it was written, finally filled in.
+#: It said "put a permission code here to restrict it" and migration 137 is
+#: that code -- so the mechanism is the one the file always expected, not a
+#: second one bolted alongside.
+VIEW = "stock.view"
+EDIT = "stock.edit"
 
 
 def _actor(request: Request) -> str:
@@ -91,9 +96,11 @@ def _valid_cell(grade: str, bucket: str) -> bool:
 
 @router.get("", summary="The stock position entered for one day")
 def get_day(
+    request: Request,
     on_date: date = Query(..., description="The Stock_Date to read"),
     pg: Session = Depends(get_minehub_db),
 ) -> dict:
+    perm.require_any(request, (VIEW, EDIT), "read the mines stock position")
     rows = pg.execute(text("""
         SELECT grade, bucket, qty, entry_id, entry_date, updated_at, updated_by
           FROM minehub.mines_stock_entry
@@ -139,10 +146,7 @@ def put_day(
     proposed_despatch: dict | None = Body(None, embed=True),
     pg: Session = Depends(get_minehub_db),
 ) -> dict:
-    if STOCK_PERMISSION:
-        from app.services import access as access_svc
-        if not access_svc.has_permission(pg, _actor(request), STOCK_PERMISSION):
-            raise HTTPException(403, "You may not enter stock figures.")
+    perm.require(request, EDIT, "enter the mines stock position")
 
     if on_date > date.today():
         raise HTTPException(400, "Cannot record a stock position for a future date.")
@@ -280,10 +284,7 @@ def delete_day(
     on_date: date = Query(...),
     pg: Session = Depends(get_minehub_db),
 ) -> dict:
-    if STOCK_PERMISSION:
-        from app.services import access as access_svc
-        if not access_svc.has_permission(pg, _actor(request), STOCK_PERMISSION):
-            raise HTTPException(403, "You may not enter stock figures.")
+    perm.require(request, EDIT, "enter the mines stock position")
     r = pg.execute(text("DELETE FROM minehub.mines_stock_entry WHERE stock_date = :d"),
                    {"d": on_date})
     # The day's proposed despatch goes with it. It is entered on the same form

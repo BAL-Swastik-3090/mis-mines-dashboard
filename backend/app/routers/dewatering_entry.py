@@ -20,10 +20,17 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.minehub_db import get_minehub_db
+from app.services import perm
 from app.services import dewatering_entry as svc
 from app.services.dewatering_entry import DewateringError
 
 router = APIRouter(prefix="/api/dewatering-entry", tags=["Dewatering Entry"])
+
+#: Migration 137. Until it this inherited dashboard.mis from the shorter
+#: /api/dewatering prefix in services/auth.py. Each day's closing stock is the
+#: next day's opening, so a write here carries forward.
+VIEW = "dewatering.view"
+EDIT = "dewatering.edit"
 
 
 def _actor(request: Request) -> str:
@@ -50,16 +57,20 @@ def fields() -> dict:
 
 
 @router.get("")
-def read_day(data_date: date = Query(...),
+def read_day(request: Request,
+             data_date: date = Query(...),
              db: Session = Depends(get_minehub_db)) -> dict:
     """One day, with the opening stock that would be carried into it."""
+    perm.require_any(request, (VIEW, EDIT), "read the dewatering sheet")
     return svc.day_form(db, data_date)
 
 
 @router.get("/range")
-def read_range(from_date: date = Query(...), to_date: date = Query(...),
+def read_range(request: Request,
+               from_date: date = Query(...), to_date: date = Query(...),
                db: Session = Depends(get_minehub_db)) -> dict:
     """A window of days, for a table or a chart."""
+    perm.require_any(request, (VIEW, EDIT), "read the dewatering sheet")
     if to_date < from_date:
         raise HTTPException(400, "The end date is before the start date.")
     rows = svc.read_range(db, from_date, to_date)
@@ -78,6 +89,7 @@ def save_day(request: Request,
     sent as null is CLEARED -- the screen means different things by the two,
     so the payload is read as a set of edits rather than as a whole row.
     """
+    perm.require(request, EDIT, "enter the dewatering sheet")
     try:
         return svc.save_day(db, data_date, values, _actor(request))
     except DewateringError as e:
@@ -85,7 +97,8 @@ def save_day(request: Request,
 
 
 @router.get("/history")
-def history(from_date: date | None = Query(None),
+def history(request: Request,
+            from_date: date | None = Query(None),
             to_date: date | None = Query(None),
             field: str | None = Query(None),
             limit: int = Query(300, ge=1, le=2000),
@@ -96,6 +109,7 @@ def history(from_date: date | None = Query(None),
     earlier day did -- which is how a figure that changed on its own is traced
     back to the edit that changed it.
     """
+    perm.require_any(request, (VIEW, EDIT), "read the dewatering sheet")
     if field and field not in {f for f, *_ in svc.FIELDS}:
         raise HTTPException(400, "not a field on this sheet")
     rows = svc.history(db, from_date, to_date, field, limit)

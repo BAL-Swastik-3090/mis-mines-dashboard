@@ -484,6 +484,51 @@ _PERMISSION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("/api/productivity", ("ops.roster.view",)),
     # Notes are readable by anybody who can open the platform at all — writing
     # is what carries a permission, checked inside the router.
+
+    # ── THE DAILY ENTRY FORMS ──────────────────────────────────────────────
+    # Each form's own pair, from migration 137. These are the outer door that
+    # PREFIX_PAGE used to be: seven of these paths were gated on dashboard.mis
+    # and two on nothing at all, so a person granted one entry role — and
+    # nothing else, which is the whole point of those roles — was refused
+    # before the router that checks their permission ever ran.
+    #
+    # Listed here rather than as pages because a page resolves to exactly ONE
+    # code and a form needs either of its two: somebody who may only read a
+    # form still has to be able to open it. The routers check the same codes
+    # again per route, and that is where the view/edit distinction is made —
+    # this rule only asks whether the person has any business on the path.
+    ("/api/prev-day-actual", ("prevday.view", "prevday.edit",
+                              # ...and the MIS dashboard, which draws the
+                              # Plan vs Actual variance from this endpoint.
+                              # See the note in routers/prev_day_actual.py.
+                              "dashboard.mis")),
+    ("/api/stock-entry", ("stock.view", "stock.edit")),
+    ("/api/resource-reserve", ("reserve.view", "reserve.edit",
+                               # ...and the MIS dashboard, for the remaining
+                               # reserve on the Executive Summary. The router
+                               # allows it on the position read only.
+                               "dashboard.mis")),
+    # romstack.* is here because the ROM STACK form reads and extends this
+    # router's location list -- the two forms share one. The door opens for a
+    # stack editor; /rom-entry/day still refuses them, because the lock is in
+    # the router. See the note on STACK_VIEW in routers/rom_entry.py.
+    ("/api/rom-entry", ("rom.view", "rom.edit", "rom.block.edit",
+                        "romstack.view", "romstack.edit")),
+    ("/api/rom-stack", ("romstack.view", "romstack.edit")),
+    ("/api/desilting-plan", ("desilting.view", "desilting.edit")),
+    ("/api/equipment-plan", ("oeemaster.view", "oeemaster.edit")),
+    ("/api/shifting", ("shifting.view", "shifting.edit")),
+    ("/api/dewatering-entry", ("dewatering.view", "dewatering.edit")),
+
+    # The day-wise SAP figures the Est Actual form compares against. The MIS
+    # dashboard's own right comes first and is unchanged; the two entry codes
+    # are what let somebody who files that one form see what they are filing
+    # against. Nothing else under /api/production or /api/despatch moves --
+    # both keep their dashboard.mis page gate. See the note in
+    # services/auth.py, which must keep these two prefixes above the broader
+    # ones for this rule to be reached at all.
+    ("/api/production/daywise", ("dashboard.mis", "prevday.view", "prevday.edit")),
+    ("/api/despatch/daywise", ("dashboard.mis", "prevday.view", "prevday.edit")),
 )
 
 # A page is reachable with the matching dashboard permission.

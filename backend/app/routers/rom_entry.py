@@ -48,23 +48,54 @@ EDIT = "rom.edit"
 BLOCK = "rom.block.edit"
 DELETE = "rom.delete"
 
+#: ...and what the ROM STACK form holds. The two forms share one list of
+#: locations -- a stack is built out of the places the day's ROM came from --
+#: so the stack form reads, and extends, this router's /locations.
+#:
+#: That was free while both forms rode on dashboard.mis. Once migration 137
+#: gave each its own pair, a person granted only "Entry · ROM Stack" could
+#: open their tab and the location dropdown came back 403, which is the form
+#: not working at all. Named here rather than imported from rom_stack to keep
+#: the two routers independent; e2e asserts the strings still match.
+STACK_VIEW = "romstack.view"
+STACK_EDIT = "romstack.edit"
 
-# A bench level, or a span of two. The spaces people type around the dash are
-# taken out rather than refused -- "80 - 82" and "80-82" are the same bench and
-# storing both would split one answer into two.
-_MRL = re.compile(r"^\d{1,4}(\.\d{1,2})?(-\d{1,4}(\.\d{1,2})?)?$")
+
+#: The longest mRL the column holds. varchar(40) since migration 136; a value
+#: over it is refused here with a sentence rather than by the database with a
+#: driver error nobody on the screen can read.
+_MRL_MAX = 40
 
 
 def _mrl(raw: str) -> str | None:
-    """The stored form of an mRL, or None if it is not one."""
-    v = re.sub(r"\s*-\s*", "-", raw.strip())
-    if not _MRL.match(v):
+    """The stored form of an mRL, or None if there is nothing in it.
+
+    FREE TEXT SINCE 26 NOVEMBER 2026. It used to be a number or a span of two
+    -- 80, 27.5, 80-82 -- and anything else was refused here and again by a
+    CHECK constraint. The mine asked for the box to take what Geology actually
+    writes, which includes '>80' and 'below 27': a bench is not always a
+    number, and people were flattening what the survey said in order to get
+    past the form. Migration 136 drops the matching constraints on both
+    mines_rom_entry and mines_rom_stack_line.
+
+    Two things are still done to it, and neither rejects anything:
+
+    - RUNS OF WHITESPACE COLLAPSE TO ONE SPACE and the ends are trimmed, and
+      SPACES AROUND A DASH ARE CLOSED UP. The second rule is kept from the old
+      numeric version on purpose: '80 - 82' and '80-82' are one bench, the
+      mine already has the closed-up spelling stored, and the form now offers
+      what has been typed before -- so a rule that let those drift apart would
+      split one entry in the very list that exists to stop that happening.
+    - A value of nothing but spaces reads as no mRL at all, which is what the
+      caller already treats as "clear the block model".
+
+    Nothing else is touched. '>80', 'below 27' and 'RL 80 ~ 82' are stored
+    exactly as typed.
+    """
+    v = re.sub(r"\s*-\s*", "-", re.sub(r"\s+", " ", raw)).strip()
+    if not v:
         return None
-    if "-" in v:
-        lo, hi = (float(x) for x in v.split("-"))
-        if lo > hi:                 # "82-80" is a transposition, not a span
-            return None
-    return v
+    return v[:_MRL_MAX]
 
 
 def _actor(request: Request) -> str:
@@ -74,6 +105,12 @@ def _actor(request: Request) -> str:
 def _require(request: Request, code: str, doing: str) -> None:
     held = getattr(request.state, "permissions", None) or set()
     if code not in held:
+        raise HTTPException(403, f"You do not have permission to {doing}.")
+
+
+def _require_any(request: Request, codes: tuple[str, ...], doing: str) -> None:
+    held = getattr(request.state, "permissions", None) or set()
+    if not held.intersection(codes):
         raise HTTPException(403, f"You do not have permission to {doing}.")
 
 
@@ -136,9 +173,18 @@ def get_pending(request: Request, limit: int = Query(200, ge=1, le=1000),
 @router.get("/locations", summary="The locations the entry form offers")
 def get_locations(request: Request, include_inactive: bool = Query(False),
                   pg: Session = Depends(get_minehub_db)) -> dict:
-    _require(request, VIEW, "read the ROM analysis")
+    # Either form's audience: see STACK_VIEW above.
+    _require_any(request, (VIEW, EDIT, STACK_VIEW, STACK_EDIT),
+                 "read the ROM locations")
+    # THE mRLs COME BACK WITH THE LOCATIONS, on one request rather than two.
+    # The entry form needs both the moment it opens and neither changes while
+    # it is open, so a second round trip would buy nothing but a second thing
+    # to keep in step. They are both "what the dropdowns offer".
     return {"locations": rom.locations(pg, include_inactive),
-            "may_edit": _may(request, EDIT)}
+            "mrls": rom.mrls(pg),
+            # Whether THIS caller may extend the list. Both forms offer
+            # "+ Add location", so both editors get it.
+            "may_edit": _may(request, EDIT) or _may(request, STACK_EDIT)}
 
 
 # ── locations ───────────────────────────────────────────────────────────────
@@ -156,7 +202,7 @@ def add_location(request: Request, body: dict = Body(...),
     person on the screen from inventing a third spelling to get past the
     error.
     """
-    _require(request, EDIT, "add a ROM location")
+    _require_any(request, (EDIT, STACK_EDIT), "add a ROM location")
     name = str(body.get("name") or "").strip()
     if not name:
         raise HTTPException(400, "A location needs a name.")
@@ -434,9 +480,14 @@ def save_block(request: Request, body: dict = Body(...),
                      f"got {cr_f:g}.")
         mrl_s = _mrl(str(mrl))
         if mrl_s is None:
+            # The only way to get here now that the mRL is free text: a box
+            # holding nothing but spaces. It looks filled on screen while the
+            # Cr2O3 beside it genuinely is, so saying "it is empty" would read
+            # as wrong to the person looking at it.
             raise HTTPException(
-                400, f"Row {i + 1}: the mRL should be a bench level like 80, "
-                     f"or a span like 80-82.")
+                400, f"Row {i + 1}: the mRL is blank. Type the bench — "
+                     f"anything the survey says, such as 80, 80-82 or >80 — "
+                     f"or clear the Cr2O3% beside it to drop the block model.")
         wanted[rid] = {"block_mrl": mrl_s, "block_cr2o3_pct": round(cr_f, 3)}
 
     before = {r["rom_id"]: r for r in pg.execute(text("""

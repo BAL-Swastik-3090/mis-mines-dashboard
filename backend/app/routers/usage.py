@@ -72,17 +72,74 @@ VIEW = ("usage.view", "access.users.view")
 ALLOWED_APPS = ("MINES",)
 
 # Where a page path maps to a name somebody would recognise. The paths are
-# what the browser reported; these are what the sidebar calls them.
+# what the browser reported -- AuthWrapper posts "/" + the AppPage id on every
+# navigation -- and these are what the sidebar calls them.
+#
+# ── A MISSING NAME IS INVISIBLE, WHICH IS WHY THIS WENT STALE ───────────────
+# The lookup below falls back to the raw path, so a screen added to the rail
+# and forgotten here still appears in the report -- just as "/executive-
+# summary" rather than "Executive Summary". Nothing breaks and nobody is told,
+# so it stays wrong.
+#
+# It had been wrong for a while. On 26 November 2026, 29 of the 47 paths in
+# the table had no name, and the worst of them was /executive-summary at 2,278
+# views -- the single most-read screen on the platform, printed as a URL in
+# the report people use to decide whether the platform earns its keep.
+#
+# Every screen that has ever been visited is now named. If you add a page to
+# AppPage, add it here: the tracking needs no change -- it posts whatever the
+# page id is -- so this map is the ONLY thing standing between a new screen
+# and a row of punctuation in the usage report.
 SCREEN_NAMES = {
     "/": "MIS Dashboard", "/mis": "MIS Dashboard",
+    "/executive-summary": "Executive Summary",
     "/minehub": "Equipment 360", "/manpower": "Manpower",
     "/operations": "Shift Control", "/workforce": "Workforce Planning",
-    "/capacity": "Capacity", "/weighbridge": "Weighbridge", "/gate": "Gate",
+    "/capacity": "Capacity", "/gate": "Gate",
+    "/weighbridge": "Weighbridge", "/weighbridge-sap": "Weighbridge (SAP)",
     "/organisation": "Organisation", "/market": "Market Watch",
     "/oee": "OEE", "/lcm": "LCM", "/intelligence": "Intelligence",
+    "/amira": "AMIRA Accounting", "/product-costing": "Product Costing",
+    "/pr-po": "PR to Payment",
     "/fuel-management": "Fuel Management", "/ev-tracking": "Electric Vehicles",
     "/access-control": "Access Control", "/weather": "Weather Forecast",
-    "/usage": "Usage",
+    "/usage": "Usage", "/data-health": "Data Health",
+
+    # Handover. The rail drops the "HOTO" prefix because the heading above
+    # them carries it; here there is no heading, so each name says it.
+    "/hoto-board": "HOTO Shift Board", "/hoto-register": "HOTO Register",
+    "/hoto-defects": "HOTO Defects", "/hoto-checklists": "HOTO Checklists",
+    "/hoto-devices": "HOTO Devices", "/hoto-stickers": "HOTO Cab Stickers",
+    "/hoto-app": "HOTO App",
+
+    # The three plans, same reasoning as HOTO.
+    "/plan-despatch": "Plan · Despatch", "/plan-cobp": "Plan · COB Plant",
+    "/plan-excavation": "Plan · Excavation", "/plan-faces": "Plan · Faces",
+
+    # The Daily Entry Hub. These needed NOTHING on the capture side -- every
+    # one of them was already being recorded, 49 rows of it, because
+    # AuthWrapper posts the page id and they are pages. Only the naming was
+    # missing, which is the whole of what "include it in Usage" turned out to
+    # mean. The wording matches entryNav.ts, so the report calls a form what
+    # the menu that opens it calls it.
+    "/entry-prev-day": "Entry · Est Actual",
+    "/entry-stock": "Entry · Mines Stock",
+    "/entry-reserve": "Entry · Resource Reserve",
+    "/entry-rom": "Entry · Daywise ROM",
+    "/entry-rom-stack": "Entry · ROM Stack",
+    "/entry-desilting": "Entry · Desilting Plan",
+    "/entry-oee-master": "Entry · OEE Master",
+    "/entry-shifting-actual": "Entry · Shifting Actual",
+    "/entry-shifting-plan": "Entry · Shifting Plan",
+    "/entry-dewatering": "Entry · Dewatering",
+
+    # DELIBERATELY NOT NAMED: "/six-sigma" and "/cost-plan". Neither is an
+    # AppPage in this tree -- /cost-plan was folded into Product Costing (last
+    # seen 27 October 2026) and /six-sigma has no code here at all yet was
+    # viewed as recently as 25 November 2026, which means it exists somewhere
+    # this branch has not got. Inventing a name for a screen nobody here can
+    # point at would make the report confidently wrong; the raw path at least
+    # says "ask somebody what this is".
 }
 
 
