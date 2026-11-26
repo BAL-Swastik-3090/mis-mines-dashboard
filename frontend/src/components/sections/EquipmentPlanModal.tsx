@@ -5,6 +5,7 @@ import { Pickaxe, X, Loader2, AlertTriangle, Check, History } from "lucide-react
 import api from "@/lib/api";
 import EquipmentStatusSelector from "./EquipmentStatusSelector";
 import LcmKamSelector from "./LcmKamSelector";
+import FormShell from "@/components/ui/FormShell";
 
 /**
  * Which excavator digs ore and which digs overburden, for one month.
@@ -111,9 +112,12 @@ function stamp(iso: string | null): string {
 }
 
 export default function EquipmentPlanModal({
-  open, onClose, onSaved,
+  open, onClose, onSaved, inline,
 }: {
   open: boolean;
+  /** True on its own screen under Daily Entry Hub: no backdrop, no
+   *  click-to-dismiss, no close button. See FormShell. */
+  inline?: boolean;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
 }) {
@@ -139,12 +143,18 @@ export default function EquipmentPlanModal({
     setShowHistory(false);
   }, [year, month, open]);
 
+  /* NEITHER OF THESE APPLIES INLINE, and both would be bugs there.
+     Escape means "put back what I was covering", and inline there is nothing
+     covered -- it would silently throw away a half-typed form. And the scroll
+     lock is held on document.body so the page BEHIND a dialog cannot move;
+     inline that body is the page the form itself sits on, so a form taller
+     than the window could not be scrolled to its own Submit button. */
   useEffect(() => {
-    if (!open) return;
+    if (!open || inline) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open, inline, onClose]);
 
   const q = useQuery<MonthRead>({
     queryKey: ["equipment-plan", year, month],
@@ -229,31 +239,21 @@ export default function EquipmentPlanModal({
   const entered = q.data?.month_entered;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center p-3 sm:p-6 bg-black/45 overflow-y-auto"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-label="OEE master selector"
-    >
-      <div
-        className={"bg-white rounded-lg shadow-xl border border-border w-full my-auto "
-          + (tab === "plan" ? "max-w-2xl" : "max-w-5xl")}
-        onClick={(e) => e.stopPropagation()}
-      >
+    <FormShell inline={inline} maxW={tab === "plan" ? "max-w-2xl" : "max-w-5xl"} inlineMax={tab === "plan" ? "max-w-[900px]" : ""}
+               label="OEE master selector" onClose={onClose}>
         {/* ── heading ──────────────────────────────────────────────────── */}
         <div className="px-4 py-3 border-b border-border-light flex items-center gap-2">
           <Pickaxe size={15} className="text-accent" />
           <span className="font-condensed font-bold text-[13px] text-navy tracking-widest uppercase">
             OEE Master Selector
           </span>
-          <button
+          {!inline && (<button
             onClick={onClose}
             aria-label="Close"
             className="ml-auto p-1 rounded hover:bg-bg-section text-txt-muted hover:text-navy transition-colors"
           >
             <X size={16} />
-          </button>
+          </button>)}
         </div>
 
         {/* ── the three things the mine sets here ──────────────────────── */}
@@ -569,7 +569,7 @@ export default function EquipmentPlanModal({
               onClick={onClose}
               className="px-3 py-1.5 rounded border border-border text-[12px] font-semibold text-txt-secondary hover:bg-bg-section transition-colors"
             >
-              Close
+              {inline ? "Cancel" : "Close"}
             </button>
             <button
               onClick={save}
@@ -585,7 +585,6 @@ export default function EquipmentPlanModal({
           </div>
         </div>
         </>)}
-      </div>
-    </div>
+    </FormShell>
   );
 }

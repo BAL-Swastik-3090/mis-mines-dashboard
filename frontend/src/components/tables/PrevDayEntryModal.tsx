@@ -32,6 +32,7 @@ import { formatIndian } from "@/lib/utils";
 import { buildRows, dayLabel, todayISO, type KpiRow } from "@/lib/prevDay";
 import type { ProductionDaywiseResponse, DespatchDaywiseResponse } from "@/types";
 import DateField from "@/components/minehub/DateField";
+import FormShell from "@/components/ui/FormShell";
 
 export interface StoredValue {
   value: number;
@@ -57,9 +58,12 @@ function parseCell(raw: string): { ok: boolean; value: number | null } {
 }
 
 export default function PrevDayEntryModal({
-  open, onClose, defaultDay, onSaved,
+  open, onClose, defaultDay, onSaved, inline,
 }: {
   open: boolean;
+  /** True on its own screen under Daily Entry Hub: no backdrop, no
+   *  click-to-dismiss, no close button. See FormShell. */
+  inline?: boolean;
   onClose: () => void;
   /** Where the date box starts — yesterday, from the table. */
   defaultDay: string;
@@ -134,8 +138,14 @@ export default function PrevDayEntryModal({
   }, [open, stored, day]);
 
   // Esc to close, and stop the page behind from scrolling while open
+  /* NEITHER OF THESE APPLIES INLINE, and both would be bugs there.
+     Escape means "put back what I was covering", and inline there is nothing
+     covered -- it would silently throw away a half-typed form. And the scroll
+     lock is held on document.body so the page BEHIND a dialog cannot move;
+     inline that body is the page the form itself sits on, so a form taller
+     than the window could not be scrolled to its own Submit button. */
   useEffect(() => {
-    if (!open) return;
+    if (!open || inline) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
@@ -144,7 +154,7 @@ export default function PrevDayEntryModal({
       window.removeEventListener("keydown", onKey);
       document.body.style.overflow = prev;
     };
-  }, [open, onClose]);
+  }, [open, inline, onClose]);
 
   const invalid = useMemo(
     () => Object.values(draft).some((v) => !parseCell(v).ok),
@@ -165,7 +175,13 @@ export default function PrevDayEntryModal({
       }));
       await api.put("/prev-day-actual", { on_date: day, entries: payload });
       await onSaved(day);
-      onClose();
+      // CLOSING IS A DIALOG'S WAY OF SAYING "SAVED". Inline there is nothing to
+      // close, and remounting the form here would reset the date box and wipe
+      // the screen with no sign the save had worked -- which reads exactly
+      // like a save that silently failed. The form stays where it is; its own
+      // queries were just invalidated by onSaved, so it refetches and shows
+      // what was stored, and EntryHubSection prints the confirmation.
+      if (!inline) onClose();
     } catch (e) {
       const detail = (e as { response?: { data?: { detail?: string } } })
         ?.response?.data?.detail;
@@ -178,29 +194,20 @@ export default function PrevDayEntryModal({
   if (!open) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start sm:items-center justify-center p-3 sm:p-6 bg-black/45"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Enter actuals"
-    >
-      <div
-        className="bg-white rounded-lg shadow-xl border border-border w-full max-w-xl max-h-[88vh] flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <FormShell inline={inline} maxW="max-w-xl" inlineMax="max-w-[820px]"
+               label="Enter actuals" onClose={onClose} panelClass="max-h-[88vh] flex flex-col">
         <div className="px-4 py-3 border-b border-border-light flex items-center gap-2 shrink-0">
           <PencilLine size={15} className="text-accent" />
           <span className="font-condensed font-bold text-[13px] text-navy tracking-widest uppercase">
             Enter Actuals
           </span>
-          <button
+          {!inline && (<button
             onClick={onClose}
             aria-label="Close"
             className="ml-auto p-1 rounded hover:bg-bg-section text-txt-muted hover:text-navy transition-colors"
           >
             <X size={16} />
-          </button>
+          </button>)}
         </div>
 
         {/* ── which day ─────────────────────────────────────────────────── */}
@@ -319,7 +326,6 @@ export default function PrevDayEntryModal({
             {saving ? "Saving…" : "Submit"}
           </button>
         </div>
-      </div>
-    </div>
+    </FormShell>
   );
 }

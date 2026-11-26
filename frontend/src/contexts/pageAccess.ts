@@ -106,6 +106,41 @@ export const PAGE_PERMISSION: Partial<Record<AppPage, string[]>> = {
   // Installing the app is for anyone in HOTO; publishing a version is checked
   // per action on the server (hoto.admin).
   "hoto-app": ["hoto.view", "hoto.capture", "hoto.admin"],
+  /* ── The Daily Entry Hub ──────────────────────────────────────────────────
+     ONE PERMISSION PER FORM, which is the whole point of these being pages.
+     The access matrix is keyed on AppPage, so this table IS the answer to
+     "which entry screens may I see" -- for the rail, for the strip across the
+     top, for the shortcut menu in the header and for the route guard, all
+     from the same canOpen().
+
+     EIGHT OF THESE USED TO SAY dashboard.mis. That was the honest first step
+     rather than the right answer: it is what services/auth.py enforces on the
+     endpoints, so the rail agreed with the API instead of inventing a right
+     nobody checked. But dashboard.mis is held by eight roles including
+     DASHBOARD_VIEWER and MANAGEMENT -- read-only audiences who were being
+     offered eight forms for typing the mine's figures. Migration 137 gives
+     each form a view/edit pair of its own and this table now names them.
+
+     A PAGE OPENS ON EITHER CODE. Holding only the .view opens the screen and
+     the server refuses the save; holding the .edit implies you may look at
+     what you are about to change. Whether the Save button does anything is
+     the server's answer, never this file's -- hiding a control is a courtesy,
+     the endpoint is the gate. */
+  "entry-prev-day":        ["prevday.view", "prevday.edit"],
+  "entry-stock":           ["stock.view", "stock.edit"],
+  "entry-reserve":         ["reserve.view", "reserve.edit"],
+  "entry-rom":             ["rom.view", "rom.edit", "rom.block.edit"],
+  "entry-rom-stack":       ["romstack.view", "romstack.edit"],
+  "entry-desilting":       ["desilting.view", "desilting.edit"],
+  "entry-oee-master":      ["oeemaster.view", "oeemaster.edit"],
+  /* BOTH SHIFTING SCREENS SHARE A PAIR, deliberately. They are one job split
+     by where the figure comes from -- the day is typed, the month is
+     uploaded -- and the two screens read each other's data. Separate codes
+     would mean granting two things to let one person do one job. */
+  "entry-shifting-actual": ["shifting.view", "shifting.edit"],
+  "entry-shifting-plan":   ["shifting.view", "shifting.edit"],
+  "entry-dewatering":      ["dewatering.view", "dewatering.edit"],
+
   "minehub": ["platform.registry.browse"],
   "manpower": ["platform.operators.view"],
   "operations": ["ops.shift.view"],
@@ -266,6 +301,27 @@ const LANDING_RANK: Record<AppPage, number> = {
   // Dead last. It is open to everyone, and ranking it any higher would land a
   // person with no dashboard on a table of table names.
   "data-health": 94,
+
+  /* THE ENTRY FORMS RANK BELOW EVERYTHING, which is the point of the numbers
+     here. Most of them open to anyone holding dashboard.mis, so a high rank
+     would land every MIS user on a blank entry form instead of their
+     dashboard. Nobody should ever land on one of these: you go to a form to
+     type something, which means you arrived with an intention.
+
+     They keep the order the header menu listed them in, not frequency order.
+     People have learnt where each one sits in that list, and the whole point
+     of this change is that the list got too long to scan — reordering it at
+     the same time would mean relearning it twice. */
+  "entry-prev-day": 100,
+  "entry-stock": 101,
+  "entry-reserve": 102,
+  "entry-rom": 103,
+  "entry-rom-stack": 104,
+  "entry-desilting": 105,
+  "entry-oee-master": 106,
+  "entry-shifting-actual": 107,
+  "entry-shifting-plan": 108,
+  "entry-dewatering": 109,
 };
 
 const LANDING_ORDER = (Object.keys(LANDING_RANK) as AppPage[])

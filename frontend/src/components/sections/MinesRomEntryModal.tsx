@@ -34,6 +34,7 @@ import api from "@/lib/api";
 import { formatIndian } from "@/lib/utils";
 import { dayLabel, todayISO } from "@/lib/prevDay";
 import DateField from "@/components/minehub/DateField";
+import FormShell from "@/components/ui/FormShell";
 
 const SHIFTS = ["A", "B", "C"] as const;
 
@@ -120,18 +121,16 @@ function num(v: string | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 const filled = (v: string | undefined) => String(v ?? "").trim() !== "";
-/** A bench level ("80", "27.5") or a span of two ("80-82"). Spaces around
- *  the dash are fine — the server takes them out rather than refusing. */
-function badMrl(v: string | undefined): boolean {
-  if (!filled(v)) return false;
-  const t = String(v).replace(/\s*-\s*/g, "-").trim();
-  if (!/^\d{1,4}(\.\d{1,2})?(-\d{1,4}(\.\d{1,2})?)?$/.test(t)) return true;
-  if (t.includes("-")) {
-    const [lo, hi] = t.split("-").map(Number);
-    if (lo > hi) return true;       // "82-80" is a transposition
-  }
-  return false;
-}
+/* badMrl() USED TO LIVE HERE and refused anything that was not a number or a
+   span of two. The mine asked on 26 November 2026 for the box to take what
+   Geology actually writes -- '>80', 'below 27' -- so there is nothing left to
+   check: any text is a bench if the survey says it is. Migration 136 drops the
+   matching CHECK constraints on mines_rom_entry and mines_rom_stack_line, and
+   the server now only collapses whitespace.
+
+   What went with it is the transposition catch: '82-80' is a bench written
+   backwards and the database used to refuse it. Free text cannot keep that --
+   '>80' has no two sides to compare. */
 
 function bad(v: string | undefined, hi?: number): boolean {
   if (!filled(v)) return false;
@@ -177,9 +176,12 @@ function Fig({ v, dp = 2, strong }: { v: number | null; dp?: number; strong?: bo
 }
 
 export default function MinesRomEntryModal({
-  open, onClose, onSaved,
+  open, onClose, onSaved, inline,
 }: {
   open: boolean;
+  /** True on its own screen under Daily Entry Hub: no backdrop, no
+   *  click-to-dismiss, no close button. See FormShell. */
+  inline?: boolean;
   onClose: () => void;
   onSaved: (day: string) => void | Promise<void>;
 }) {
@@ -204,7 +206,7 @@ export default function MinesRomEntryModal({
     setNewLoc("");
   }, [open]);
 
-  const locs = useQuery<{ locations: Loc[] }>({
+  const locs = useQuery<{ locations: Loc[]; mrls?: string[] }>({
     queryKey: ["rom-locations"],
     queryFn: async () => (await api.get("/rom-entry/locations")).data,
     enabled: open,
@@ -336,9 +338,6 @@ export default function MinesRomEntryModal({
           + `Cr₂O₃%. Leave both empty to clear it.`;
       if (bad(r.block_cr2o3_pct, 100))
         return `Row ${i + 1}: block Cr₂O₃% must be 0–100.`;
-      if (badMrl(r.block_mrl))
-        return `Row ${i + 1}: the mRL should be a bench level like 80, `
-          + `or a span like 80-82.`;
     }
     return null;
   }, [rows]);
@@ -408,8 +407,14 @@ export default function MinesRomEntryModal({
     }
   }, [rows, day, mayEdit, mayBlock, onSaved, dayQ]);
 
+  /* NEITHER OF THESE APPLIES INLINE, and both would be bugs there.
+     Escape means "put back what I was covering", and inline there is nothing
+     covered -- it would silently throw away a half-typed form. And the scroll
+     lock is held on document.body so the page BEHIND a dialog cannot move;
+     inline that body is the page the form itself sits on, so a form taller
+     than the window could not be scrolled to its own Submit button. */
   useEffect(() => {
-    if (!open) return;
+    if (!open || inline) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
@@ -418,7 +423,7 @@ export default function MinesRomEntryModal({
       window.removeEventListener("keydown", onKey);
       document.body.style.overflow = prev;
     };
-  }, [open, onClose]);
+  }, [open, inline, onClose]);
 
   if (!open) return null;
 
@@ -429,26 +434,17 @@ export default function MinesRomEntryModal({
     : mayEdit ? "Submit ROM Entry" : "Submit Block Model";
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center p-3 sm:p-6 bg-black/45 overflow-y-auto"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Enter day-wise ROM"
-    >
-      <div
-        className="bg-white rounded-lg shadow-xl border border-border w-full max-w-6xl my-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <FormShell inline={inline} maxW="max-w-6xl"
+               label="Enter day-wise ROM" onClose={onClose}>
         <div className="px-4 py-3 border-b border-border-light flex items-center gap-2">
           <Hammer size={15} className="text-accent" />
           <span className="font-condensed font-bold text-[13px] text-navy tracking-widest uppercase">
             Entry Daywise ROM
           </span>
-          <button onClick={onClose} aria-label="Close"
+          {!inline && (<button onClick={onClose} aria-label="Close"
             className="ml-auto p-1 rounded hover:bg-bg-section text-txt-muted hover:text-navy transition-colors">
             <X size={16} />
-          </button>
+          </button>)}
         </div>
 
         {/* ── which day ──────────────────────────────────────────────────── */}
@@ -477,6 +473,15 @@ export default function MinesRomEntryModal({
         </div>
 
         <div className="px-4 py-3 space-y-3 overflow-x-auto">
+          {/* ONE LIST FOR EVERY ROW. A datalist is referenced by id, so the
+              rows share this rather than each rendering its own copy of the
+              same sixty options. Commonest bench first, as the server sends
+              it -- browsers keep datalist order, and the one or two benches
+              being worked this month are what somebody is reaching for. */}
+          <datalist id="rom-mrl-list">
+            {(locs.data?.mrls ?? []).map((m) => <option key={m} value={m} />)}
+          </datalist>
+
           <table className="w-full border-collapse">
             <thead>
               <tr>
@@ -579,8 +584,18 @@ export default function MinesRomEntryModal({
                              onChange={(e) => set(r.key, "qty_mt", e.target.value)} />
                     </td>
                     <td className="py-1.5 px-1 bg-amber-50/60 border-l border-amber-200">
+                      {/* TYPE ANYTHING, OR PICK ONE ALREADY USED.
+                          A datalist rather than a <select>, because the two
+                          requests the mine made pull opposite ways: the box
+                          must take whatever the survey says, AND it should
+                          offer what has been typed before. A dropdown can
+                          only do the second, and a plain box only the first.
+
+                          The list is a convenience, never a constraint --
+                          nothing here checks that what was typed is on it. */}
                       <input className={BOX} disabled={!mayBlock}
-                             aria-label="Block model mRL" placeholder="80 or 80-82"
+                             list="rom-mrl-list"
+                             aria-label="Block model mRL" placeholder="80, 80-82 or >80"
                              value={r.block_mrl}
                              onChange={(e) => set(r.key, "block_mrl", e.target.value)} />
                     </td>
@@ -682,9 +697,12 @@ export default function MinesRomEntryModal({
             disagree with its parts; the ratio is (Cr<sub>2</sub>O<sub>3</sub> ×
             0.6843) ÷ (FeO × 0.7773).{" "}
             <strong>Block Model is filed separately by Geology</strong> and may
-            be empty — nothing before November 2026 carries it at all. Adding a
-            location from the dropdown puts it on the list for
-            everyone; a re-spelling of one already on it selects the original.
+            be empty — nothing before November 2026 carries it at all. The{" "}
+            <strong>mRL takes whatever the survey says</strong> — 80, 80-82,
+            &gt;80 — and offers the ones already filed as you type; picking one
+            keeps a bench to a single spelling. Adding a location from the
+            dropdown puts it on the list for everyone; a re-spelling of one
+            already on it selects the original.
           </p>
         </div>
 
@@ -718,7 +736,7 @@ export default function MinesRomEntryModal({
           <button onClick={onClose}
             className="px-3 py-1.5 rounded border border-border text-[12px] font-bold
               text-txt-secondary hover:bg-bg-section">
-            Close
+            {inline ? "Cancel" : "Close"}
           </button>
           <button
             onClick={submit}
@@ -732,7 +750,6 @@ export default function MinesRomEntryModal({
             {saving ? "Submitting…" : label}
           </button>
         </div>
-      </div>
-    </div>
+    </FormShell>
   );
 }

@@ -2,9 +2,10 @@
 /**
  * Mines Stock Position — from `mines_stock_entry`, filled in on this dashboard.
  *
- * Entry lives in MinesStockEntryModal, opened from "Enter Mines Stock" in the
- * three-dot menu in the header; this section only displays. The modal is
- * mounted here because this is the section its figures belong to.
+ * READ-ONLY. Entry lives in MinesStockEntryModal, which is mounted on its own
+ * screen under Daily Entry Hub. It used to be mounted here, because a dialog
+ * has to be mounted somewhere and this was the section its figures belong to
+ * -- which is why opening any entry form navigated you to this dashboard.
  *
  * TWO TABLES, SIDE BY SIDE, in the layout the mine already reads:
  *
@@ -20,16 +21,9 @@
  * Both tables come from the API already shaped, totals included, so no figure
  * on screen is arithmetic done twice.
  */
-import { useCallback } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import { Package, AlertTriangle } from "lucide-react";
 import { useStockPosition } from "@/hooks/useStock";
 import { formatIndian } from "@/lib/utils";
-import { useEntryDialog } from "@/contexts/useEntryDialog";
-import MinesStockEntryModal from "@/components/sections/MinesStockEntryModal";
-import MinesReserveEntryModal from "@/components/sections/MinesReserveEntryModal";
-import MinesRomEntryModal from "@/components/sections/MinesRomEntryModal";
-import MinesRomStackEntryModal from "@/components/sections/MinesRomStackEntryModal";
 import LastChanged from "@/components/ui/LastChanged";
 
 function mt(v: number | null | undefined) {
@@ -68,83 +62,8 @@ const TD_SL = "pl-2 pr-1 py-1.5 text-right text-[10px] font-mono tabular-nums " 
 
 export default function StockSection() {
   const { data, isLoading, isError, error } = useStockPosition();
-  const qc = useQueryClient();
-  const dialog = useEntryDialog((s) => s.which);
-  const closeDialog = useEntryDialog((s) => s.close);
-
-  // A saved position changes what this section shows, so the snapshot query is
-  // refetched rather than waiting for its stale time.
-  // BOTH KEYS, or an edit is only half visible. ["stock"] refreshes this
-  // section; ["stock-entry"] is the form's own copy of the day, and leaving it
-  // stale meant reopening the dialog within its 30-second window showed the
-  // figures as they were BEFORE the save that had just succeeded — which reads
-  // exactly like the save having failed.
-  const afterSave = useCallback(() => {
-    void qc.invalidateQueries({ queryKey: ["stock"] });
-    void qc.invalidateQueries({ queryKey: ["stock-entry"] });
-  }, [qc]);
-
-  // A saved reserve declaration changes the remaining-reserve figures, which
-  // are derived and not stored, so only the reserve queries need refreshing.
-  const afterReserveSave = useCallback(() => {
-    void qc.invalidateQueries({ queryKey: ["resource-reserve"] });
-    void qc.invalidateQueries({ queryKey: ["resource-reserve-entry"] });
-    void qc.invalidateQueries({ queryKey: ["resource-reserve-value"] });
-  }, [qc]);
-
-  // The day's ROM is what the stacks are made of, so its own queries are the
-  // only ones a save disturbs. The stock position is counted, not derived
-  // from this, and must not be refreshed as though it were.
-  const afterRomSave = useCallback(() => {
-    void qc.invalidateQueries({ queryKey: ["rom-day"] });
-    void qc.invalidateQueries({ queryKey: ["rom-range"] });
-    void qc.invalidateQueries({ queryKey: ["rom-pending"] });
-    void qc.invalidateQueries({ queryKey: ["rom-locations"] });
-  }, [qc]);
-
-  // A saved stack changes the stacks and how much of each ROM sample is left
-  // to stack -- and nothing else. The ROM entry itself is untouched by
-  // building a stack out of it, so ["rom-day"] is deliberately NOT in here:
-  // refreshing it would say the day's figures had moved when they had not.
-  const afterStackSave = useCallback(() => {
-    void qc.invalidateQueries({ queryKey: ["rom-stack"] });
-    void qc.invalidateQueries({ queryKey: ["rom-stack-samples"] });
-  }, [qc]);
-
-  // ALL THREE dialogs are mounted here. The reserve is not part of the stock
-  // position -- one is ore above ground awaiting clearance, the other is ore
-  // still in the ground -- but this is the section about how much ore the mine
-  // has, and a dialog has to be mounted somewhere its own section exists.
-  // It moves when the reserve gets a section of its own.
-  const entryModal = (
-    <>
-      <MinesStockEntryModal
-        open={dialog === "mines-stock"}
-        onClose={closeDialog}
-        onSaved={afterSave}
-      />
-      <MinesReserveEntryModal
-        open={dialog === "mines-reserve"}
-        onClose={closeDialog}
-        onSaved={afterReserveSave}
-      />
-      <MinesRomEntryModal
-        open={dialog === "daywise-rom"}
-        onClose={closeDialog}
-        onSaved={afterRomSave}
-      />
-      <MinesRomStackEntryModal
-        open={dialog === "rom-stack"}
-        onClose={closeDialog}
-        onSaved={afterStackSave}
-      />
-    </>
-  );
 
   if (isError) {
-    // The dialog renders here too: a failure to READ the position is exactly
-    // when somebody may need to enter one, and an unreachable form would make
-    // the section a dead end.
     return (
       <>
         <div className="p-4 rounded-lg bg-red-50 border border-red-200 flex items-center gap-3">
@@ -153,7 +72,6 @@ export default function StockSection() {
             {error instanceof Error ? error.message : "Failed to load stock position"}
           </span>
         </div>
-        {entryModal}
       </>
     );
   }
@@ -381,7 +299,6 @@ export default function StockSection() {
         </p>
       </div>
 
-      {entryModal}
     </div>
   );
 }

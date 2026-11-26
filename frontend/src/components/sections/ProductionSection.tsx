@@ -1,11 +1,5 @@
 "use client";
-import { useCallback } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import { TrendingUp } from "lucide-react";
-import { useEntryDialog } from "@/contexts/useEntryDialog";
-import DesiltingPlanModal from "@/components/sections/DesiltingPlanModal";
-import ShiftingActualModal from "@/components/sections/ShiftingActualModal";
-import ShiftingPlanModal   from "@/components/sections/ShiftingPlanModal";
 import ProductionKpiStrip from "@/components/kpi/ProductionKpiStrip";
 import ProductionCharts   from "@/components/charts/ProductionCharts";
 import GradeChart         from "@/components/charts/GradeChart";
@@ -16,56 +10,14 @@ import GradeDespatchChart from "@/components/charts/GradeDespatchChart";
 import GradeDespatchTable from "@/components/tables/GradeDespatchTable";
 import DaywiseTable       from "@/components/tables/DaywiseTable";
 
+/* READ-ONLY. The de-silting plan and the two shifting forms used to be mounted
+   here, because a dialog has to be mounted somewhere and this section owns the
+   cards they fill. They now have screens of their own under Daily Entry Hub,
+   and their cache invalidations moved with them -- EntryHubSection carries the
+   note about which keys a de-silting save disturbs. */
 export default function ProductionSection() {
-  const dialog = useEntryDialog((s) => s.which);
-  const closeDialog = useEntryDialog((s) => s.close);
-  const qc = useQueryClient();
-
-  /* The de-silting plan feeds the KPI card in this section, the day-wise
-     silt_plan beneath it, and the Executive Summary's achievement. Dropping
-     the ["production"] prefix covers the first two — summary and daywise are
-     both nested under it — and the summary page is keyed separately.
-
-     The dialog lives HERE because this section owns the De-Silting card the
-     plan fills, which is the rule the stock dialog already follows. */
-  const afterSave = useCallback(async () => {
-    await Promise.all([
-      qc.invalidateQueries({ queryKey: ["production"] }),
-      qc.invalidateQueries({ queryKey: ["executive-summary"] }),
-      qc.invalidateQueries({ queryKey: ["desilting-plan"] }),
-    ]);
-  }, [qc]);
-
-  /* One prefix covers the plan, the actual and their history: the plan
-     screen and the actual screen read each other's data, so a save on either
-     must refresh both. */
-  const afterShifting = useCallback(async () => {
-    await qc.invalidateQueries({ queryKey: ["shifting"] });
-  }, [qc]);
-
   return (
     <section className="space-y-4">
-
-      <DesiltingPlanModal
-        open={dialog === "desilting-plan"}
-        onClose={closeDialog}
-        onSaved={afterSave}
-      />
-
-      {/* Shifting lives on this section for the same reason the de-silting
-          plan does: it is the mine's own day-wise movement figure, entered
-          here and read here. Both dialogs invalidate the same key, so the
-          actual screen sees a freshly uploaded plan without a reload. */}
-      <ShiftingActualModal
-        open={dialog === "shifting-actual"}
-        onClose={closeDialog}
-        onSaved={afterShifting}
-      />
-      <ShiftingPlanModal
-        open={dialog === "shifting-plan"}
-        onClose={closeDialog}
-        onSaved={afterShifting}
-      />
 
       {/* Section title */}
       <div className="section-title">

@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { Activity, BarChart3, Boxes, Calculator, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, ClipboardCheck, ClipboardPaste, CloudSun, Database, DoorOpen, ExternalLink, Gauge, Layers, LayoutDashboard, LineChart, Network, Radar, Receipt, Scale, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
+import { Activity, BarChart3, Boxes, Calculator, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, ClipboardCheck, ClipboardPaste, ClipboardPen, CloudSun, Database, DoorOpen, ExternalLink, Gauge, Layers, LayoutDashboard, LineChart, Network, Radar, Receipt, Scale, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
 import { useAppPage, type AppPage } from "@/contexts/useAppPage";
 import { canOpen } from "@/contexts/pageAccess";
 import { useSidebar }               from "@/contexts/useSidebar";
@@ -8,6 +8,7 @@ import { useAuth }                  from "@/contexts/useAuth";
 import { useDataHealth } from "@/hooks/useDataHealth";
 import { HOTO_TABS } from "./hotoNav";
 import { PLAN_TABS } from "./planNav";
+import { ENTRY_TABS } from "./entryNav";
 
 /** A nav entry is EITHER an internal page or an external link — never both.
  *
@@ -91,6 +92,15 @@ const NAV_ITEMS: NavItem[] = [
      dashboard. */
   { kind: "group", id: "plans", label: "Plans", icon: ClipboardPaste, tag: "NEW",
     children: PLAN_TABS.map(({ id, label }) => ({ id, label })) },
+  /* Every form the mine fills in, as one section.
+     Ten entries in a three-dot menu in the header had outgrown a menu: it is
+     the length of the whole rail, it is unordered as far as a reader can tell,
+     and — the part that mattered — nothing in it was gated, so every signed-in
+     account saw all ten. Here each form is a page, which is what lets canOpen
+     decide per form; see entryNav.ts. The menu stays as a shortcut and now
+     draws from this same list. */
+  { kind: "group", id: "daily-entry", label: "Daily Entry Hub", icon: ClipboardPen,
+    children: ENTRY_TABS.map(({ id, label }) => ({ id, label })) },
 ];
 
 /* Two administration entries, split by audience rather than merged for tidiness.

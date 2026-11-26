@@ -4,8 +4,10 @@ import CommandPalette          from "./CommandPalette";
 import SectionTabBar           from "./SectionTabBar";
 import HotoTabBar              from "./HotoTabBar";
 import PlanTabBar              from "./PlanTabBar";
+import EntryTabBar             from "./EntryTabBar";
 import { isHotoPage }          from "./hotoNav";
 import { isPlanPage }          from "./planNav";
+import { isEntryPage }         from "./entryNav";
 import IntelligenceTabBar      from "./IntelligenceTabBar";
 import FuelManagementSection   from "@/components/sections/FuelManagementSection";
 import ElectricVehiclesSection from "@/components/sections/ElectricVehiclesSection";
@@ -43,6 +45,7 @@ import { useSidebar }          from "@/contexts/useSidebar";
 import { useAuth }             from "@/contexts/useAuth";
 import { canOpen, openablePages } from "@/contexts/pageAccess";
 import DataHealthSection from "@/components/sections/DataHealthSection";
+import EntryHubSection   from "@/components/sections/EntryHubSection";
 
 export default function MainLayout({ children }: { children: React.ReactNode }) {
   const { page }      = useAppPage();
@@ -63,6 +66,11 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
      one click rather than a trip back out to the rail. */
   const isHoto   = isHotoPage(page) && mayOpen;
   const isPlan   = isPlanPage(page) && mayOpen;
+  /* Every entry form carries the same strip, so moving between the ten is one
+     click rather than a trip back out to the rail -- which matters more here
+     than anywhere else, because somebody filing the morning's figures files
+     several of them in a row. */
+  const isEntry  = isEntryPage(page) && mayOpen;
 
   const sideW = collapsed ? "56px" : "200px";
 
@@ -87,6 +95,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
       {isIntel && <IntelligenceTabBar />}
       {isHoto && <HotoTabBar />}
       {isPlan && <PlanTabBar />}
+      {isEntry && <EntryTabBar />}
 
       <main
         id="main" tabIndex={-1}
@@ -95,7 +104,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           min-h-screen pb-8
           px-4 sm:px-6 xl:px-8
           transition-[margin-left,padding-top] duration-300 ease-in-out
-          ${isMis || isIntel || isHoto || isPlan ? "pt-[115px]" : "pt-[76px]"}
+          ${isMis || isIntel || isHoto || isPlan || isEntry ? "pt-[115px]" : "pt-[76px]"}
         `}
       >
         <div className="max-w-[1920px] mx-auto">
@@ -155,6 +164,10 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           {page === "hoto-app"        && <HotoAppSection />}
           {page === "usage"            && <UsageSection />}
           {page === "data-health"      && <DataHealthSection />}
+          {/* One component for all ten: they differ only in which dialog is
+              mounted and what a save invalidates, and ten near-identical
+              branches here is ten places to forget one. */}
+          {isEntryPage(page)           && <EntryHubSection form={page} />}
             </>
           )}
         </div>

@@ -27,7 +27,8 @@
  * and repeating it invites the reader to measure this day's variance against
  * the wrong row.
  *
- * READ-ONLY. Entry happens in PrevDayEntryModal, opened from "Enter Est Actual"
+ * READ-ONLY. Entry happens in PrevDayEntryModal, on its own screen under
+ * Daily Entry Hub and still reachable from "Enter Est Actual"
  * in the three-dot menu in the header.
  *
  * THE DAY FOLLOWS THE HEADER. It is the day before "report as on" — the
@@ -57,14 +58,13 @@
  * UNITS follow DaywiseTable: ore, COB and despatch in MT; OB and total
  * excavation in CuM. VARIANCE = shown value - Plan; positive is ahead of plan.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { CalendarCheck, ChevronLeft, ChevronRight } from "lucide-react";
 import api from "@/lib/api";
 import { formatIndian } from "@/lib/utils";
-import PrevDayEntryModal, { type StoredValue } from "@/components/tables/PrevDayEntryModal";
+import { type StoredValue } from "@/components/tables/PrevDayEntryModal";
 import LastChanged from "@/components/ui/LastChanged";
-import { useEntryDialog } from "@/contexts/useEntryDialog";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import {
   ORE_T_PER_M3, buildRows, daysBetween, dayBefore, dayLabel, reportDay,
@@ -95,7 +95,6 @@ function Variance({ plan, value }: { plan: number | null; value: number | null }
 }
 
 export default function PrevDayVarianceTable() {
-  const qc = useQueryClient();
   // "Report as on" is the end of the header's range. This panel is about the
   // day before it — that is what "previous day" means, whichever day is being
   // reported on.
@@ -138,8 +137,6 @@ export default function PrevDayVarianceTable() {
   /** The day before that, for the "Both Days" view. */
   const older = useMemo(() => dayBefore(day), [day]);
   const [view, setView] = useState<View>("actual");
-  const dialog = useEntryDialog((s) => s.which);
-  const closeDialog = useEntryDialog((s) => s.close);
 
   // The midnight rollover timer that used to live here has gone with the
   // hard-coded day. Rolling this one panel over at 00:01 while the header
@@ -216,17 +213,6 @@ export default function PrevDayVarianceTable() {
   const stored = entries.data?.values;
   const olderStored = olderEntries.data?.values;
 
-  // Invalidate the day that was actually saved — the dialog may have been on a
-  // different date from the one this table is showing.
-  //
-  // One key covers both the main day and the "Both Days" comparison column:
-  // each query is keyed by the date it actually fetches, so whichever of them
-  // is showing savedDay is the one this invalidates.
-  const refetchEntries = useCallback(
-    (savedDay: string) =>
-      qc.invalidateQueries({ queryKey: ["prev-day", "entered", savedDay] }),
-    [qc],
-  );
 
   const loading = prod.isLoading || desp.isLoading || entries.isLoading
     || (wantOlder && (olderProd.isLoading || olderDesp.isLoading
@@ -496,12 +482,6 @@ export default function PrevDayVarianceTable() {
         </div>
       </div>
 
-      <PrevDayEntryModal
-        open={dialog === "prev-day"}
-        onClose={closeDialog}
-        defaultDay={day}
-        onSaved={refetchEntries}
-      />
     </section>
   );
 }

@@ -26,7 +26,14 @@ import { persist } from "zustand/middleware";
 // and nowhere else is the list repeated -- pageAccess.ts keys off this type,
 // so a page added here without a permission beside it fails to compile
 // rather than appearing to everyone.
-export type AppPage = "mis" | "executive-summary" | "weather" | "fuel-management" | "ev-tracking" | "product-costing" | "oee" | "lcm" | "intelligence" | "amira" | "access-control" | "data-health" | "minehub" | "manpower" | "operations" | "workforce" | "market" | "organisation" | "weighbridge" | "weighbridge-sap" | "gate" | "capacity" | "usage" | "pr-po" | "hoto-checklists" | "hoto-register" | "hoto-defects" | "hoto-board" | "hoto-devices" | "hoto-stickers" | "hoto-app" | "plan-despatch" | "plan-cobp" | "plan-excavation" | "plan-faces";
+//
+// The ten entry-* pages are the Daily Entry Hub. They are pages rather than
+// tabs inside one page for the reason entryNav.ts gives: the access matrix is
+// keyed on AppPage, so being pages is what lets canOpen decide per form for
+// the rail, the strip and the route guard at once. Before them, each form was
+// a dialog mounted inside whichever dashboard section held its figures, and
+// opening one navigated you to that dashboard.
+export type AppPage = "mis" | "executive-summary" | "weather" | "fuel-management" | "ev-tracking" | "product-costing" | "oee" | "lcm" | "intelligence" | "amira" | "access-control" | "data-health" | "minehub" | "manpower" | "operations" | "workforce" | "market" | "organisation" | "weighbridge" | "weighbridge-sap" | "gate" | "capacity" | "usage" | "pr-po" | "hoto-checklists" | "hoto-register" | "hoto-defects" | "hoto-board" | "hoto-devices" | "hoto-stickers" | "hoto-app" | "plan-despatch" | "plan-cobp" | "plan-excavation" | "plan-faces" | "entry-prev-day" | "entry-stock" | "entry-reserve" | "entry-rom" | "entry-rom-stack" | "entry-desilting" | "entry-oee-master" | "entry-shifting-actual" | "entry-shifting-plan" | "entry-dewatering";
 
 interface AppPageStore {
   page: AppPage;

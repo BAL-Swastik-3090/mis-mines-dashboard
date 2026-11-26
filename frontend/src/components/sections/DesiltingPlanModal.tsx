@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import api from "@/lib/api";
 import { formatIndian } from "@/lib/utils";
+import FormShell from "@/components/ui/FormShell";
 
 type Row = { plan_date: string; plan_qty: number };
 
@@ -86,9 +87,12 @@ function Qty({ v, strong = false }: { v: number | null | undefined; strong?: boo
 }
 
 export default function DesiltingPlanModal({
-  open, onClose, onSaved,
+  open, onClose, onSaved, inline,
 }: {
   open: boolean;
+  /** True on its own screen under Daily Entry Hub: no backdrop, no
+   *  click-to-dismiss, no close button. See FormShell. */
+  inline?: boolean;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
 }) {
@@ -122,12 +126,18 @@ export default function DesiltingPlanModal({
   // screen under a new heading would be a diff of the wrong thing.
   useEffect(() => { reset(); }, [year, month, reset]);
 
+  /* NEITHER OF THESE APPLIES INLINE, and both would be bugs there.
+     Escape means "put back what I was covering", and inline there is nothing
+     covered -- it would silently throw away a half-typed form. And the scroll
+     lock is held on document.body so the page BEHIND a dialog cannot move;
+     inline that body is the page the form itself sits on, so a form taller
+     than the window could not be scrolled to its own Submit button. */
   useEffect(() => {
-    if (!open) return;
+    if (!open || inline) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open, inline, onClose]);
 
   const stored = useQuery<StoredMonth>({
     queryKey: ["desilting-plan", year, month],
@@ -216,30 +226,21 @@ export default function DesiltingPlanModal({
   const willRemove = (d?.removed.length ?? 0) > 0;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center p-3 sm:p-6 bg-black/45 overflow-y-auto"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Enter de-silting plan"
-    >
-      <div
-        className="bg-white rounded-lg shadow-xl border border-border w-full max-w-3xl my-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <FormShell inline={inline} maxW="max-w-3xl" inlineMax="max-w-[1000px]"
+               label="Enter de-silting plan" onClose={onClose}>
         {/* ── heading ──────────────────────────────────────────────────── */}
         <div className="px-4 py-3 border-b border-border-light flex items-center gap-2">
           <Droplets size={15} className="text-info" />
           <span className="font-condensed font-bold text-[13px] text-navy tracking-widest uppercase">
             De-Silting Plan
           </span>
-          <button
+          {!inline && (<button
             onClick={onClose}
             aria-label="Close"
             className="ml-auto p-1 rounded hover:bg-bg-section text-txt-muted hover:text-navy transition-colors"
           >
             <X size={16} />
-          </button>
+          </button>)}
         </div>
 
         {/* ── step 1 · which month ─────────────────────────────────────── */}
@@ -531,8 +532,7 @@ export default function DesiltingPlanModal({
             )}
           </>
         )}
-      </div>
-    </div>
+    </FormShell>
   );
 }
 

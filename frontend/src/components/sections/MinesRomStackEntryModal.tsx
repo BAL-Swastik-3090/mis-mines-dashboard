@@ -43,6 +43,7 @@ import api from "@/lib/api";
 import { formatIndian } from "@/lib/utils";
 import { dayLabel, todayISO } from "@/lib/prevDay";
 import DateField from "@/components/minehub/DateField";
+import FormShell from "@/components/ui/FormShell";
 
 /** The six the mine named. Shifting material is a shift here rather than a
  *  flag beside A/B/C — their sheet reads that way and so does the dropdown
@@ -247,9 +248,12 @@ function Fig({ v, dp = 2, strong }: { v: number | null; dp?: number; strong?: bo
 }
 
 export default function MinesRomStackEntryModal({
-  open, onClose, onSaved,
+  open, onClose, onSaved, inline,
 }: {
   open: boolean;
+  /** True on its own screen under Daily Entry Hub: no backdrop, no
+   *  click-to-dismiss, no close button. See FormShell. */
+  inline?: boolean;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
 }) {
@@ -512,8 +516,14 @@ export default function MinesRomStackEntryModal({
     }
   }, [rows, createdOn, stackNo, onSaved, stackQ]);
 
+  /* NEITHER OF THESE APPLIES INLINE, and both would be bugs there.
+     Escape means "put back what I was covering", and inline there is nothing
+     covered -- it would silently throw away a half-typed form. And the scroll
+     lock is held on document.body so the page BEHIND a dialog cannot move;
+     inline that body is the page the form itself sits on, so a form taller
+     than the window could not be scrolled to its own Submit button. */
   useEffect(() => {
-    if (!open) return;
+    if (!open || inline) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
@@ -522,7 +532,7 @@ export default function MinesRomStackEntryModal({
       window.removeEventListener("keydown", onKey);
       document.body.style.overflow = prev;
     };
-  }, [open, onClose]);
+  }, [open, inline, onClose]);
 
   if (!open) return null;
 
@@ -532,17 +542,8 @@ export default function MinesRomStackEntryModal({
   const pickingShifting = isShifting(pickShift);
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center p-3 sm:p-6 bg-black/45 overflow-y-auto"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Enter ROM stack"
-    >
-      <div
-        className="bg-white rounded-lg shadow-xl border border-border w-full max-w-7xl my-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <FormShell inline={inline} maxW="max-w-7xl"
+               label="Enter ROM stack" onClose={onClose}>
         <div className="px-4 py-3 border-b border-border-light flex items-center gap-2">
           <Layers size={15} className="text-accent" />
           <span className="font-condensed font-bold text-[13px] text-navy tracking-widest uppercase">
@@ -551,10 +552,10 @@ export default function MinesRomStackEntryModal({
           {(stackQ.isFetching || locs.isFetching) && (
             <Loader2 size={12} className="animate-spin text-txt-light" />
           )}
-          <button onClick={onClose} aria-label="Close"
+          {!inline && (<button onClick={onClose} aria-label="Close"
             className="ml-auto p-1 rounded hover:bg-bg-section text-txt-muted hover:text-navy transition-colors">
             <X size={16} />
-          </button>
+          </button>)}
         </div>
 
         {/* ── which stack ──────────────────────────────────────────────────
@@ -1021,7 +1022,7 @@ export default function MinesRomStackEntryModal({
             <button type="button" onClick={onClose}
               className="px-3 py-1.5 rounded border border-border text-[12px]
                          text-txt-secondary hover:bg-bg-section">
-              Close
+              {inline ? "Cancel" : "Close"}
             </button>
             <button
               type="button"
@@ -1037,7 +1038,6 @@ export default function MinesRomStackEntryModal({
             </button>
           </div>
         </div>
-      </div>
-    </div>
+    </FormShell>
   );
 }

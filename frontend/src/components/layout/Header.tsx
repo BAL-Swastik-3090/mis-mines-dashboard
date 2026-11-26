@@ -1,22 +1,34 @@
 "use client";
 import { format } from "date-fns";
-import { RefreshCw, MoreVertical, PencilLine, Boxes, Droplets, Pickaxe, Shuffle, Droplet, Mountain, Hammer, Layers,} from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import AlertsBell from "./AlertsBell";
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import DateFilter from "./DateFilter";
 import ProfileMenu from "./ProfileMenu";
 import DataHealthButton from "./DataHealthButton";
 import { useDateFilter } from "@/contexts/useDateFilter";
 import { useAppPage } from "@/contexts/useAppPage";
-import { useEntryDialog } from "@/contexts/useEntryDialog";
+import { ENTRY_PAGES } from "./entryNav";
 import { cn } from "@/lib/utils";
 import { type AppPage } from "@/contexts/useAppPage";
 
-/** Screens with no period of their own: what they show is "now" or "all". */
+/** Screens with no period of their own: what they show is "now" or "all".
+ *
+ *  THE ENTRY FORMS BELONG HERE, AND NOT ONLY FOR TIDINESS. Every one of them
+ *  carries its own date box — the day being filed is the form's own field, not
+ *  a dashboard filter — so the control drives nothing a person can see, and a
+ *  filter that changes nothing teaches people it is unreliable everywhere else.
+ *
+ *  It was also a way to file a figure against the wrong day. Est Actual starts
+ *  its date box at reportDay(apiTo); while these were dialogs the backdrop sat
+ *  over the header and the filter could not be reached. Inline it can, and
+ *  moving it re-dated the box underneath whatever had already been typed into
+ *  the rows — same figures, different day, no warning. */
 const DATELESS_PAGES = new Set<AppPage>([
   "hoto-board", "hoto-defects", "hoto-checklists", "hoto-devices",
   "hoto-stickers", "hoto-app",
+  ...ENTRY_PAGES,
 ]);
 
 /** True when the selected end-date is today → sensor data is live. */
@@ -154,9 +166,17 @@ export default function Header() {
 
           <AlertsBell />
 
-          {/* Data-entry actions. Separate from the profile menu, which is about
-              who you are rather than what you can record. */}
-          <ActionsMenu />
+          {/* THE THREE-DOT ACTIONS MENU WAS REMOVED ON 26 NOVEMBER 2026.
+             It held nothing but the ten entry forms, and they have had a
+             sidebar section and ten pages of their own since the Daily Entry
+             Hub shipped. Two doors to the same ten screens meant two lists to
+             keep in step with who may open them -- and the menu's list had
+             already drifted once, offering forms the API refused.
+
+             Nothing else lived in it, so removing the entries removed the
+             button. If something non-navigational ever needs a home up here,
+             it is a new control with its own name, not this one brought back
+             as a drawer. */}
 
           {/* Who is signed in. Was at the foot of the sidebar with every role
               spelled out as a badge, which cost half the rail for anybody
@@ -165,112 +185,6 @@ export default function Header() {
         </div>
       </div>
     </header>
-  );
-}
-
-/**
- * The three-dot actions menu.
- *
- * "Enter Est Actual" also switches to the MIS dashboard, because the dialog is
- * owned by the previous-day table that holds the plan figures it needs. Opening
- * it from another page would otherwise set a flag nothing was listening to and
- * appear to do nothing at all.
- */
-function ActionsMenu() {
-  const [open, setOpen] = useState(false);
-  const box = useRef<HTMLDivElement | null>(null);
-  const setPage = useAppPage((s) => s.setPage);
-  const openDialog = useEntryDialog((s) => s.open);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (box.current && !box.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
-    document.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  return (
-    <div className="relative" ref={box}>
-      <button
-        onClick={() => setOpen((o) => !o)}
-        title="More actions"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        className="p-2 rounded border border-white/15 text-white/60 hover:text-white hover:border-white/30 transition-colors"
-      >
-        <MoreVertical size={15} />
-      </button>
-
-      {open && (
-        <div
-          role="menu"
-          className="absolute right-0 mt-1 w-56 bg-white rounded-lg shadow-xl border border-border py-1 z-50"
-        >
-          {([
-            ["prev-day", "Enter Est Actual", PencilLine],
-            ["mines-stock", "Enter Mines Stock", Boxes],
-            // The reserve still in the ground. "Declare" rather than
-            // "Enter", because this is not a day's figure being recorded —
-            // it is a survey's statement, filed a few times a year, that
-            // every remaining-reserve and valuation figure is derived from.
-            ["mines-reserve", "Declare Resource Reserve", Mountain],
-    // What came out of the ground that day, shift by shift, with the assay
-    // of each parcel. Filed in two halves -- production, then Geology's block
-    // model -- so the menu entry says "Entry" rather than naming either.
-    ["daywise-rom", "Entry Daywise ROM", Hammer],
-            // What the mine BUILDS out of that ROM, and the number it ships
-            // under. Separate from the entry above because the stack is where
-            // the despatch number is assigned, and assigning it is a
-            // different job from filing what was dug.
-            ["rom-stack", "Entry ROM Stack", Layers],
-            // An upload rather than a form, which is why it reads "Enter" like
-            // the other two: what the user is doing is entering a plan, and
-            // the dialog is where they find out it wants a spreadsheet.
-            ["desilting-plan", "Enter Desilting Plan", Droplets],
-            // Not "Enter" like the three above, because nothing behind this
-            // one is a figure being entered. It is the three standing
-            // decisions the OEE and the Lost Cost Matrix are calculated
-            // from -- which machine digs what, which machines are on the
-            // tables and what they are measured against, and who owns each
-            // loss head.
-            ["equipment-plan", "OEE Master Selector", Pickaxe],
-            // The day's three movements, typed against the plan beside them.
-            ["shifting-actual", "Enter Shifting Actual", PencilLine],
-            // And the plan those are read against: an upload, a month at a
-            // time, re-uploaded whenever the month's plan changes.
-            ["shifting-plan", "Enter Shifting Plan", Shuffle],
-            // One day of the dewatering sheet: twenty-one figures
-            // typed, six computed from them.
-            ["dewatering-entry", "Enter Daily Dewatering Data", Droplet],
-          ] as const).map(([which, label, Icon]) => (
-            <button
-              key={which}
-              role="menuitem"
-              onClick={() => {
-                setOpen(false);
-                // Each dialog is owned by the section holding the figures it
-                // needs, so opening one also goes to that section. The
-                // excavation plan belongs to OEE, which it feeds; the
-                // other three to the MIS dashboard.
-                setPage(which === "equipment-plan" ? "oee" : "mis");
-                openDialog(which);
-              }}
-              className="w-full flex items-center gap-2 px-3 py-2 text-left text-[12px] font-semibold text-txt-secondary hover:bg-bg-section hover:text-navy transition-colors"
-            >
-              <Icon size={13} className="text-accent shrink-0" />
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
   );
 }
 

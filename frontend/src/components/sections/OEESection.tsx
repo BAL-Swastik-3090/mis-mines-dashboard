@@ -2,8 +2,6 @@
 import { useState } from "react";
 import { Activity, Info, Download, Check } from "lucide-react";
 import FormulaModal from "@/components/sections/FormulaModal";
-import EquipmentPlanModal from "@/components/sections/EquipmentPlanModal";
-import { useEntryDialog } from "@/contexts/useEntryDialog";
 import { useDateFilter }  from "@/contexts/useDateFilter";
 import { useOEE }         from "@/hooks/useOEE";
 import { useTipperOEE }   from "@/hooks/useTipperOEE";
@@ -501,8 +499,6 @@ export default function OEESection() {
   const newMachines         = machines.filter((m) => m.generation === "new");
   const tippers             = useTipperOEE();
 
-  const entryDialog = useEntryDialog((s) => s.which);
-  const closeEntryDialog = useEntryDialog((s) => s.close);
   const [showFormulae, setShowFormulae] = useState(false);
   const { label: dateRange, periodLabel } = useDateFilter();
   const qc = useQueryClient();
@@ -683,16 +679,6 @@ export default function OEESection() {
           each is measured against. The ore/OB half of it also decides the
           machine split the LCM divides by, which is why one invalidation
           below refetches both screens. */}
-      <EquipmentPlanModal
-        open={entryDialog === "equipment-plan"}
-        onClose={closeEntryDialog}
-        onSaved={async () => {
-          /* ["oee"] is the prefix of the LCM and KAM-tree keys as well as
-             the OEE table's own, so one invalidation refetches every figure
-             the selector can move -- on this page and on the LCM page. */
-          await qc.invalidateQueries({ queryKey: ["oee"] });
-        }}
-      />
 
     </div>
   );
