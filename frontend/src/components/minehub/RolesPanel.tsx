@@ -1,10 +1,11 @@
 "use client";
 /** Create roles and decide what each one carries. */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, Trash2, Loader2, Check, Lock, ShieldAlert, X } from "lucide-react";
+import { Plus, Trash2, Loader2, Check, Lock, ShieldAlert, X, Layers } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
 import { Alert, Chip, Button, Card, CardHeader, Field, inputClass } from "./ui";
+import { roleNameWithin, splitRoleGroups } from "./roleGroups";
 
 interface Permission {
   permission_id: number; code: string; module: string; name: string;
@@ -13,6 +14,14 @@ interface Permission {
 interface Role {
   role_id: number; code: string; name: string; description: string | null;
   is_system: boolean; status: string; user_count: number; permissions: string[];
+  // Migration 139. Roles that belong to a group are drawn inside one card
+  // rather than one card each — nine entry roles pushed the roles that
+  // actually get edited off the first screen. Nothing about what they CARRY
+  // changes: each is still edited, counted and deleted on its own below.
+  group_code?: string | null;
+  group_name?: string | null;
+  group_description?: string | null;
+  group_sort_order?: number | null;
 }
 
 export default function RolesPanel() {
@@ -51,6 +60,8 @@ export default function RolesPanel() {
     const t = setTimeout(() => setNotice(null), 4000);
     return () => clearTimeout(t);
   }, [notice]);
+
+  const { loose, groups } = useMemo(() => splitRoleGroups(roles), [roles]);
 
   const byModule = useMemo(() => {
     const m: Record<string, Permission[]> = {};
@@ -147,6 +158,80 @@ export default function RolesPanel() {
     </div>
   );
 
+  /** One role, one card — how every role was drawn before migration 139, and
+   *  still how an ungrouped one is drawn. Lifted out of the map verbatim so
+   *  the grouped rows below cannot drift away from it. */
+  const roleCard = (r: Role) => {
+    const isEditing = editing === r.role_id;
+    const isSuperadmin = r.code === "SUPERADMIN";
+    return (
+      <Card key={r.role_id}>
+        <CardHeader
+          title={r.name}
+          subtitle={r.description ?? undefined}
+          actions={
+            <>
+              {r.is_system && (
+                <Chip tone="slate" title="A system role — it cannot be renamed or deleted">
+                  <Lock className="w-3 h-3" /> system
+                </Chip>
+              )}
+              <Chip tone="sky">
+                {r.user_count} {r.user_count === 1 ? "person" : "people"}
+              </Chip>
+              {mayManage && !isSuperadmin && (
+                <Button size="sm" variant="secondary"
+                  onClick={() => { setEditing(isEditing ? null : r.role_id); setDraft(r.permissions); }}>
+                  {isEditing ? "Close" : "Edit permissions"}
+                </Button>
+              )}
+              {mayManage && !r.is_system && (
+                <Button size="sm" variant="danger" onClick={() => removeRole(r)}
+                  title={r.user_count ? "Move its holders to another role first" : "Delete this role"}>
+                  <Trash2 className="w-3.5 h-3.5" />
+                </Button>
+              )}
+            </>
+          }
+        />
+        <div className="p-4">
+          {isSuperadmin ? (
+            <p className="text-[12.5px] text-txt-muted">
+              The Superadmin holds every permission, including ones added later.
+              That is what makes it the role that can always restore access.
+            </p>
+          ) : isEditing ? (
+            <div className="space-y-4">
+              <PermissionGrid />
+              <div className="flex gap-2">
+                <Button variant="primary" onClick={() => savePermissions(r.role_id)} disabled={saving}>
+                  {saving ? "Saving…" : "Save permissions"}
+                </Button>
+                <Button variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
+              </div>
+            </div>
+          ) : r.permissions.length === 0 ? (
+            <p className="text-[12.5px] text-warning">
+              This role carries nothing — anyone holding only this role can sign in but see no page.
+            </p>
+          ) : (
+            <div className="flex flex-wrap gap-1.5">
+              {r.permissions.map((code) => {
+                const p = perms.find((x) => x.code === code);
+                return (
+                  <Chip key={code} tone={p?.is_sensitive ? "amber" : "slate"}
+                         title={p?.description ?? code}>
+                    {p?.name ?? code}
+                  </Chip>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </Card>
+    );
+  };
+
   if (loading) {
     return <div className="flex justify-center py-16"><Loader2 className="w-5 h-5 animate-spin text-gold" /></div>;
   }
@@ -195,76 +280,104 @@ export default function RolesPanel() {
         </Card>
       )}
 
-      {roles.map((r) => {
-        const isEditing = editing === r.role_id;
-        const isSuperadmin = r.code === "SUPERADMIN";
-        return (
-          <Card key={r.role_id}>
-            <CardHeader
-              title={r.name}
-              subtitle={r.description ?? undefined}
-              actions={
-                <>
-                  {r.is_system && (
-                    <Chip tone="slate" title="A system role — it cannot be renamed or deleted">
-                      <Lock className="w-3 h-3" /> system
+      {/* Roles in no group: one card each, as before. */}
+      {loose.map((r) => roleCard(r))}
+
+      {/* A group: one card for the lot. The roles inside are still roles —
+          each keeps its own permissions, its own holder count and its own
+          delete button — but they are drawn as rows of one card rather than
+          nine cards, because to the person granting them they are one choice
+          made nine ways. See roleGroups.ts. */}
+      {groups.map((g) => (
+        <Card key={g.group_code}>
+          <CardHeader
+            title={g.name}
+            subtitle={g.description ?? undefined}
+            actions={
+              <>
+                <Chip tone="slate" title="Granted as one chip in People & Access">
+                  <Layers className="w-3 h-3" /> grouped
+                </Chip>
+                <Chip tone="sky">{g.roles.length} forms</Chip>
+              </>
+            }
+          />
+          <div className="p-4 space-y-2">
+            <p className="text-[12px] text-txt-muted">
+              Each form is a role of its own, so a person can be given the forms
+              that are theirs and no others. In People &amp; Access they are
+              offered as a single “{g.name}” chip with a picker behind it —
+              there is nothing to tick here unless what a form ALLOWS is
+              changing.
+            </p>
+            {g.roles.map((r) => {
+              const isEditing = editing === r.role_id;
+              return (
+                <div key={r.role_id}
+                     className={`rounded border ${isEditing ? "border-gold" : "border-border-light"} bg-bg-base`}>
+                  <div className="flex flex-wrap items-center gap-2 px-3 py-2.5">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[12.5px] font-medium text-txt-primary">
+                        {roleNameWithin(g.name, r.name)}
+                      </div>
+                      {r.description && (
+                        <div className="text-[11px] text-txt-muted leading-snug mt-0.5">
+                          {r.description}
+                        </div>
+                      )}
+                    </div>
+                    <Chip tone="sky">
+                      {r.user_count} {r.user_count === 1 ? "person" : "people"}
                     </Chip>
-                  )}
-                  <Chip tone="sky">
-                    {r.user_count} {r.user_count === 1 ? "person" : "people"}
-                  </Chip>
-                  {mayManage && !isSuperadmin && (
-                    <Button size="sm" variant="secondary"
-                      onClick={() => { setEditing(isEditing ? null : r.role_id); setDraft(r.permissions); }}>
-                      {isEditing ? "Close" : "Edit permissions"}
-                    </Button>
-                  )}
-                  {mayManage && !r.is_system && (
-                    <Button size="sm" variant="danger" onClick={() => removeRole(r)}
-                      title={r.user_count ? "Move its holders to another role first" : "Delete this role"}>
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </Button>
-                  )}
-                </>
-              }
-            />
-            <div className="p-4">
-              {isSuperadmin ? (
-                <p className="text-[12.5px] text-txt-muted">
-                  The Superadmin holds every permission, including ones added later.
-                  That is what makes it the role that can always restore access.
-                </p>
-              ) : isEditing ? (
-                <div className="space-y-4">
-                  <PermissionGrid />
-                  <div className="flex gap-2">
-                    <Button variant="primary" onClick={() => savePermissions(r.role_id)} disabled={saving}>
-                      {saving ? "Saving…" : "Save permissions"}
-                    </Button>
-                    <Button variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
+                    {mayManage && (
+                      <Button size="sm" variant="secondary"
+                        onClick={() => { setEditing(isEditing ? null : r.role_id); setDraft(r.permissions); }}>
+                        {isEditing ? "Close" : "Edit permissions"}
+                      </Button>
+                    )}
+                    {mayManage && !r.is_system && (
+                      <Button size="sm" variant="danger" onClick={() => removeRole(r)}
+                        title={r.user_count ? "Move its holders to another role first"
+                                            : "Delete this role"}>
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
+                  </div>
+                  <div className="px-3 pb-3">
+                    {isEditing ? (
+                      <div className="space-y-4">
+                        <PermissionGrid />
+                        <div className="flex gap-2">
+                          <Button variant="primary" onClick={() => savePermissions(r.role_id)} disabled={saving}>
+                            {saving ? "Saving…" : "Save permissions"}
+                          </Button>
+                          <Button variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
+                        </div>
+                      </div>
+                    ) : r.permissions.length === 0 ? (
+                      <p className="text-[12px] text-warning">
+                        This form carries nothing — granting it opens no tab.
+                      </p>
+                    ) : (
+                      <div className="flex flex-wrap gap-1.5">
+                        {r.permissions.map((code) => {
+                          const pm = perms.find((x) => x.code === code);
+                          return (
+                            <Chip key={code} tone={pm?.is_sensitive ? "amber" : "slate"}
+                                   title={pm?.description ?? code}>
+                              {pm?.name ?? code}
+                            </Chip>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 </div>
-              ) : r.permissions.length === 0 ? (
-                <p className="text-[12.5px] text-warning">
-                  This role carries nothing — anyone holding only this role can sign in but see no page.
-                </p>
-              ) : (
-                <div className="flex flex-wrap gap-1.5">
-                  {r.permissions.map((code) => {
-                    const p = perms.find((x) => x.code === code);
-                    return (
-                      <Chip key={code} tone={p?.is_sensitive ? "amber" : "slate"}
-                             title={p?.description ?? code}>
-                        {p?.name ?? code}
-                      </Chip>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </Card>
-        );
-      })}
+              );
+            })}
+          </div>
+        </Card>
+      ))}
     </div>
   );
 }

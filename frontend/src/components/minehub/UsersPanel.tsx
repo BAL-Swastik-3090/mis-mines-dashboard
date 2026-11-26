@@ -2,12 +2,24 @@
 /** Who can sign in, and what each person may do. */
 import { matchesSearch } from "@/lib/search";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Search, Trash2, Loader2, UserPlus, Check, X } from "lucide-react";
+import { Search, Trash2, Loader2, UserPlus, Check, X, ChevronDown } from "lucide-react";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/useAuth";
 import { Alert, Chip, Button, Card, CardHeader, EmptyRow, Td, Th, Tile, inputClass } from "./ui";
+import RoleGroupPicker from "./RoleGroupPicker";
+import { roleNameWithin, splitRoleGroups, type RoleGroup } from "./roleGroups";
 
-interface Role { role_id: number; code: string; name: string; permissions: string[] }
+interface Role {
+  role_id: number; code: string; name: string; description?: string | null;
+  permissions: string[];
+  // Migration 139. A grouped role is an ordinary role; the group only decides
+  // that it is offered through one chip and a picker rather than a chip of
+  // its own. See roleGroups.ts.
+  group_code?: string | null;
+  group_name?: string | null;
+  group_description?: string | null;
+  group_sort_order?: number | null;
+}
 interface AccessUser {
   emp_id: string; name?: string; department?: string; designation?: string;
   roles: { role_id: number; code: string; name: string }[];
@@ -34,7 +46,14 @@ export default function UsersPanel() {
   const [searching, setSearching] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState<number[]>([]);
+  // "role:CODE" or "group:CODE" — a group tile filters on holding ANY of its
+  // roles, which is the question the tile's own number answers.
   const [roleFilter, setRoleFilter] = useState<string>("");
+  /** The open picker, if any. `target` is who it is for; `into` says whether
+   *  applying edits the draft being edited or saves immediately. */
+  const [picker, setPicker] = useState<
+    { group: RoleGroup<Role>; target: string; label: string;
+      value: number[]; into: "draft" | "save" } | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -68,20 +87,61 @@ export default function UsersPanel() {
     return () => clearTimeout(t);
   }, [addQuery, users]);
 
+  const { loose, groups } = useMemo(() => splitRoleGroups(roles), [roles]);
+
+  /** role_id → its group, for reading a person's held roles back. A person may
+   *  hold a role this caller cannot see; it is simply not grouped, and falls
+   *  through to a plain chip rather than disappearing. */
+  const groupOf = useMemo(() => {
+    const m = new Map<number, RoleGroup<Role>>();
+    groups.forEach((g) => g.roles.forEach((r) => m.set(r.role_id, g)));
+    return m;
+  }, [groups]);
+
+  /** What a person holds, split the same way the roles are. */
+  const splitHeld = useCallback((held: { role_id: number; code: string; name: string }[]) => {
+    const plain: typeof held = [];
+    const inGroup = new Map<string, typeof held>();
+    held.forEach((r) => {
+      const g = groupOf.get(r.role_id);
+      if (!g) { plain.push(r); return; }
+      const list = inGroup.get(g.group_code) ?? [];
+      list.push(r);
+      inGroup.set(g.group_code, list);
+    });
+    return { plain, inGroup };
+  }, [groupOf]);
+
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
-    users.forEach((u) => u.roles.forEach((r) => { c[r.code] = (c[r.code] ?? 0) + 1; }));
+    users.forEach((u) => {
+      u.roles.forEach((r) => { c[`role:${r.code}`] = (c[`role:${r.code}`] ?? 0) + 1; });
+      // Counted once per person, not once per role they hold in it — the tile
+      // says how many PEOPLE file something, and somebody filing four forms is
+      // still one person.
+      const seen = new Set<string>();
+      u.roles.forEach((r) => {
+        const g = groupOf.get(r.role_id);
+        if (g) seen.add(g.group_code);
+      });
+      seen.forEach((gc) => { c[`group:${gc}`] = (c[`group:${gc}`] ?? 0) + 1; });
+    });
     return c;
-  }, [users]);
+  }, [users, groupOf]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return users.filter((u) => {
-      if (roleFilter && !u.roles.some((r) => r.code === roleFilter)) return false;
+      if (roleFilter) {
+        const held = roleFilter.startsWith("group:")
+          ? u.roles.some((r) => groupOf.get(r.role_id)?.group_code === roleFilter.slice(6))
+          : u.roles.some((r) => r.code === roleFilter.slice(5));
+        if (!held) return false;
+      }
       if (!q) return true;
       return matchesSearch(q, [u.name, u.emp_id, u.department, u.designation]);
     });
-  }, [users, query, roleFilter]);
+  }, [users, query, roleFilter, groupOf]);
 
   const saveRoles = async (emp_id: string, role_ids: number[]) => {
     setError(null);
@@ -95,6 +155,22 @@ export default function UsersPanel() {
       const d = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(d ?? "Could not update access.");
     }
+  };
+
+  /** What the picker hands back, put where the picker was opened from. */
+  const applyPicker = (ids: number[]) => {
+    if (!picker) return;
+    if (picker.into === "save") {
+      // Granting nothing is not a grant. Saving an empty set here would write
+      // "no roles" for somebody who has none yet, which looks like it worked
+      // and leaves them unable to sign in.
+      if (ids.length) void saveRoles(picker.target, ids);
+      setPicker(null);
+      return;
+    }
+    const mine = new Set(picker.group.roles.map((r) => r.role_id));
+    setDraft((d) => [...d.filter((x) => !mine.has(x)), ...ids]);
+    setPicker(null);
   };
 
   const revoke = async (u: AccessUser) => {
@@ -122,17 +198,23 @@ export default function UsersPanel() {
 
       {/* Distribution — also the filter */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {roles.map((r) => {
-          const active = roleFilter === r.code;
+        {[
+          ...loose.map((r) => ({ key: `role:${r.code}`, name: r.name })),
+          // One tile for the whole group. Nine tiles for nine entry forms
+          // pushed the roles that decide what SECTION a person sees off the
+          // first screen, which is what this consolidation is for.
+          ...groups.map((g) => ({ key: `group:${g.group_code}`, name: g.name })),
+        ].map((r) => {
+          const active = roleFilter === r.key;
           return (
-            <button key={r.role_id} onClick={() => setRoleFilter(active ? "" : r.code)}
+            <button key={r.key} onClick={() => setRoleFilter(active ? "" : r.key)}
               className={`text-left bg-bg-base border rounded-lg shadow-sm px-4 py-3 transition
                 ${active ? "border-gold ring-1 ring-gold/30" : "border-border-light hover:border-border-strong"}`}>
               <div className="font-condensed text-[10px] font-bold uppercase tracking-[.14em] text-txt-light truncate">
                 {r.name}
               </div>
               <div className="font-condensed font-extrabold text-[26px] leading-none mt-1.5 text-navy tabular-nums">
-                {counts[r.code] ?? 0}
+                {counts[r.key] ?? 0}
               </div>
               <div className="text-[11px] text-txt-muted mt-1">
                 {active ? "filtering — click to clear" : "click to filter"}
@@ -170,11 +252,24 @@ export default function UsersPanel() {
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-1.5">
-                      {roles.map((r) => (
+                      {loose.map((r) => (
                         <Button key={r.role_id} size="sm" variant="secondary"
                           onClick={() => saveRoles(h.emp_id, [r.role_id])}
                           title={`Give ${h.name ?? h.emp_id} the ${r.name} role`}>
                           <UserPlus className="w-3 h-3" />{r.name}
+                        </Button>
+                      ))}
+                      {/* A group cannot be granted by one click -- which forms
+                          is the whole question -- so it opens the picker and
+                          saves what comes back. */}
+                      {groups.map((g) => (
+                        <Button key={g.group_code} size="sm" variant="secondary"
+                          onClick={() => setPicker({
+                            group: g, target: h.emp_id, value: [], into: "save",
+                            label: h.name ?? h.emp_id,
+                          })}
+                          title={`Choose which forms ${h.name ?? h.emp_id} files`}>
+                          <UserPlus className="w-3 h-3" />{g.name}…
                         </Button>
                       ))}
                     </div>
@@ -239,7 +334,7 @@ export default function UsersPanel() {
                       {isEditing ? (
                         <div className="space-y-2">
                           <div className="flex flex-wrap gap-1.5">
-                            {roles.map((r) => {
+                            {loose.map((r) => {
                               const on = draft.includes(r.role_id);
                               return (
                                 <button key={r.role_id}
@@ -251,6 +346,29 @@ export default function UsersPanel() {
                                 </button>
                               );
                             })}
+                            {/* One chip for the group. It cannot be toggled —
+                                there is nothing sensible for a single click to
+                                mean when the choice is "which of nine" — so it
+                                opens the picker and shows the tally. */}
+                            {groups.map((g) => {
+                              const ids = g.roles.map((r) => r.role_id);
+                              const n = draft.filter((x) => ids.includes(x)).length;
+                              return (
+                                <button key={g.group_code}
+                                  onClick={() => setPicker({
+                                    group: g, target: u.emp_id, into: "draft",
+                                    value: draft, label: u.name ?? u.emp_id,
+                                  })}
+                                  title={`Choose which of the ${ids.length} forms this person files`}
+                                  className={`px-2.5 py-1 rounded border text-[11.5px] font-semibold transition
+                                    ${n ? "bg-gold/10 border-gold text-gold-dark"
+                                        : "bg-bg-base border-border text-txt-muted hover:border-border-strong"}`}>
+                                  {n > 0 && <Check className="w-3 h-3 inline mr-1" />}
+                                  {g.name} · {n} of {ids.length}
+                                  <ChevronDown className="w-3 h-3 inline ml-1" />
+                                </button>
+                              );
+                            })}
                           </div>
                           <div className="flex gap-2">
                             <Button size="sm" variant="primary" onClick={() => saveRoles(u.emp_id, draft)}>Save</Button>
@@ -259,7 +377,32 @@ export default function UsersPanel() {
                         </div>
                       ) : (
                         <div className="flex flex-wrap items-center gap-1.5">
-                          {u.roles.map((r) => <Chip key={r.role_id} tone="gold">{r.name}</Chip>)}
+                          {(() => {
+                            const { plain, inGroup } = splitHeld(u.roles);
+                            return (
+                              <>
+                                {plain.map((r) => <Chip key={r.role_id} tone="gold">{r.name}</Chip>)}
+                                {/* A person filing four forms reads as four
+                                    chips of an entirely different kind next to
+                                    their dashboard roles. One chip, and the
+                                    forms themselves on hover. */}
+                                {groups.map((g) => {
+                                  const held = inGroup.get(g.group_code);
+                                  if (!held?.length) return null;
+                                  const names = held
+                                    .map((r) => roleNameWithin(g.name, r.name))
+                                    .sort((a, b) => a.localeCompare(b));
+                                  const whole = held.length === g.roles.length;
+                                  return (
+                                    <Chip key={g.group_code} tone="amber" title={names.join(", ")}>
+                                      {g.name} · {whole ? "all forms"
+                                        : `${held.length} ${held.length === 1 ? "form" : "forms"}`}
+                                    </Chip>
+                                  );
+                                })}
+                              </>
+                            );
+                          })()}
                           {mayManage && (
                             <button onClick={() => { setEditing(u.emp_id); setDraft(u.roles.map((r) => r.role_id)); }}
                               className="text-[11.5px] text-accent hover:text-accent-dark underline underline-offset-2">
@@ -286,6 +429,17 @@ export default function UsersPanel() {
           </table>
         </div>
       </Card>
+
+      {picker && (
+        <RoleGroupPicker
+          group={picker.group}
+          value={picker.value}
+          subject={picker.label}
+          applyLabel={picker.into === "save" ? "Grant access" : "Apply"}
+          onApply={applyPicker}
+          onClose={() => setPicker(null)}
+        />
+      )}
     </div>
   );
 }

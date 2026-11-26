@@ -150,6 +150,15 @@ def _roles_visible_to(db, pg, actor: str) -> list[dict]:
     rows = pg.execute(text("""
         SELECT r.role_id, r.code, r.name, r.description, r.is_system, r.status,
                r.grants_everything,
+               -- Migration 139. Presentational only: a grouped role is an
+               -- ordinary role carrying ordinary permissions, and every check
+               -- in this file treats it as one. The group is what lets both
+               -- access screens draw nine entry roles as a single choice with
+               -- a picker behind it, instead of nine chips and nine cards.
+               r.group_code,
+               g.name        AS group_name,
+               g.description AS group_description,
+               g.sort_order  AS group_sort_order,
                (SELECT count(*) FROM user_access ua
                  WHERE ua.role_id = r.role_id AND ua.valid_to IS NULL) AS user_count,
                COALESCE((SELECT array_agg(p.code ORDER BY p.sort_order)
@@ -157,6 +166,7 @@ def _roles_visible_to(db, pg, actor: str) -> list[dict]:
                            JOIN permission p ON p.permission_id = rp.permission_id
                           WHERE rp.role_id = r.role_id), ARRAY[]::text[]) AS permissions
         FROM role r
+        LEFT JOIN role_group g ON g.group_code = r.group_code
         WHERE :all OR NOT r.grants_everything
         ORDER BY r.is_system DESC, r.name
     """), {"all": everything}).mappings().all()
